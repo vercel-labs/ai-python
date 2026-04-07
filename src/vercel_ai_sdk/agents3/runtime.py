@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import contextvars
 from collections.abc import AsyncGenerator, AsyncIterable, Awaitable
-from typing import Any
 
 from .. import types
 
