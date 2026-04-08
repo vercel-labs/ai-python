@@ -61,7 +61,7 @@ async def stream_step(
     ``@stream``, so each call becomes a replayable step in the
     event log.
     """
-    async for msg in models.stream(
+    async for msg in await models.stream(
         model, messages, tools=tools, output_type=output_type, **kwargs
     ):
         yield msg.model_copy(update={"label": label}) if label is not None else msg

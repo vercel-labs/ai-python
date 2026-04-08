@@ -33,7 +33,9 @@ async def main() -> None:
     async def custom(context: Context) -> AsyncGenerator[ai.Message]:
         """Stream, execute tools with logging, repeat."""
         while True:
-            s = ai.models.stream(context.model, context.messages, tools=context.tools)
+            s = await ai.models.stream(
+                context.model, context.messages, tools=context.tools
+            )
             async for msg in s:
                 yield msg
 

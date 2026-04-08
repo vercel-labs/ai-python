@@ -10,8 +10,11 @@ from typing import Any, Protocol, get_type_hints
 
 import pydantic
 
+from .. import _durability as _dctx
 from .. import models, types
 from ..types import builders
+from . import checkpoint as checkpoint_
+from . import durability as durability_
 from . import runtime
 
 
@@ -116,21 +119,36 @@ class ToolCall:
         return self._part.tool_args
 
     async def __call__(self) -> types.ToolResultPart:
-        """Execute the tool and return a :class:`ToolResultPart`."""
-        try:
-            result = await self._tool(self._part.tool_args)
-        except Exception as exc:
+        """Execute the tool and return a :class:`ToolResultPart`.
+
+        If a durability provider is active, the call is routed through
+        it for recording or replay.
+        """
+        provider = _dctx.get_provider()
+
+        async def _execute() -> types.ToolResultPart:
+            try:
+                result = await self._tool(self._part.tool_args)
+            except Exception as exc:
+                return types.ToolResultPart(
+                    tool_call_id=self._part.tool_call_id,
+                    tool_name=self._part.tool_name,
+                    result=str(exc),
+                    is_error=True,
+                )
             return types.ToolResultPart(
                 tool_call_id=self._part.tool_call_id,
                 tool_name=self._part.tool_name,
-                result=str(exc),
-                is_error=True,
+                result=result,
             )
-        return types.ToolResultPart(
-            tool_call_id=self._part.tool_call_id,
-            tool_name=self._part.tool_name,
-            result=result,
-        )
+
+        if provider is not None:
+            return await provider.execute_tool(
+                _execute,
+                tool_call_id=self.id,
+                tool_name=self.name,
+            )
+        return await _execute()
 
 
 class Context(pydantic.BaseModel):
@@ -156,7 +174,9 @@ class LoopFn(Protocol):
 
 async def _default_loop(context: Context) -> AsyncGenerator[types.Message]:
     while True:
-        stream = models.stream(context.model, context.messages, tools=context.tools)
+        stream = await models.stream(
+            context.model, context.messages, tools=context.tools
+        )
         async for message in stream:
             yield message
 
@@ -211,14 +231,40 @@ class Agent:
         return fn
 
     async def run(
-        self, model: models.Model, messages: list[types.Message]
+        self,
+        model: models.Model,
+        messages: list[types.Message],
+        *,
+        durability: durability_.DurabilityProvider | None = None,
+        checkpoint: checkpoint_.Checkpoint | None = None,
     ) -> AsyncGenerator[types.Message]:
-        """Run the agent loop, yielding messages to the consumer."""
+        """Run the agent loop, yielding messages to the consumer.
+
+        Args:
+            model: The model to use for LLM calls.
+            messages: Initial conversation messages.
+            durability: Explicit durability provider.  If ``None`` but
+                *checkpoint* is given, an :class:`EventLogProvider` is
+                created automatically.
+            checkpoint: Checkpoint to resume from.  Implies eventlog
+                durability when no explicit *durability* is provided.
+        """
+        # Convenience: checkpoint implies eventlog provider.
+        if checkpoint is not None and durability is None:
+            durability = durability_.EventLogProvider(checkpoint)
+
         context = Context(model=model, messages=list(messages), tools=self._tools)
 
-        source = _collect_messages(self._loop_fn(context), context.messages)
-        async for message in runtime.run(source):
-            yield message
+        # Set the durability provider on the shared context var so that
+        # models.stream() and ToolCall.__call__() auto-detect it.
+        token = _dctx.set_provider(durability) if durability is not None else None
+        try:
+            source = _collect_messages(self._loop_fn(context), context.messages)
+            async for message in runtime.run(source):
+                yield message
+        finally:
+            if token is not None:
+                _dctx.reset_provider(token)
 
 
 def agent(

@@ -13,18 +13,20 @@ Usage::
     msgs = [Message(role="user", parts=[TextPart(text="hello")])]
 
     # stream — auto-creates client from env vars
-    async for msg in models.stream(model, msgs):
+    s = await models.stream(model, msgs)
+    async for msg in s:
         print(msg.text_delta, end="")
 
     # buffer the whole response
-    result = await models.buffer(models.stream(model, msgs))
+    result = await models.buffer(await models.stream(model, msgs))
     print(result.text)
 
     # explicit client
     client = models.Client(
         base_url="https://custom.example.com/v3/ai", api_key="sk-...",
     )
-    async for msg in models.stream(model, msgs, client=client):
+    s = await models.stream(model, msgs, client=client)
+    async for msg in s:
         ...
 """
 
@@ -152,7 +154,7 @@ class StreamResult:
         return self._final.output if self._final else None
 
 
-def stream(
+async def stream(
     model: Model,
     messages: list[messages_.Message],
     *,
@@ -166,19 +168,39 @@ def stream(
     Returns a :class:`StreamResult` that is async-iterable and collects
     the final ``Message``.  After iteration, access ``.text``,
     ``.tool_calls``, ``.usage``, etc.
+
+    If a :class:`~vercel_ai_sdk.agents3.durability.DurabilityProvider` is
+    active (set by ``Agent.run()``), the stream is routed through the
+    provider for recording or replay.
     """
-    _ensure_adapters()
-    c = client or _auto_client(model)
-    adapter_fn = _stream_adapters.get(model.adapter)
-    if adapter_fn is None:
-        registered = ", ".join(sorted(_stream_adapters)) or "(none)"
-        raise KeyError(
-            f"No stream adapter registered for adapter={model.adapter!r}. "
-            f"Registered: {registered}"
+    # Lazy import to avoid circular dependency at module level.
+    from .._durability import get_provider
+
+    provider = get_provider()
+
+    async def _make_raw() -> StreamResult:
+        _ensure_adapters()
+        c = client or _auto_client(model)
+        adapter_fn = _stream_adapters.get(model.adapter)
+        if adapter_fn is None:
+            registered = ", ".join(sorted(_stream_adapters)) or "(none)"
+            raise KeyError(
+                f"No stream adapter registered for adapter={model.adapter!r}. "
+                f"Registered: {registered}"
+            )
+        return StreamResult(
+            adapter_fn(
+                c, model, messages, tools=tools, output_type=output_type, **kwargs
+            )
         )
-    return StreamResult(
-        adapter_fn(c, model, messages, tools=tools, output_type=output_type, **kwargs)
-    )
+
+    if provider is not None:
+        # Provider returns a StreamResultLike — may be a replay or
+        # a recording wrapper.  We return it typed as StreamResult;
+        # callers only use the shared protocol surface (.tool_calls, etc.).
+        return await provider.execute_stream(_make_raw)  # type: ignore[return-value]
+
+    return await _make_raw()
 
 
 async def generate(
