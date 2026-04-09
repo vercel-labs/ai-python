@@ -149,7 +149,7 @@ class TemporalDurabilityProvider:
         # after gathering all results, and _collect_messages appends it
         # to context.messages. We mirror that here so our next LLM call
         # has the full conversation.
-        self._messages.append(ai.tool_message(tool_result))
+        self._messages.append(ai.Message(role="tool", parts=[tool_result]))
         return tool_result
 
     def checkpoint(self) -> ai.Checkpoint:

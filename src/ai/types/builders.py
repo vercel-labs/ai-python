@@ -1,9 +1,8 @@
 """Composable message construction helpers.
 
 Convenience functions for building Message objects without manually
-constructing Part lists.  Each ``*_message`` function accepts a mix of
-plain strings (auto-wrapped in :class:`TextPart`) and existing
-:class:`Part` objects, returning a single :class:`Message`.
+constructing Part lists. Each ``*_message`` function returns a single
+``Message``.
 """
 
 from __future__ import annotations
@@ -97,12 +96,31 @@ def thinking(text: str, *, signature: str | None = None) -> ReasoningPart:
     return ReasoningPart(text=text, signature=signature)
 
 
-def tool_message(*parts: ToolResultPart) -> Message:
-    """Create a tool-result message from one or more :class:`ToolResultPart` objects.
+def tool_message(*messages: Message | list[Message]) -> Message:
+    """Merge one or more tool messages into a single tool-result message.
 
-    >>> ai.tool_message(ai.tool_result("tc-1", result=72, tool_name="weather"))
+    >>> part = ai.tool_result("tc-1", result=72, tool_name="weather")
+    >>> ai.tool_message(ai.Message(role="tool", parts=[part]))
     """
-    return Message(role="tool", parts=list(parts))
+    flattened: list[Message] = []
+    for message in messages:
+        if isinstance(message, list):
+            flattened.extend(message)
+        else:
+            flattened.append(message)
+
+    parts: list[ToolResultPart] = []
+    for message in flattened:
+        if message.role != "tool":
+            raise TypeError(f"Expected tool message, got role={message.role!r}")
+        for part in message.parts:
+            if not isinstance(part, ToolResultPart):
+                raise TypeError(
+                    "tool_message() only accepts tool messages containing "
+                    "ToolResultPart parts"
+                )
+            parts.append(part)
+    return Message(role="tool", parts=parts)
 
 
 def tool_result(

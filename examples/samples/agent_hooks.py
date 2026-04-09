@@ -50,17 +50,22 @@ async def main() -> None:
                     approval = await ai.hook(
                         f"approve_{tc.id}",
                         payload=Approval,
-                        metadata={"tool": tc.name, "args": tc.args},
+                        metadata={"tool": tc.name, "kwargs": tc.kwargs},
                     )
                     if approval.granted:
                         results.append(await tc())
                     else:
                         results.append(
-                            ai.ToolResultPart(
-                                tool_call_id=tc.id,
-                                tool_name=tc.name,
-                                result=f"Rejected: {approval.reason}",
-                                is_error=True,
+                            ai.Message(
+                                role="tool",
+                                parts=[
+                                    ai.ToolResultPart(
+                                        tool_call_id=tc.id,
+                                        tool_name=tc.name,
+                                        result=f"Rejected: {approval.reason}",
+                                        is_error=True,
+                                    )
+                                ],
                             )
                         )
                 else:

@@ -639,7 +639,7 @@ async def test_runtime_tool_approval_same_step() -> None:
         if not tool_calls:
             return
 
-        async def approve_and_execute(tc: ai.ToolCall) -> ai.ToolResultPart:
+        async def approve_and_execute(tc: ai.ToolCall) -> ai.Message:
             approval = await ai.hook(
                 f"approve_{tc.id}",
                 payload=ai.ToolApproval,
@@ -648,11 +648,16 @@ async def test_runtime_tool_approval_same_step() -> None:
             )
             if approval.granted:
                 return await tc()
-            return ai.ToolResultPart(
-                tool_call_id=tc.id,
-                tool_name=tc.name,
-                result="denied",
-                is_error=True,
+            return ai.Message(
+                role="tool",
+                parts=[
+                    ai.ToolResultPart(
+                        tool_call_id=tc.id,
+                        tool_name=tc.name,
+                        result="denied",
+                        is_error=True,
+                    )
+                ],
             )
 
         async with asyncio.TaskGroup() as tg:

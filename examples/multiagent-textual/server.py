@@ -88,7 +88,7 @@ def _gated_agent(
             if not tool_calls:
                 break
 
-            results: list[ai.ToolResultPart] = []
+            results: list[ai.Message] = []
             for tc in tool_calls:
                 if tc.name == approval_tool:
                     approval = await ai.hook(
@@ -100,11 +100,16 @@ def _gated_agent(
                         results.append(await tc())
                     else:
                         results.append(
-                            ai.ToolResultPart(
-                                tool_call_id=tc.id,
-                                tool_name=tc.name,
-                                result=f"Denied: {approval.reason}",
-                                is_error=True,
+                            ai.Message(
+                                role="tool",
+                                parts=[
+                                    ai.ToolResultPart(
+                                        tool_call_id=tc.id,
+                                        tool_name=tc.name,
+                                        result=f"Denied: {approval.reason}",
+                                        is_error=True,
+                                    )
+                                ],
                             )
                         )
                 else:

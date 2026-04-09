@@ -42,11 +42,13 @@ async def main() -> None:
                 f"\n  [calling {len(tool_calls)} tool(s): "
                 f"{', '.join(tc.name for tc in tool_calls)}]"
             )
+            # Each resolved tool call exposes tc.fn and tc.kwargs, and
+            # tc(**overrides) lets you adjust arguments before execution.
 
             async with asyncio.TaskGroup() as tg:
                 tasks = [tg.create_task(tc()) for tc in tool_calls]
 
-            # Yield a tool-result message — history auto-collects it.
+            # Yield one merged tool-result message — history auto-collects it.
             yield ai.tool_message(*(t.result() for t in tasks))
 
     async for msg in my_agent.run(

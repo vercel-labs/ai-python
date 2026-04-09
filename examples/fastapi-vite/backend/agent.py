@@ -42,13 +42,11 @@ async def graph(context: ai.Context) -> AsyncGenerator[ai.Message]:
         if not tool_calls:
             return
 
-        results = await asyncio.gather(
-            *(_execute_with_approval(tc) for tc in tool_calls)
-        )
+        results = await asyncio.gather(*(_execute_with_approval(tc) for tc in tool_calls))
         yield ai.tool_message(*results)
 
 
-async def _execute_with_approval(tc: ai.ToolCall) -> ai.ToolResultPart:
+async def _execute_with_approval(tc: ai.ToolCall) -> ai.Message:
     """Execute a tool call only after the user grants approval.
 
     Creates a ToolApproval hook that suspends execution until the
@@ -57,16 +55,21 @@ async def _execute_with_approval(tc: ai.ToolCall) -> ai.ToolResultPart:
     approval = await ai.hook(
         f"approve_{tc.id}",
         payload=ai.ToolApproval,
-        metadata={"tool_name": tc.name, "tool_args": tc.args},
+        metadata={"tool_name": tc.name, "tool_kwargs": tc.kwargs},
         interrupt_loop=True,
     )
 
     if approval.granted:
         return await tc()
 
-    return ai.ToolResultPart(
-        tool_call_id=tc.id,
-        tool_name=tc.name,
-        result="Tool call was denied by the user.",
-        is_error=True,
+    return ai.Message(
+        role="tool",
+        parts=[
+            ai.ToolResultPart(
+                tool_call_id=tc.id,
+                tool_name=tc.name,
+                result="Tool call was denied by the user.",
+                is_error=True,
+            )
+        ],
     )

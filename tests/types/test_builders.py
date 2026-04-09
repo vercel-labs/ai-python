@@ -7,10 +7,13 @@ from ai.types.builders import (
     file_part,
     system_message,
     thinking,
+    tool_message,
+    tool_result,
     user_message,
 )
 from ai.types.messages import (
     FilePart,
+    Message,
     ReasoningPart,
     TextPart,
     ToolCallPart,
@@ -130,6 +133,47 @@ def test_thinking_basic() -> None:
 def test_thinking_with_signature() -> None:
     r = thinking("deep thoughts", signature="sig123")
     assert r.signature == "sig123"
+
+
+# -- tool_message ----------------------------------------------------------
+
+
+def test_tool_message_merges_tool_messages() -> None:
+    m1 = Message(
+        role="tool",
+        parts=[tool_result("tc-1", result=1, tool_name="a")],
+    )
+    m2 = Message(
+        role="tool",
+        parts=[tool_result("tc-2", result=2, tool_name="b")],
+    )
+
+    merged = tool_message(m1, m2)
+
+    assert merged.role == "tool"
+    assert [part.tool_call_id for part in merged.tool_results] == ["tc-1", "tc-2"]
+
+
+def test_tool_message_accepts_message_list() -> None:
+    messages = [
+        Message(role="tool", parts=[tool_result("tc-1", result=1, tool_name="a")]),
+        Message(role="tool", parts=[tool_result("tc-2", result=2, tool_name="b")]),
+    ]
+
+    merged = tool_message(messages)
+
+    assert [part.tool_call_id for part in merged.tool_results] == ["tc-1", "tc-2"]
+
+
+def test_tool_message_rejects_non_tool_message() -> None:
+    with pytest.raises(TypeError, match="Expected tool message"):
+        tool_message(user_message("hello"))
+
+
+def test_tool_message_rejects_non_result_parts() -> None:
+    invalid = Message(role="tool", parts=[TextPart(text="bad")])  # type: ignore[list-item]
+    with pytest.raises(TypeError, match="ToolResultPart"):
+        tool_message(invalid)
 
 
 # -- type coercion edge cases ----------------------------------------------

@@ -54,7 +54,7 @@ async def main() -> None:
                     confirmation = await ai.hook(
                         f"confirm_{tc.id}",
                         payload=Confirmation,
-                        metadata={"tool": tc.name, "args": tc.args},
+                        metadata={"tool": tc.name, "kwargs": tc.kwargs},
                         interrupt_loop=True,  # serverless: cancel if unresolved
                     )
                 except asyncio.CancelledError:
@@ -66,11 +66,16 @@ async def main() -> None:
                     results.append(await tc())
                 else:
                     results.append(
-                        ai.ToolResultPart(
-                            tool_call_id=tc.id,
-                            tool_name=tc.name,
-                            result=f"Rejected: {confirmation.reason}",
-                            is_error=True,
+                        ai.Message(
+                            role="tool",
+                            parts=[
+                                ai.ToolResultPart(
+                                    tool_call_id=tc.id,
+                                    tool_name=tc.name,
+                                    result=f"Rejected: {confirmation.reason}",
+                                    is_error=True,
+                                )
+                            ],
                         )
                     )
 

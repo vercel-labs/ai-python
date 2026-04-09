@@ -1,5 +1,6 @@
 """@tool decorator: schema extraction, execution, ToolCall."""
 
+import pydantic
 import pytest
 
 import ai
@@ -67,11 +68,11 @@ async def test_tool_call_with_json_args() -> None:
     assert result == 3
 
 
-# -- ToolCall binds a ToolCallPart to a Tool and returns ToolResultPart ----
+# -- ToolCall binds a ToolCallPart to a Tool and returns tool messages ----
 
 
 @pytest.mark.asyncio
-async def test_tool_call_returns_result_part() -> None:
+async def test_tool_call_returns_tool_message() -> None:
     @ai.tool
     async def double(x: int) -> int:
         """Double a number."""
@@ -85,10 +86,14 @@ async def test_tool_call_returns_result_part() -> None:
     tc = ai.ToolCall(part=part, tool=double)
     result = await tc()
 
-    assert result.tool_call_id == "tc-1"
-    assert result.tool_name == "double"
-    assert result.result == 10
-    assert not result.is_error
+    assert tc.fn is double.fn
+    assert tc.kwargs == {"x": 5}
+    assert result.role == "tool"
+    assert len(result.tool_results) == 1
+    assert result.tool_results[0].tool_call_id == "tc-1"
+    assert result.tool_results[0].tool_name == "double"
+    assert result.tool_results[0].result == 10
+    assert not result.tool_results[0].is_error
 
 
 @pytest.mark.asyncio
@@ -106,8 +111,64 @@ async def test_tool_call_catches_errors() -> None:
     tc = ai.ToolCall(part=part, tool=fail)
     result = await tc()
 
-    assert result.is_error
-    assert "boom" in str(result.result)
+    assert result.tool_results[0].is_error
+    assert "boom" in str(result.tool_results[0].result)
+
+
+@pytest.mark.asyncio
+async def test_tool_call_allows_kwarg_overrides() -> None:
+    @ai.tool
+    async def double(x: int) -> int:
+        """Double a number."""
+        return x * 2
+
+    part = ai.ToolCallPart(
+        tool_call_id="tc-1",
+        tool_name="double",
+        tool_args='{"x": 5}',
+    )
+    tc = ai.ToolCall(part=part, tool=double)
+
+    result = await tc(x=7)
+
+    assert result.tool_results[0].result == 14
+
+
+@pytest.mark.asyncio
+async def test_tool_call_override_validation_failure() -> None:
+    @ai.tool
+    async def double(x: int) -> int:
+        """Double a number."""
+        return x * 2
+
+    part = ai.ToolCallPart(
+        tool_call_id="tc-1",
+        tool_name="double",
+        tool_args='{"x": 5}',
+    )
+    tc = ai.ToolCall(part=part, tool=double)
+
+    with pytest.raises(pydantic.ValidationError):
+        await tc(x="bad")
+
+
+@pytest.mark.asyncio
+async def test_tool_call_malformed_args_become_error_message() -> None:
+    @ai.tool
+    async def double(x: int) -> int:
+        """Double a number."""
+        return x * 2
+
+    part = ai.ToolCallPart(
+        tool_call_id="tc-1",
+        tool_name="double",
+        tool_args='{"x": ',
+    )
+    tc = ai.ToolCall(part=part, tool=double)
+
+    result = await tc()
+
+    assert result.tool_results[0].is_error
 
 
 # -- Helpers ---------------------------------------------------------------
