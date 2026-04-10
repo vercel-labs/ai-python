@@ -5,11 +5,11 @@ wired to an ``httpx.MockTransport``, so the full production code path
 is covered:
 
     generate(client, model, messages, ImageParams(...))
-      → extract prompt/images from messages
-      → httpx POST (mock) to /image-model
-      → JSON response parsing
-      → media type detection
-      → return Message with FileParts
+      -> extract prompt/images from messages
+      -> httpx POST (mock) to /image-model
+      -> JSON response parsing
+      -> media type detection
+      -> return Message with FileParts
 """
 
 from __future__ import annotations
@@ -22,13 +22,11 @@ import httpx
 import pytest
 
 from ai.models.ai_gateway import errors
-from ai.models.ai_gateway.generate import (
-    ImageParams,
-    generate,
-)
-from ai.models.core import client as client_
+from ai.models.ai_gateway.generate import ImageParams, generate
 from ai.models.core import model as model_
 from ai.types import messages
+
+from .conftest import mock_client, user_msg
 
 # 1x1 transparent PNG (minimal valid PNG for magic-byte detection)
 _PNG_HEADER = bytes([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
@@ -47,32 +45,11 @@ _IMAGE_MODEL = model_.Model(
 
 
 # ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _client(
-    handler: httpx.MockTransport, *, api_key: str = "test-key"
-) -> client_.Client:
-    c = client_.Client(base_url="https://gw.test/v3/ai", api_key=api_key)
-    c._http = httpx.AsyncClient(transport=handler)
-    return c
-
-
-def _user(text: str) -> messages.Message:
-    return messages.Message(
-        role="user",
-        parts=[messages.TextPart(text=text)],
-    )
-
-
-# ---------------------------------------------------------------------------
 # Basic generation
 # ---------------------------------------------------------------------------
 
 
 class TestGenerate:
-    @pytest.mark.asyncio
     async def test_basic_image_generation(self) -> None:
         """Simple prompt -> one PNG image back."""
 
@@ -82,15 +59,14 @@ class TestGenerate:
                 json={"images": [_PNG_B64]},
             )
 
-        client = _client(httpx.MockTransport(handler))
-        msg = await generate(client, _IMAGE_MODEL, [_user("A sunset over Tokyo")])
+        client = mock_client(httpx.MockTransport(handler))
+        msg = await generate(client, _IMAGE_MODEL, [user_msg("A sunset over Tokyo")])
 
         assert msg.role == "assistant"
         assert len(msg.images) == 1
         assert msg.images[0].data == _PNG_B64
         assert msg.images[0].media_type == "image/png"
 
-    @pytest.mark.asyncio
     async def test_multiple_images(self) -> None:
         """Request n=3 images."""
 
@@ -102,11 +78,11 @@ class TestGenerate:
                 json={"images": [_PNG_B64, _JPEG_B64, _PNG_B64]},
             )
 
-        client = _client(httpx.MockTransport(handler))
+        client = mock_client(httpx.MockTransport(handler))
         msg = await generate(
             client,
             _IMAGE_MODEL,
-            [_user("Three cats")],
+            [user_msg("Three cats")],
             params=ImageParams(n=3),
         )
 
@@ -115,7 +91,6 @@ class TestGenerate:
         assert msg.images[1].media_type == "image/jpeg"
         assert msg.images[2].media_type == "image/png"
 
-    @pytest.mark.asyncio
     async def test_usage_parsing(self) -> None:
         """Usage data from response surfaces on the Message."""
 
@@ -128,8 +103,8 @@ class TestGenerate:
                 },
             )
 
-        client = _client(httpx.MockTransport(handler))
-        msg = await generate(client, _IMAGE_MODEL, [_user("a dog")])
+        client = mock_client(httpx.MockTransport(handler))
+        msg = await generate(client, _IMAGE_MODEL, [user_msg("a dog")])
 
         assert msg.usage is not None
         assert msg.usage.input_tokens == 50
@@ -142,7 +117,6 @@ class TestGenerate:
 
 
 class TestRequest:
-    @pytest.mark.asyncio
     async def test_protocol_headers(self) -> None:
         captured: dict[str, str] = {}
 
@@ -156,27 +130,32 @@ class TestRequest:
             provider="ai-gateway",
             capabilities=("image",),
         )
-        client = _client(httpx.MockTransport(handler), api_key="sk-test")
-        await generate(client, model, [_user("Hi")])
+        client = mock_client(httpx.MockTransport(handler), api_key="sk-test")
+        await generate(client, model, [user_msg("Hi")])
 
         assert captured["authorization"] == "Bearer sk-test"
         assert captured["ai-image-model-specification-version"] == "3"
         assert captured["ai-model-id"] == "openai/gpt-image-1"
         assert captured["ai-gateway-auth-method"] == "api-key"
 
-    @pytest.mark.asyncio
-    async def test_parameters_forwarded(self) -> None:
+    async def test_request_body_forwards_parameters_and_files(self) -> None:
         captured_body: dict[str, Any] = {}
 
         def handler(req: httpx.Request) -> httpx.Response:
             captured_body.update(json.loads(req.content))
             return httpx.Response(200, json={"images": [_PNG_B64]})
 
-        client = _client(httpx.MockTransport(handler))
+        msg = messages.Message(
+            role="user",
+            parts=[
+                messages.TextPart(text="landscape"),
+                messages.FilePart(data=_PNG_B64, media_type="image/png"),
+            ],
+        )
         await generate(
-            client,
+            mock_client(httpx.MockTransport(handler)),
             _IMAGE_MODEL,
-            [_user("landscape")],
+            [msg],
             params=ImageParams(
                 n=2,
                 size="1024x1024",
@@ -192,33 +171,11 @@ class TestRequest:
         assert captured_body["aspectRatio"] == "16:9"
         assert captured_body["seed"] == 42
         assert captured_body["providerOptions"] == {"google": {"style": "vivid"}}
-
-    @pytest.mark.asyncio
-    async def test_input_images_forwarded(self) -> None:
-        """Input images from user messages -> files in request body."""
-        captured_body: dict[str, Any] = {}
-
-        def handler(req: httpx.Request) -> httpx.Response:
-            captured_body.update(json.loads(req.content))
-            return httpx.Response(200, json={"images": [_PNG_B64]})
-
-        user_msg = messages.Message(
-            role="user",
-            parts=[
-                messages.TextPart(text="Edit this"),
-                messages.FilePart(data=_PNG_B64, media_type="image/png"),
-            ],
-        )
-        client = _client(httpx.MockTransport(handler))
-        await generate(client, _IMAGE_MODEL, [user_msg])
-
-        assert captured_body["prompt"] == "Edit this"
         assert "files" in captured_body
         assert len(captured_body["files"]) == 1
         assert captured_body["files"][0]["type"] == "file"
         assert captured_body["files"][0]["mediaType"] == "image/png"
 
-    @pytest.mark.asyncio
     async def test_url_posts_to_image_model_endpoint(self) -> None:
         captured_url: list[str] = []
 
@@ -226,8 +183,8 @@ class TestRequest:
             captured_url.append(str(req.url))
             return httpx.Response(200, json={"images": [_PNG_B64]})
 
-        client = _client(httpx.MockTransport(handler))
-        await generate(client, _IMAGE_MODEL, [_user("test")])
+        client = mock_client(httpx.MockTransport(handler))
+        await generate(client, _IMAGE_MODEL, [user_msg("test")])
 
         assert captured_url[0] == "https://gw.test/v3/ai/image-model"
 
@@ -238,7 +195,6 @@ class TestRequest:
 
 
 class TestErrors:
-    @pytest.mark.asyncio
     async def test_401_authentication_error(self) -> None:
         def handler(req: httpx.Request) -> httpx.Response:
             return httpx.Response(
@@ -253,12 +209,11 @@ class TestErrors:
 
         with pytest.raises(errors.GatewayAuthenticationError):
             await generate(
-                _client(httpx.MockTransport(handler)),
+                mock_client(httpx.MockTransport(handler)),
                 _IMAGE_MODEL,
-                [_user("test")],
+                [user_msg("test")],
             )
 
-    @pytest.mark.asyncio
     async def test_429_rate_limit_error(self) -> None:
         def handler(req: httpx.Request) -> httpx.Response:
             return httpx.Response(
@@ -273,12 +228,11 @@ class TestErrors:
 
         with pytest.raises(errors.GatewayRateLimitError):
             await generate(
-                _client(httpx.MockTransport(handler)),
+                mock_client(httpx.MockTransport(handler)),
                 _IMAGE_MODEL,
-                [_user("test")],
+                [user_msg("test")],
             )
 
-    @pytest.mark.asyncio
     async def test_empty_images_returns_empty_message(self) -> None:
         """Gateway returns empty images array -> message with no parts."""
 
@@ -286,8 +240,8 @@ class TestErrors:
             return httpx.Response(200, json={"images": []})
 
         msg = await generate(
-            _client(httpx.MockTransport(handler)),
+            mock_client(httpx.MockTransport(handler)),
             _IMAGE_MODEL,
-            [_user("test")],
+            [user_msg("test")],
         )
         assert len(msg.images) == 0

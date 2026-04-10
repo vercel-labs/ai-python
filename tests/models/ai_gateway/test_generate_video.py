@@ -5,11 +5,11 @@ wired to an ``httpx.MockTransport``, so the full production code path
 is covered:
 
     generate(client, model, messages, VideoParams(...))
-      → extract prompt/image from messages
-      → httpx POST (mock) to /video-model with SSE accept
-      → SSE event parsing
-      → video data handling (base64 or URL download)
-      → return Message with FileParts
+      -> extract prompt/image from messages
+      -> httpx POST (mock) to /video-model with SSE accept
+      -> SSE event parsing
+      -> video data handling (base64 or URL download)
+      -> return Message with FileParts
 """
 
 from __future__ import annotations
@@ -23,13 +23,11 @@ import httpx
 import pytest
 
 from ai.models.ai_gateway import errors
-from ai.models.ai_gateway.generate import (
-    VideoParams,
-    generate,
-)
-from ai.models.core import client as client_
+from ai.models.ai_gateway.generate import VideoParams, generate
 from ai.models.core import model as model_
 from ai.types import messages
+
+from .conftest import mock_client, sse, user_msg
 
 # MP4 magic bytes (ftyp box)
 _MP4_HEADER = bytes(
@@ -50,40 +48,14 @@ _VIDEO_MODEL = model_.Model(
 
 
 # ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _sse(*events: dict[str, Any]) -> str:
-    """Build SSE response text from event dicts."""
-    return "".join(f"data: {json.dumps(e)}\n\n" for e in events)
-
-
-def _client(
-    handler: httpx.MockTransport, *, api_key: str = "test-key"
-) -> client_.Client:
-    c = client_.Client(base_url="https://gw.test/v3/ai", api_key=api_key)
-    c._http = httpx.AsyncClient(transport=handler)
-    return c
-
-
-def _user(text: str) -> messages.Message:
-    return messages.Message(
-        role="user",
-        parts=[messages.TextPart(text=text)],
-    )
-
-
-# ---------------------------------------------------------------------------
 # Basic generation
 # ---------------------------------------------------------------------------
 
 
 class TestGenerate:
-    @pytest.mark.asyncio
     async def test_basic_video_generation_base64(self) -> None:
         """Simple prompt -> one MP4 video back via base64."""
-        body = _sse(
+        body = sse(
             {
                 "type": "result",
                 "videos": [
@@ -95,11 +67,11 @@ class TestGenerate:
         def handler(req: httpx.Request) -> httpx.Response:
             return httpx.Response(200, text=body)
 
-        client = _client(httpx.MockTransport(handler))
+        client = mock_client(httpx.MockTransport(handler))
         msg = await generate(
             client,
             _VIDEO_MODEL,
-            [_user("A cat walking on a beach")],
+            [user_msg("A cat walking on a beach")],
             params=VideoParams(),
         )
 
@@ -108,10 +80,9 @@ class TestGenerate:
         assert msg.videos[0].data == _MP4_B64
         assert msg.videos[0].media_type == "video/mp4"
 
-    @pytest.mark.asyncio
     async def test_video_generation_url(self) -> None:
         """Video returned as URL -> downloaded automatically."""
-        body = _sse(
+        body = sse(
             {
                 "type": "result",
                 "videos": [
@@ -127,7 +98,7 @@ class TestGenerate:
         def handler(req: httpx.Request) -> httpx.Response:
             return httpx.Response(200, text=body)
 
-        client = _client(httpx.MockTransport(handler))
+        client = mock_client(httpx.MockTransport(handler))
 
         with patch(
             "ai.models.core.helpers.files.download",
@@ -137,7 +108,7 @@ class TestGenerate:
             msg = await generate(
                 client,
                 _VIDEO_MODEL,
-                [_user("A sunset timelapse")],
+                [user_msg("A sunset timelapse")],
                 params=VideoParams(),
             )
 
@@ -146,9 +117,8 @@ class TestGenerate:
         assert msg.videos[0].data == _MP4_HEADER
         assert msg.videos[0].media_type == "video/mp4"
 
-    @pytest.mark.asyncio
     async def test_multiple_videos(self) -> None:
-        body = _sse(
+        body = sse(
             {
                 "type": "result",
                 "videos": [
@@ -162,9 +132,9 @@ class TestGenerate:
             return httpx.Response(200, text=body)
 
         msg = await generate(
-            _client(httpx.MockTransport(handler)),
+            mock_client(httpx.MockTransport(handler)),
             _VIDEO_MODEL,
-            [_user("Two versions")],
+            [user_msg("Two versions")],
             params=VideoParams(n=2),
         )
         assert len(msg.videos) == 2
@@ -178,7 +148,6 @@ class TestGenerate:
 
 
 class TestRequest:
-    @pytest.mark.asyncio
     async def test_protocol_headers(self) -> None:
         captured: dict[str, str] = {}
 
@@ -186,7 +155,7 @@ class TestRequest:
             captured.update(dict(req.headers))
             return httpx.Response(
                 200,
-                text=_sse(
+                text=sse(
                     {
                         "type": "result",
                         "videos": [
@@ -200,11 +169,11 @@ class TestRequest:
                 ),
             )
 
-        client = _client(httpx.MockTransport(handler), api_key="sk-test")
+        client = mock_client(httpx.MockTransport(handler), api_key="sk-test")
         await generate(
             client,
             _VIDEO_MODEL,
-            [_user("test")],
+            [user_msg("test")],
             params=VideoParams(),
         )
 
@@ -214,15 +183,14 @@ class TestRequest:
         assert captured["accept"] == "text/event-stream"
         assert captured["ai-gateway-auth-method"] == "api-key"
 
-    @pytest.mark.asyncio
-    async def test_parameters_forwarded(self) -> None:
+    async def test_request_body_forwards_parameters_and_input_image(self) -> None:
         captured_body: dict[str, Any] = {}
 
         def handler(req: httpx.Request) -> httpx.Response:
             captured_body.update(json.loads(req.content))
             return httpx.Response(
                 200,
-                text=_sse(
+                text=sse(
                     {
                         "type": "result",
                         "videos": [
@@ -236,11 +204,18 @@ class TestRequest:
                 ),
             )
 
-        client = _client(httpx.MockTransport(handler))
+        png_b64 = base64.b64encode(b"\x89PNG").decode()
+        msg = messages.Message(
+            role="user",
+            parts=[
+                messages.TextPart(text="sunset"),
+                messages.FilePart(data=png_b64, media_type="image/png"),
+            ],
+        )
         await generate(
-            client,
+            mock_client(httpx.MockTransport(handler)),
             _VIDEO_MODEL,
-            [_user("sunset")],
+            [msg],
             params=VideoParams(
                 n=2,
                 aspect_ratio="16:9",
@@ -260,8 +235,10 @@ class TestRequest:
         assert captured_body["fps"] == 30
         assert captured_body["seed"] == 42
         assert captured_body["providerOptions"] == {"google": {"enhancePrompt": True}}
+        assert "image" in captured_body
+        assert captured_body["image"]["type"] == "file"
+        assert captured_body["image"]["mediaType"] == "image/png"
 
-    @pytest.mark.asyncio
     async def test_url_posts_to_video_model_endpoint(self) -> None:
         captured_url: list[str] = []
 
@@ -269,7 +246,7 @@ class TestRequest:
             captured_url.append(str(req.url))
             return httpx.Response(
                 200,
-                text=_sse(
+                text=sse(
                     {
                         "type": "result",
                         "videos": [
@@ -283,54 +260,14 @@ class TestRequest:
                 ),
             )
 
-        client = _client(httpx.MockTransport(handler))
+        client = mock_client(httpx.MockTransport(handler))
         await generate(
             client,
             _VIDEO_MODEL,
-            [_user("test")],
+            [user_msg("test")],
             params=VideoParams(),
         )
-
         assert captured_url[0] == "https://gw.test/v3/ai/video-model"
-
-    @pytest.mark.asyncio
-    async def test_image_to_video_input(self) -> None:
-        """Image in user message -> image field in request body."""
-        captured_body: dict[str, Any] = {}
-
-        def handler(req: httpx.Request) -> httpx.Response:
-            captured_body.update(json.loads(req.content))
-            return httpx.Response(
-                200,
-                text=_sse(
-                    {
-                        "type": "result",
-                        "videos": [
-                            {
-                                "type": "base64",
-                                "data": _MP4_B64,
-                                "mediaType": "video/mp4",
-                            }
-                        ],
-                    }
-                ),
-            )
-
-        png_b64 = base64.b64encode(b"\x89PNG").decode()
-        user_msg = messages.Message(
-            role="user",
-            parts=[
-                messages.TextPart(text="Animate this"),
-                messages.FilePart(data=png_b64, media_type="image/png"),
-            ],
-        )
-        client = _client(httpx.MockTransport(handler))
-        await generate(client, _VIDEO_MODEL, [user_msg], params=VideoParams())
-
-        assert captured_body["prompt"] == "Animate this"
-        assert "image" in captured_body
-        assert captured_body["image"]["type"] == "file"
-        assert captured_body["image"]["mediaType"] == "image/png"
 
 
 # ---------------------------------------------------------------------------
@@ -339,10 +276,9 @@ class TestRequest:
 
 
 class TestErrors:
-    @pytest.mark.asyncio
     async def test_sse_error_event(self) -> None:
         """Gateway returns an SSE error event -> raises."""
-        body = _sse(
+        body = sse(
             {
                 "type": "error",
                 "message": "Content policy violation",
@@ -357,13 +293,12 @@ class TestErrors:
 
         with pytest.raises(errors.GatewayInvalidRequestError, match="Content policy"):
             await generate(
-                _client(httpx.MockTransport(handler)),
+                mock_client(httpx.MockTransport(handler)),
                 _VIDEO_MODEL,
-                [_user("test")],
+                [user_msg("test")],
                 params=VideoParams(),
             )
 
-    @pytest.mark.asyncio
     async def test_401_authentication_error(self) -> None:
         def handler(req: httpx.Request) -> httpx.Response:
             return httpx.Response(
@@ -378,13 +313,12 @@ class TestErrors:
 
         with pytest.raises(errors.GatewayAuthenticationError):
             await generate(
-                _client(httpx.MockTransport(handler)),
+                mock_client(httpx.MockTransport(handler)),
                 _VIDEO_MODEL,
-                [_user("test")],
+                [user_msg("test")],
                 params=VideoParams(),
             )
 
-    @pytest.mark.asyncio
     async def test_empty_sse_stream(self) -> None:
         """SSE stream with no data events -> raises."""
 
@@ -393,8 +327,8 @@ class TestErrors:
 
         with pytest.raises(errors.GatewayResponseError, match="SSE stream ended"):
             await generate(
-                _client(httpx.MockTransport(handler)),
+                mock_client(httpx.MockTransport(handler)),
                 _VIDEO_MODEL,
-                [_user("test")],
+                [user_msg("test")],
                 params=VideoParams(),
             )

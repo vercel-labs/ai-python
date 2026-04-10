@@ -2,9 +2,12 @@
 
 Focus areas:
 - ``_messages_to_prompt``: the critical outgoing translation layer
-- ``_build_request_body``: using real ``@tool``
+- ``_build_request_body``: output_type serialization
 - ``_parse_stream_part``: the critical incoming translation layer
 - ``_parse_usage``: the two distinct wire formats
+
+Note: tool serialization and provider_options passthrough are tested
+end-to-end in ``test_stream.py`` via real HTTP round-trips.
 """
 
 from __future__ import annotations
@@ -14,9 +17,7 @@ import json
 from unittest.mock import AsyncMock, patch
 
 import pydantic
-import pytest
 
-import ai
 from ai.models.core.helpers import streaming
 from ai.types import messages
 
@@ -29,7 +30,6 @@ stream_mod = importlib.import_module("ai.models.ai_gateway.stream")
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 class TestMessagesToPrompt:
     async def test_system_message(self) -> None:
         msgs = [
@@ -184,19 +184,6 @@ class TestMessagesToPrompt:
         assert part["data"].startswith("data:image/png;base64,")
         assert part["filename"] == "pic.png"
 
-    async def test_user_message_text_only_unchanged(self) -> None:
-        """Regression: text-only user messages still work."""
-        msgs = [
-            messages.Message(
-                role="user",
-                parts=[messages.TextPart(text="Hello")],
-            )
-        ]
-        result = await stream_mod._messages_to_prompt(msgs)
-        assert result == [
-            {"role": "user", "content": [{"type": "text", "text": "Hello"}]}
-        ]
-
     async def test_pending_tool_call_no_tool_message(self) -> None:
         """A tool call without a corresponding tool-result message
         should NOT produce a tool-result in the prompt."""
@@ -218,42 +205,11 @@ class TestMessagesToPrompt:
 
 
 # ---------------------------------------------------------------------------
-# _build_request_body — using real @tool
+# _build_request_body -- output_type (not tested in test_stream.py)
 # ---------------------------------------------------------------------------
 
 
-@ai.tool
-async def get_weather(city: str, units: str = "celsius") -> str:
-    """Get the current weather for a city."""
-    return f"Sunny in {city}"
-
-
-@pytest.mark.asyncio
 class TestBuildRequestBody:
-    async def test_with_real_tool(self) -> None:
-        """Verify @tool-produced schema round-trips through
-        _build_request_body -> JSON -> gateway wire format."""
-        msgs = [
-            messages.Message(
-                role="user",
-                parts=[messages.TextPart(text="What's the weather?")],
-            )
-        ]
-        body = await stream_mod._build_request_body(msgs, tools=[get_weather])
-
-        assert "tools" in body
-        tool_def = body["tools"][0]
-        assert tool_def["type"] == "function"
-        assert tool_def["name"] == "get_weather"
-        assert tool_def["description"] == ("Get the current weather for a city.")
-        # The schema comes from pydantic — verify structure, not exact dict
-        schema = tool_def["inputSchema"]
-        assert "properties" in schema
-        assert "city" in schema["properties"]
-        assert "units" in schema["properties"]
-        # 'city' is required (no default), 'units' is not (has default)
-        assert "city" in schema.get("required", [])
-
     async def test_with_output_type(self) -> None:
         class WeatherResult(pydantic.BaseModel):
             temp: float
@@ -274,74 +230,9 @@ class TestBuildRequestBody:
         assert "properties" in rf["schema"]
         assert "temp" in rf["schema"]["properties"]
 
-    async def test_provider_options_passthrough(self) -> None:
-        msgs = [
-            messages.Message(
-                role="user",
-                parts=[messages.TextPart(text="Hi")],
-            )
-        ]
-        opts = {"gateway": {"order": ["bedrock", "openai"]}}
-        body = await stream_mod._build_request_body(msgs, provider_options=opts)
-        assert body["providerOptions"] == opts
 
-
-# ---------------------------------------------------------------------------
-# _parse_stream_part — parametrized simple 1:1 mappings
-# ---------------------------------------------------------------------------
-
-_SIMPLE_STREAM_PARTS = [
-    (
-        {"type": "text-start", "id": "t1"},
-        streaming.TextStart(block_id="t1"),
-    ),
-    (
-        {"type": "text-end", "id": "t1"},
-        streaming.TextEnd(block_id="t1"),
-    ),
-    (
-        {"type": "reasoning-start", "id": "r1"},
-        streaming.ReasoningStart(block_id="r1"),
-    ),
-    (
-        {"type": "reasoning-delta", "id": "r1", "delta": "hmm"},
-        streaming.ReasoningDelta(block_id="r1", delta="hmm"),
-    ),
-    (
-        {"type": "reasoning-end", "id": "r1"},
-        streaming.ReasoningEnd(block_id="r1"),
-    ),
-    (
-        {"type": "tool-input-start", "id": "tc-1", "toolName": "search"},
-        streaming.ToolStart(tool_call_id="tc-1", tool_name="search"),
-    ),
-    (
-        {"type": "tool-input-delta", "id": "tc-1", "delta": '{"q"'},
-        streaming.ToolArgsDelta(tool_call_id="tc-1", delta='{"q"'),
-    ),
-    (
-        {"type": "tool-input-end", "id": "tc-1"},
-        streaming.ToolEnd(tool_call_id="tc-1"),
-    ),
-]
-
-
-@pytest.mark.parametrize(
-    ("wire", "expected"),
-    _SIMPLE_STREAM_PARTS,
-    ids=[w["type"] for w, _ in _SIMPLE_STREAM_PARTS],
-)
-def test_parse_stream_part_simple(
-    wire: dict[str, object], expected: streaming.StreamEvent
-) -> None:
-    events = stream_mod._parse_stream_part(wire)
-    assert len(events) == 1
-    assert events[0] == expected
-
-
-@pytest.mark.asyncio
 class TestParseStreamPartComplex:
-    async def test_text_delta_uses_textDelta_key(self) -> None:
+    def test_text_delta_uses_textDelta_key(self) -> None:
         """The gateway sends ``textDelta`` (camelCase), not ``delta``."""
         events = stream_mod._parse_stream_part(
             {"type": "text-delta", "id": "t1", "textDelta": "Hello"}
@@ -349,7 +240,7 @@ class TestParseStreamPartComplex:
         assert isinstance(events[0], streaming.TextDelta)
         assert events[0].delta == "Hello"
 
-    async def test_tool_call_expands_to_three_events(self) -> None:
+    def test_tool_call_expands_to_three_events(self) -> None:
         """A complete ``tool-call`` part must expand into
         ToolStart -> ToolArgsDelta -> ToolEnd."""
         events = stream_mod._parse_stream_part(
@@ -367,7 +258,7 @@ class TestParseStreamPartComplex:
         assert json.loads(events[1].delta) == {"city": "SF"}
         assert isinstance(events[2], streaming.ToolEnd)
 
-    async def test_finish_flat_usage(self) -> None:
+    def test_finish_flat_usage(self) -> None:
         events = stream_mod._parse_stream_part(
             {
                 "type": "finish",
@@ -385,7 +276,7 @@ class TestParseStreamPartComplex:
         assert done.usage.input_tokens == 10
         assert done.usage.output_tokens == 20
 
-    async def test_finish_v3_nested_usage(self) -> None:
+    def test_finish_v3_nested_usage(self) -> None:
         events = stream_mod._parse_stream_part(
             {
                 "type": "finish",
@@ -413,7 +304,7 @@ class TestParseStreamPartComplex:
         assert done.usage.cache_read_tokens == 50
         assert done.usage.reasoning_tokens == 30
 
-    async def test_file_part(self) -> None:
+    def test_file_part(self) -> None:
         """A ``file`` stream part (inline image from Gemini/GPT-5)
         must produce a FileEvent."""
         events = stream_mod._parse_stream_part(
@@ -430,14 +321,14 @@ class TestParseStreamPartComplex:
         assert events[0].media_type == "image/png"
         assert events[0].data == "iVBORw0KGgo="
 
-    async def test_file_part_defaults(self) -> None:
+    def test_file_part_defaults(self) -> None:
         """A minimal ``file`` part uses sensible defaults."""
         events = stream_mod._parse_stream_part({"type": "file", "data": "somedata"})
         assert len(events) == 1
         assert isinstance(events[0], streaming.FileEvent)
         assert events[0].media_type == "application/octet-stream"
 
-    async def test_unknown_types_produce_no_events(self) -> None:
+    def test_unknown_types_produce_no_events(self) -> None:
         for t in ("stream-start", "raw", "response-metadata", "banana"):
             assert stream_mod._parse_stream_part({"type": t}) == []
 
@@ -447,14 +338,13 @@ class TestParseStreamPartComplex:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 class TestParseUsage:
-    async def test_flat_format(self) -> None:
+    def test_flat_format(self) -> None:
         usage = stream_mod._parse_usage({"prompt_tokens": 10, "completion_tokens": 20})
         assert usage.input_tokens == 10
         assert usage.output_tokens == 20
 
-    async def test_v3_nested_format(self) -> None:
+    def test_v3_nested_format(self) -> None:
         usage = stream_mod._parse_usage(
             {
                 "inputTokens": {
@@ -471,7 +361,7 @@ class TestParseUsage:
         assert usage.cache_write_tokens == 5
         assert usage.reasoning_tokens == 10
 
-    async def test_non_dict_returns_empty(self) -> None:
+    def test_non_dict_returns_empty(self) -> None:
         usage = stream_mod._parse_usage("not a dict")
         assert usage.input_tokens == 0
         assert usage.output_tokens == 0

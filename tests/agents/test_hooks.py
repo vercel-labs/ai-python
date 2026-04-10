@@ -1,5 +1,7 @@
 """Hooks: live resolution, cancellation, pre-registration, schema validation."""
 
+from __future__ import annotations
+
 import asyncio
 from collections.abc import AsyncGenerator
 
@@ -19,7 +21,6 @@ class Confirmation(pydantic.BaseModel):
 # -- resolve_hook() with live future (long-running mode) -------------------
 
 
-@pytest.mark.asyncio
 async def test_resolve_live_future() -> None:
     """In long-running mode, resolve_hook() unblocks the awaiting coroutine."""
     resolved_value: Confirmation | None = None
@@ -48,7 +49,6 @@ async def test_resolve_live_future() -> None:
 # -- cancel_hook() --------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_cancel_live_hook() -> None:
     """cancel_hook() cancels the future, causing CancelledError in graph."""
     was_cancelled = False
@@ -76,7 +76,6 @@ async def test_cancel_live_hook() -> None:
 # -- cancel_hook() on non-existent label raises ----------------------------
 
 
-@pytest.mark.asyncio
 async def test_cancel_nonexistent_raises() -> None:
     with pytest.raises(ValueError, match="No pending hook"):
         await ai.cancel_hook("does_not_exist_xyz")
@@ -85,7 +84,6 @@ async def test_cancel_nonexistent_raises() -> None:
 # -- Pre-registration (serverless re-entry) --------------------------------
 
 
-@pytest.mark.asyncio
 async def test_pre_registered_resolution_consumed() -> None:
     """Pre-registered resolution is consumed by hook() without suspending."""
     my_agent = ai.agent()
@@ -130,7 +128,6 @@ def test_resolve_validates_schema() -> None:
 # -- Resolved hook emits message -------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_resolved_hook_emits_message() -> None:
     """After resolution, a 'resolved' HookPart message is emitted."""
     my_agent = ai.agent()
@@ -161,7 +158,6 @@ async def test_resolved_hook_emits_message() -> None:
 # -- Hook metadata surfaces in pending message -----------------------------
 
 
-@pytest.mark.asyncio
 async def test_hook_metadata_in_pending() -> None:
     my_agent = ai.agent()
 

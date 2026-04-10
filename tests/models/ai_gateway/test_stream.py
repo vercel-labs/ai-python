@@ -5,12 +5,12 @@ wired to an ``httpx.MockTransport``, so the full production code path
 is covered:
 
     stream(client, model, messages)
-      → _build_request_body()
-      → httpx POST (mock)
-      → SSE line parsing
-      → _parse_stream_part()
-      → StreamHandler
-      → yield Message
+      -> _build_request_body()
+      -> httpx POST (mock)
+      -> SSE line parsing
+      -> _parse_stream_part()
+      -> StreamHandler
+      -> yield Message
 """
 
 from __future__ import annotations
@@ -24,9 +24,10 @@ import pytest
 
 import ai
 from ai.models.ai_gateway import errors
-from ai.models.core import client as client_
 from ai.models.core import model as model_
 from ai.types import messages
+
+from .conftest import mock_client, sse, user_msg
 
 # The ai_gateway __init__.py re-exports `stream` as a function, which
 # shadows the module.  Use importlib to get the actual module.
@@ -43,22 +44,8 @@ _TEST_MODEL = model_.Model(
 )
 
 
-def _sse(*events: dict[str, Any]) -> str:
-    """Build SSE response text from event dicts."""
-    return "".join(f"data: {json.dumps(e)}\n\n" for e in events)
-
-
-def _client(
-    handler: httpx.MockTransport, *, api_key: str = "test-key"
-) -> client_.Client:
-    """Create a Client wired to a mock transport."""
-    c = client_.Client(base_url="https://gw.test/v3/ai", api_key=api_key)
-    c._http = httpx.AsyncClient(transport=handler)
-    return c
-
-
 async def _collect(
-    client: client_.Client,
+    client: Any,
     msgs: list[messages.Message],
     model: model_.Model = _TEST_MODEL,
     **kwargs: Any,
@@ -70,22 +57,14 @@ async def _collect(
     return result
 
 
-def _user(text: str) -> messages.Message:
-    return messages.Message(
-        role="user",
-        parts=[messages.TextPart(text=text)],
-    )
-
-
 # ---------------------------------------------------------------------------
 # Streaming: text, reasoning, tool calls
 # ---------------------------------------------------------------------------
 
 
 class TestStreaming:
-    @pytest.mark.asyncio
     async def test_text_stream(self) -> None:
-        body = _sse(
+        body = sse(
             {"type": "text-start", "id": "t1"},
             {"type": "text-delta", "id": "t1", "textDelta": "Hello"},
             {"type": "text-delta", "id": "t1", "textDelta": " World"},
@@ -103,8 +82,8 @@ class TestStreaming:
         def handler(req: httpx.Request) -> httpx.Response:
             return httpx.Response(200, text=body)
 
-        client = _client(httpx.MockTransport(handler))
-        msgs = await _collect(client, [_user("Hi")])
+        client = mock_client(httpx.MockTransport(handler))
+        msgs = await _collect(client, [user_msg("Hi")])
 
         final = msgs[-1]
         assert final.text == "Hello World"
@@ -113,9 +92,8 @@ class TestStreaming:
         assert final.usage.input_tokens == 5
         assert final.usage.output_tokens == 2
 
-    @pytest.mark.asyncio
     async def test_reasoning_then_text(self) -> None:
-        body = _sse(
+        body = sse(
             {"type": "reasoning-start", "id": "r1"},
             {"type": "reasoning-delta", "id": "r1", "delta": "think"},
             {"type": "reasoning-end", "id": "r1"},
@@ -128,15 +106,14 @@ class TestStreaming:
         def handler(req: httpx.Request) -> httpx.Response:
             return httpx.Response(200, text=body)
 
-        final = (await _collect(_client(httpx.MockTransport(handler)), [_user("?")]))[
-            -1
-        ]
+        final = (
+            await _collect(mock_client(httpx.MockTransport(handler)), [user_msg("?")])
+        )[-1]
         assert final.reasoning == "think"
         assert final.text == "42"
 
-    @pytest.mark.asyncio
     async def test_streaming_tool_call(self) -> None:
-        body = _sse(
+        body = sse(
             {
                 "type": "tool-input-start",
                 "id": "tc-1",
@@ -156,18 +133,19 @@ class TestStreaming:
             return httpx.Response(200, text=body)
 
         final = (
-            await _collect(_client(httpx.MockTransport(handler)), [_user("search")])
+            await _collect(
+                mock_client(httpx.MockTransport(handler)), [user_msg("search")]
+            )
         )[-1]
         tc = final.tool_calls
         assert len(tc) == 1
         assert tc[0].tool_name == "search"
         assert tc[0].tool_args == '{"q":"hi"}'
 
-    @pytest.mark.asyncio
     async def test_inline_file_stream(self) -> None:
         """Models like Gemini-3-pro-image return inline file parts
         alongside text in the language model stream."""
-        body = _sse(
+        body = sse(
             {"type": "text-start", "id": "t1"},
             {"type": "text-delta", "id": "t1", "textDelta": "Here is an image:"},
             {"type": "text-end", "id": "t1"},
@@ -188,7 +166,9 @@ class TestStreaming:
             return httpx.Response(200, text=body)
 
         final = (
-            await _collect(_client(httpx.MockTransport(handler)), [_user("draw me")])
+            await _collect(
+                mock_client(httpx.MockTransport(handler)), [user_msg("draw me")]
+            )
         )[-1]
         assert final.text == "Here is an image:"
         assert len(final.images) == 1
@@ -196,10 +176,9 @@ class TestStreaming:
         assert final.images[0].data == "iVBORw0KGgo="
         assert final.is_done
 
-    @pytest.mark.asyncio
     async def test_complete_tool_call_part(self) -> None:
         """Non-streaming ``tool-call`` part (one shot) must also work."""
-        body = _sse(
+        body = sse(
             {
                 "type": "tool-call",
                 "toolCallId": "tc-1",
@@ -217,7 +196,9 @@ class TestStreaming:
             return httpx.Response(200, text=body)
 
         final = (
-            await _collect(_client(httpx.MockTransport(handler)), [_user("weather")])
+            await _collect(
+                mock_client(httpx.MockTransport(handler)), [user_msg("weather")]
+            )
         )[-1]
         assert len(final.tool_calls) == 1
         assert json.loads(final.tool_calls[0].tool_args) == {"city": "SF"}
@@ -229,7 +210,6 @@ class TestStreaming:
 
 
 class TestRequest:
-    @pytest.mark.asyncio
     async def test_protocol_headers(self) -> None:
         captured: dict[str, str] = {}
 
@@ -237,7 +217,7 @@ class TestRequest:
             captured.update(dict(req.headers))
             return httpx.Response(
                 200,
-                text=_sse({"type": "finish", "finishReason": "stop", "usage": {}}),
+                text=sse({"type": "finish", "finishReason": "stop", "usage": {}}),
             )
 
         model = model_.Model(
@@ -245,8 +225,8 @@ class TestRequest:
             adapter="ai-gateway-v3",
             provider="ai-gateway",
         )
-        client = _client(httpx.MockTransport(handler), api_key="sk-test")
-        await _collect(client, [_user("Hi")], model=model)
+        client = mock_client(httpx.MockTransport(handler), api_key="sk-test")
+        await _collect(client, [user_msg("Hi")], model=model)
 
         assert captured["authorization"] == "Bearer sk-test"
         assert captured["ai-gateway-protocol-version"] == "0.0.1"
@@ -255,7 +235,6 @@ class TestRequest:
         assert captured["ai-language-model-streaming"] == "true"
         assert captured["ai-gateway-auth-method"] == "api-key"
 
-    @pytest.mark.asyncio
     async def test_body_prompt_format(self) -> None:
         captured_body: dict[str, Any] = {}
 
@@ -263,10 +242,10 @@ class TestRequest:
             captured_body.update(json.loads(req.content))
             return httpx.Response(
                 200,
-                text=_sse({"type": "finish", "finishReason": "stop", "usage": {}}),
+                text=sse({"type": "finish", "finishReason": "stop", "usage": {}}),
             )
 
-        await _collect(_client(httpx.MockTransport(handler)), [_user("Hello")])
+        await _collect(mock_client(httpx.MockTransport(handler)), [user_msg("Hello")])
 
         assert captured_body["prompt"] == [
             {
@@ -275,7 +254,6 @@ class TestRequest:
             }
         ]
 
-    @pytest.mark.asyncio
     async def test_provider_options_in_body(self) -> None:
         captured_body: dict[str, Any] = {}
 
@@ -283,19 +261,18 @@ class TestRequest:
             captured_body.update(json.loads(req.content))
             return httpx.Response(
                 200,
-                text=_sse({"type": "finish", "finishReason": "stop", "usage": {}}),
+                text=sse({"type": "finish", "finishReason": "stop", "usage": {}}),
             )
 
         opts = {"gateway": {"order": ["bedrock", "openai"]}}
         await _collect(
-            _client(httpx.MockTransport(handler)),
-            [_user("Hi")],
+            mock_client(httpx.MockTransport(handler)),
+            [user_msg("Hi")],
             provider_options=opts,
         )
 
         assert captured_body["providerOptions"] == opts
 
-    @pytest.mark.asyncio
     async def test_real_tool_in_request_body(self) -> None:
         """A real ``@tool``-decorated function must appear correctly
         in the request body sent to the gateway."""
@@ -311,12 +288,12 @@ class TestRequest:
             captured_body.update(json.loads(req.content))
             return httpx.Response(
                 200,
-                text=_sse({"type": "finish", "finishReason": "stop", "usage": {}}),
+                text=sse({"type": "finish", "finishReason": "stop", "usage": {}}),
             )
 
         await _collect(
-            _client(httpx.MockTransport(handler)),
-            [_user("find something")],
+            mock_client(httpx.MockTransport(handler)),
+            [user_msg("find something")],
             tools=[lookup],
         )
 
@@ -326,7 +303,6 @@ class TestRequest:
         assert td["type"] == "function"
         assert "query" in td["inputSchema"]["properties"]
 
-    @pytest.mark.asyncio
     async def test_multi_turn_request_body(self) -> None:
         """A multi-turn conversation including a tool result must
         serialize correctly into the v3 prompt format."""
@@ -336,7 +312,7 @@ class TestRequest:
             captured_body.update(json.loads(req.content))
             return httpx.Response(
                 200,
-                text=_sse({"type": "finish", "finishReason": "stop", "usage": {}}),
+                text=sse({"type": "finish", "finishReason": "stop", "usage": {}}),
             )
 
         tool_call = messages.ToolCallPart(
@@ -350,16 +326,16 @@ class TestRequest:
             result={"temp": 72},
         )
         conversation = [
-            _user("What's the weather?"),
+            user_msg("What's the weather?"),
             messages.Message(role="assistant", parts=[tool_call]),
             messages.Message(role="tool", parts=[tool_result]),
-            _user("Thanks, and tomorrow?"),
+            user_msg("Thanks, and tomorrow?"),
         ]
 
-        await _collect(_client(httpx.MockTransport(handler)), conversation)
+        await _collect(mock_client(httpx.MockTransport(handler)), conversation)
 
         prompt = captured_body["prompt"]
-        # user → assistant (tool-call) → tool (tool-result) → user
+        # user -> assistant (tool-call) -> tool (tool-result) -> user
         assert len(prompt) == 4
         assert prompt[0]["role"] == "user"
         assert prompt[1]["role"] == "assistant"
@@ -375,7 +351,6 @@ class TestRequest:
 
 
 class TestErrors:
-    @pytest.mark.asyncio
     async def test_401_authentication_error(self) -> None:
         def handler(req: httpx.Request) -> httpx.Response:
             return httpx.Response(
@@ -389,9 +364,8 @@ class TestErrors:
             )
 
         with pytest.raises(errors.GatewayAuthenticationError):
-            await _collect(_client(httpx.MockTransport(handler)), [_user("Hi")])
+            await _collect(mock_client(httpx.MockTransport(handler)), [user_msg("Hi")])
 
-    @pytest.mark.asyncio
     async def test_429_rate_limit_error(self) -> None:
         def handler(req: httpx.Request) -> httpx.Response:
             return httpx.Response(
@@ -405,9 +379,8 @@ class TestErrors:
             )
 
         with pytest.raises(errors.GatewayRateLimitError):
-            await _collect(_client(httpx.MockTransport(handler)), [_user("Hi")])
+            await _collect(mock_client(httpx.MockTransport(handler)), [user_msg("Hi")])
 
-    @pytest.mark.asyncio
     async def test_404_model_not_found(self) -> None:
         def handler(req: httpx.Request) -> httpx.Response:
             return httpx.Response(
@@ -422,13 +395,12 @@ class TestErrors:
             )
 
         with pytest.raises(errors.GatewayModelNotFoundError) as exc_info:
-            await _collect(_client(httpx.MockTransport(handler)), [_user("Hi")])
+            await _collect(mock_client(httpx.MockTransport(handler)), [user_msg("Hi")])
         assert exc_info.value.model_id == "xyz"
 
-    @pytest.mark.asyncio
     async def test_500_malformed_response(self) -> None:
         def handler(req: httpx.Request) -> httpx.Response:
             return httpx.Response(500, text="Not JSON")
 
         with pytest.raises(errors.GatewayResponseError):
-            await _collect(_client(httpx.MockTransport(handler)), [_user("Hi")])
+            await _collect(mock_client(httpx.MockTransport(handler)), [user_msg("Hi")])

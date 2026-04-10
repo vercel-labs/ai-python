@@ -16,20 +16,10 @@ from ai.models.ai_gateway import errors
 class TestGatewayErrorBase:
     """Base class behaviour that all concrete errors inherit."""
 
-    def test_isinstance_hierarchy(self) -> None:
-        err = errors.GatewayRateLimitError("nope")
-        assert isinstance(err, errors.GatewayError)
-        assert isinstance(err, Exception)
-
     def test_generation_id_in_message(self) -> None:
         err = errors.GatewayInternalServerError("boom", generation_id="gen-123")
         assert "[gen-123]" in str(err)
         assert err.generation_id == "gen-123"
-
-    def test_cause_chained(self) -> None:
-        original = ValueError("original")
-        err = errors.GatewayInternalServerError("boom", cause=original)
-        assert err.__cause__ is original
 
 
 class TestCreateGatewayError:

@@ -1,5 +1,7 @@
 """@tool decorator: schema extraction, execution, ToolCall."""
 
+from __future__ import annotations
+
 import pydantic
 import pytest
 
@@ -57,7 +59,6 @@ def test_complex_type_schema() -> None:
 # -- Execution (Tool.__call__) --------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_tool_call_with_json_args() -> None:
     @ai.tool
     async def add(a: int, b: int) -> int:
@@ -71,7 +72,6 @@ async def test_tool_call_with_json_args() -> None:
 # -- ToolCall binds a ToolCallPart to a Tool and returns tool messages ----
 
 
-@pytest.mark.asyncio
 async def test_tool_call_returns_tool_message() -> None:
     @ai.tool
     async def double(x: int) -> int:
@@ -96,7 +96,6 @@ async def test_tool_call_returns_tool_message() -> None:
     assert not result.tool_results[0].is_error
 
 
-@pytest.mark.asyncio
 async def test_tool_call_catches_errors() -> None:
     @ai.tool
     async def fail(x: int) -> int:
@@ -115,7 +114,6 @@ async def test_tool_call_catches_errors() -> None:
     assert "boom" in str(result.tool_results[0].result)
 
 
-@pytest.mark.asyncio
 async def test_tool_call_allows_kwarg_overrides() -> None:
     @ai.tool
     async def double(x: int) -> int:
@@ -134,7 +132,6 @@ async def test_tool_call_allows_kwarg_overrides() -> None:
     assert result.tool_results[0].result == 14
 
 
-@pytest.mark.asyncio
 async def test_tool_call_override_validation_failure() -> None:
     @ai.tool
     async def double(x: int) -> int:
@@ -152,7 +149,6 @@ async def test_tool_call_override_validation_failure() -> None:
         await tc(x="bad")
 
 
-@pytest.mark.asyncio
 async def test_tool_call_malformed_args_become_error_message() -> None:
     @ai.tool
     async def double(x: int) -> int:

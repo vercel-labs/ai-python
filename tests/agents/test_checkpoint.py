@@ -1,9 +1,10 @@
 """Checkpoint replay, hook cancellation/resolution, serialization."""
 
+from __future__ import annotations
+
 from collections.abc import AsyncGenerator
 
 import pydantic
-import pytest
 
 import ai
 from ai.agents.checkpoint import Checkpoint, HookEvent, StepEvent, ToolEvent
@@ -18,7 +19,6 @@ class Approval(pydantic.BaseModel):
 # -- Replay ----------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_step_replay_skips_llm() -> None:
     my_agent = ai.agent()
 
@@ -45,7 +45,6 @@ async def test_step_replay_skips_llm() -> None:
     assert llm2.call_count == 0
 
 
-@pytest.mark.asyncio
 async def test_tool_replay_skips_execution() -> None:
     execution_count = 0
 
@@ -91,7 +90,6 @@ async def test_tool_replay_skips_execution() -> None:
 # -- Hooks -----------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_hook_cancellation_pending() -> None:
     my_agent = ai.agent()
 
@@ -118,7 +116,6 @@ async def test_hook_cancellation_pending() -> None:
     assert hook_msgs[0].parts[0].status == "pending"  # type: ignore[union-attr]
 
 
-@pytest.mark.asyncio
 async def test_hook_resolution_on_reentry() -> None:
     my_agent = ai.agent()
 

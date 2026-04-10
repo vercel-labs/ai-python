@@ -52,7 +52,6 @@ async def double(x: int) -> int:
 # ── Event sequence: text-only run ────────────────────────────────
 
 
-@pytest.mark.asyncio
 async def test_text_only_run_events(handler: RecordingHandler) -> None:
     """Simplest run emits RunStart, StepStart, StepFinish, RunFinish."""
     my_agent = ai.agent()
@@ -74,7 +73,6 @@ async def test_text_only_run_events(handler: RecordingHandler) -> None:
 # ── Event sequence: tool call run ────────────────────────────────
 
 
-@pytest.mark.asyncio
 async def test_tool_call_events(handler: RecordingHandler) -> None:
     """Tool-calling run emits tool events between steps."""
     my_agent = ai.agent(tools=[double])
@@ -112,7 +110,6 @@ async def test_tool_call_events(handler: RecordingHandler) -> None:
 # ── run_id contextvar ────────────────────────────────────────────
 
 
-@pytest.mark.asyncio
 async def test_run_id_available_during_run() -> None:
     """get_run_id() returns a non-empty ID inside a handler during run."""
     captured: str = ""
@@ -138,7 +135,6 @@ async def test_run_id_available_during_run() -> None:
 # ── enable / disable lifecycle ───────────────────────────────────
 
 
-@pytest.mark.asyncio
 async def test_disable_reverts_to_noop() -> None:
     """disable() stops events from reaching the handler."""
     handler = RecordingHandler()
@@ -163,7 +159,6 @@ async def test_disable_reverts_to_noop() -> None:
 # ── User-emitted custom events ──────────────────────────────────
 
 
-@pytest.mark.asyncio
 async def test_user_emitted_custom_event(handler: RecordingHandler) -> None:
     """ai.telemetry.handle() delivers user events to the active handler."""
 
@@ -191,7 +186,6 @@ async def test_user_emitted_custom_event(handler: RecordingHandler) -> None:
 # ── Error capture ────────────────────────────────────────────────
 
 
-@pytest.mark.asyncio
 async def test_run_error_in_finish_event(handler: RecordingHandler) -> None:
     """RunFinishEvent captures the error when the loop function raises."""
     my_agent = ai.agent()

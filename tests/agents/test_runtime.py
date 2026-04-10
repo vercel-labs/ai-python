@@ -1,6 +1,6 @@
 """Agent default loop, tool execution, multi-turn."""
 
-import pytest
+from __future__ import annotations
 
 import ai
 from ai.types import messages
@@ -25,7 +25,6 @@ async def concat(a: str, b: str) -> str:
 # -- Agent default loop: single turn (no tools) ----------------------------
 
 
-@pytest.mark.asyncio
 async def test_agent_text_only() -> None:
     """Agent default loop with no tool calls returns after one LLM call."""
     my_agent = ai.agent(tools=[double])
@@ -41,7 +40,6 @@ async def test_agent_text_only() -> None:
 # -- Agent default loop: tool call + follow-up -----------------------------
 
 
-@pytest.mark.asyncio
 async def test_agent_tool_then_text() -> None:
     """Agent default loop calls tool, feeds result back, gets final text."""
     my_agent = ai.agent(tools=[double])
@@ -62,7 +60,6 @@ async def test_agent_tool_then_text() -> None:
 # -- Agent default loop: multiple tool calls in one message ----------------
 
 
-@pytest.mark.asyncio
 async def test_agent_parallel_tools() -> None:
     """LLM returns two tool calls in one message; both execute."""
     my_agent = ai.agent(tools=[double])
@@ -99,7 +96,6 @@ async def test_agent_parallel_tools() -> None:
 # -- Agent default loop: multi-turn (tool -> tool -> text) -----------------
 
 
-@pytest.mark.asyncio
 async def test_agent_multi_turn() -> None:
     """LLM calls a tool, then calls another tool, then returns text."""
     my_agent = ai.agent(tools=[double, concat])

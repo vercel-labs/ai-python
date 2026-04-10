@@ -1,10 +1,11 @@
 """MCP client: tool conversion, end-to-end execution."""
 
+from __future__ import annotations
+
 import contextlib
 from typing import Any
 
 import mcp.types
-import pytest
 
 import ai
 from ai.agents.mcp.client import _mcp_tool_to_native
@@ -64,7 +65,6 @@ def test_mcp_tool_to_native_schema_preserved() -> None:
 # -- End-to-end: MCP tool executes through Agent default loop ---------------
 
 
-@pytest.mark.asyncio
 async def test_mcp_tool_executes_through_agent() -> None:
     """MCP-style tool via _mcp_tool_to_native works with Agent."""
     call_log: list[dict[str, str]] = []

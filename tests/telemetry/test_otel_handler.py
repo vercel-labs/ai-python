@@ -32,7 +32,6 @@ async def double(x: int) -> int:
     return x * 2
 
 
-@pytest.mark.asyncio
 async def test_text_only_spans(spans: InMemorySpanExporter) -> None:
     """Text-only run produces ai.run > ai.stream span hierarchy."""
     my_agent = ai.agent()
@@ -61,7 +60,6 @@ async def test_text_only_spans(spans: InMemorySpanExporter) -> None:
     assert run_span.attributes.get("ai.run.id") != ""
 
 
-@pytest.mark.asyncio
 async def test_tool_call_spans(spans: InMemorySpanExporter) -> None:
     """Tool-calling run produces ai.tool spans with correct attributes."""
     my_agent = ai.agent(tools=[double])

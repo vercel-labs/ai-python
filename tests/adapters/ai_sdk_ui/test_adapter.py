@@ -2,10 +2,10 @@
 Based on: .reference/ai/packages/ai/src/ui/process-ui-message-stream.test.ts
 """
 
+from __future__ import annotations
+
 import asyncio
 from collections.abc import AsyncGenerator
-
-import pytest
 
 import ai
 from ai.adapters.ai_sdk_ui import adapter, ui_message
@@ -30,7 +30,6 @@ async def get_event_types(msgs: list[messages.Message]) -> list[str]:
 # -----------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_text_streaming() -> None:
     """Text: start -> start-step -> text-start/delta/end -> finish-step -> finish"""
     msgs = [
@@ -67,7 +66,6 @@ async def test_text_streaming() -> None:
     ]
 
 
-@pytest.mark.asyncio
 async def test_tool_roundtrip() -> None:
     """Server-side tool: input-available -> output-available -> text response.
 
@@ -124,7 +122,6 @@ async def test_tool_roundtrip() -> None:
     ]
 
 
-@pytest.mark.asyncio
 async def test_text_then_tool_then_text() -> None:
     """Full mothership scenario: text -> tool -> result -> final text.
 
@@ -231,7 +228,6 @@ async def get_weather(city: str) -> str:
     return f"Sunny in {city}"
 
 
-@pytest.mark.asyncio
 async def test_runtime_tool_roundtrip() -> None:
     """
     Integration test: run an Agent through agent.run() and verify
@@ -520,7 +516,6 @@ def test_ui_skips_unsupported_parts() -> None:
 # -----------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_tool_approval_hook_emits_approval_request() -> None:
     """Pending ToolApproval HookPart emits tool-approval-request on the wire.
 
@@ -609,7 +604,6 @@ def test_approval_responded_resolves_hook() -> None:
     assert resolution == {"granted": True, "reason": "looks safe"}
 
 
-@pytest.mark.asyncio
 async def test_runtime_tool_approval_same_step() -> None:
     """E2E: tool-approval-request must land in the same SSE step as the tool call.
 
