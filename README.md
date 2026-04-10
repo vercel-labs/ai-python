@@ -114,4 +114,5 @@ Small focused samples live in `examples/samples/`. End-to-end demos:
 
 - `examples/fastapi-vite/` -- FastAPI backend + Vite frontend with hook-based tool approval
 - `examples/multiagent-textual/` -- Textual TUI with parallel agents and interactive hook resolution
-- `examples/temporal-durable/` -- durable execution patterns with Temporal
+- `examples/temporal-direct/` -- durable agent with a custom loop (every I/O call is a Temporal activity)
+- `examples/temporal-middleware/` -- durable agent via Middleware (default loop, I/O routed to Temporal activities)

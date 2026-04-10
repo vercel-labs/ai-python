@@ -1,7 +1,7 @@
 [project]
-name = "temporal-durable"
+name = "temporal-direct"
 version = "0.1.0"
-description = "Durable agent execution with Temporal"
+description = "Durable agent with a custom loop — every I/O call is a Temporal activity"
 requires-python = ">=3.12"
 dependencies = [
     "vercel-ai-sdk",

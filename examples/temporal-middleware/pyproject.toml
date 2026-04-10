@@ -1,0 +1,12 @@
+[project]
+name = "temporal-middleware"
+version = "0.1.0"
+description = "Durable agent via Middleware — default loop, I/O routed to Temporal activities"
+requires-python = ">=3.12"
+dependencies = [
+    "vercel-ai-sdk",
+    "temporalio>=1.9.0",
+]
+
+[tool.uv.sources]
+vercel-ai-sdk = { path = "../..", editable = true }
