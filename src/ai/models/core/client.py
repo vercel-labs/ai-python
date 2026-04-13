@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import dataclasses
+import os
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     import httpx
+
+    from . import model as model_
 
 
 @dataclasses.dataclass
@@ -47,3 +50,26 @@ class Client:
         if self._http is not None and not self._http.is_closed:
             await self._http.aclose()
             self._http = None
+
+
+# ---------------------------------------------------------------------------
+# Provider defaults — base URLs and env var names for auto-client creation.
+# ---------------------------------------------------------------------------
+
+_PROVIDER_DEFAULTS: dict[str, tuple[str, str]] = {
+    "ai-gateway": ("https://ai-gateway.vercel.sh/v3/ai", "AI_GATEWAY_API_KEY"),
+    "anthropic": ("https://api.anthropic.com/v1", "ANTHROPIC_API_KEY"),
+    "openai": ("https://api.openai.com/v1", "OPENAI_API_KEY"),
+}
+
+
+def auto_client(model: model_.Model) -> Client:
+    """Create a :class:`Client` from env vars for the given model's provider."""
+    defaults = _PROVIDER_DEFAULTS.get(model.provider)
+    if defaults is None:
+        raise ValueError(
+            f"No default client config for provider {model.provider!r}. "
+            f"Pass an explicit client= argument."
+        )
+    base_url, env_var = defaults
+    return Client(base_url=base_url, api_key=os.environ.get(env_var))
