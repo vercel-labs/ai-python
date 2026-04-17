@@ -13,7 +13,7 @@ from typing import Any, Literal, cast
 
 import pydantic
 
-from ...types import messages as messages_
+from ....types import messages as messages_
 
 
 class UITextPart(pydantic.BaseModel):
