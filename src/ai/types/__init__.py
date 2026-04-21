@@ -1,40 +1,48 @@
-"""Shared transport types — the universal interchange format.
-
-Message, Part types, Usage, and tool schema protocols used across
-both the models and agents layers.
-"""
-
+from .events import (
+    End,
+    Event,
+    HookResolution,
+    HookSuspention,
+    MessageEnd,
+    MessageStart,
+    PartDelta,
+    PartEnd,
+    PartStart,
+    Start,
+)
 from .messages import (
     FilePart,
     HookPart,
     Message,
     Part,
-    PartClosed,
-    PartDelta,
-    PartOpened,
     ReasoningPart,
-    StreamState,
     StructuredOutputPart,
     TextPart,
     ToolCallPart,
     ToolResultPart,
-    Usage,
     generate_id,
 )
-from .stream import StreamResultLike
-from .tools import ToolLike, ToolSchema
+from .proto import StreamResultLike, ToolLike
+from .tools import ToolSchema
+from .usage import Usage
 
 __all__ = [
+    "End",
+    "Event",
     "FilePart",
     "HookPart",
+    "HookResolution",
+    "HookSuspention",
     "Message",
+    "MessageEnd",
+    "MessageStart",
     "Part",
-    "PartClosed",
     "PartDelta",
-    "PartOpened",
+    "PartEnd",
+    "PartStart",
     "ReasoningPart",
+    "Start",
     "StreamResultLike",
-    "StreamState",
     "StructuredOutputPart",
     "TextPart",
     "ToolCallPart",
