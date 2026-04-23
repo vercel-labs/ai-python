@@ -4,8 +4,6 @@ Message/tool conversion and streaming via the official ``anthropic`` SDK.
 The SDK client is constructed from :class:`Client` params on each call.
 """
 
-from __future__ import annotations
-
 import json
 from collections.abc import AsyncGenerator, Sequence
 from typing import Any
@@ -13,12 +11,9 @@ from typing import Any
 import anthropic
 import pydantic
 
-from ...types import media
-from ...types import messages as messages_
-from ...types import tools as tools_
-from ..core import client as client_
-from ..core import model as model_
-from ..core.helpers import streaming
+from ... import types
+from ...types import events
+from .. import core
 
 # ---------------------------------------------------------------------------
 # Message / tool conversion — internal types → Anthropic wire format
@@ -26,7 +21,7 @@ from ..core.helpers import streaming
 
 
 def _tools_to_anthropic(
-    tools: Sequence[tools_.ToolLike],
+    tools: Sequence[types.proto.ToolLike],
 ) -> list[dict[str, Any]]:
     """Convert internal Tool objects to Anthropic tool schema format."""
     return [
@@ -40,7 +35,7 @@ def _tools_to_anthropic(
 
 
 def _file_part_to_anthropic(
-    part: messages_.FilePart,
+    part: types.FilePart,
 ) -> dict[str, Any]:
     """Convert a :class:`FilePart` to an Anthropic content block.
 
@@ -53,7 +48,7 @@ def _file_part_to_anthropic(
 
     if mt.startswith("image/"):
         media_type = "image/jpeg" if mt == "image/*" else mt
-        if isinstance(part.data, str) and media.is_url(part.data):
+        if isinstance(part.data, str) and types.media.is_url(part.data):
             return {
                 "type": "image",
                 "source": {"type": "url", "url": part.data},
@@ -63,12 +58,12 @@ def _file_part_to_anthropic(
             "source": {
                 "type": "base64",
                 "media_type": media_type,
-                "data": media.data_to_base64(part.data),
+                "data": types.media.data_to_base64(part.data),
             },
         }
 
     if mt == "application/pdf":
-        if isinstance(part.data, str) and media.is_url(part.data):
+        if isinstance(part.data, str) and types.media.is_url(part.data):
             return {
                 "type": "document",
                 "source": {"type": "url", "url": part.data},
@@ -78,14 +73,14 @@ def _file_part_to_anthropic(
             "source": {
                 "type": "base64",
                 "media_type": "application/pdf",
-                "data": media.data_to_base64(part.data),
+                "data": types.media.data_to_base64(part.data),
             },
         }
 
     if mt == "text/plain":
         if isinstance(part.data, bytes):
             text_data = part.data.decode("utf-8")
-        elif media.is_url(part.data):
+        elif types.media.is_url(part.data):
             return {
                 "type": "document",
                 "source": {"type": "url", "url": part.data},
@@ -107,7 +102,7 @@ def _file_part_to_anthropic(
 
 
 async def _messages_to_anthropic(
-    messages: list[messages_.Message],
+    messages: list[types.Message],
 ) -> tuple[str | None, list[dict[str, Any]]]:
     """Convert internal messages to Anthropic API format.
 
@@ -122,13 +117,13 @@ async def _messages_to_anthropic(
         match msg.role:
             case "system":
                 system_prompt = "".join(
-                    p.text for p in msg.parts if isinstance(p, messages_.TextPart)
+                    p.text for p in msg.parts if isinstance(p, types.TextPart)
                 )
             case "assistant":
                 content: list[dict[str, Any]] = []
                 for part in msg.parts:
                     match part:
-                        case messages_.ReasoningPart(text=text, signature=signature):
+                        case types.ReasoningPart(text=text, signature=signature):
                             if signature:
                                 content.append(
                                     {
@@ -137,9 +132,9 @@ async def _messages_to_anthropic(
                                         "signature": signature,
                                     }
                                 )
-                        case messages_.TextPart(text=text):
+                        case types.TextPart(text=text):
                             content.append({"type": "text", "text": text})
-                        case messages_.ToolCallPart():
+                        case types.ToolCallPart():
                             tool_input = (
                                 json.loads(part.tool_args) if part.tool_args else {}
                             )
@@ -157,7 +152,7 @@ async def _messages_to_anthropic(
             case "tool":
                 tool_results: list[dict[str, Any]] = []
                 for part in msg.parts:
-                    if isinstance(part, messages_.ToolResultPart):
+                    if isinstance(part, types.ToolResultPart):
                         entry: dict[str, Any] = {
                             "type": "tool_result",
                             "tool_use_id": part.tool_call_id,
@@ -172,19 +167,19 @@ async def _messages_to_anthropic(
                     result.append({"role": "user", "content": tool_results})
 
             case "user":
-                has_files = any(isinstance(p, messages_.FilePart) for p in msg.parts)
+                has_files = any(isinstance(p, types.FilePart) for p in msg.parts)
                 if not has_files:
                     content_text = "".join(
-                        p.text for p in msg.parts if isinstance(p, messages_.TextPart)
+                        p.text for p in msg.parts if isinstance(p, types.TextPart)
                     )
                     result.append({"role": "user", "content": content_text})
                 else:
                     user_content: list[dict[str, Any]] = []
                     for p in msg.parts:
                         match p:
-                            case messages_.TextPart(text=text):
+                            case types.TextPart(text=text):
                                 user_content.append({"type": "text", "text": text})
-                            case messages_.FilePart():
+                            case types.FilePart():
                                 user_content.append(_file_part_to_anthropic(p))
                     result.append({"role": "user", "content": user_content})
 
@@ -228,7 +223,7 @@ def _to_content_list(content: Any) -> list[dict[str, Any]]:
 
 
 def _make_client(
-    client: client_.Client,
+    client: core.client.Client,
 ) -> anthropic.AsyncAnthropic:
     """Construct an ``AsyncAnthropic`` from our generic ``Client``."""
     return anthropic.AsyncAnthropic(
@@ -243,19 +238,19 @@ def _make_client(
 
 
 async def stream(
-    client: client_.Client,
-    model: model_.Model,
-    messages: list[messages_.Message],
+    client: core.client.Client,
+    model: core.model.Model,
+    messages: list[types.Message],
     *,
-    tools: Sequence[tools_.ToolLike] | None = None,
+    tools: Sequence[types.proto.ToolLike] | None = None,
     output_type: type[pydantic.BaseModel] | None = None,
     thinking: bool = False,
     budget_tokens: int = 10000,
     **kwargs: Any,
-) -> AsyncGenerator[messages_.Message]:
+) -> AsyncGenerator[events.Event]:
     """Stream an LLM response via the Anthropic messages API.
 
-    Yields ``Message`` snapshots as the response streams in.
+    Yields :class:`~ai.types.events.Event` objects as the response streams in.
 
     Extra keyword arguments beyond the ``StreamFn`` protocol:
 
@@ -285,16 +280,20 @@ async def stream(
     if output_type is not None:
         api_kwargs["output_format"] = output_type
 
-    handler = streaming.StreamHandler()
-
     block_types: dict[int, str] = {}
     tool_ids: dict[int, str] = {}
     signature_buffer: dict[int, str] = {}
+    # Accumulate parts for the final Message
+    parts: list[types.Part] = []
+    _text_parts: dict[str, str] = {}  # block_id -> accumulated text
+    _reasoning_parts: dict[str, str] = {}  # block_id -> accumulated text
+    _tool_parts: dict[str, str] = {}  # tool_call_id -> accumulated args
 
     try:
         stream_cm = sdk_client.messages.stream(**api_kwargs)
 
         async with stream_cm as sdk_stream:
+            yield events.MessageStart()
             async for event in sdk_stream:
                 match event.type:
                     case "content_block_start":
@@ -304,20 +303,17 @@ async def stream(
 
                         match block.type:
                             case "text":
-                                yield handler.handle_event(
-                                    streaming.TextStart(block_id=str(idx))
-                                )
+                                _text_parts[str(idx)] = ""
+                                yield events.TextStart(block_id=str(idx))
                             case "thinking":
-                                yield handler.handle_event(
-                                    streaming.ReasoningStart(block_id=str(idx))
-                                )
+                                _reasoning_parts[str(idx)] = ""
+                                yield events.ReasoningStart(block_id=str(idx))
                             case "tool_use":
                                 tool_ids[idx] = block.id
-                                yield handler.handle_event(
-                                    streaming.ToolStart(
-                                        tool_call_id=block.id,
-                                        tool_name=block.name,
-                                    )
+                                _tool_parts[block.id] = ""
+                                yield events.ToolStart(
+                                    tool_call_id=block.id,
+                                    tool_name=block.name,
                                 )
 
                     case "content_block_delta":
@@ -326,18 +322,21 @@ async def stream(
 
                         match delta.type:
                             case "text_delta":
-                                yield handler.handle_event(
-                                    streaming.TextDelta(
-                                        block_id=str(idx),
-                                        delta=delta.text,
-                                    )
+                                _text_parts[str(idx)] = (
+                                    _text_parts.get(str(idx), "") + delta.text
+                                )
+                                yield events.TextDelta(
+                                    chunk=delta.text,
+                                    block_id=str(idx),
                                 )
                             case "thinking_delta":
-                                yield handler.handle_event(
-                                    streaming.ReasoningDelta(
-                                        block_id=str(idx),
-                                        delta=delta.thinking,
-                                    )
+                                _reasoning_parts[str(idx)] = (
+                                    _reasoning_parts.get(str(idx), "")
+                                    + delta.thinking
+                                )
+                                yield events.ReasoningDelta(
+                                    chunk=delta.thinking,
+                                    block_id=str(idx),
                                 )
                             case "signature_delta":
                                 signature_buffer[idx] = (
@@ -346,37 +345,54 @@ async def stream(
                             case "input_json_delta":
                                 tool_id = tool_ids.get(idx)
                                 if tool_id:
-                                    yield handler.handle_event(
-                                        streaming.ToolArgsDelta(
-                                            tool_call_id=tool_id,
-                                            delta=delta.partial_json,
-                                        )
+                                    _tool_parts[tool_id] = (
+                                        _tool_parts.get(tool_id, "")
+                                        + delta.partial_json
+                                    )
+                                    yield events.ToolDelta(
+                                        chunk=delta.partial_json,
+                                        tool_call_id=tool_id,
                                     )
 
                     case "content_block_stop":
                         idx = event.index
+                        bid = str(idx)
                         match block_types.get(idx):
                             case "text":
-                                yield handler.handle_event(
-                                    streaming.TextEnd(block_id=str(idx))
+                                parts.append(
+                                    types.TextPart(
+                                        id=bid, text=_text_parts.get(bid, "")
+                                    )
                                 )
+                                yield events.TextEnd(block_id=bid)
                             case "thinking":
-                                yield handler.handle_event(
-                                    streaming.ReasoningEnd(
-                                        block_id=str(idx),
+                                parts.append(
+                                    types.ReasoningPart(
+                                        id=bid,
+                                        text=_reasoning_parts.get(bid, ""),
                                         signature=signature_buffer.get(idx),
                                     )
+                                )
+                                yield events.ReasoningEnd(
+                                    block_id=bid,
+                                    signature=signature_buffer.get(idx),
                                 )
                             case "tool_use":
                                 tool_id = tool_ids.get(idx)
                                 if tool_id:
-                                    yield handler.handle_event(
-                                        streaming.ToolEnd(tool_call_id=tool_id)
+                                    parts.append(
+                                        types.ToolCallPart(
+                                            id=tool_id,
+                                            tool_call_id=tool_id,
+                                            tool_name=block_types.get(idx, ""),
+                                            tool_args=_tool_parts.get(tool_id, ""),
+                                        )
                                     )
+                                    yield events.ToolEnd(tool_call_id=tool_id)
 
             snapshot = sdk_stream.current_message_snapshot
             sdk_usage = snapshot.usage
-            usage = messages_.Usage(
+            usage = types.Usage(
                 input_tokens=sdk_usage.input_tokens or 0,
                 output_tokens=sdk_usage.output_tokens or 0,
                 cache_read_tokens=getattr(sdk_usage, "cache_read_input_tokens", None),
@@ -385,6 +401,11 @@ async def stream(
                 ),
                 raw=sdk_usage.model_dump(exclude_none=True) or None,
             )
-            yield handler.handle_event(streaming.MessageDone(usage=usage))
+            final_message = types.Message(
+                role="assistant",
+                parts=parts,
+                usage=usage,
+            )
+            yield events.MessageEnd(message=final_message, usage=usage)
     finally:
         await sdk_client.close()

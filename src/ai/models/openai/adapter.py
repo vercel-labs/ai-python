@@ -12,6 +12,7 @@ from typing import Any
 import openai
 import pydantic
 
+from ...types import events as events_
 from ...types import media
 from ...types import messages as messages_
 from ...types import tools as tools_
@@ -206,10 +207,10 @@ async def stream(
     budget_tokens: int | None = None,
     reasoning_effort: str | None = None,
     **kwargs: Any,
-) -> AsyncGenerator[messages_.Message]:
+) -> AsyncGenerator[events_.Event]:
     """Stream an LLM response via the OpenAI chat completions API.
 
-    Yields ``Message`` snapshots as the response streams in.
+    Yields :class:`~ai.types.events.Event` objects as the response streams in.
 
     Extra keyword arguments beyond the ``StreamFn`` protocol:
 
@@ -256,6 +257,9 @@ async def stream(
 
     handler = streaming.StreamHandler()
 
+    def _emit(adapter_event: streaming.StreamEvent) -> list[events_.Event]:
+        return handler.handle_event(adapter_event)
+
     try:
         sdk_stream = await sdk_client.chat.completions.create(**api_kwargs)
 
@@ -264,6 +268,8 @@ async def stream(
         tc_state: dict[int, dict[str, Any]] = {}
         finish_reason: str | None = None
         usage: messages_.Usage | None = None
+
+        yield handler.message_start()
 
         async for chunk in sdk_stream:
             if chunk.usage is not None:
@@ -308,28 +314,33 @@ async def stream(
             if reasoning_value:
                 if not reasoning_started:
                     reasoning_started = True
-                    yield handler.handle_event(
+                    for e in _emit(
                         streaming.ReasoningStart(block_id="reasoning")
-                    )
-                yield handler.handle_event(
+                    ):
+                        yield e
+                for e in _emit(
                     streaming.ReasoningDelta(
                         block_id="reasoning", delta=reasoning_value
                     )
-                )
+                ):
+                    yield e
 
             if delta.content:
                 if reasoning_started:
-                    yield handler.handle_event(
+                    for e in _emit(
                         streaming.ReasoningEnd(block_id="reasoning")
-                    )
+                    ):
+                        yield e
                     reasoning_started = False
 
                 if not text_started:
                     text_started = True
-                    yield handler.handle_event(streaming.TextStart(block_id="text"))
-                yield handler.handle_event(
+                    for e in _emit(streaming.TextStart(block_id="text")):
+                        yield e
+                for e in _emit(
                     streaming.TextDelta(block_id="text", delta=delta.content)
-                )
+                ):
+                    yield e
 
             if delta.tool_calls:
                 for tc in delta.tool_calls:
@@ -351,37 +362,43 @@ async def stream(
 
                             if not tc_state[idx]["started"] and tid:
                                 tc_state[idx]["started"] = True
-                                yield handler.handle_event(
+                                for e in _emit(
                                     streaming.ToolStart(
                                         tool_call_id=tid,
                                         tool_name=tname,
                                     )
-                                )
+                                ):
+                                    yield e
 
                             if tid:
-                                yield handler.handle_event(
+                                for e in _emit(
                                     streaming.ToolArgsDelta(
                                         tool_call_id=tid,
                                         delta=tc.function.arguments,
                                     )
-                                )
+                                ):
+                                    yield e
 
             if choice.finish_reason is not None:
                 finish_reason = choice.finish_reason
                 if reasoning_started:
-                    yield handler.handle_event(
+                    for e in _emit(
                         streaming.ReasoningEnd(block_id="reasoning")
-                    )
+                    ):
+                        yield e
                 if text_started:
-                    yield handler.handle_event(streaming.TextEnd(block_id="text"))
+                    for e in _emit(streaming.TextEnd(block_id="text")):
+                        yield e
                 for tc in tc_state.values():
                     if tc["started"] and tc["id"]:
-                        yield handler.handle_event(
+                        for e in _emit(
                             streaming.ToolEnd(tool_call_id=tc["id"])
-                        )
+                        ):
+                            yield e
 
-        yield handler.handle_event(
+        for e in _emit(
             streaming.MessageDone(finish_reason=finish_reason, usage=usage)
-        )
+        ):
+            yield e
     finally:
         await sdk_client.close()

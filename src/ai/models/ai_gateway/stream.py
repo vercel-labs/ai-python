@@ -12,9 +12,11 @@ from typing import Any
 import httpx
 import pydantic
 
+from ...types import events as events_
 from ...types import media
 from ...types import messages as messages_
 from ...types import tools as tools_
+from ...types import usage as usage_
 from ..core import client as client_
 from ..core import model as model_
 from ..core.helpers import files, streaming
@@ -169,10 +171,10 @@ def _expand_tool_call(data: dict[str, Any]) -> list[streaming.StreamEvent]:
     ]
 
 
-def _parse_usage(data: Any) -> messages_.Usage:
+def _parse_usage(data: Any) -> usage_.Usage:
     """Parse v3 usage data into an internal ``Usage``."""
     if not isinstance(data, dict):
-        return messages_.Usage()
+        return usage_.Usage()
 
     input_tokens_obj = data.get("inputTokens")
     output_tokens_obj = data.get("outputTokens")
@@ -180,7 +182,7 @@ def _parse_usage(data: Any) -> messages_.Usage:
     if isinstance(input_tokens_obj, dict) or isinstance(output_tokens_obj, dict):
         inp = input_tokens_obj if isinstance(input_tokens_obj, dict) else {}
         out = output_tokens_obj if isinstance(output_tokens_obj, dict) else {}
-        return messages_.Usage(
+        return usage_.Usage(
             input_tokens=inp.get("total") or 0,
             output_tokens=out.get("total") or 0,
             reasoning_tokens=out.get("reasoning"),
@@ -189,7 +191,7 @@ def _parse_usage(data: Any) -> messages_.Usage:
             raw=data,
         )
 
-    return messages_.Usage(
+    return usage_.Usage(
         input_tokens=data.get("prompt_tokens") or data.get("inputTokens") or 0,
         output_tokens=(data.get("completion_tokens") or data.get("outputTokens") or 0),
         raw=data,
@@ -287,12 +289,10 @@ async def stream(
     tools: Sequence[tools_.ToolLike] | None = None,
     output_type: type[pydantic.BaseModel] | None = None,
     **kwargs: Any,
-) -> AsyncGenerator[messages_.Message]:
+) -> AsyncGenerator[events_.Event]:
     """Stream an LLM response through the AI Gateway v3 protocol.
 
-    Yields ``Message`` snapshots as the response streams in.  Each
-    snapshot is a complete, self-contained message reflecting the
-    accumulated state up to that point.
+    Yields :class:`~ai.types.events.Event` objects as the response streams in.
     """
     body = await _build_request_body(
         messages, tools=tools, output_type=output_type, **kwargs
@@ -319,10 +319,11 @@ async def stream(
                     api_key_provided=bool(client.api_key),
                 )
 
+            yield handler.message_start()
             async for data in _common.parse_sse_lines(response):
-                for event in _parse_stream_part(data):
-                    msg = handler.handle_event(event)
-                    yield msg
+                for adapter_event in _parse_stream_part(data):
+                    for out_event in handler.handle_event(adapter_event):
+                        yield out_event
     except errors.GatewayError:
         raise
     except httpx.TimeoutException as exc:

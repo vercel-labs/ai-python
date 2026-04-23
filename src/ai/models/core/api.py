@@ -5,12 +5,13 @@ These wire together adapters, middleware chains, and auto-client creation.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import AsyncGenerator, Sequence
 from typing import Any
 
 import pydantic
 
 from ... import middleware as middleware_
+from ...types import events as events_
 from ...types import integrity as integrity_
 from ...types import messages as messages_
 from ...types import stream as stream_
@@ -21,7 +22,7 @@ from . import model as model_
 from . import types as types_
 
 
-async def stream(
+def stream(
     model: model_.Model,
     messages: list[messages_.Message],
     *,
@@ -36,6 +37,11 @@ async def stream(
     collects the final ``Message``.  After iteration, access ``.text``,
     ``.tool_calls``, ``.usage``, etc.
 
+    Call-site is a plain ``async for`` — no outer ``await`` needed::
+
+        async for msg in ai.stream(model, messages):
+            ...
+
     One call is one turn: a single request and its response.  The model
     response carries ``turn_id``; re-emitted input messages keep any
     existing ``turn_id`` from prior turns and only receive the current
@@ -43,6 +49,9 @@ async def stream(
 
     The client is resolved from the model: ``model.client`` if set,
     otherwise auto-created from ``model.base_url`` / ``model.api_key_env``.
+
+    Middleware dispatch and adapter setup are deferred to the first
+    iteration; any async preflight work happens there.
     """
     messages = integrity_.prepare_messages(messages)
 
@@ -76,8 +85,13 @@ async def stream(
             input_messages=call.messages,
         )
 
-    chain = middleware_._build_model_chain(_real)
-    return await chain(call)
+    async def _driver() -> AsyncGenerator[events_.Event]:
+        chain = middleware_._build_model_chain(_real)
+        inner = await chain(call)
+        async for event in inner:
+            yield event
+
+    return stream_.StreamResult.from_generator(_driver())
 
 
 async def generate(

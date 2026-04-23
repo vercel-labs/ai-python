@@ -24,7 +24,7 @@ import pydantic
 
 from .types import messages as messages_
 from .types import tools as tools_
-from .types.stream import StreamResultLike
+from .types.proto import StreamResultLike
 
 # ---------------------------------------------------------------------------
 # Call context objects — frozen dataclasses with isolated mutable fields.

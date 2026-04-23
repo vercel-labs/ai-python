@@ -1,6 +1,7 @@
 from collections.abc import AsyncGenerator
 from typing import Any, Protocol, runtime_checkable
 
+from . import events as events_
 from . import messages, usage
 
 
@@ -25,7 +26,7 @@ class StreamResultLike(Protocol):
     The easiest way is ``StreamResult.from_generator(gen)``.
     """
 
-    def __aiter__(self) -> AsyncGenerator[messages.Message]: ...
+    def __aiter__(self) -> AsyncGenerator[events_.Event]: ...
 
     @property
     def text(self) -> str: ...

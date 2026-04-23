@@ -26,7 +26,7 @@ Usage::
     ids = await openai.list()
 """
 
-from ..types.stream import StreamResultLike
+from ..types.proto import StreamResultLike
 from .ai_gateway import ai_gateway
 from .anthropic import anthropic
 from .core.adapters import register_generate, register_stream
