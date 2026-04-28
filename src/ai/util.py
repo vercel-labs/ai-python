@@ -7,11 +7,11 @@ from collections.abc import AsyncIterable, AsyncIterator
 
 
 async def merge[T](*aiterables: AsyncIterable[T]) -> AsyncIterator[T]:
-    aiters = [iter.__aiter__() for iter in aiterables]
+    aiters = [aiter(iter) for iter in aiterables]
 
     # Launch a task doing anext on every iterator
     tasks: list[asyncio.Future[T] | None] = [
-        asyncio.ensure_future(iter.__anext__()) for iter in aiters
+        asyncio.ensure_future(anext(iter)) for iter in aiters
     ]
 
     try:
@@ -33,7 +33,7 @@ async def merge[T](*aiterables: AsyncIterable[T]) -> AsyncIterator[T]:
                 else:
                     # Fire off a new task for the relevant iterator
                     iter = aiters[idx]
-                    tasks[idx] = asyncio.ensure_future(iter.__anext__())
+                    tasks[idx] = asyncio.ensure_future(anext(iter))
                     yield t.result()
     except Exception:
         for task in tasks:
