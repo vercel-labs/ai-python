@@ -47,6 +47,43 @@ async def test_stream_basic() -> None:
     assert "".join(deltas) == "Hello world"
 
 
+async def test_stream_tool_end_includes_aggregated_tool_call() -> None:
+    """ToolEnd exposes the full ToolCallPart assembled from streamed input."""
+
+    async def _tool_stream(
+        client: models.Client,
+        model: models.Model,
+        messages: list[messages_.Message],
+        *,
+        tools: Sequence[ai.ToolLike] | None = None,
+        output_type: type[pydantic.BaseModel] | None = None,
+        **kwargs: Any,
+    ) -> AsyncGenerator[events_.Event]:
+        yield events_.StreamStart()
+        yield events_.ToolStart(tool_call_id="tc-1", tool_name="weather")
+        yield events_.ToolDelta(tool_call_id="tc-1", chunk='{"city"')
+        yield events_.ToolDelta(tool_call_id="tc-1", chunk=':"SF"}')
+        yield events_.ToolEnd(
+            tool_call_id="tc-1",
+            tool_call=messages_.DUMMY_TOOL_CALL,
+        )
+        yield events_.StreamEnd()
+
+    models.register_stream("mock", _tool_stream)
+
+    s = models.stream(MOCK_MODEL, [ai.user_message("Check weather")])
+    tool_end: events_.ToolEnd | None = None
+    async for event in s:
+        if isinstance(event, events_.ToolEnd):
+            tool_end = event
+
+    assert tool_end is not None
+    assert tool_end.tool_call.tool_call_id == "tc-1"
+    assert tool_end.tool_call.tool_name == "weather"
+    assert tool_end.tool_call.tool_args == '{"city":"SF"}'
+    assert s.tool_calls == [tool_end.tool_call]
+
+
 async def test_stream_with_explicit_client() -> None:
     """Model with explicit client= forwards it to the adapter."""
     received_clients: list[models.Client] = []

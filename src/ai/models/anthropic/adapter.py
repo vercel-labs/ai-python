@@ -13,6 +13,7 @@ import pydantic
 
 from ... import types
 from ...types import events
+from ...types import messages as messages_
 from .. import core
 
 # ---------------------------------------------------------------------------
@@ -352,7 +353,10 @@ async def stream(
                             case "tool_use":
                                 tool_id = tool_ids.get(idx)
                                 if tool_id:
-                                    yield events.ToolEnd(tool_call_id=tool_id)
+                                    yield events.ToolEnd(
+                                        tool_call_id=tool_id,
+                                        tool_call=messages_.DUMMY_TOOL_CALL,
+                                    )
 
             snapshot = sdk_stream.current_message_snapshot
             sdk_usage = snapshot.usage

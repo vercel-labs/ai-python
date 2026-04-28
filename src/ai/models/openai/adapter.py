@@ -349,7 +349,10 @@ async def stream(
                     text_started = False
                 for tc in tc_state.values():
                     if tc["started"] and tc["id"]:
-                        yield types.events.ToolEnd(tool_call_id=tc["id"])
+                        yield types.events.ToolEnd(
+                            tool_call_id=tc["id"],
+                            tool_call=types.messages.DUMMY_TOOL_CALL,
+                        )
                         tc["started"] = False
 
         yield types.events.StreamEnd(usage=usage)

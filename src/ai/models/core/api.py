@@ -84,8 +84,8 @@ class Stream:
 
     async def __anext__(self) -> types.Event:
         event = await self._gen.__anext__()
-        self._aggregate_event(event)
-        return event.model_copy(update={"message": self._message})
+        updates = self._aggregate_event(event)
+        return event.model_copy(update={"message": self._message, **updates})
 
     @property
     def message(self) -> types.Message:
@@ -107,7 +107,9 @@ class Stream:
     def output(self) -> Any:
         return self._message.output
 
-    def _aggregate_event(self, event: types.Event) -> None:
+    def _aggregate_event(self, event: types.Event) -> dict[str, Any]:
+        updates: dict[str, Any] = {}
+
         # grab usage from any event that carries one
         if event.usage is not None:
             self._message.usage = event.usage
@@ -149,6 +151,10 @@ class Stream:
                 existing_tool = self._parts.get(tcid)
                 if isinstance(existing_tool, types.ToolCallPart):
                     existing_tool.tool_args += c
+            case types.ToolEnd(tool_call_id=tcid):
+                existing_tool = self._parts.get(tcid)
+                if isinstance(existing_tool, types.ToolCallPart):
+                    updates["tool_call"] = existing_tool
             case types.FileEvent(block_id=bid, media_type=mt, data=d, filename=fname):
                 fp = types.FilePart(
                     id=bid or types.generate_id(),
@@ -160,6 +166,8 @@ class Stream:
                 self._parts[fp.id] = fp
             case _:
                 pass
+
+        return updates
 
 
 def stream(
