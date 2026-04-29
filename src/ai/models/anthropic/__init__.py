@@ -22,7 +22,7 @@ from ..core.model import Model
 if TYPE_CHECKING:
     pass
 
-_BASE_URL = "https://api.anthropic.com/v1"
+_BASE_URL = "https://api.anthropic.com"
 _API_KEY_ENV = "ANTHROPIC_API_KEY"
 _ANTHROPIC_VERSION = "2023-06-01"
 
@@ -83,7 +83,9 @@ class _Anthropic:
             "x-api-key": c.api_key or "",
             "anthropic-version": _ANTHROPIC_VERSION,
         }
-        response = await c.http.get(f"{c.base_url.rstrip('/')}/models", headers=headers)
+        response = await c.http.get(
+            f"{c.base_url.rstrip('/')}/v1/models", headers=headers
+        )
         response.raise_for_status()
         data: list[dict[str, object]] = response.json().get("data", [])
         return sorted(str(m["id"]) for m in data)

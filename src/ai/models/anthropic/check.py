@@ -1,7 +1,7 @@
 """Anthropic connection check.
 
 Verifies that the client's credentials are valid and that the model
-exists on the Anthropic API by hitting ``GET /v1/models/{model_id}``.
+exists on the Anthropic API by hitting ``GET {base_url}/v1/models/{model_id}``.
 
 The ``anthropic-version`` header is added by the check function itself
 so that :class:`~ai.models.core.client.Client` stays provider-agnostic.
@@ -24,7 +24,7 @@ async def check(client: client_.Client, model: model_.Model) -> bool:
     """Return ``True`` if *client* can reach Anthropic and *model* exists."""
     if not client.api_key:
         return False
-    url = f"{client.base_url.rstrip('/')}/models/{model.id}"
+    url = f"{client.base_url.rstrip('/')}/v1/models/{model.id}"
     headers = {
         "x-api-key": client.api_key,
         "anthropic-version": _ANTHROPIC_VERSION,
