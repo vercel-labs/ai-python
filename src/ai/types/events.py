@@ -9,114 +9,110 @@ from . import usage as usage_
 # serialization border in the case of durable execution
 
 
-class Start(pydantic.BaseModel):
-    kind: Literal["start"] = "start"
-    model_config = pydantic.ConfigDict(frozen=True)
+class BaseEvent(pydantic.BaseModel):
+    """Common fields stamped onto every event by the streaming wrapper.
 
+    ``message`` carries the in-progress (or final) assistant message; the
+    streaming layer aggregates parts into it as deltas arrive and stamps
+    a reference onto each yielded event. ``usage`` carries the latest
+    usage value reported by the provider (latest-wins across the stream).
+    """
 
-class End(pydantic.BaseModel):
-    kind: Literal["end"] = "end"
-    model_config = pydantic.ConfigDict(frozen=True)
-
-
-class MessageStart(pydantic.BaseModel):
     message: messages.Message | None = None
-
-    kind: Literal["message_start"] = "message_start"
-    model_config = pydantic.ConfigDict(frozen=True)
-
-
-class MessageEnd(pydantic.BaseModel):
-    message: messages.Message
     usage: usage_.Usage | None = None
 
-    kind: Literal["message_end"] = "message_end"
     model_config = pydantic.ConfigDict(frozen=True)
 
 
-class TextStart(pydantic.BaseModel):
+class StreamStart(BaseEvent):
+    kind: Literal["stream_start"] = "stream_start"
+
+
+class StreamEnd(BaseEvent):
+    kind: Literal["stream_end"] = "stream_end"
+
+
+class TextStart(BaseEvent):
     block_id: str = ""
 
     kind: Literal["text_start"] = "text_start"
-    model_config = pydantic.ConfigDict(frozen=True)
 
 
-class TextDelta(pydantic.BaseModel):
+class TextDelta(BaseEvent):
     chunk: str
     block_id: str = ""
 
     kind: Literal["text_delta"] = "text_delta"
-    model_config = pydantic.ConfigDict(frozen=True)
 
 
-class TextEnd(pydantic.BaseModel):
+class TextEnd(BaseEvent):
     block_id: str = ""
 
     kind: Literal["text_end"] = "text_end"
-    model_config = pydantic.ConfigDict(frozen=True)
 
 
-class ReasoningStart(pydantic.BaseModel):
+class ReasoningStart(BaseEvent):
     block_id: str = ""
 
     kind: Literal["reasoning_start"] = "reasoning_start"
-    model_config = pydantic.ConfigDict(frozen=True)
 
 
-class ReasoningDelta(pydantic.BaseModel):
+class ReasoningDelta(BaseEvent):
     chunk: str
     block_id: str = ""
 
     kind: Literal["reasoning_delta"] = "reasoning_delta"
-    model_config = pydantic.ConfigDict(frozen=True)
 
 
-class ReasoningEnd(pydantic.BaseModel):
+class ReasoningEnd(BaseEvent):
     block_id: str = ""
     signature: str | None = None
 
     kind: Literal["reasoning_end"] = "reasoning_end"
-    model_config = pydantic.ConfigDict(frozen=True)
 
 
-class ToolStart(pydantic.BaseModel):
+class ToolStart(BaseEvent):
     tool_call_id: str = ""
     tool_name: str = ""
 
     kind: Literal["tool_start"] = "tool_start"
-    model_config = pydantic.ConfigDict(frozen=True)
 
 
-class ToolDelta(pydantic.BaseModel):
+class ToolDelta(BaseEvent):
     chunk: str
     tool_call_id: str = ""
 
     kind: Literal["tool_delta"] = "tool_delta"
-    model_config = pydantic.ConfigDict(frozen=True)
 
 
-class ToolEnd(pydantic.BaseModel):
+class ToolEnd(BaseEvent):
     tool_call_id: str = ""
 
     kind: Literal["tool_end"] = "tool_end"
-    model_config = pydantic.ConfigDict(frozen=True)
 
 
-class HookSuspention(pydantic.BaseModel):
+class FileEvent(BaseEvent):
+    """A complete generated file from the LLM (e.g. inline image from Gemini/GPT)."""
+
+    block_id: str = ""
+    media_type: str
+    data: str | bytes
+    filename: str | None = None
+
+    kind: Literal["file"] = "file"
+
+
+class HookSuspention(BaseEvent):
     kind: Literal["hook_suspention"] = "hook_suspention"
-    model_config = pydantic.ConfigDict(frozen=True)
 
 
-class HookResolution(pydantic.BaseModel):
+class HookResolution(BaseEvent):
     kind: Literal["hook_resolution"] = "hook_resolution"
-    model_config = pydantic.ConfigDict(frozen=True)
 
 
 Event = Annotated[
-    Start
-    | End
-    | MessageStart
-    | MessageEnd
+    StreamStart
+    | StreamEnd
     | TextStart
     | TextDelta
     | TextEnd
@@ -126,6 +122,7 @@ Event = Annotated[
     | ToolStart
     | ToolDelta
     | ToolEnd
+    | FileEvent
     | HookSuspention
     | HookResolution,
     pydantic.Field(discriminator="kind"),

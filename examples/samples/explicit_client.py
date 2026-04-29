@@ -19,11 +19,13 @@ messages = [ai.user_message("Hello!")]
 
 async def main() -> None:
     try:
-        async for event in ai.models.stream(model, messages):
-            if isinstance(event, ai.TextDelta):
-                print(event.chunk, end="", flush=True)
+        async with ai.stream(model, messages) as s:
+            async for event in s:
+                if isinstance(event, ai.TextDelta):
+                    print(event.chunk, end="", flush=True)
         print()
     finally:
+        # Explicit clients need explicit cleanup.
         await client.aclose()
 
 

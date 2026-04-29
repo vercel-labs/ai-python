@@ -1,150 +1,195 @@
-"""Top-level orchestration — stream(), generate(), check_connection().
-
-These wire together adapters, middleware chains, and auto-client creation.
-"""
-
-from __future__ import annotations
-
+import dataclasses
 from collections.abc import AsyncGenerator, Sequence
-from typing import Any
+from typing import Any, Protocol, Self, runtime_checkable
 
 import pydantic
 
-from ... import middleware as middleware_
-from ...types import events as events_
+from ... import types
 from ...types import integrity as integrity_
-from ...types import messages as messages_
-from ...types import proto as proto_
-from ...types import stream as stream_
-from . import adapters
+from . import adapters, params
 from . import client as client_
 from . import model as model_
-from . import types as types_
+
+
+@dataclasses.dataclass(frozen=True)
+class StreamRequest:
+    model: model_.Model
+    messages: list[types.Message]
+    tools: Sequence[types.ToolLike] | None = None
+    output_type: type[pydantic.BaseModel] | None = None
+
+
+@dataclasses.dataclass(frozen=True)
+class GenerateRequest:
+    model: model_.Model
+    messages: list[types.Message]
+    params: params.GenerateParams
+
+
+@runtime_checkable
+class StreamExecutor(Protocol):
+    def _do_stream(self, request: StreamRequest) -> AsyncGenerator[types.Event]: ...
+
+
+@runtime_checkable
+class GenerateExecutor(Protocol):
+    async def _do_generate(self, request: GenerateRequest) -> types.Message: ...
+
+
+class Executor:
+    """Default executor: dispatches to adapters via the local client."""
+
+    async def _do_stream(self, request: StreamRequest) -> AsyncGenerator[types.Event]:
+        c = client_.auto_client(request.model)
+        fn = adapters.get_stream_adapter(request.model.adapter)
+        async for ev in fn(
+            c,
+            request.model,
+            request.messages,
+            tools=request.tools,
+            output_type=request.output_type,
+        ):
+            yield ev
+
+    async def _do_generate(self, request: GenerateRequest) -> types.Message:
+        c = client_.auto_client(request.model)
+        fn = adapters.get_generate_adapter(request.model.adapter)
+        return await fn(c, request.model, request.messages, params=request.params)
+
+
+_default_executor = Executor()
+
+
+class Stream:
+    """Async-iterable wrapper around an adapter's event stream."""
+
+    def __init__(self, gen: AsyncGenerator[types.Event]) -> None:
+        self._gen = gen
+        self._message: types.Message = types.Message(role="assistant", parts=[])
+        self._parts: dict[str, types.Part] = {}
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: object,
+    ) -> None:
+        await self._gen.aclose()
+
+    def __aiter__(self) -> Self:
+        return self
+
+    async def __anext__(self) -> types.Event:
+        event = await self._gen.__anext__()
+        self._aggregate_event(event)
+        return event.model_copy(update={"message": self._message})
+
+    @property
+    def message(self) -> types.Message:
+        return self._message
+
+    @property
+    def usage(self) -> types.Usage | None:
+        return self._message.usage
+
+    @property
+    def text(self) -> str:
+        return self._message.text
+
+    @property
+    def tool_calls(self) -> list[types.ToolCallPart]:
+        return self._message.tool_calls
+
+    @property
+    def output(self) -> Any:
+        return self._message.output
+
+    def _aggregate_event(self, event: types.Event) -> None:
+        # grab usage from any event that carries one
+        if event.usage is not None:
+            self._message.usage = event.usage
+
+        match event:
+            case types.TextStart(block_id=bid):
+                tp = types.TextPart(id=bid, text="")
+                self._message.parts.append(tp)
+                self._parts[bid] = tp
+            case types.TextDelta(block_id=bid, chunk=c):
+                existing_text = self._parts.get(bid)
+                if isinstance(existing_text, types.TextPart):
+                    existing_text.text += c
+            case types.ReasoningStart(block_id=bid):
+                rp = types.ReasoningPart(id=bid, text="")
+                self._message.parts.append(rp)
+                self._parts[bid] = rp
+            case types.ReasoningDelta(block_id=bid, chunk=c):
+                existing_reasoning = self._parts.get(bid)
+                if isinstance(existing_reasoning, types.ReasoningPart):
+                    existing_reasoning.text += c
+            case types.ReasoningEnd(block_id=bid, signature=sig):
+                existing_reasoning = self._parts.get(bid)
+                if (
+                    isinstance(existing_reasoning, types.ReasoningPart)
+                    and sig is not None
+                ):
+                    existing_reasoning.signature = sig
+            case types.ToolStart(tool_call_id=tcid, tool_name=name):
+                tcp = types.ToolCallPart(
+                    id=tcid,
+                    tool_call_id=tcid,
+                    tool_name=name,
+                    tool_args="",
+                )
+                self._message.parts.append(tcp)
+                self._parts[tcid] = tcp
+            case types.ToolDelta(tool_call_id=tcid, chunk=c):
+                existing_tool = self._parts.get(tcid)
+                if isinstance(existing_tool, types.ToolCallPart):
+                    existing_tool.tool_args += c
+            case types.FileEvent(block_id=bid, media_type=mt, data=d, filename=fname):
+                fp = types.FilePart(
+                    id=bid or types.generate_id(),
+                    data=d,
+                    media_type=mt,
+                    filename=fname,
+                )
+                self._message.parts.append(fp)
+                self._parts[fp.id] = fp
+            case _:
+                pass
 
 
 def stream(
     model: model_.Model,
-    messages: list[messages_.Message],
+    messages: list[types.Message],
     *,
-    tools: Sequence[proto_.ToolLike] | None = None,
+    tools: Sequence[types.ToolLike] | None = None,
     output_type: type[pydantic.BaseModel] | None = None,
-    turn_id: str | None = None,
-    **kwargs: Any,
-) -> proto_.StreamResultLike:
-    """Stream an LLM response.
-
-    Returns a :class:`StreamResultLike` that is async-iterable and
-    collects the final ``Message``.  After iteration, access ``.text``,
-    ``.tool_calls``, ``.usage``, etc.
-
-    Call-site is a plain ``async for`` — no outer ``await`` needed::
-
-        async for event in ai.stream(model, messages):
-            ...
-
-    One call is one turn: a single request and its response.  The model
-    response carries ``turn_id``; re-emitted input messages keep any
-    existing ``turn_id`` from prior turns and only receive the current
-    one when unstamped.  If *turn_id* is not provided, one is generated.
-
-    The client is resolved from the model: ``model.client`` if set,
-    otherwise auto-created from ``model.base_url`` / ``model.api_key_env``.
-
-    Middleware dispatch and adapter setup are deferred to the first
-    iteration; any async preflight work happens there.
-    """
+    executor: StreamExecutor = _default_executor,
+) -> Stream:
+    """Stream an LLM response."""
     messages = integrity_.prepare_messages(messages)
-
-    if turn_id is None:
-        turn_id = messages_.generate_id("turn")
-
-    call = middleware_.ModelContext(
-        model=model,
-        messages=messages,
-        tools=tools,
-        output_type=output_type,
-        kwargs=kwargs,
-    )
-
-    # Capture in closure for the inner function.
-    _turn_id = turn_id
-
-    async def _real(call: middleware_.ModelContext) -> proto_.StreamResultLike:
-        c = client_.auto_client(call.model)
-        adapter_fn = adapters.get_stream_adapter(call.model.adapter)
-        return types_.StreamResult(
-            adapter_fn(
-                c,
-                call.model,
-                call.messages,
-                tools=call.tools,
-                output_type=call.output_type,
-                **call.kwargs,
-            ),
-            turn_id=_turn_id,
-            input_messages=call.messages,
-        )
-
-    async def _driver() -> AsyncGenerator[events_.Event]:
-        chain = middleware_._build_model_chain(_real)
-        inner = await chain(call)
-        async for event in inner:
-            yield event
-
-    return stream_.StreamResult(_driver(), turn_id=turn_id)
+    request = StreamRequest(model, messages, tools, output_type)
+    return Stream(executor._do_stream(request))
 
 
 async def generate(
     model: model_.Model,
-    messages: list[messages_.Message],
-    params: types_.GenerateParams,
-    **kwargs: Any,
-) -> messages_.Message:
-    """Generate a response (images, video, etc.).
-
-    Resolves the adapter function from ``model.adapter``, auto-creates a
-    :class:`Client` from the model if no explicit client is set.
-
-    ``params`` is required and controls the generation type:
-
-    * :class:`ImageParams` — image generation (``/image-model``).
-    * :class:`VideoParams` — video generation (``/video-model``).
-    """
+    messages: list[types.Message],
+    params: params.GenerateParams,
+    *,
+    executor: GenerateExecutor = _default_executor,
+) -> types.Message:
+    """Generate a non-streaming response (images, video, etc.)."""
     messages = integrity_.prepare_messages(messages)
-
-    call = middleware_.GenerateContext(
-        model=model,
-        messages=messages,
-        params=params,
-    )
-
-    async def _real(call: middleware_.GenerateContext) -> messages_.Message:
-        c = client_.auto_client(call.model)
-        adapter_fn = adapters.get_generate_adapter(call.model.adapter)
-        return await adapter_fn(c, call.model, call.messages, params=call.params)
-
-    chain = middleware_._build_generate_chain(_real)
-    return await chain(call)
+    request = GenerateRequest(model, messages, params)
+    return await executor._do_generate(request)
 
 
-async def check_connection(
-    model: model_.Model,
-) -> bool:
-    """Check whether the model's provider is reachable and the model exists.
-
-    Returns ``True`` when the credentials are valid **and** the model is
-    available on the remote side — i.e. a subsequent :func:`stream` or
-    :func:`generate` call should succeed (network conditions permitting).
-
-    This only hits free metadata endpoints; no tokens or credits are
-    consumed.
-
-    The client is resolved from the model: ``model.client`` if set,
-    otherwise created by the provider.
-
-    Non-auth transport errors (network failures, 5xx) are raised rather
-    than returning ``False`` so that callers can distinguish "bad
-    credentials / unknown model" from "provider unreachable".
-    """
+async def check_connection(model: model_.Model) -> bool:
+    """Check whether the model's provider is reachable and the model exists."""
     c = client_.auto_client(model)
     return await model.provider.check(c, model)

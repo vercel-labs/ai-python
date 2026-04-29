@@ -7,9 +7,11 @@ import pydantic
 
 import ai
 from ai import models
+from ai.agents import events as agent_events_
 from ai.types import builders
 from ai.types import events as events_
 from ai.types import messages as messages_
+from ai.types import usage as usage_
 
 
 class MockProvider:
@@ -87,12 +89,63 @@ MOCK_MODEL = models.Model(
 )
 
 
+async def emit_events_for_messages(
+    seq: list[messages_.Message],
+    *,
+    usage: usage_.Usage | None = None,
+) -> AsyncGenerator[events_.Event]:
+    """Emit a stream of public ``events_.Event`` corresponding to ``seq``.
+
+    Walks each message's parts and yields the appropriate
+    ``Start`` / ``Delta`` / ``End`` events (and ``FileEvent``).  The output
+    matches what a real adapter would produce.  Bookended by
+    ``StreamStart`` / ``StreamEnd``.
+    """
+    yield events_.StreamStart()
+    for msg in seq:
+        for i, part in enumerate(msg.parts):
+            if isinstance(part, messages_.TextPart):
+                bid = f"text-{i}"
+                yield events_.TextStart(block_id=bid)
+                if part.text:
+                    yield events_.TextDelta(block_id=bid, chunk=part.text)
+                yield events_.TextEnd(block_id=bid)
+
+            elif isinstance(part, messages_.ReasoningPart):
+                bid = f"reasoning-{i}"
+                yield events_.ReasoningStart(block_id=bid)
+                if part.text:
+                    yield events_.ReasoningDelta(block_id=bid, chunk=part.text)
+                yield events_.ReasoningEnd(block_id=bid, signature=part.signature)
+
+            elif isinstance(part, messages_.ToolCallPart):
+                yield events_.ToolStart(
+                    tool_call_id=part.tool_call_id,
+                    tool_name=part.tool_name,
+                )
+                if part.tool_args:
+                    yield events_.ToolDelta(
+                        tool_call_id=part.tool_call_id,
+                        chunk=part.tool_args,
+                    )
+                yield events_.ToolEnd(tool_call_id=part.tool_call_id)
+
+            elif isinstance(part, messages_.FilePart):
+                yield events_.FileEvent(
+                    block_id=part.id,
+                    media_type=part.media_type,
+                    data=part.data if isinstance(part.data, str) else "",
+                )
+            # StructuredOutputPart is not a streamed part; tests that need it
+            # construct a tailored adapter directly.
+    yield events_.StreamEnd(usage=usage)
+
+
 class MockAdapter:
     """Mock stream adapter that yields pre-configured response sequences.
 
-    Each call to the adapter pops the next response list and yields the
-    messages through a StreamHandler (matching real adapter behavior).
-    Tracks ``call_count`` for assertions.
+    Each call pops the next response list and emits events for it via
+    :func:`emit_events_for_messages`.  Tracks ``call_count``.
     """
 
     def __init__(self, responses: list[list[messages_.Message]]) -> None:
@@ -116,79 +169,7 @@ class MockAdapter:
         seq = self._responses[self._call_index]
         self._call_index += 1
 
-        from ai.models.core.helpers import streaming as streaming_
-
-        message_id = seq[0].id if seq else messages_.generate_id()
-        handler = streaming_.StreamHandler(message_id=message_id)
-        yield handler.message_start()
-
-        for msg in seq:
-            for i, part in enumerate(msg.parts):
-                if isinstance(part, messages_.TextPart):
-                    bid = f"text-{i}"
-                    for event in handler.handle_event(
-                        streaming_.TextStart(block_id=bid)
-                    ):
-                        yield event
-                    if part.text:
-                        for event in handler.handle_event(
-                            streaming_.TextDelta(block_id=bid, delta=part.text)
-                        ):
-                            yield event
-                    for event in handler.handle_event(streaming_.TextEnd(block_id=bid)):
-                        yield event
-
-                elif isinstance(part, messages_.ReasoningPart):
-                    bid = f"reasoning-{i}"
-                    for event in handler.handle_event(
-                        streaming_.ReasoningStart(block_id=bid)
-                    ):
-                        yield event
-                    if part.text:
-                        for event in handler.handle_event(
-                            streaming_.ReasoningDelta(block_id=bid, delta=part.text)
-                        ):
-                            yield event
-                    for event in handler.handle_event(
-                        streaming_.ReasoningEnd(block_id=bid, signature=part.signature)
-                    ):
-                        yield event
-
-                elif isinstance(part, messages_.ToolCallPart):
-                    for event in handler.handle_event(
-                        streaming_.ToolStart(
-                            tool_call_id=part.tool_call_id,
-                            tool_name=part.tool_name,
-                        )
-                    ):
-                        yield event
-                    if part.tool_args:
-                        for event in handler.handle_event(
-                            streaming_.ToolArgsDelta(
-                                tool_call_id=part.tool_call_id,
-                                delta=part.tool_args,
-                            )
-                        ):
-                            yield event
-                    for event in handler.handle_event(
-                        streaming_.ToolEnd(tool_call_id=part.tool_call_id)
-                    ):
-                        yield event
-
-                elif isinstance(part, messages_.StructuredOutputPart):
-                    handler._current_parts[part.id] = part
-
-                elif isinstance(part, messages_.FilePart):
-                    for event in handler.handle_event(
-                        streaming_.FileEvent(
-                            block_id=part.id,
-                            media_type=part.media_type,
-                            data=part.data if isinstance(part.data, str) else "",
-                        )
-                    ):
-                        yield event
-
-        for event in handler.handle_event(streaming_.MessageDone()):
+        async for event in emit_events_for_messages(seq):
             yield event
 
 
@@ -203,12 +184,12 @@ def mock_llm(responses: list[list[messages_.Message]]) -> MockAdapter:
 
 
 async def collect_messages(
-    source: AsyncIterable[events_.Event],
+    source: AsyncIterable[agent_events_.AgentEvent],
 ) -> list[messages_.Message]:
     """Collect terminal messages from an event stream."""
     result: list[messages_.Message] = []
     async for event in source:
-        if isinstance(event, events_.MessageEnd):
+        if isinstance(event, agent_events_.MessageEnd):
             result.append(event.message)
     return result
 

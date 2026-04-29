@@ -17,51 +17,6 @@ _WEATHER_DATA = {"city": "SF", "temperature": 62.0}
 _WEATHER_TYPE_NAME = f"{_Weather.__module__}.{_Weather.__qualname__}"
 
 
-def test_replace() -> None:
-    old_text = messages.TextPart(id="p0", text="hello")
-    m = messages.Message(
-        id="m1",
-        role="assistant",
-        parts=[old_text, messages.TextPart(id="p1", text="world")],
-    )
-    new_text = messages.TextPart(id="p0", text="updated")
-    updated_m = m.replace(new_text)
-    assert updated_m.parts[0].text == "updated"  # type: ignore[union-attr]
-    assert m.parts[0].text == "hello"  # type: ignore[union-attr]
-
-
-def test_replace_missing_id() -> None:
-    m = messages.Message(
-        id="m1", role="assistant", parts=[messages.TextPart(id="p0", text="hi")]
-    )
-    orphan = messages.TextPart(id="no-such-id", text="x")
-    with pytest.raises(ValueError, match="in message"):
-        m.replace(orphan)
-
-
-def test_replace_two_arg() -> None:
-    old_text = messages.TextPart(id="p0", text="hello")
-    m = messages.Message(id="m1", role="assistant", parts=[old_text])
-    new_text = messages.TextPart(id="different", text="world")
-    updated = m.replace(old_text, new_text)
-    part = updated.parts[0]
-    assert isinstance(part, messages.TextPart)
-    assert part.text == "world"
-    assert part.id == "different"
-    orig = m.parts[0]
-    assert isinstance(orig, messages.TextPart)
-    assert orig.text == "hello"
-
-
-def test_replace_two_arg_missing() -> None:
-    m = messages.Message(
-        id="m1", role="assistant", parts=[messages.TextPart(id="p0", text="hi")]
-    )
-    stranger = messages.TextPart(id="p0", text="hi")
-    with pytest.raises(ValueError, match="not found in message"):
-        m.replace(stranger, messages.TextPart(text="new"))
-
-
 def test_structured_output_part_value() -> None:
     part = messages.StructuredOutputPart(
         data=_WEATHER_DATA, output_type_name=_WEATHER_TYPE_NAME

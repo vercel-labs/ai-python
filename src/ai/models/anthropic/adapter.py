@@ -21,7 +21,7 @@ from .. import core
 
 
 def _tools_to_anthropic(
-    tools: Sequence[types.proto.ToolLike],
+    tools: Sequence[types.ToolLike],
 ) -> list[dict[str, Any]]:
     """Convert internal Tool objects to Anthropic tool schema format."""
     return [
@@ -242,7 +242,7 @@ async def stream(
     model: core.model.Model,
     messages: list[types.Message],
     *,
-    tools: Sequence[types.proto.ToolLike] | None = None,
+    tools: Sequence[types.ToolLike] | None = None,
     output_type: type[pydantic.BaseModel] | None = None,
     thinking: bool = False,
     budget_tokens: int = 10000,
@@ -251,6 +251,8 @@ async def stream(
     """Stream an LLM response via the Anthropic messages API.
 
     Yields :class:`~ai.types.events.Event` objects as the response streams in.
+    Pure delta emitter — the :class:`~ai.models.Stream` wrapper aggregates
+    parts into the final :class:`~ai.types.Message`.
 
     Extra keyword arguments beyond the ``StreamFn`` protocol:
 
@@ -280,24 +282,16 @@ async def stream(
     if output_type is not None:
         api_kwargs["output_format"] = output_type
 
+    # Anthropic indexes content blocks by int; map to string block_ids.
     block_types: dict[int, str] = {}
     tool_ids: dict[int, str] = {}
     tool_names: dict[int, str] = {}
     signature_buffer: dict[int, str] = {}
-    # Accumulate parts for the final Message
-    parts: list[types.Part] = []
-    _text_parts: dict[str, str] = {}  # block_id -> accumulated text
-    _reasoning_parts: dict[str, str] = {}  # block_id -> accumulated text
-    _tool_parts: dict[str, str] = {}  # tool_call_id -> accumulated args
-    message_id = types.generate_id()
 
     try:
-        stream_cm = sdk_client.messages.stream(**api_kwargs)
+        async with sdk_client.messages.stream(**api_kwargs) as sdk_stream:
+            yield events.StreamStart()
 
-        async with stream_cm as sdk_stream:
-            yield events.MessageStart(
-                message=types.Message(id=message_id, role="assistant", parts=[])
-            )
             async for event in sdk_stream:
                 match event.type:
                     case "content_block_start":
@@ -307,15 +301,12 @@ async def stream(
 
                         match block.type:
                             case "text":
-                                _text_parts[str(idx)] = ""
                                 yield events.TextStart(block_id=str(idx))
                             case "thinking":
-                                _reasoning_parts[str(idx)] = ""
                                 yield events.ReasoningStart(block_id=str(idx))
                             case "tool_use":
                                 tool_ids[idx] = block.id
                                 tool_names[idx] = block.name
-                                _tool_parts[block.id] = ""
                                 yield events.ToolStart(
                                     tool_call_id=block.id,
                                     tool_name=block.name,
@@ -327,17 +318,11 @@ async def stream(
 
                         match delta.type:
                             case "text_delta":
-                                _text_parts[str(idx)] = (
-                                    _text_parts.get(str(idx), "") + delta.text
-                                )
                                 yield events.TextDelta(
                                     chunk=delta.text,
                                     block_id=str(idx),
                                 )
                             case "thinking_delta":
-                                _reasoning_parts[str(idx)] = (
-                                    _reasoning_parts.get(str(idx), "") + delta.thinking
-                                )
                                 yield events.ReasoningDelta(
                                     chunk=delta.thinking,
                                     block_id=str(idx),
@@ -349,10 +334,6 @@ async def stream(
                             case "input_json_delta":
                                 tool_id = tool_ids.get(idx)
                                 if tool_id:
-                                    _tool_parts[tool_id] = (
-                                        _tool_parts.get(tool_id, "")
-                                        + delta.partial_json
-                                    )
                                     yield events.ToolDelta(
                                         chunk=delta.partial_json,
                                         tool_call_id=tool_id,
@@ -360,38 +341,17 @@ async def stream(
 
                     case "content_block_stop":
                         idx = event.index
-                        bid = str(idx)
                         match block_types.get(idx):
                             case "text":
-                                parts.append(
-                                    types.TextPart(
-                                        id=bid, text=_text_parts.get(bid, "")
-                                    )
-                                )
-                                yield events.TextEnd(block_id=bid)
+                                yield events.TextEnd(block_id=str(idx))
                             case "thinking":
-                                parts.append(
-                                    types.ReasoningPart(
-                                        id=bid,
-                                        text=_reasoning_parts.get(bid, ""),
-                                        signature=signature_buffer.get(idx),
-                                    )
-                                )
                                 yield events.ReasoningEnd(
-                                    block_id=bid,
+                                    block_id=str(idx),
                                     signature=signature_buffer.get(idx),
                                 )
                             case "tool_use":
                                 tool_id = tool_ids.get(idx)
                                 if tool_id:
-                                    parts.append(
-                                        types.ToolCallPart(
-                                            id=tool_id,
-                                            tool_call_id=tool_id,
-                                            tool_name=tool_names.get(idx, ""),
-                                            tool_args=_tool_parts.get(tool_id, ""),
-                                        )
-                                    )
                                     yield events.ToolEnd(tool_call_id=tool_id)
 
             snapshot = sdk_stream.current_message_snapshot
@@ -405,12 +365,6 @@ async def stream(
                 ),
                 raw=sdk_usage.model_dump(exclude_none=True) or None,
             )
-            final_message = types.Message(
-                id=message_id,
-                role="assistant",
-                parts=parts,
-                usage=usage,
-            )
-            yield events.MessageEnd(message=final_message, usage=usage)
+            yield events.StreamEnd(usage=usage)
     finally:
         await sdk_client.close()

@@ -2,20 +2,21 @@ from __future__ import annotations
 
 from collections.abc import AsyncGenerator
 
+from ai.agents import events as agent_events_
 from ai.agents.ui.ai_sdk import protocol, to_stream
 from ai.types import events as events_
 from ai.types import messages as messages_
 
 
 async def _gen(
-    stream_events: list[events_.Event],
-) -> AsyncGenerator[events_.Event]:
+    stream_events: list[agent_events_.AgentEvent],
+) -> AsyncGenerator[agent_events_.AgentEvent]:
     for event in stream_events:
         yield event
 
 
 async def _collect(
-    stream_events: list[events_.Event],
+    stream_events: list[agent_events_.AgentEvent],
 ) -> list[protocol.UIMessageStreamPart]:
     return [part async for part in to_stream(_gen(stream_events))]
 
@@ -25,8 +26,8 @@ def _assistant_start(
     *,
     turn_id: str | None = "t1",
     source_label: str | None = None,
-) -> events_.MessageStart:
-    return events_.MessageStart(
+) -> agent_events_.MessageStart:
+    return agent_events_.MessageStart(
         message=messages_.Message(
             id=msg_id,
             role="assistant",
@@ -51,7 +52,7 @@ async def test_event_driven_text_streaming() -> None:
             events_.TextStart(block_id=text_id),
             events_.TextDelta(block_id=text_id, chunk="hi"),
             events_.TextEnd(block_id=text_id),
-            events_.MessageEnd(message=final),
+            agent_events_.MessageEnd(message=final),
         ]
     )
 
@@ -72,7 +73,7 @@ async def test_static_text_message_emits_text_parts() -> None:
         parts=[messages_.TextPart(id="txt1", text="hello")],
     )
     out = await _collect(
-        [events_.MessageStart(message=msg), events_.MessageEnd(message=msg)]
+        [agent_events_.MessageStart(message=msg), agent_events_.MessageEnd(message=msg)]
     )
     assert any(isinstance(part, protocol.TextDeltaPart) for part in out)
 
@@ -92,10 +93,10 @@ async def test_turn_id_change_emits_step_boundary() -> None:
     )
     out = await _collect(
         [
-            events_.MessageStart(message=msg1),
-            events_.MessageEnd(message=msg1),
-            events_.MessageStart(message=msg2),
-            events_.MessageEnd(message=msg2),
+            agent_events_.MessageStart(message=msg1),
+            agent_events_.MessageEnd(message=msg1),
+            agent_events_.MessageStart(message=msg2),
+            agent_events_.MessageEnd(message=msg2),
         ]
     )
     has_mid_step_boundary = any(
@@ -122,10 +123,10 @@ async def test_agent_change_emits_message_boundary() -> None:
     )
     out = await _collect(
         [
-            events_.MessageStart(message=msg1),
-            events_.MessageEnd(message=msg1),
-            events_.MessageStart(message=msg2),
-            events_.MessageEnd(message=msg2),
+            agent_events_.MessageStart(message=msg1),
+            agent_events_.MessageEnd(message=msg1),
+            agent_events_.MessageStart(message=msg2),
+            agent_events_.MessageEnd(message=msg2),
         ]
     )
     has_mid_msg_boundary = any(
@@ -163,10 +164,10 @@ async def test_tool_call_and_result_emit_terminal_parts() -> None:
     )
     out = await _collect(
         [
-            events_.MessageStart(message=tool_call),
-            events_.MessageEnd(message=tool_call),
-            events_.MessageStart(message=tool_result),
-            events_.MessageEnd(message=tool_result),
+            agent_events_.MessageStart(message=tool_call),
+            agent_events_.MessageEnd(message=tool_call),
+            agent_events_.MessageStart(message=tool_result),
+            agent_events_.MessageEnd(message=tool_result),
         ]
     )
     types = [type(part).__name__ for part in out]
@@ -201,10 +202,10 @@ async def test_approval_request_hook_emits_approval_part() -> None:
     )
     out = await _collect(
         [
-            events_.MessageStart(message=tool_call),
-            events_.MessageEnd(message=tool_call),
-            events_.MessageStart(message=hook),
-            events_.MessageEnd(message=hook),
+            agent_events_.MessageStart(message=tool_call),
+            agent_events_.MessageEnd(message=tool_call),
+            agent_events_.MessageStart(message=hook),
+            agent_events_.MessageEnd(message=hook),
         ]
     )
     approval_parts = [p for p in out if isinstance(p, protocol.ToolApprovalRequestPart)]
@@ -220,12 +221,12 @@ async def test_dedup_on_reemitted_message_id() -> None:
         turn_id="t1",
         parts=[messages_.TextPart(id="txt1", text="hi")],
     )
-    stream_events: list[events_.Event] = [
-        events_.MessageStart(message=msg),
+    stream_events: list[agent_events_.AgentEvent] = [
+        agent_events_.MessageStart(message=msg),
         events_.TextStart(block_id="txt1"),
         events_.TextDelta(block_id="txt1", chunk="hi"),
         events_.TextEnd(block_id="txt1"),
-        events_.MessageEnd(message=msg),
+        agent_events_.MessageEnd(message=msg),
     ]
     out = await _collect([*stream_events, *stream_events])
     text_deltas = [part for part in out if isinstance(part, protocol.TextDeltaPart)]

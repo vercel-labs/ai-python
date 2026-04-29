@@ -7,6 +7,7 @@ import contextvars
 from collections.abc import AsyncGenerator, AsyncIterable, Awaitable
 
 from .. import types
+from . import events as events_
 from . import hooks as hooks_
 from .mcp import client as mcp_client
 
@@ -20,17 +21,17 @@ class Runtime:
     _SENTINEL = _Sentinel()
 
     def __init__(self) -> None:
-        self._event_queue: asyncio.Queue[types.Event | Runtime._Sentinel] = (
+        self._event_queue: asyncio.Queue[events_.AgentEvent | Runtime._Sentinel] = (
             asyncio.Queue()
         )
         self._hook_labels: set[str] = set()
 
-    async def put_event(self, event: types.Event) -> None:
+    async def put_event(self, event: events_.AgentEvent) -> None:
         await self._event_queue.put(event)
 
     async def put_message(self, message: types.Message) -> None:
-        await self.put_event(types.MessageStart(message=message))
-        await self.put_event(types.MessageEnd(message=message))
+        await self.put_event(events_.MessageStart(message=message))
+        await self.put_event(events_.MessageEnd(message=message))
 
     async def signal_done(self) -> None:
         await self._event_queue.put(self._SENTINEL)
@@ -61,8 +62,8 @@ async def _stop_when_done(runtime: Runtime, task: Awaitable[None]) -> None:
 
 
 async def run(
-    source: AsyncIterable[types.Event],
-) -> AsyncGenerator[types.Event]:
+    source: AsyncIterable[events_.AgentEvent],
+) -> AsyncGenerator[events_.AgentEvent]:
     """Run *source* and yield every event that gets put into the Runtime queue."""
     rt = Runtime()
     token = _runtime.set(rt)

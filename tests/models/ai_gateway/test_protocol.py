@@ -18,7 +18,7 @@ from unittest.mock import AsyncMock, patch
 
 import pydantic
 
-from ai.models.core.helpers import streaming
+from ai.types import events as events_
 from ai.types import messages
 
 # The ai_gateway __init__.py re-exports `stream` as a function, which
@@ -237,12 +237,12 @@ class TestParseStreamPartComplex:
         events = stream_mod._parse_stream_part(
             {"type": "text-delta", "id": "t1", "textDelta": "Hello"}
         )
-        assert isinstance(events[0], streaming.TextDelta)
-        assert events[0].delta == "Hello"
+        assert isinstance(events[0], events_.TextDelta)
+        assert events[0].chunk == "Hello"
 
     def test_tool_call_expands_to_three_events(self) -> None:
         """A complete ``tool-call`` part must expand into
-        ToolStart -> ToolArgsDelta -> ToolEnd."""
+        ToolStart -> ToolDelta -> ToolEnd."""
         events = stream_mod._parse_stream_part(
             {
                 "type": "tool-call",
@@ -252,11 +252,11 @@ class TestParseStreamPartComplex:
             }
         )
         assert len(events) == 3
-        assert isinstance(events[0], streaming.ToolStart)
+        assert isinstance(events[0], events_.ToolStart)
         assert events[0].tool_name == "get_weather"
-        assert isinstance(events[1], streaming.ToolArgsDelta)
-        assert json.loads(events[1].delta) == {"city": "SF"}
-        assert isinstance(events[2], streaming.ToolEnd)
+        assert isinstance(events[1], events_.ToolDelta)
+        assert json.loads(events[1].chunk) == {"city": "SF"}
+        assert isinstance(events[2], events_.ToolEnd)
 
     def test_finish_flat_usage(self) -> None:
         events = stream_mod._parse_stream_part(
@@ -270,8 +270,7 @@ class TestParseStreamPartComplex:
             }
         )
         done = events[0]
-        assert isinstance(done, streaming.MessageDone)
-        assert done.finish_reason == "stop"
+        assert isinstance(done, events_.StreamEnd)
         assert done.usage is not None
         assert done.usage.input_tokens == 10
         assert done.usage.output_tokens == 20
@@ -297,8 +296,7 @@ class TestParseStreamPartComplex:
             }
         )
         done = events[0]
-        assert isinstance(done, streaming.MessageDone)
-        assert done.finish_reason == "tool-calls"
+        assert isinstance(done, events_.StreamEnd)
         assert done.usage is not None
         assert done.usage.input_tokens == 100
         assert done.usage.cache_read_tokens == 50
@@ -316,7 +314,7 @@ class TestParseStreamPartComplex:
             }
         )
         assert len(events) == 1
-        assert isinstance(events[0], streaming.FileEvent)
+        assert isinstance(events[0], events_.FileEvent)
         assert events[0].block_id == "f1"
         assert events[0].media_type == "image/png"
         assert events[0].data == "iVBORw0KGgo="
@@ -325,7 +323,7 @@ class TestParseStreamPartComplex:
         """A minimal ``file`` part uses sensible defaults."""
         events = stream_mod._parse_stream_part({"type": "file", "data": "somedata"})
         assert len(events) == 1
-        assert isinstance(events[0], streaming.FileEvent)
+        assert isinstance(events[0], events_.FileEvent)
         assert events[0].media_type == "application/octet-stream"
 
     def test_unknown_types_produce_no_events(self) -> None:

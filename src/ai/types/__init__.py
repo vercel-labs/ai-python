@@ -1,15 +1,14 @@
 from . import media
 from .events import (
-    End,
     Event,
+    FileEvent,
     HookResolution,
     HookSuspention,
-    MessageEnd,
-    MessageStart,
     ReasoningDelta,
     ReasoningEnd,
     ReasoningStart,
-    Start,
+    StreamEnd,
+    StreamStart,
     TextDelta,
     TextEnd,
     TextStart,
@@ -29,27 +28,25 @@ from .messages import (
     ToolResultPart,
     generate_id,
 )
-from .proto import StreamResultLike, ToolLike
+from .proto import ToolLike
 from .tools import ToolSchema
 from .usage import Usage
 
 __all__ = [
-    "End",
     "Event",
+    "FileEvent",
     "FilePart",
     "HookPart",
     "HookResolution",
     "HookSuspention",
     "Message",
-    "MessageEnd",
-    "MessageStart",
     "Part",
     "ReasoningDelta",
     "ReasoningEnd",
     "ReasoningPart",
     "ReasoningStart",
-    "Start",
-    "StreamResultLike",
+    "StreamEnd",
+    "StreamStart",
     "StructuredOutputPart",
     "TextDelta",
     "TextEnd",

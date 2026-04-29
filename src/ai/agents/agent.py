@@ -13,6 +13,7 @@ import pydantic
 from .. import middleware as middleware_
 from .. import models, types
 from ..types import builders
+from . import events as events_
 from . import runtime
 
 
@@ -199,21 +200,23 @@ class Context(pydantic.BaseModel):
         ]
 
 
-StreamItem = types.Event | types.Message
+StreamItem = events_.AgentEvent | types.Message
 
 
 class LoopFn(Protocol):
     def __call__(self, context: Context) -> AsyncGenerator[StreamItem]: ...
 
 
-async def _message_events(message: types.Message) -> AsyncGenerator[types.Event]:
-    yield types.MessageStart(message=message)
-    yield types.MessageEnd(message=message)
+async def _message_events(
+    message: types.Message,
+) -> AsyncGenerator[events_.AgentEvent]:
+    yield events_.MessageStart(message=message)
+    yield events_.MessageEnd(message=message)
 
 
 async def _coerce_events(
     source: AsyncIterable[StreamItem],
-) -> AsyncGenerator[types.Event]:
+) -> AsyncGenerator[events_.AgentEvent]:
     async for item in source:
         if isinstance(item, types.Message):
             async for event in _message_events(item):
@@ -222,15 +225,23 @@ async def _coerce_events(
             yield item
 
 
-async def _default_loop(context: Context) -> AsyncGenerator[types.Event]:
+async def _default_loop(context: Context) -> AsyncGenerator[events_.AgentEvent]:
     while True:
         stream = models.stream(
             context.model,
             context.messages,
             tools=context.tools,
         )
-        async for event in stream:
-            yield event
+        async for stream_event in stream:
+            yield stream_event
+
+        # Bridge: emit MessageStart/MessageEnd around the assistant message
+        # the model stream just produced, so _collect_messages and downstream
+        # consumers (AI-SDK outbound, label stamping) see the same boundary
+        # events they did under the previous adapter contract.
+        if stream.message is not None and stream.message.parts:
+            async for boundary in _message_events(stream.message):
+                yield boundary
 
         tool_calls = context.resolve(stream.tool_calls)
         if not tool_calls:
@@ -244,14 +255,14 @@ async def _default_loop(context: Context) -> AsyncGenerator[types.Event]:
         # Left un-stamped: the tool result is the input of the *next* turn,
         # so the next stream() call will stamp it with that turn's id.
         tool_msg = builders.tool_message(*(t.result() for t in tasks))
-        async for event in _message_events(tool_msg):
-            yield event
+        async for boundary in _message_events(tool_msg):
+            yield boundary
 
 
 async def _collect_messages(
     source: AsyncIterable[StreamItem],
     messages: list[types.Message],
-) -> AsyncGenerator[types.Event]:
+) -> AsyncGenerator[events_.AgentEvent]:
     """Intercept yielded events and collect MessageEnd messages into *messages*.
 
     This runs on the **producer** side (same coroutine as the loop function),
@@ -260,7 +271,7 @@ async def _collect_messages(
     happened on the consumer side of the runtime queue.
     """
     async for event in _coerce_events(source):
-        if isinstance(event, types.MessageEnd):
+        if isinstance(event, events_.MessageEnd):
             message = event.message
             for i, existing in enumerate(messages):
                 if existing.id == message.id:
@@ -292,7 +303,7 @@ async def yield_from(source: AsyncIterable[StreamItem]) -> str:
     last: types.Message | None = None
     async for item in _coerce_events(source):
         await rt.put_event(item)
-        if isinstance(item, types.MessageEnd):
+        if isinstance(item, events_.MessageEnd):
             last = item.message
     return last.text if last else ""
 
@@ -325,7 +336,7 @@ class Agent:
         *,
         label: str | None = None,
         middleware: list[middleware_.Middleware] | None = None,
-    ) -> AsyncGenerator[types.Event]:
+    ) -> AsyncGenerator[events_.AgentEvent]:
         """Run the agent loop, yielding events to the consumer.
 
         Args:
@@ -349,7 +360,7 @@ class Agent:
 
         async def _real(
             call: middleware_.AgentRunContext,
-        ) -> AsyncGenerator[types.Event]:
+        ) -> AsyncGenerator[events_.AgentEvent]:
             context = Context(
                 model=call.model,
                 messages=list(call.messages),
@@ -359,8 +370,8 @@ class Agent:
             async for event in runtime.run(source):
                 if call.label is not None:
                     event_message: types.Message | None = None
-                    if isinstance(event, types.MessageEnd) or (
-                        isinstance(event, types.MessageStart)
+                    if isinstance(event, events_.MessageEnd) or (
+                        isinstance(event, events_.MessageStart)
                         and event.message is not None
                     ):
                         event_message = event.message

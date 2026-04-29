@@ -3,22 +3,19 @@
 from __future__ import annotations
 
 import dataclasses
-from collections.abc import AsyncGenerator, Sequence
+from collections.abc import AsyncGenerator
 from typing import Any
 
 import pydantic
 import pytest
 
 import ai
-from ai import middleware, models
-from ai.models.core.helpers import streaming as streaming_
-from ai.types import events as events_
-from ai.types import messages as messages_
+from ai import middleware
+from ai.agents import events as agent_events_
 
 from .conftest import (
     MOCK_MODEL,
     collect_messages,
-    mock_generate,
     mock_llm,
     text_msg,
     tool_call_msg,
@@ -30,31 +27,6 @@ from .conftest import (
 class Confirmation(pydantic.BaseModel):
     approved: bool
     reason: str = ""
-
-
-# ── wrap_model ──────────────────────────────────────────────────
-
-
-async def test_wrap_model_is_called() -> None:
-    """Middleware.wrap_model is invoked for every models.stream() call."""
-    model_calls: list[middleware.ModelContext] = []
-
-    class Spy(ai.Middleware):
-        async def wrap_model(self, call: middleware.ModelContext, next: Any) -> Any:
-            model_calls.append(call)
-            return await next(call)
-
-    my_agent = ai.agent()
-    mock_llm([[text_msg("Hello!")]])
-
-    async for _m in my_agent.run(
-        MOCK_MODEL, [ai.user_message("Hi")], middleware=[Spy()]
-    ):
-        pass
-
-    assert len(model_calls) == 1
-    assert model_calls[0].model.id == "mock-model"
-    assert len(model_calls[0].messages) >= 1
 
 
 # ── wrap_tool ───────────────────────────────────────────────────
@@ -115,7 +87,7 @@ async def test_wrap_hook_is_called() -> None:
     async for event in my_agent.run(
         MOCK_MODEL, [ai.user_message("go")], middleware=[Spy()]
     ):
-        if not isinstance(event, ai.MessageEnd):
+        if not isinstance(event, agent_events_.MessageEnd):
             continue
         msg = event.message
         if any(isinstance(p, ai.HookPart) and p.status == "pending" for p in msg.parts):
@@ -125,159 +97,6 @@ async def test_wrap_hook_is_called() -> None:
     assert hook_calls[0].label == "test_hook"
     assert hook_calls[0].payload is Confirmation
     assert hook_calls[0].interrupt_loop is False
-
-
-# ── Middleware ordering (onion model) ────────────────────────────
-
-
-async def test_model_middleware_ordering() -> None:
-    """First in list = outermost. Sees call first, result last."""
-    order: list[str] = []
-
-    class Outer(ai.Middleware):
-        async def wrap_model(self, call: middleware.ModelContext, next: Any) -> Any:
-            order.append("outer-before")
-            result = await next(call)
-            order.append("outer-after")
-            return result
-
-    class Inner(ai.Middleware):
-        async def wrap_model(self, call: middleware.ModelContext, next: Any) -> Any:
-            order.append("inner-before")
-            result = await next(call)
-            order.append("inner-after")
-            return result
-
-    my_agent = ai.agent()
-    mock_llm([[text_msg("Hi")]])
-
-    async for _m in my_agent.run(
-        MOCK_MODEL, [ai.user_message("Hi")], middleware=[Outer(), Inner()]
-    ):
-        pass
-
-    assert order == ["outer-before", "inner-before", "inner-after", "outer-after"]
-
-
-# ── Context modification ────────────────────────────────────────
-
-
-async def test_model_context_can_be_modified() -> None:
-    """Middleware can modify the ModelContext before passing to next."""
-
-    class Injector(ai.Middleware):
-        async def wrap_model(self, call: middleware.ModelContext, next: Any) -> Any:
-            # Inject a system message.
-            extra = ai.system_message("Extra instruction: be concise.")
-            modified = dataclasses.replace(call, messages=[extra, *call.messages])
-            return await next(modified)
-
-    # Use a capturing adapter to see what messages the LLM received.
-    captured_messages: list[list[messages_.Message]] = []
-
-    class CapturingAdapter:
-        def __init__(self, responses: list[list[messages_.Message]]) -> None:
-            self._responses = list(responses)
-            self._idx = 0
-
-        async def stream(
-            self,
-            client: Any,
-            model: Any,
-            messages: list[messages_.Message],
-            *,
-            tools: Sequence[Any] | None = None,
-            output_type: type[pydantic.BaseModel] | None = None,
-            **kw: Any,
-        ) -> AsyncGenerator[events_.Event]:
-            captured_messages.append(list(messages))
-            seq = self._responses[self._idx]
-            self._idx += 1
-            message_id = seq[0].id if seq else messages_.generate_id()
-            handler = streaming_.StreamHandler(message_id=message_id)
-            yield handler.message_start()
-            for msg in seq:
-                for i, part in enumerate(msg.parts):
-                    if isinstance(part, messages_.TextPart):
-                        bid = f"text-{i}"
-                        for event in handler.handle_event(
-                            streaming_.TextStart(block_id=bid)
-                        ):
-                            yield event
-                        if part.text:
-                            for event in handler.handle_event(
-                                streaming_.TextDelta(block_id=bid, delta=part.text)
-                            ):
-                                yield event
-                        for event in handler.handle_event(
-                            streaming_.TextEnd(block_id=bid)
-                        ):
-                            yield event
-            for event in handler.handle_event(streaming_.MessageDone()):
-                yield event
-
-    adapter = CapturingAdapter([[text_msg("Concise!")]])
-    models.register_stream("mock", adapter.stream)
-
-    my_agent = ai.agent()
-    async for _m in my_agent.run(
-        MOCK_MODEL, [ai.user_message("Hi")], middleware=[Injector()]
-    ):
-        pass
-
-    # The LLM should have seen 2 messages: injected system + user.
-    assert len(captured_messages) == 1
-    assert len(captured_messages[0]) == 2
-    assert captured_messages[0][0].role == "system"
-
-
-# ── Nested agents inherit middleware ─────────────────────────────
-
-
-async def test_nested_agent_extends_middleware() -> None:
-    """Nested agent.run(middleware=[B]) extends, not replaces, the parent stack."""
-    tags: list[str] = []
-
-    class Tagger(ai.Middleware):
-        def __init__(self, tag: str) -> None:
-            self.tag = tag
-
-        async def wrap_model(self, call: middleware.ModelContext, next: Any) -> Any:
-            tags.append(self.tag)
-            return await next(call)
-
-    inner = ai.agent()
-
-    @ai.tool  # type: ignore[arg-type]
-    async def run_inner(query: str) -> AsyncGenerator[ai.Event]:
-        """Run sub-agent with its own middleware."""
-        async for event in inner.run(
-            MOCK_MODEL,
-            [ai.user_message(query)],
-            middleware=[Tagger("B")],
-        ):
-            yield event
-
-    outer = ai.agent(tools=[run_inner])
-
-    mock_llm(
-        [
-            # Outer turn 1: call run_inner.
-            [tool_call_msg(tc_id="tc-1", name="run_inner", args='{"query": "hi"}')],
-            # Inner turn 1: text reply (consumed by inner agent).
-            [text_msg("inner done", id="inner-1")],
-            # Outer turn 2: final.
-            [text_msg("outer done", id="outer-2")],
-        ]
-    )
-
-    async for _m in outer.run(
-        MOCK_MODEL, [ai.user_message("go")], middleware=[Tagger("A")]
-    ):
-        pass
-
-    # Outer model calls see only A. Inner model call sees A then B (composed).
-    assert tags == ["A", "A", "B", "A"]
 
 
 # ── wrap_agent_run ──────────────────────────────────────────────
@@ -314,46 +133,6 @@ async def test_wrap_agent_run_ordering() -> None:
         pass
 
     assert order == ["outer-before", "inner-before", "inner-after", "outer-after"]
-
-
-# ── wrap_generate ───────────────────────────────────────────────
-
-
-async def test_wrap_generate_is_called() -> None:
-    """Middleware.wrap_generate is invoked for models.generate() inside a run."""
-    gen_calls: list[middleware.GenerateContext] = []
-
-    class Spy(ai.Middleware):
-        async def wrap_generate(
-            self, call: middleware.GenerateContext, next: Any
-        ) -> Any:
-            gen_calls.append(call)
-            return await next(call)
-
-    response = messages_.Message(
-        id="gen-1",
-        role="assistant",
-        parts=[messages_.TextPart(text="generated image url")],
-    )
-    mock_generate([response])
-
-    # Call generate inside an agent loop so middleware is active.
-    my_agent = ai.agent()
-
-    @my_agent.loop
-    async def gen_loop(context: ai.Context) -> AsyncGenerator[ai.Message]:
-        result = await models.generate(
-            context.model, context.messages, models.ImageParams()
-        )
-        yield result
-
-    async for _m in my_agent.run(
-        MOCK_MODEL, [ai.user_message("paint a cat")], middleware=[Spy()]
-    ):
-        pass
-
-    assert len(gen_calls) == 1
-    assert gen_calls[0].model.id == "mock-model"
 
 
 async def test_wrap_tool_context_fields_flow_to_result() -> None:
@@ -411,46 +190,6 @@ async def test_wrap_tool_rewriting_tool_call_id_breaks_history() -> None:
 
     assert len(exc_info.value.exceptions) == 1
     assert "orphaned-tool-result" in str(exc_info.value.exceptions[0])
-
-
-# ── StreamResult wrapping ───────────────────────────────────────
-
-
-async def test_middleware_can_wrap_stream_result() -> None:
-    """Middleware can iterate a StreamResult and transform messages."""
-
-    class TextAppender(ai.Middleware):
-        async def wrap_model(
-            self,
-            call: middleware.ModelContext,
-            next: Any,
-        ) -> ai.StreamResultLike:
-            stream_result = await next(call)
-
-            async def _transformed() -> AsyncGenerator[events_.Event]:
-                async for event in stream_result:
-                    yield event
-                # After the stream ends, yield one more snapshot with extra text.
-                msg = messages_.Message(
-                    id="appended",
-                    role="assistant",
-                    parts=[messages_.TextPart(text="original + appended")],
-                )
-                yield events_.MessageStart(message=msg.model_copy(update={"parts": []}))
-                yield events_.MessageEnd(message=msg)
-
-            return ai.StreamResult.from_generator(_transformed())
-
-    my_agent = ai.agent()
-    mock_llm([[text_msg("original")]])
-
-    msgs = await collect_messages(
-        my_agent.run(MOCK_MODEL, [ai.user_message("Hi")], middleware=[TextAppender()])
-    )
-
-    # The last message should be from the appended stream.
-    texts = [m.text for m in msgs if m.text]
-    assert "original + appended" in texts
 
 
 # ── Context snapshot isolation ──────────────────────────────────
@@ -511,42 +250,3 @@ async def test_middleware_can_fix_bad_tool_kwargs() -> None:
     # The fixer middleware supplied x=99, so double should return 198.
     assert tool_result_msgs[0].tool_results[0].result == 198
     assert tool_result_msgs[0].tool_results[0].is_error is False
-
-
-# ── Run-scoped isolation ────────────────────────────────────────
-
-
-async def test_middleware_is_run_scoped() -> None:
-    """Middleware from one run does not leak into another."""
-    model_calls: list[str] = []
-
-    class Tagger(ai.Middleware):
-        def __init__(self, tag: str) -> None:
-            self.tag = tag
-
-        async def wrap_model(self, call: middleware.ModelContext, next: Any) -> Any:
-            model_calls.append(self.tag)
-            return await next(call)
-
-    my_agent = ai.agent()
-
-    # Run 1: with Tagger("A")
-    mock_llm([[text_msg("Hi")]])
-    async for _m in my_agent.run(
-        MOCK_MODEL, [ai.user_message("Hi")], middleware=[Tagger("A")]
-    ):
-        pass
-
-    # Run 2: no middleware
-    mock_llm([[text_msg("Hi")]])
-    async for _m in my_agent.run(MOCK_MODEL, [ai.user_message("Hi")]):
-        pass
-
-    # Run 3: with Tagger("C")
-    mock_llm([[text_msg("Hi")]])
-    async for _m in my_agent.run(
-        MOCK_MODEL, [ai.user_message("Hi")], middleware=[Tagger("C")]
-    ):
-        pass
-
-    assert model_calls == ["A", "C"]

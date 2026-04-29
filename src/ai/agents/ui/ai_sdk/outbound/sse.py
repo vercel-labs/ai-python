@@ -6,7 +6,7 @@ import dataclasses
 import json
 from collections.abc import AsyncGenerator, AsyncIterable
 
-from .....types import events as events_
+from ....events import AgentEvent
 from .. import protocol
 from .stream import to_stream
 
@@ -32,7 +32,7 @@ def format_sse(part: protocol.UIMessageStreamPart) -> str:
 
 
 async def to_sse(
-    events: AsyncIterable[events_.Event],
+    events: AsyncIterable[AgentEvent],
 ) -> AsyncGenerator[str]:
     """Convert an internal event stream into SSE strings."""
     async for part in to_stream(events):

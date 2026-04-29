@@ -19,7 +19,6 @@ class TextPart(pydantic.BaseModel):
     text: str
 
     kind: Literal["text"] = "text"
-    model_config = pydantic.ConfigDict(frozen=True)
 
 
 class ToolCallPart(pydantic.BaseModel):
@@ -29,7 +28,6 @@ class ToolCallPart(pydantic.BaseModel):
     tool_args: str
 
     kind: Literal["tool_call"] = "tool_call"
-    model_config = pydantic.ConfigDict(frozen=True)
 
 
 class ToolResultPart(pydantic.BaseModel):
@@ -51,7 +49,6 @@ class ReasoningPart(pydantic.BaseModel):
     signature: str | None = None
 
     kind: Literal["reasoning"] = "reasoning"
-    model_config = pydantic.ConfigDict(frozen=True)
 
 
 class HookPart[T](pydantic.BaseModel):
@@ -188,8 +185,6 @@ Part = Annotated[
 
 
 class Message(pydantic.BaseModel):
-    model_config = pydantic.ConfigDict(frozen=True)
-
     role: Literal["user", "assistant", "system", "tool", "internal"]
     parts: list[Part]
     id: str = pydantic.Field(default_factory=generate_id)
@@ -234,28 +229,6 @@ class Message(pydantic.BaseModel):
             if isinstance(part, StructuredOutputPart):
                 return part.value
         return None
-
-    def replace(self, old: Part, new: Part | None = None) -> Self:
-        """Return a copy with one part replaced.
-
-        ``replace(new_part)`` matches by ``new_part.id``.
-        ``replace(old_part, new_part)`` matches by object identity.
-        """
-        if new is None:
-            new = old
-            for idx, part in enumerate(self.parts):
-                if part.id == new.id:
-                    parts = list(self.parts)
-                    parts[idx] = new
-                    return self.model_copy(update={"parts": parts})
-            raise ValueError(f"Part id={new.id!r} not found in message {self.id!r}")
-
-        for idx, part in enumerate(self.parts):
-            if part is old:
-                parts = list(self.parts)
-                parts[idx] = new
-                return self.model_copy(update={"parts": parts})
-        raise ValueError(f"Part id={old.id!r} not found in message {self.id!r}")
 
 
 Usage = usage_.Usage

@@ -91,7 +91,7 @@ class StreamFn(Protocol):
     """Protocol for streaming adapter functions.
 
     Implementations yield event objects as the response streams in. The
-    terminal assistant state is surfaced as a ``MessageEnd.message``.
+    terminal assistant state is surfaced as a ``StreamEnd.message``.
     """
 
     def __call__(

@@ -1,8 +1,9 @@
 """Inline image generation — LLM that outputs images alongside text.
 
 Models like Gemini 3 Pro Image can generate images as part of their
-language model response. The images arrive as FileParts on the final
-MessageEnd message.
+language model response. The images arrive as ``FileEvent`` events
+during the stream and end up as ``FilePart``s on the aggregated
+``Stream.message``.
 """
 
 import asyncio
@@ -22,20 +23,18 @@ messages = [
 
 
 async def main() -> None:
-    last_msg: ai.Message | None = None
-
-    # Stream — text deltas arrive as events, images arrive on MessageEnd
-    async for event in ai.stream(model, messages):
-        if isinstance(event, ai.TextDelta):
-            print(event.chunk, end="", flush=True)
-        elif isinstance(event, ai.MessageEnd):
-            last_msg = event.message
+    # Stream — text deltas arrive as TextDelta events, generated images
+    # arrive as FileEvent events and accumulate on s.message.
+    async with ai.stream(model, messages) as s:
+        async for event in s:
+            if isinstance(event, ai.TextDelta):
+                print(event.chunk, end="", flush=True)
 
     print()
 
-    # Check for images in the final message
-    if last_msg and last_msg.images:
-        for i, img in enumerate(last_msg.images):
+    # Check for images in the aggregated message.
+    if s.message.images:
+        for i, img in enumerate(s.message.images):
             filename = f"inline_{i}.png"
             data = (
                 img.data if isinstance(img.data, bytes) else base64.b64decode(img.data)

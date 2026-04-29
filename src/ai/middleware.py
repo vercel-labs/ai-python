@@ -22,9 +22,15 @@ from typing import TYPE_CHECKING, Any
 
 import pydantic
 
-from .types import events as events_
 from .types import messages as messages_
-from .types.proto import StreamResultLike, ToolLike
+from .types.proto import ToolLike
+
+# Compat shim: ``StreamResultLike`` was removed from ``ai.types.proto`` when
+# the model layer was reworked.  Middleware is dead code under the new
+# ``Executor``-based ``api.py`` and is kept around only so the agents
+# rewrite can land separately; ``Any`` is enough to keep the existing
+# annotations type-checking.
+type StreamResultLike = Any
 
 # ---------------------------------------------------------------------------
 # Call context objects — frozen dataclasses with isolated mutable fields.
@@ -113,8 +119,11 @@ class AgentRunContext:
 # Middleware base class — override the methods you care about.
 # ---------------------------------------------------------------------------
 
-# Event/message aliases for brevity in signatures.
-_Event = events_.Event
+# Event/message aliases for brevity in signatures.  ``_Event`` is intentionally
+# typed as ``Any`` so the agent-run chain accepts the wider ``AgentEvent``
+# union (which includes ``MessageStart``/``MessageEnd``) without a circular
+# import from ``ai.agents``.
+_Event = Any
 _Message = messages_.Message
 
 # Agent run next-function type: call -> async generator of events.

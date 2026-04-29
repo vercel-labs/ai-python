@@ -9,11 +9,18 @@ import pydantic
 
 import ai
 from ai import models
-from ai.models.core.helpers import streaming as streaming_
+from ai.agents import events as agent_events_
 from ai.types import events as events_
 from ai.types import messages as messages_
 
-from ..conftest import MOCK_MODEL, collect_messages, mock_llm, text_msg, tool_call_msg
+from ..conftest import (
+    MOCK_MODEL,
+    collect_messages,
+    emit_events_for_messages,
+    mock_llm,
+    text_msg,
+    tool_call_msg,
+)
 
 # ---------------------------------------------------------------------------
 # Generator tool: yields intermediate messages, returns final text
@@ -96,45 +103,7 @@ class _CapturingAdapter:
         seq = self._responses[self._idx]
         self._idx += 1
 
-        message_id = seq[0].id if seq else messages_.generate_id()
-        handler = streaming_.StreamHandler(message_id=message_id)
-        yield handler.message_start()
-        for msg in seq:
-            for i, part in enumerate(msg.parts):
-                if isinstance(part, messages_.TextPart):
-                    bid = f"text-{i}"
-                    for event in handler.handle_event(
-                        streaming_.TextStart(block_id=bid)
-                    ):
-                        yield event
-                    if part.text:
-                        for event in handler.handle_event(
-                            streaming_.TextDelta(block_id=bid, delta=part.text)
-                        ):
-                            yield event
-                    for event in handler.handle_event(streaming_.TextEnd(block_id=bid)):
-                        yield event
-                elif isinstance(part, messages_.ToolCallPart):
-                    for event in handler.handle_event(
-                        streaming_.ToolStart(
-                            tool_call_id=part.tool_call_id,
-                            tool_name=part.tool_name,
-                        )
-                    ):
-                        yield event
-                    if part.tool_args:
-                        for event in handler.handle_event(
-                            streaming_.ToolArgsDelta(
-                                tool_call_id=part.tool_call_id,
-                                delta=part.tool_args,
-                            )
-                        ):
-                            yield event
-                    for event in handler.handle_event(
-                        streaming_.ToolEnd(tool_call_id=part.tool_call_id)
-                    ):
-                        yield event
-        for event in handler.handle_event(streaming_.MessageDone()):
+        async for event in emit_events_for_messages(seq):
             yield event
 
 
@@ -145,7 +114,7 @@ async def inner_fact(topic: str) -> str:
 
 
 @ai.tool  # type: ignore[arg-type]
-async def research_tool(topic: str) -> AsyncGenerator[ai.Event]:
+async def research_tool(topic: str) -> AsyncGenerator[agent_events_.AgentEvent]:
     """Nested agent that researches a topic."""
     inner = ai.agent(tools=[inner_fact])
 

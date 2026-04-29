@@ -19,7 +19,7 @@ from ...types import proto as proto_
 from ...types import usage as usage_
 from ..core import client as client_
 from ..core import model as model_
-from ..core.helpers import files, streaming
+from ..core.helpers import files
 from . import _common, errors
 
 # ---------------------------------------------------------------------------
@@ -154,20 +154,20 @@ async def _build_request_body(
 
 
 # ---------------------------------------------------------------------------
-# SSE response parsing — v3 stream parts → StreamEvent
+# SSE response parsing — v3 stream parts → public Event
 # ---------------------------------------------------------------------------
 
 
-def _expand_tool_call(data: dict[str, Any]) -> list[streaming.StreamEvent]:
-    """Expand a complete ``tool-call`` part into Start + ArgsDelta + End."""
+def _expand_tool_call(data: dict[str, Any]) -> list[events_.Event]:
+    """Expand a complete ``tool-call`` part into Start + Delta + End."""
     tc_id = data.get("toolCallId", "")
     tool_name = data.get("toolName", "")
     tool_input = data.get("input", "")
     args_str = tool_input if isinstance(tool_input, str) else json.dumps(tool_input)
     return [
-        streaming.ToolStart(tool_call_id=tc_id, tool_name=tool_name),
-        streaming.ToolArgsDelta(tool_call_id=tc_id, delta=args_str),
-        streaming.ToolEnd(tool_call_id=tc_id),
+        events_.ToolStart(tool_call_id=tc_id, tool_name=tool_name),
+        events_.ToolDelta(tool_call_id=tc_id, chunk=args_str),
+        events_.ToolEnd(tool_call_id=tc_id),
     ]
 
 
@@ -198,40 +198,40 @@ def _parse_usage(data: Any) -> usage_.Usage:
     )
 
 
-def _parse_stream_part(data: dict[str, Any]) -> list[streaming.StreamEvent]:
-    """Convert a ``LanguageModelV3StreamPart`` to internal events."""
+def _parse_stream_part(data: dict[str, Any]) -> list[events_.Event]:
+    """Convert a ``LanguageModelV3StreamPart`` to public events."""
     match data.get("type", ""):
         case "text-start":
-            return [streaming.TextStart(block_id=data.get("id", "text"))]
+            return [events_.TextStart(block_id=data.get("id", "text"))]
 
         case "text-delta":
             return [
-                streaming.TextDelta(
+                events_.TextDelta(
                     block_id=data.get("id", "text"),
-                    delta=data.get("textDelta", data.get("delta", "")),
+                    chunk=data.get("textDelta", data.get("delta", "")),
                 )
             ]
 
         case "text-end":
-            return [streaming.TextEnd(block_id=data.get("id", "text"))]
+            return [events_.TextEnd(block_id=data.get("id", "text"))]
 
         case "reasoning-start":
-            return [streaming.ReasoningStart(block_id=data.get("id", "reasoning"))]
+            return [events_.ReasoningStart(block_id=data.get("id", "reasoning"))]
 
         case "reasoning-delta":
             return [
-                streaming.ReasoningDelta(
+                events_.ReasoningDelta(
                     block_id=data.get("id", "reasoning"),
-                    delta=data.get("delta", ""),
+                    chunk=data.get("delta", ""),
                 )
             ]
 
         case "reasoning-end":
-            return [streaming.ReasoningEnd(block_id=data.get("id", "reasoning"))]
+            return [events_.ReasoningEnd(block_id=data.get("id", "reasoning"))]
 
         case "tool-input-start":
             return [
-                streaming.ToolStart(
+                events_.ToolStart(
                     tool_call_id=data.get("id", ""),
                     tool_name=data.get("toolName", ""),
                 )
@@ -239,22 +239,22 @@ def _parse_stream_part(data: dict[str, Any]) -> list[streaming.StreamEvent]:
 
         case "tool-input-delta":
             return [
-                streaming.ToolArgsDelta(
+                events_.ToolDelta(
                     tool_call_id=data.get("id", ""),
-                    delta=data.get("delta", ""),
+                    chunk=data.get("delta", ""),
                 )
             ]
 
         case "tool-input-end":
-            return [streaming.ToolEnd(tool_call_id=data.get("id", ""))]
+            return [events_.ToolEnd(tool_call_id=data.get("id", ""))]
 
         case "tool-call":
             return _expand_tool_call(data)
 
         case "file":
             return [
-                streaming.FileEvent(
-                    block_id=data.get("id", f"file-{len(data)}"),
+                events_.FileEvent(
+                    block_id=data.get("id", ""),
                     media_type=data.get("mediaType", "application/octet-stream"),
                     data=data.get("data", ""),
                 )
@@ -263,14 +263,7 @@ def _parse_stream_part(data: dict[str, Any]) -> list[streaming.StreamEvent]:
         case "finish":
             usage_data = data.get("usage")
             usage = _parse_usage(usage_data) if usage_data else None
-            match data.get("finishReason"):
-                case dict() as d:
-                    finish_reason = d.get("unified", "stop")
-                case str() as s:
-                    finish_reason = s
-                case _:
-                    finish_reason = "stop"
-            return [streaming.MessageDone(finish_reason=finish_reason, usage=usage)]
+            return [events_.StreamEnd(usage=usage)]
 
         case _:
             return []
@@ -293,6 +286,8 @@ async def stream(
     """Stream an LLM response through the AI Gateway v3 protocol.
 
     Yields :class:`~ai.types.events.Event` objects as the response streams in.
+    Pure delta emitter — the :class:`~ai.models.Stream` wrapper aggregates
+    parts into the final :class:`~ai.types.Message`.
     """
     body = await _build_request_body(
         messages, tools=tools, output_type=output_type, **kwargs
@@ -301,8 +296,6 @@ async def stream(
         client, model, model_type="language", streaming=True
     )
     url = f"{client.base_url.rstrip('/')}/language-model"
-
-    handler = streaming.StreamHandler()
 
     try:
         async with client.http.stream(
@@ -319,11 +312,10 @@ async def stream(
                     api_key_provided=bool(client.api_key),
                 )
 
-            yield handler.message_start()
+            yield events_.StreamStart()
             async for data in _common.parse_sse_lines(response):
-                for adapter_event in _parse_stream_part(data):
-                    for out_event in handler.handle_event(adapter_event):
-                        yield out_event
+                for event in _parse_stream_part(data):
+                    yield event
     except errors.GatewayError:
         raise
     except httpx.TimeoutException as exc:

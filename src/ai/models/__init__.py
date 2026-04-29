@@ -25,29 +25,42 @@ Usage::
     ids = await openai.list()
 """
 
-from ..types.proto import StreamResultLike
 from .ai_gateway import ai_gateway
 from .anthropic import anthropic
 from .core.adapters import register_generate, register_stream
-from .core.api import check_connection, generate, stream
+from .core.api import (
+    Executor,
+    GenerateExecutor,
+    GenerateRequest,
+    Stream,
+    StreamExecutor,
+    StreamRequest,
+    check_connection,
+    generate,
+    stream,
+)
 from .core.client import Client
 from .core.model import Model
+from .core.params import GenerateParams, ImageParams, VideoParams
 from .core.proto import CheckConnFn, GenerateFn, Provider, StreamFn
-from .core.types import GenerateParams, ImageParams, StreamResult, VideoParams
 from .openai import openai
 
 __all__ = [
     # Core types
     "CheckConnFn",
     "Client",
+    "Executor",
+    "GenerateExecutor",
     "GenerateFn",
     "GenerateParams",
+    "GenerateRequest",
     "ImageParams",
     "Model",
     "Provider",
+    "Stream",
+    "StreamExecutor",
     "StreamFn",
-    "StreamResult",
-    "StreamResultLike",
+    "StreamRequest",
     "VideoParams",
     # Provider factories
     "ai_gateway",

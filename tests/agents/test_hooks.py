@@ -9,6 +9,7 @@ import pydantic
 import pytest
 
 import ai
+from ai.agents import events as agent_events_
 
 from ..conftest import MOCK_MODEL, mock_llm, text_msg
 
@@ -37,7 +38,7 @@ async def test_resolve_live_future() -> None:
     mock_llm([[text_msg("OK")]])
 
     async for event in my_agent.run(MOCK_MODEL, [ai.user_message("go")]):
-        if not isinstance(event, ai.MessageEnd):
+        if not isinstance(event, agent_events_.MessageEnd):
             continue
         msg = event.message
         # When we see the pending hook message, resolve it.
@@ -70,7 +71,7 @@ async def test_cancel_live_hook() -> None:
     mock_llm([[text_msg("OK")]])
 
     async for event in my_agent.run(MOCK_MODEL, [ai.user_message("go")]):
-        if not isinstance(event, ai.MessageEnd):
+        if not isinstance(event, agent_events_.MessageEnd):
             continue
         msg = event.message
         if any(isinstance(p, ai.HookPart) and p.status == "pending" for p in msg.parts):
@@ -144,7 +145,7 @@ async def test_resolved_hook_emits_message() -> None:
 
     msgs: list[ai.Message] = []
     async for event in my_agent.run(MOCK_MODEL, [ai.user_message("go")]):
-        if not isinstance(event, ai.MessageEnd):
+        if not isinstance(event, agent_events_.MessageEnd):
             continue
         msg = event.message
         msgs.append(msg)
@@ -180,7 +181,7 @@ async def test_hook_metadata_in_pending() -> None:
     mock_llm([[text_msg("OK")]])
     msgs: list[ai.Message] = []
     async for event in my_agent.run(MOCK_MODEL, [ai.user_message("go")]):
-        if isinstance(event, ai.MessageEnd):
+        if isinstance(event, agent_events_.MessageEnd):
             msgs.append(event.message)
 
     hook_msgs = [m for m in msgs if any(isinstance(p, ai.HookPart) for p in m.parts)]

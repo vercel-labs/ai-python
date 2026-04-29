@@ -16,9 +16,10 @@ from ...types import events as events_
 from ...types import media
 from ...types import messages as messages_
 from ...types import proto as proto_
+from ...types import usage as usage_
 from ..core import client as client_
 from ..core import model as model_
-from ..core.helpers import files, streaming
+from ..core.helpers import files
 
 # ---------------------------------------------------------------------------
 # Message / tool conversion — internal types → OpenAI wire format
@@ -211,6 +212,8 @@ async def stream(
     """Stream an LLM response via the OpenAI chat completions API.
 
     Yields :class:`~ai.types.events.Event` objects as the response streams in.
+    Pure delta emitter — the :class:`~ai.models.Stream` wrapper aggregates
+    parts into the final :class:`~ai.types.Message`.
 
     Extra keyword arguments beyond the ``StreamFn`` protocol:
 
@@ -255,42 +258,28 @@ async def stream(
             reasoning_config["effort"] = reasoning_effort
         api_kwargs["extra_body"] = {"reasoning": reasoning_config}
 
-    handler = streaming.StreamHandler()
-
-    def _emit(adapter_event: streaming.StreamEvent) -> list[events_.Event]:
-        return handler.handle_event(adapter_event)
-
     try:
         sdk_stream = await sdk_client.chat.completions.create(**api_kwargs)
 
         text_started = False
         reasoning_started = False
         tc_state: dict[int, dict[str, Any]] = {}
-        finish_reason: str | None = None
-        usage: messages_.Usage | None = None
+        usage: usage_.Usage | None = None
 
-        yield handler.message_start()
+        yield events_.StreamStart()
 
         async for chunk in sdk_stream:
             if chunk.usage is not None:
                 raw = chunk.usage.model_dump(exclude_none=True)
                 reasoning_tokens: int | None = None
                 cache_read: int | None = None
-                cd = getattr(
-                    chunk.usage,
-                    "completion_tokens_details",
-                    None,
-                )
+                cd = getattr(chunk.usage, "completion_tokens_details", None)
                 if cd:
                     reasoning_tokens = getattr(cd, "reasoning_tokens", None)
-                pd = getattr(
-                    chunk.usage,
-                    "prompt_tokens_details",
-                    None,
-                )
+                pd = getattr(chunk.usage, "prompt_tokens_details", None)
                 if pd:
                     cache_read = getattr(pd, "cached_tokens", None)
-                usage = messages_.Usage(
+                usage = usage_.Usage(
                     input_tokens=chunk.usage.prompt_tokens or 0,
                     output_tokens=chunk.usage.completion_tokens or 0,
                     reasoning_tokens=reasoning_tokens,
@@ -314,29 +303,20 @@ async def stream(
             if reasoning_value:
                 if not reasoning_started:
                     reasoning_started = True
-                    for e in _emit(streaming.ReasoningStart(block_id="reasoning")):
-                        yield e
-                for e in _emit(
-                    streaming.ReasoningDelta(
-                        block_id="reasoning", delta=reasoning_value
-                    )
-                ):
-                    yield e
+                    yield events_.ReasoningStart(block_id="reasoning")
+                yield events_.ReasoningDelta(
+                    chunk=reasoning_value, block_id="reasoning"
+                )
 
             if delta.content:
                 if reasoning_started:
-                    for e in _emit(streaming.ReasoningEnd(block_id="reasoning")):
-                        yield e
+                    yield events_.ReasoningEnd(block_id="reasoning")
                     reasoning_started = False
 
                 if not text_started:
                     text_started = True
-                    for e in _emit(streaming.TextStart(block_id="text")):
-                        yield e
-                for e in _emit(
-                    streaming.TextDelta(block_id="text", delta=delta.content)
-                ):
-                    yield e
+                    yield events_.TextStart(block_id="text")
+                yield events_.TextDelta(chunk=delta.content, block_id="text")
 
             if delta.tool_calls:
                 for tc in delta.tool_calls:
@@ -358,37 +338,28 @@ async def stream(
 
                             if not tc_state[idx]["started"] and tid:
                                 tc_state[idx]["started"] = True
-                                for e in _emit(
-                                    streaming.ToolStart(
-                                        tool_call_id=tid,
-                                        tool_name=tname,
-                                    )
-                                ):
-                                    yield e
+                                yield events_.ToolStart(
+                                    tool_call_id=tid, tool_name=tname
+                                )
 
                             if tid:
-                                for e in _emit(
-                                    streaming.ToolArgsDelta(
-                                        tool_call_id=tid,
-                                        delta=tc.function.arguments,
-                                    )
-                                ):
-                                    yield e
+                                yield events_.ToolDelta(
+                                    chunk=tc.function.arguments,
+                                    tool_call_id=tid,
+                                )
 
             if choice.finish_reason is not None:
-                finish_reason = choice.finish_reason
                 if reasoning_started:
-                    for e in _emit(streaming.ReasoningEnd(block_id="reasoning")):
-                        yield e
+                    yield events_.ReasoningEnd(block_id="reasoning")
+                    reasoning_started = False
                 if text_started:
-                    for e in _emit(streaming.TextEnd(block_id="text")):
-                        yield e
+                    yield events_.TextEnd(block_id="text")
+                    text_started = False
                 for tc in tc_state.values():
                     if tc["started"] and tc["id"]:
-                        for e in _emit(streaming.ToolEnd(tool_call_id=tc["id"])):
-                            yield e
+                        yield events_.ToolEnd(tool_call_id=tc["id"])
+                        tc["started"] = False
 
-        for e in _emit(streaming.MessageDone(finish_reason=finish_reason, usage=usage)):
-            yield e
+        yield events_.StreamEnd(usage=usage)
     finally:
         await sdk_client.close()

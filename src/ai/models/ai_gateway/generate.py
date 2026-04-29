@@ -14,9 +14,9 @@ from ...types import messages as messages_
 from ..core import client as client_
 from ..core import model as model_
 from ..core.helpers import files
-from ..core.types import GenerateParams as GenerateParams
-from ..core.types import ImageParams as ImageParams
-from ..core.types import VideoParams as VideoParams
+from ..core.params import GenerateParams as GenerateParams
+from ..core.params import ImageParams as ImageParams
+from ..core.params import VideoParams as VideoParams
 from . import _common, errors
 
 # ---------------------------------------------------------------------------

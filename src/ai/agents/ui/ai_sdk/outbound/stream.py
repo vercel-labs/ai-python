@@ -4,13 +4,13 @@ from __future__ import annotations
 
 from collections.abc import AsyncGenerator, AsyncIterable
 
-from .....types import events as events_
+from ....events import AgentEvent, MessageEnd, MessageStart
 from .. import protocol
 from ._state import _StreamState
 
 
 async def to_stream(
-    events: AsyncIterable[events_.Event],
+    events: AsyncIterable[AgentEvent],
 ) -> AsyncGenerator[protocol.UIMessageStreamPart]:
     """Walk ``events`` once, emitting AI SDK UI stream parts.
 
@@ -21,10 +21,10 @@ async def to_stream(
     state = _StreamState()
 
     async for event in events:
-        if isinstance(event, events_.MessageStart):
+        if isinstance(event, MessageStart):
             for part in state.on_message_start(event.message):
                 yield part
-        elif isinstance(event, events_.MessageEnd):
+        elif isinstance(event, MessageEnd):
             for part in state.on_terminal(event.message):
                 yield part
         else:

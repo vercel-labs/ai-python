@@ -24,14 +24,16 @@ messages = [ai.user_message("What's the weather in Tokyo?")]
 
 
 async def main() -> None:
-    # Stream with tools — the model may emit tool calls
-    async for event in ai.stream(model, messages, tools=[get_weather]):
-        if isinstance(event, ai.TextDelta):
-            print(event.chunk, end="", flush=True)
-        elif isinstance(event, ai.MessageEnd):
-            for tc in event.message.tool_calls:
-                print(f"\nTool call: {tc.tool_name}({tc.tool_args})")
+    # Stream with tools — the model may emit tool calls.
+    async with ai.stream(model, messages, tools=[get_weather]) as s:
+        async for event in s:
+            if isinstance(event, ai.TextDelta):
+                print(event.chunk, end="", flush=True)
     print()
+
+    # After iteration, s.tool_calls collects every tool call from the response.
+    for tc in s.tool_calls:
+        print(f"Tool call: {tc.tool_name}({tc.tool_args})")
 
 
 if __name__ == "__main__":

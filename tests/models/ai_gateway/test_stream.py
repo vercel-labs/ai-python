@@ -23,6 +23,7 @@ import httpx
 import pytest
 
 import ai
+from ai import models
 from ai.models.ai_gateway import ai_gateway, errors
 from ai.models.core import model as model_
 from ai.types import events, messages
@@ -59,13 +60,11 @@ async def _final(
     model: model_.Model = _TEST_MODEL,
     **kwargs: Any,
 ) -> messages.Message:
-    """Drain ``stream()`` and return the terminal assistant message."""
-    result: list[messages.Message] = []
-    async for event in stream_mod.stream(client, model, msgs, **kwargs):
-        if isinstance(event, events.MessageEnd):
-            result.append(event.message)
-    assert result
-    return result[-1]
+    """Drain the adapter's event stream and return the aggregated message."""
+    s = models.Stream(stream_mod.stream(client, model, msgs, **kwargs))
+    async for _ in s:
+        pass
+    return s.message
 
 
 # ---------------------------------------------------------------------------
