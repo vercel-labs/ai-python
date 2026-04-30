@@ -12,18 +12,14 @@ end-to-end in ``test_stream.py`` via real HTTP round-trips.
 
 from __future__ import annotations
 
-import importlib
 import json
 from unittest.mock import AsyncMock, patch
 
 import pydantic
 
+from ai.models.ai_gateway import adapter
 from ai.types import events as events_
 from ai.types import messages
-
-# The ai_gateway __init__.py re-exports `stream` as a function, which
-# shadows the module.  Use importlib to get the actual module.
-stream_mod = importlib.import_module("ai.models.ai_gateway.stream")
 
 # ---------------------------------------------------------------------------
 # _messages_to_prompt
@@ -38,7 +34,7 @@ class TestMessagesToPrompt:
                 parts=[messages.TextPart(text="You are helpful.")],
             )
         ]
-        result = await stream_mod._messages_to_prompt(msgs)
+        result = await adapter._messages_to_prompt(msgs)
         assert result == [{"role": "system", "content": "You are helpful."}]
 
     async def test_user_message(self) -> None:
@@ -48,7 +44,7 @@ class TestMessagesToPrompt:
                 parts=[messages.TextPart(text="Hello")],
             )
         ]
-        result = await stream_mod._messages_to_prompt(msgs)
+        result = await adapter._messages_to_prompt(msgs)
         assert result == [
             {
                 "role": "user",
@@ -66,7 +62,7 @@ class TestMessagesToPrompt:
                 ],
             )
         ]
-        result = await stream_mod._messages_to_prompt(msgs)
+        result = await adapter._messages_to_prompt(msgs)
         content = result[0]["content"]
         assert content[0] == {"type": "reasoning", "text": "Let me think..."}
         assert content[1] == {"type": "text", "text": "42"}
@@ -96,7 +92,7 @@ class TestMessagesToPrompt:
                 ],
             ),
         ]
-        result = await stream_mod._messages_to_prompt(msgs)
+        result = await adapter._messages_to_prompt(msgs)
         assert len(result) == 2
 
         # Assistant message has the tool-call
@@ -134,7 +130,7 @@ class TestMessagesToPrompt:
                 ],
             ),
         ]
-        result = await stream_mod._messages_to_prompt(msgs)
+        result = await adapter._messages_to_prompt(msgs)
         tr = result[1]["content"][0]
         assert tr["output"]["type"] == "error-text"
         assert tr["output"]["value"] == "Connection timeout"
@@ -158,7 +154,7 @@ class TestMessagesToPrompt:
             new_callable=AsyncMock,
             return_value=(fake_jpeg, "image/jpeg"),
         ):
-            result = await stream_mod._messages_to_prompt(msgs)
+            result = await adapter._messages_to_prompt(msgs)
         content = result[0]["content"]
         assert content[0] == {"type": "text", "text": "Look at this"}
         assert content[1]["type"] == "file"
@@ -177,7 +173,7 @@ class TestMessagesToPrompt:
                 ],
             )
         ]
-        result = await stream_mod._messages_to_prompt(msgs)
+        result = await adapter._messages_to_prompt(msgs)
         part = result[0]["content"][0]
         assert part["type"] == "file"
         assert part["mediaType"] == "image/png"
@@ -199,7 +195,7 @@ class TestMessagesToPrompt:
                 ],
             )
         ]
-        result = await stream_mod._messages_to_prompt(msgs)
+        result = await adapter._messages_to_prompt(msgs)
         assert len(result) == 1
         assert result[0]["role"] == "assistant"
 
@@ -221,7 +217,7 @@ class TestBuildRequestBody:
                 parts=[messages.TextPart(text="Weather?")],
             )
         ]
-        body = await stream_mod._build_request_body(msgs, output_type=WeatherResult)
+        body = await adapter._build_request_body(msgs, output_type=WeatherResult)
 
         assert "responseFormat" in body
         rf = body["responseFormat"]
@@ -234,7 +230,7 @@ class TestBuildRequestBody:
 class TestParseStreamPartComplex:
     def test_text_delta_uses_textDelta_key(self) -> None:
         """The gateway sends ``textDelta`` (camelCase), not ``delta``."""
-        events = stream_mod._parse_stream_part(
+        events = adapter._parse_stream_part(
             {"type": "text-delta", "id": "t1", "textDelta": "Hello"}, set()
         )
         assert isinstance(events[0], events_.TextDelta)
@@ -243,7 +239,7 @@ class TestParseStreamPartComplex:
     def test_tool_call_expands_to_three_events(self) -> None:
         """A complete ``tool-call`` part must expand into
         ToolStart -> ToolDelta -> ToolEnd."""
-        events = stream_mod._parse_stream_part(
+        events = adapter._parse_stream_part(
             {
                 "type": "tool-call",
                 "toolCallId": "tc-1",
@@ -262,11 +258,11 @@ class TestParseStreamPartComplex:
     def test_tool_call_skipped_when_already_streamed(self) -> None:
         """A ``tool-call`` that duplicates a streamed tool is dropped."""
         seen: set[str] = set()
-        stream_mod._parse_stream_part(
+        adapter._parse_stream_part(
             {"type": "tool-input-start", "id": "tc-1", "toolName": "get_weather"},
             seen,
         )
-        events = stream_mod._parse_stream_part(
+        events = adapter._parse_stream_part(
             {
                 "type": "tool-call",
                 "toolCallId": "tc-1",
@@ -278,7 +274,7 @@ class TestParseStreamPartComplex:
         assert events == []
 
     def test_finish_flat_usage(self) -> None:
-        events = stream_mod._parse_stream_part(
+        events = adapter._parse_stream_part(
             {
                 "type": "finish",
                 "finishReason": "stop",
@@ -296,7 +292,7 @@ class TestParseStreamPartComplex:
         assert done.usage.output_tokens == 20
 
     def test_finish_v3_nested_usage(self) -> None:
-        events = stream_mod._parse_stream_part(
+        events = adapter._parse_stream_part(
             {
                 "type": "finish",
                 "finishReason": {
@@ -326,7 +322,7 @@ class TestParseStreamPartComplex:
     def test_file_part(self) -> None:
         """A ``file`` stream part (inline image from Gemini/GPT-5)
         must produce a FileEvent."""
-        events = stream_mod._parse_stream_part(
+        events = adapter._parse_stream_part(
             {
                 "type": "file",
                 "id": "f1",
@@ -343,16 +339,14 @@ class TestParseStreamPartComplex:
 
     def test_file_part_defaults(self) -> None:
         """A minimal ``file`` part uses sensible defaults."""
-        events = stream_mod._parse_stream_part(
-            {"type": "file", "data": "somedata"}, set()
-        )
+        events = adapter._parse_stream_part({"type": "file", "data": "somedata"}, set())
         assert len(events) == 1
         assert isinstance(events[0], events_.FileEvent)
         assert events[0].media_type == "application/octet-stream"
 
     def test_unknown_types_produce_no_events(self) -> None:
         for t in ("stream-start", "raw", "response-metadata", "banana"):
-            assert stream_mod._parse_stream_part({"type": t}, set()) == []
+            assert adapter._parse_stream_part({"type": t}, set()) == []
 
 
 # ---------------------------------------------------------------------------
@@ -362,12 +356,12 @@ class TestParseStreamPartComplex:
 
 class TestParseUsage:
     def test_flat_format(self) -> None:
-        usage = stream_mod._parse_usage({"prompt_tokens": 10, "completion_tokens": 20})
+        usage = adapter._parse_usage({"prompt_tokens": 10, "completion_tokens": 20})
         assert usage.input_tokens == 10
         assert usage.output_tokens == 20
 
     def test_v3_nested_format(self) -> None:
-        usage = stream_mod._parse_usage(
+        usage = adapter._parse_usage(
             {
                 "inputTokens": {
                     "total": 100,
@@ -384,6 +378,6 @@ class TestParseUsage:
         assert usage.reasoning_tokens == 10
 
     def test_non_dict_returns_empty(self) -> None:
-        usage = stream_mod._parse_usage("not a dict")
+        usage = adapter._parse_usage("not a dict")
         assert usage.input_tokens == 0
         assert usage.output_tokens == 0

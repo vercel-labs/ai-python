@@ -15,7 +15,6 @@ is covered:
 
 from __future__ import annotations
 
-import importlib
 import json
 from typing import Any
 
@@ -24,15 +23,11 @@ import pytest
 
 import ai
 from ai import models
-from ai.models.ai_gateway import ai_gateway, errors
+from ai.models.ai_gateway import adapter, ai_gateway, errors
 from ai.models.core import model as model_
 from ai.types import events, messages
 
 from .conftest import mock_client, sse, user_msg
-
-# The ai_gateway __init__.py re-exports `stream` as a function, which
-# shadows the module.  Use importlib to get the actual module.
-stream_mod = importlib.import_module("ai.models.ai_gateway.stream")
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -49,7 +44,7 @@ async def _collect(
 ) -> list[events.Event]:
     """Drain ``stream()`` and return all yielded events."""
     result: list[events.Event] = []
-    async for event in stream_mod.stream(client, model, msgs, **kwargs):
+    async for event in adapter.stream(client, model, msgs, **kwargs):
         result.append(event)
     return result
 
@@ -61,7 +56,7 @@ async def _final(
     **kwargs: Any,
 ) -> messages.Message:
     """Drain the adapter's event stream and return the aggregated message."""
-    s = models.Stream(stream_mod.stream(client, model, msgs, **kwargs))
+    s = models.Stream(adapter.stream(client, model, msgs, **kwargs))
     async for _ in s:
         pass
     return s.message

@@ -23,7 +23,8 @@ import httpx
 import pytest
 
 from ai.models.ai_gateway import ai_gateway, errors
-from ai.models.ai_gateway.generate import VideoParams, generate
+from ai.models.ai_gateway.adapter import generate
+from ai.models.core.params import VideoParams
 from ai.types import messages
 
 from .conftest import mock_client, sse, user_msg
