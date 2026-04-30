@@ -210,7 +210,9 @@ def _expand_tool_call(
     return [
         types.events.ToolStart(tool_call_id=tc_id, tool_name=tool_name),
         types.events.ToolDelta(tool_call_id=tc_id, chunk=args_str),
-        types.events.ToolEnd(tool_call_id=tc_id),
+        types.events.ToolEnd(
+            tool_call_id=tc_id, tool_call=types.messages.DUMMY_TOOL_CALL
+        ),
     ]
 
 
@@ -293,7 +295,12 @@ def _parse_stream_part(
             ]
 
         case "tool-input-end":
-            return [types.events.ToolEnd(tool_call_id=data.get("id", ""))]
+            return [
+                types.events.ToolEnd(
+                    tool_call_id=data.get("id", ""),
+                    tool_call=types.messages.DUMMY_TOOL_CALL,
+                )
+            ]
 
         case "tool-call":
             return _expand_tool_call(data, streamed_tool_ids)

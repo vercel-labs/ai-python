@@ -86,6 +86,7 @@ class ToolDelta(BaseEvent):
 
 
 class ToolEnd(BaseEvent):
+    tool_call: messages.ToolCallPart
     tool_call_id: str = ""
 
     kind: Literal["tool_end"] = "tool_end"

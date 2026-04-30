@@ -28,9 +28,7 @@ async def main() -> None:
     async def custom(context: ai.Context) -> AsyncGenerator[ai.Event]:
         """Stream, execute tools with logging, repeat."""
         while True:
-            s = ai.models.stream(
-                context.model, context.messages, tools=context.tools
-            )
+            s = ai.models.stream(context.model, context.messages, tools=context.tools)
             async for event in s:
                 yield event
 

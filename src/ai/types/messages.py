@@ -30,6 +30,11 @@ class ToolCallPart(pydantic.BaseModel):
     kind: Literal["tool_call"] = "tool_call"
 
 
+DUMMY_TOOL_CALL = ToolCallPart(
+    id="<invalid>", tool_call_id="", tool_name="", tool_args=""
+)
+
+
 class ToolResultPart(pydantic.BaseModel):
     id: str = pydantic.Field(default_factory=generate_id)
     tool_call_id: str

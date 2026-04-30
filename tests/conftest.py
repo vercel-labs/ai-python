@@ -128,7 +128,7 @@ async def emit_events_for_messages(
                         tool_call_id=part.tool_call_id,
                         chunk=part.tool_args,
                     )
-                yield events_.ToolEnd(tool_call_id=part.tool_call_id)
+                yield events_.ToolEnd(tool_call_id=part.tool_call_id, tool_call=part)
 
             elif isinstance(part, messages_.FilePart):
                 yield events_.FileEvent(
