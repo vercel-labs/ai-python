@@ -1,10 +1,4 @@
-"""Tool schema types — what the LLM layer sees.
-
-These are schema-only definitions used by LanguageModel.stream(tools=...).
-The executable Tool class and @tool decorator live in agents.agent.
-"""
-
-from __future__ import annotations
+"""Tool schema types — what the LLM layer sees."""
 
 from typing import Any
 
@@ -18,3 +12,9 @@ class ToolSchema(pydantic.BaseModel):
     description: str
     param_schema: dict[str, Any]
     return_type: Any
+
+
+class BuiltinTool(pydantic.BaseModel):
+    """Base for provider-executed built-in tools."""
+
+    model_config = pydantic.ConfigDict(frozen=True)

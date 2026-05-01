@@ -221,6 +221,28 @@ class Stream:
                 existing_tool = self._parts.get(tcid)
                 if isinstance(existing_tool, types.ToolCallPart):
                     updates["tool_call"] = existing_tool
+            case types.BuiltinToolStart(
+                tool_call_id=tcid, tool_name=name, provider_name=pname
+            ):
+                btcp = types.BuiltinToolCallPart(
+                    id=tcid,
+                    tool_call_id=tcid,
+                    tool_name=name,
+                    tool_args="",
+                    provider_name=pname,
+                )
+                self._message.parts.append(btcp)
+                self._parts[tcid] = btcp
+            case types.BuiltinToolDelta(tool_call_id=tcid, chunk=c):
+                existing_btc = self._parts.get(tcid)
+                if isinstance(existing_btc, types.BuiltinToolCallPart):
+                    existing_btc.tool_args += c
+            case types.BuiltinToolEnd(tool_call_id=tcid):
+                existing_btc = self._parts.get(tcid)
+                if isinstance(existing_btc, types.BuiltinToolCallPart):
+                    updates["tool_call"] = existing_btc
+            case types.BuiltinToolResult(result=res):
+                self._message.parts.append(res)
             case types.FileEvent(block_id=bid, media_type=mt, data=d, filename=fname):
                 fp = types.FilePart(
                     id=bid or types.generate_id(),

@@ -98,6 +98,37 @@ class ToolEnd(BaseEvent):
     kind: Literal["tool_end"] = "tool_end"
 
 
+class BuiltinToolStart(BaseEvent):
+    tool_call_id: str = ""
+    tool_name: str = ""
+    provider_name: str | None = None
+
+    kind: Literal["builtin_tool_start"] = "builtin_tool_start"
+
+
+class BuiltinToolDelta(BaseEvent):
+    chunk: str
+    tool_call_id: str = ""
+
+    kind: Literal["builtin_tool_delta"] = "builtin_tool_delta"
+
+
+class BuiltinToolEnd(BaseEvent):
+    tool_call: messages.BuiltinToolCallPart
+    tool_call_id: str = ""
+
+    kind: Literal["builtin_tool_end"] = "builtin_tool_end"
+
+
+class BuiltinToolResult(BaseEvent):
+    """Provider returned a result for a built-in tool call."""
+
+    result: messages.BuiltinToolReturnPart
+    tool_call_id: str = ""
+
+    kind: Literal["builtin_tool_result"] = "builtin_tool_result"
+
+
 class FileEvent(BaseEvent):
     """A complete generated file from the LLM (e.g. inline image from Gemini/GPT)."""
 
@@ -129,6 +160,10 @@ Event = Annotated[
     | ToolStart
     | ToolDelta
     | ToolEnd
+    | BuiltinToolStart
+    | BuiltinToolDelta
+    | BuiltinToolEnd
+    | BuiltinToolResult
     | FileEvent
     | HookSuspension
     | HookResolution,

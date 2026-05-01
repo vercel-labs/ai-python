@@ -46,6 +46,37 @@ class ToolResultPart(pydantic.BaseModel):
     model_config = pydantic.ConfigDict(frozen=True)
 
 
+class BuiltinToolCallPart(pydantic.BaseModel):
+    """A tool call the provider executed itself (e.g. web_search).
+
+    Distinct from :class:`ToolCallPart` — these are not callable by the
+    host. Adapters emit them when a model uses a built-in tool.
+    """
+
+    id: str = pydantic.Field(default_factory=generate_id)
+    tool_call_id: str
+    tool_name: str
+    tool_args: str = ""
+    provider_name: str | None = None
+
+    kind: Literal["builtin_tool_call"] = "builtin_tool_call"
+
+
+class BuiltinToolReturnPart(pydantic.BaseModel):
+    """The provider's result for a :class:`BuiltinToolCallPart`."""
+
+    id: str = pydantic.Field(default_factory=generate_id)
+    tool_call_id: str
+    tool_name: str
+    result: Any = None
+    is_error: bool = False
+    provider_name: str | None = None
+    provider_details: dict[str, Any] | None = None
+
+    kind: Literal["builtin_tool_return"] = "builtin_tool_return"
+    model_config = pydantic.ConfigDict(frozen=True)
+
+
 class ReasoningPart(pydantic.BaseModel):
     id: str = pydantic.Field(default_factory=generate_id)
     text: str
@@ -181,6 +212,8 @@ Part = Annotated[
     TextPart
     | ToolCallPart
     | ToolResultPart
+    | BuiltinToolCallPart
+    | BuiltinToolReturnPart
     | ReasoningPart
     | HookPart[Any]
     | StructuredOutputPart
@@ -214,6 +247,14 @@ class Message(pydantic.BaseModel):
     @property
     def tool_results(self) -> list[ToolResultPart]:
         return [p for p in self.parts if isinstance(p, ToolResultPart)]
+
+    @property
+    def builtin_tool_calls(self) -> list[BuiltinToolCallPart]:
+        return [p for p in self.parts if isinstance(p, BuiltinToolCallPart)]
+
+    @property
+    def builtin_tool_returns(self) -> list[BuiltinToolReturnPart]:
+        return [p for p in self.parts if isinstance(p, BuiltinToolReturnPart)]
 
     @property
     def files(self) -> list[FilePart]:

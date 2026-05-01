@@ -1,5 +1,9 @@
 from . import media
 from .events import (
+    BuiltinToolDelta,
+    BuiltinToolEnd,
+    BuiltinToolResult,
+    BuiltinToolStart,
     Event,
     FileEvent,
     HookResolution,
@@ -17,6 +21,8 @@ from .events import (
     ToolStart,
 )
 from .messages import (
+    BuiltinToolCallPart,
+    BuiltinToolReturnPart,
     FilePart,
     HookPart,
     Message,
@@ -28,11 +34,19 @@ from .messages import (
     ToolResultPart,
     generate_id,
 )
-from .proto import ToolLike
-from .tools import ToolSchema
+from .proto import ToolLike, ToolSchemaLike
+from .tools import BuiltinTool, ToolSchema
 from .usage import Usage
 
 __all__ = [
+    "BuiltinTool",
+    "BuiltinToolCallPart",
+    "BuiltinToolDelta",
+    "BuiltinToolEnd",
+    "BuiltinToolResult",
+    "BuiltinToolReturnPart",
+    "BuiltinToolStart",
+    "ToolSchemaLike",
     "Event",
     "FileEvent",
     "FilePart",
