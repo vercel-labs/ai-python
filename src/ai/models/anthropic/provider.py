@@ -4,6 +4,7 @@ Defines the callable :data:`anthropic` provider, which satisfies the
 :class:`~ai.models.core.proto.Provider` protocol."""
 
 import os
+from types import ModuleType
 from typing import Any
 
 from .. import core
@@ -39,6 +40,16 @@ class _Anthropic:
     @property
     def params_type(self) -> type[AnthropicParams]:
         return AnthropicParams
+
+    @property
+    def tools(self) -> ModuleType:
+        """The provider's built-in tool factories.
+
+        Convenience accessor: ``anthropic.tools.web_search(...)``.
+        """
+        from . import tools as tools_module
+
+        return tools_module
 
     def client(self) -> core.client.Client:
         """Create a :class:`Client` from env-var credentials."""
