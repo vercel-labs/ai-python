@@ -83,7 +83,7 @@ def test_to_messages_approval_hook_emitted_as_internal() -> None:
     assert hook.hook_id == "approve_tc1"
 
 
-def test_to_messages_strips_trailing_assistant_when_approved() -> None:
+def test_to_messages_keeps_trailing_assistant_when_approved() -> None:
     result = to_messages(
         [
             _ui("user", _text("delete it"), id="u1"),
@@ -100,7 +100,7 @@ def test_to_messages_strips_trailing_assistant_when_approved() -> None:
         ],
         apply_approvals_=False,
     )
-    assert [m.role for m in result] == ["user", "internal"]
+    assert [m.role for m in result] == ["user", "assistant", "internal"]
 
 
 def test_extract_approvals_returns_approved_responses() -> None:

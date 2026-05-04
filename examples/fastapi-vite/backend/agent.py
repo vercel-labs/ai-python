@@ -34,12 +34,26 @@ async def graph(context: ai.Context) -> AsyncGenerator[ai.AgentEvent]:
     Reject buttons and sends the decision back on the next request.
     """
     while True:
-        s = ai.models.stream(context.model, context.messages, tools=context.tools)
-        async for event in s:
-            yield event
-        context.add(s.message)
+        # If the last message is already an assistant turn, we're being
+        # replayed after a hook resolution — skip the model call and go
+        # straight to processing its tool calls (resolutions are
+        # pre-registered, so the hook returns immediately).
+        if context.keep_running():
+            s = ai.models.stream(context.model, context.messages, tools=context.tools)
+            async for event in s:
+                yield event
+            context.add(s.message)
 
-        tool_calls = context.resolve(s.tool_calls)
+        # Pull tool calls off the most recent assistant message.
+        # ``to_messages`` may append "internal" hook messages after the
+        # assistant, so ``messages[-1]`` isn't always the assistant turn.
+        last_assistant = next(
+            (m for m in reversed(context.messages) if m.role == "assistant"),
+            None,
+        )
+        tool_calls = (
+            context.resolve(last_assistant.tool_calls) if last_assistant else []
+        )
         if not tool_calls:
             return
 
@@ -47,6 +61,7 @@ async def graph(context: ai.Context) -> AsyncGenerator[ai.AgentEvent]:
             *(_execute_with_approval(tc) for tc in tool_calls)
         )
         yield ai.tool_result(*results)
+        context.add(ai.tool_message(*results))
 
 
 async def _execute_with_approval(tc: ai.ToolCall) -> ai.ToolCallResult:

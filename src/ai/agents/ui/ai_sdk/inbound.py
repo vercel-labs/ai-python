@@ -218,17 +218,25 @@ def to_messages(
     if apply_approvals_:
         apply_approvals(approvals)
 
-    if approvals and messages:
-        # The assistant message that originated the approval-responded tool
-        # call would re-send the duplicate tool-use to the LLM on replay.
-        # Walk past any trailing internal (hook) messages and drop the
-        # assistant message beneath them.
-        idx = len(messages) - 1
-        while idx >= 0 and messages[idx].role == "internal":
-            idx -= 1
-        if idx >= 0 and messages[idx].role == "assistant":
-            logger.info("Stripping assistant message originating responded approvals")
-            messages = messages[:idx] + messages[idx + 1 :]
+    # TODO: Stripping the trailing assistant message broke the approval
+    # replay flow — the loop needs that message (with the original
+    # tool_call_ids) to match the pre-registered hook resolutions.
+    # Without it, the loop re-calls the LLM, gets new tool_call_ids,
+    # and the resolutions never match. Loops should instead check
+    # `context.keep_running()` and skip the model call when the last
+    # message is already an assistant turn.
+    #
+    # if approvals and messages:
+    #     # The assistant message that originated the approval-responded tool
+    #     # call would re-send the duplicate tool-use to the LLM on replay.
+    #     # Walk past any trailing internal (hook) messages and drop the
+    #     # assistant message beneath them.
+    #     idx = len(messages) - 1
+    #     while idx >= 0 and messages[idx].role == "internal":
+    #         idx -= 1
+    #     if idx >= 0 and messages[idx].role == "assistant":
+    #         logger.info("Stripping assistant message originating responded approvals")
+    #         messages = messages[:idx] + messages[idx + 1 :]
 
     return messages
 
