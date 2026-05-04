@@ -44,6 +44,7 @@ TEXT_SAMPLES = [
     Sample("agent_hooks.py", stdin="y\n"),
     Sample("agent_hooks_serverless.py"),
     Sample("mcp_tools.py"),
+    Sample("builtin_web_search.py"),
 ]
 
 IMAGE_SAMPLES = [
