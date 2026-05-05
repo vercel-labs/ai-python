@@ -16,12 +16,6 @@ from ..types import builders
 from . import events as events_
 from . import runtime
 
-# What a streaming-tool generator may yield: AgentEvents pass through
-# to the consumer, and a final bare Message provides the tool's result
-# (its text becomes the return value).  Loop functions yield AgentEvents
-# only — they must call context.add() to update history.
-StreamItem = events_.AgentEvent | types.Message
-
 
 class Tool[**P, R]:
     """Wraps async function, introspects schema, attaches a validator"""
@@ -51,7 +45,13 @@ class Tool[**P, R]:
             return dict(validated.model_dump())
         return kwargs
 
-    async def execute_kwargs(self, kwargs: dict[str, Any]) -> R:
+    async def execute_kwargs(
+        self,
+        kwargs: dict[str, Any],
+        *,
+        tool_name: str | None,
+        tool_call_id: str | None,
+    ) -> R:
         """Validate kwargs and call the underlying tool implementation."""
         kwargs = self.validate_kwargs(kwargs)
         if not self._is_gen:
@@ -60,11 +60,11 @@ class Tool[**P, R]:
         # Generator tool (e.g. agent-as-a-tool): drain the async
         # generator, forward each yielded message to the runtime for
         # real-time streaming, and return the final text as the result.
-        return await yield_from(self._fn(**kwargs))  # type: ignore[arg-type,call-arg,return-value]
-
-    async def __call__(self, json_args: str) -> R:
-        """Parse json_args into kwargs, validate, and call the function."""
-        return await self.execute_kwargs(self.parse_args(json_args))
+        return await yield_from(  # type: ignore[return-value]
+            self._fn(**kwargs),  # type: ignore[arg-type,call-arg]
+            tool_name=tool_name,
+            tool_call_id=tool_call_id,
+        )
 
     @property
     def name(self) -> str:
@@ -167,7 +167,11 @@ class ToolCall:
 
         async def _real(call: middleware_.ToolContext) -> events_.ToolCallResult:
             try:
-                result = await tool.execute_kwargs(call.kwargs)
+                result = await tool.execute_kwargs(
+                    call.kwargs,
+                    tool_call_id=call.tool_call_id,
+                    tool_name=call.tool_name,
+                )
             except Exception as exc:
                 return tool_result(
                     types.ToolResultPart(
@@ -335,20 +339,31 @@ def tool_result(
     return events_.ToolCallResult(message=msg, results=msg.tool_results)
 
 
-async def yield_from(source: AsyncIterable[StreamItem]) -> str:
+async def yield_from(
+    source: AsyncIterable[events_.AgentEvent],
+    *,
+    # TODO: is this what we really want for labelling?
+    tool_name: str | None = None,
+    tool_call_id: str | None = None,
+    label: object = None,
+) -> str:
     """Drain *source*, forwarding each event to the current runtime.
 
     Use inside a custom loop to stream messages from a sub-agent to the
     consumer without adding them to the parent agent's message history::
 
-        result = await yield_from(sub.run(model, msgs, label="researcher"))
+        result = await yield_from(sub.run(model, msgs), label="researcher")
 
     Works with :func:`asyncio.gather` for concurrent fan-out::
 
         r1, r2 = await asyncio.gather(
-            yield_from(a.run(model, m1, label="a")),
-            yield_from(b.run(model, m2, label="b")),
+            yield_from(a.run(model, m1), label="a"),
+            yield_from(b.run(model, m2), label="b"),
         )
+
+    Each forwarded event is wrapped in a :class:`PartialToolCallResult`
+    carrying ``label`` (and optionally ``tool_call_id`` / ``tool_name``)
+    so the consumer can route by source.
 
     Returns the final message's text (empty string if no messages).
     """
@@ -358,7 +373,14 @@ async def yield_from(source: AsyncIterable[StreamItem]) -> str:
         if isinstance(item, types.Message):
             last = item
             continue
-        await rt.put_event(item)
+        await rt.put_event(
+            events_.PartialToolCallResult(
+                tool_call_id=tool_call_id,
+                tool_name=tool_name,
+                label=label,
+                value=item,
+            )
+        )
         if isinstance(item, events_.TerminalEvent):
             last = item.message
     return last.text if last else ""
@@ -415,7 +437,6 @@ class Agent:
         model: models.Model[Any],
         messages: list[types.Message],
         *,
-        label: str | None = None,
         middleware: list[middleware_.Middleware] | None = None,
     ) -> AsyncGenerator[events_.AgentEvent]:
         """Run the agent loop, yielding events to the consumer.
@@ -423,19 +444,18 @@ class Agent:
         Args:
             model: The model to use for LLM calls.
             messages: Initial conversation messages.
-            label: Optional label stamped onto every ``ToolCallResult``
-                emitted by this run (set on its ``message.source_label``).
-                Useful for multi-agent graphs where the consumer needs
-                to route results by source.
             middleware: Optional list of middleware to apply to this run.
                 First in the list = outermost.  Middleware wraps model
                 calls, tool calls, hooks, and the run itself.
+
+        To attribute a sub-agent's events to a branch, wrap the run in
+        ``yield_from(..., label=...)`` — the label flows via
+        ``PartialToolCallResult`` rather than on individual messages.
         """
         call = middleware_.AgentRunContext(
             model=model,
             messages=messages,
             tools=self._tools,
-            label=label,
         )
 
         loop_fn = self._loop_fn or self.default_loop
@@ -450,14 +470,6 @@ class Agent:
             )
             source = loop_fn(context)
             async for event in runtime.run(source):
-                if call.label is not None and isinstance(event, events_.ToolCallResult):
-                    event = event.model_copy(
-                        update={
-                            "message": event.message.model_copy(
-                                update={"source_label": call.label}
-                            )
-                        }
-                    )
                 yield event
 
         # Activate middleware for this run (and everything it calls).

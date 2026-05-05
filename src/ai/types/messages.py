@@ -227,7 +227,6 @@ class Message(pydantic.BaseModel):
     parts: list[Part]
     id: str = pydantic.Field(default_factory=generate_id)
     turn_id: str | None = None
-    source_label: str | None = None
     usage: usage_.Usage | None = None
 
     @property

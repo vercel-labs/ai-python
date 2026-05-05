@@ -56,19 +56,6 @@ def test_complex_type_schema() -> None:
     assert props["recipients"]["items"]["type"] == "string"
 
 
-# -- Execution (Tool.__call__) --------------------------------------------
-
-
-async def test_tool_call_with_json_args() -> None:
-    @ai.tool
-    async def add(a: int, b: int) -> int:
-        """Add two numbers."""
-        return a + b
-
-    result = await add('{"a": 1, "b": 2}')
-    assert result == 3
-
-
 # -- ToolCall binds a ToolCallPart to a Tool and returns tool messages ----
 
 

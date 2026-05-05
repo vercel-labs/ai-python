@@ -151,51 +151,7 @@ async def test_approval_request_hook_emits_approval_part() -> None:
     assert approval_parts[0].approval_id == "approve_tc1"
 
 
-async def test_agent_change_emits_message_boundary() -> None:
-    """ToolCallResult from a different agent triggers a new StartPart."""
-    tool_result_a = messages_.Message(
-        role="tool",
-        source_label="a1",
-        parts=[
-            messages_.ToolResultPart(
-                tool_call_id="tc1",
-                tool_name="foo",
-                result="ok",
-            )
-        ],
-    )
-    tool_result_b = messages_.Message(
-        role="tool",
-        source_label="a2",
-        parts=[
-            messages_.ToolResultPart(
-                tool_call_id="tc2",
-                tool_name="bar",
-                result="ok",
-            )
-        ],
-    )
-    out = await _collect(
-        [
-            # Agent a1 does text + tool
-            events_.TextStart(block_id="t1"),
-            events_.TextDelta(block_id="t1", chunk="from a"),
-            events_.TextEnd(block_id="t1"),
-            agent_events_.ToolCallResult(
-                message=tool_result_a,
-                results=tool_result_a.tool_results,
-            ),
-            # Agent a2 does text + tool — should trigger new StartPart
-            agent_events_.ToolCallResult(
-                message=tool_result_b,
-                results=tool_result_b.tool_results,
-            ),
-        ]
-    )
-    has_mid_msg_boundary = any(
-        isinstance(out[i], protocol.FinishPart)
-        and i + 1 < len(out)
-        and isinstance(out[i + 1], protocol.StartPart)
-        for i in range(1, len(out) - 1)
-    )
-    assert has_mid_msg_boundary
+# NOTE: agent-change boundary detection used to be driven by
+# Message.source_label.  That field has been removed; agent-change
+# routing in the AI SDK adapter now needs to come from
+# PartialToolCallResult, which is a separate piece of work.

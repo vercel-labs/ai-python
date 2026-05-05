@@ -61,7 +61,6 @@ Key properties on streamed messages:
 - `msg.tool_calls` — list of `ToolCallPart` on assistant messages
 - `msg.output` — validated Pydantic instance (when using `output_type`)
 - `msg.get_hook_part()` — find a hook suspension part
-- `msg.label` — which agent produced the message (for multi-agent)
 
 Serialize: `msg.model_dump()`. Restore: `ai.Message.model_validate(data)`.
 
@@ -129,13 +128,13 @@ async def multi(model: ai.Model, query: str) -> str:
     analyst = ai.agent(tools=[t2])
 
     r1, r2 = await asyncio.gather(
-        ai.yield_from(researcher.run(model, msgs1, label="researcher")),
-        ai.yield_from(analyst.run(model, msgs2, label="analyst")),
+        ai.yield_from(researcher.run(model, msgs1), label="researcher"),
+        ai.yield_from(analyst.run(model, msgs2), label="analyst"),
     )
     return f"{r1}\n{r2}"
 ```
 
-`msg.label` lets the consumer distinguish which agent produced output.
+Each forwarded event is wrapped in `ai.PartialToolCallResult` carrying the `label`, so the consumer can route by source.
 
 ## Hooks
 

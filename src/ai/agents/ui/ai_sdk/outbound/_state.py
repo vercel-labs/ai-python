@@ -6,7 +6,7 @@ from typing import Any
 
 from .....types import events as events_
 from .....types import messages as messages_
-from ....events import HookEvent, ToolCallResult
+from ....events import HookEvent, PartialToolCallResult, ToolCallResult
 from .. import _approvals, protocol
 
 
@@ -26,7 +26,6 @@ class _StreamState:
     """Single-pass state across one ``to_stream()`` call."""
 
     def __init__(self) -> None:
-        self.current_agent: str | None = None
         self.ui_message_id: str | None = None
         self.emitted_start: bool = False
         self.in_step: bool = False
@@ -72,30 +71,15 @@ class _StreamState:
         self.emitted_tool_results.clear()
         self.emitted_approval_requests.clear()
 
-    def _ensure_started(
-        self, *, source_label: str | None = None
-    ) -> list[protocol.UIMessageStreamPart]:
-        """Lazily emit StartPart / StartStepPart on the first event.
-
-        Also handles agent-change boundaries in multi-agent scenarios.
-        """
+    def _ensure_started(self) -> list[protocol.UIMessageStreamPart]:
+        """Lazily emit StartPart / StartStepPart on the first event."""
         parts: list[protocol.UIMessageStreamPart] = []
-        agent_changed = (
-            self.emitted_start
-            and source_label is not None
-            and source_label != self.current_agent
-        )
 
-        if not self.emitted_start or agent_changed:
-            parts.extend(self._finish_step())
-            if self.emitted_start:
-                parts.append(protocol.FinishPart(finish_reason="stop"))
-
+        if not self.emitted_start:
             parts.append(protocol.StartPart(message_id=None))
             parts.append(protocol.StartStepPart())
             self.emitted_start = True
             self.in_step = True
-            self.current_agent = source_label
             self._reset_step_tracking()
 
         return parts
@@ -186,8 +170,7 @@ class _StreamState:
         msg = event.message
         out: list[protocol.UIMessageStreamPart] = []
 
-        # Ensure the UI message is started (handles agent-change too).
-        out.extend(self._ensure_started(source_label=msg.source_label))
+        out.extend(self._ensure_started())
 
         # Emit ToolInputAvailable for each tool call that triggered
         # these results (from the assistant message's ToolCallParts).
@@ -233,6 +216,12 @@ class _StreamState:
                 )
 
         return out
+
+    def on_partial_tool_result(
+        self, event: PartialToolCallResult
+    ) -> list[protocol.UIMessageStreamPart]:
+        # TODO: Emit something!
+        return []
 
     # -- phase: hooks -------------------------------------------------------
 

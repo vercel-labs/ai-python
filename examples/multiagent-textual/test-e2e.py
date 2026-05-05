@@ -152,7 +152,7 @@ def main() -> int:
                 "-x",
                 "80",
                 "-y",
-                "60",
+                "120",
                 (
                     f"cd '{HERE}' && "
                     "uv run --frozen --with-editable ~/src/py-ai/ "

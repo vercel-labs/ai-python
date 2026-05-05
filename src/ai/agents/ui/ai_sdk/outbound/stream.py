@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncGenerator, AsyncIterable
 
-from ....events import AgentEvent, HookEvent, ToolCallResult
+from ....events import AgentEvent, HookEvent, PartialToolCallResult, ToolCallResult
 from .. import protocol
 from ._state import _StreamState
 
@@ -23,6 +23,9 @@ async def to_stream(
     async for event in events:
         if isinstance(event, ToolCallResult):
             for part in state.on_tool_result(event):
+                yield part
+        elif isinstance(event, PartialToolCallResult):
+            for part in state.on_partial_tool_result(event):
                 yield part
         elif isinstance(event, HookEvent):
             for part in state.on_hook(event):

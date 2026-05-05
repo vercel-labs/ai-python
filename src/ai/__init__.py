@@ -5,7 +5,7 @@ from .agents import (
     AgentEvent,
     Context,
     HookEvent,
-    StreamItem,
+    PartialToolCallResult,
     TerminalEvent,
     Tool,
     ToolApproval,
@@ -145,10 +145,10 @@ __all__ = [
     # Agents — primary API
     "Agent",
     "AgentEvent",
-    "StreamItem",
     "agent",
     "Context",
     # Agents — tools
+    "PartialToolCallResult",
     "Tool",
     "ToolCall",
     "ToolCallResult",

@@ -109,7 +109,6 @@ class AgentRunContext:
     model: Model[Any]
     messages: list[messages_.Message]
     tools: list[Tool[..., Any]]
-    label: str | None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "messages", list(self.messages))

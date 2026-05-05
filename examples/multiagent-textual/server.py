@@ -110,8 +110,9 @@ def _gated_agent(
                         )
                 else:
                     results.append(await tc())
+                yield results[-1]
 
-            yield ai.tool_result(*results)
+            context.add(ai.tool_message(*results))
 
     return gated
 
@@ -142,8 +143,8 @@ async def multiagent_loop(context: ai.Context) -> AsyncGenerator[ai.AgentEvent]:
     query = context.messages[-1].text
 
     # Fan out: both branches stream concurrently via yield_from.
-    # Messages are forwarded to the runtime automatically and labelled
-    # so the TUI can route them to the correct panel.
+    # Each yield_from wraps every inner event in a PartialToolCallResult
+    # carrying the branch label, so the TUI can route to the right panel.
     r1, r2 = await asyncio.gather(
         ai.yield_from(
             mothership_agent.run(
@@ -155,8 +156,8 @@ async def multiagent_loop(context: ai.Context) -> AsyncGenerator[ai.AgentEvent]:
                     ),
                     ai.user_message(query),
                 ],
-                label="mothership",
-            )
+            ),
+            label="mothership",
         ),
         ai.yield_from(
             data_centers_agent.run(
@@ -168,14 +169,16 @@ async def multiagent_loop(context: ai.Context) -> AsyncGenerator[ai.AgentEvent]:
                     ),
                     ai.user_message(query),
                 ],
-                label="data_centers",
-            )
+            ),
+            label="data_centers",
         ),
     )
 
     combined = f"Mothership: {r1}\nData centers: {r2}"
 
-    # Fan in: summarise via a labelled sub-agent.
+    # Fan in: stream the summary directly.  Top-level events from the
+    # orchestrator are unlabeled — the client routes them to the summary
+    # panel as its default.
     summary_agent = ai.agent()
     async for event in summary_agent.run(
         context.model,
@@ -185,7 +188,6 @@ async def multiagent_loop(context: ai.Context) -> AsyncGenerator[ai.AgentEvent]:
             ),
             ai.user_message(combined),
         ],
-        label="summary",
     ):
         yield event
 
@@ -207,6 +209,11 @@ def _normalise_event(data: dict[str, Any]) -> dict[str, Any]:
     message = data.get("message")
     if isinstance(message, dict):
         data["message"] = _normalise_message(message)
+    # Recurse into PartialToolCallResult wrappers so the inner event's
+    # message gets normalised too.
+    inner = data.get("value")
+    if isinstance(inner, dict):
+        data["value"] = _normalise_event(inner)
     return data
 
 

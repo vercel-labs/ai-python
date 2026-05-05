@@ -55,14 +55,19 @@ async def test_generator_tool_streams_and_returns_result() -> None:
 
     assert llm.call_count == 2
 
-    # Intermediate progress events were forwarded to consumer.
-    progress_deltas = [
+    # Intermediate progress events were forwarded to consumer, wrapped
+    # in PartialToolCallResult and attributed to the originating tool call.
+    progress_wrappers = [
         e
         for e in all_events
-        if isinstance(e, events_.TextDelta) and e.block_id == "progress"
+        if isinstance(e, agent_events_.PartialToolCallResult)
+        and isinstance(e.value, events_.TextDelta)
+        and e.value.block_id == "progress"
     ]
-    assert len(progress_deltas) == 1
-    assert progress_deltas[0].chunk == "Working..."
+    assert len(progress_wrappers) == 1
+    assert progress_wrappers[0].value.chunk == "Working..."
+    assert progress_wrappers[0].tool_call_id == "tc-1"
+    assert progress_wrappers[0].tool_name == "progress_tool"
 
     # Tool result was fed back to LLM.
     tool_results = [
@@ -122,7 +127,7 @@ async def research_tool(topic: str) -> AsyncGenerator[agent_events_.AgentEvent]:
         ai.system_message("Be concise."),
         ai.user_message(f"Research: {topic}"),
     ]
-    async for event in inner.run(MOCK_MODEL, msgs, label="inner"):
+    async for event in inner.run(MOCK_MODEL, msgs):
         yield event
 
 
@@ -155,13 +160,18 @@ async def test_yield_from_nested_agent() -> None:
 
     assert adapter.call_count == 3
 
-    # Inner text events were forwarded to the consumer.
+    # Inner text events were forwarded to the consumer, wrapped in
+    # PartialToolCallResult and attributed to the outer tool call.
     inner_text = [
         e
         for e in all_events
-        if isinstance(e, events_.TextDelta) and e.chunk == "Mars has two moons."
+        if isinstance(e, agent_events_.PartialToolCallResult)
+        and isinstance(e.value, events_.TextDelta)
+        and e.value.chunk == "Mars has two moons."
     ]
     assert len(inner_text) > 0
+    assert inner_text[0].tool_call_id == "otc-1"
+    assert inner_text[0].tool_name == "research_tool"
 
     tool_results = [
         e for e in all_events if isinstance(e, agent_events_.ToolCallResult)
@@ -177,7 +187,6 @@ async def test_yield_from_nested_agent() -> None:
 
     # Specifically: no inner assistant text or inner tool results leaked.
     for m in outer_turn2_msgs:
-        assert m.source_label is None or m.source_label != "inner"
         if m.role == "assistant":
             # This must be the outer tool-call message, not inner text.
             assert len(m.tool_calls) > 0

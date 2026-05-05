@@ -29,15 +29,14 @@ class PrintMiddleware(ai.Middleware):
         call: ai.middleware.AgentRunContext,
         next: Callable[[ai.middleware.AgentRunContext], AsyncGenerator[Any]],
     ) -> AsyncGenerator[Any]:
-        label = call.label or "(default)"
-        print(f">>> [run] agent starting  label={label}  tools={len(call.tools)}")
+        print(f">>> [run] agent starting  tools={len(call.tools)}")
         t0 = time.perf_counter()
 
         async for event in next(call):
             yield event
 
         elapsed = time.perf_counter() - t0
-        print(f"<<< [run] agent finished  label={label}  {elapsed:.2f}s")
+        print(f"<<< [run] agent finished  {elapsed:.2f}s")
 
     async def wrap_model(
         self,

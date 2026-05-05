@@ -116,7 +116,6 @@ class MultiAgentApp(textual.app.App[None]):
         self._event_adapter: pydantic.TypeAdapter[ai.AgentEvent] = pydantic.TypeAdapter(
             ai.AgentEvent
         )
-        self._current_label = "unknown"
 
     def compose(self) -> textual.app.ComposeResult:
         yield AgentPanel("mothership", "mothership")
@@ -165,18 +164,23 @@ class MultiAgentApp(textual.app.App[None]):
     # ------------------------------------------------------------------
     # Event routing
     #
-    # TODO: streaming events (TextDelta, etc.) don't carry a source
-    # label, so _current_label is only updated when a ToolCallResult
-    # or HookEvent arrives.  With concurrent sub-agents, streaming
-    # text can route to the wrong panel.  The hooks in this demo
-    # serialize the flow enough that it works in practice, but a
-    # proper fix needs labels on streaming events.
+    # Sub-agent events arrive wrapped in PartialToolCallResult, which
+    # carries the branch label set by ``yield_from(..., label=...)``.
+    # We unwrap and route by that label.  Unwrapped (top-level) events
+    # come from the orchestrator's own stream — the summary agent — and
+    # are routed to the "summary" panel by default.
     # ------------------------------------------------------------------
 
     def _handle_event(self, event: ai.AgentEvent) -> None:
+        if isinstance(event, ai.PartialToolCallResult):
+            label = str(event.label) if event.label is not None else "summary"
+            inner = self._event_adapter.validate_python(event.value)
+            self._render(label, inner)
+        else:
+            self._render("summary", event)
+
+    def _render(self, label: str, event: ai.AgentEvent) -> None:
         if isinstance(event, ai.ToolCallResult):
-            label = event.message.source_label or self._current_label
-            self._current_label = label
             panel = self._get_panel(label)
             if panel is not None:
                 for part in event.message.parts:
@@ -195,14 +199,14 @@ class MultiAgentApp(textual.app.App[None]):
             return
 
         if isinstance(event, ai.TextDelta):
-            panel = self._get_panel(self._current_label)
+            panel = self._get_panel(label)
             if panel is not None:
                 panel.append_text(event.chunk)
                 if panel.status == "idle":
                     panel.status = "streaming..."
 
         elif isinstance(event, ai.ReasoningDelta | ai.ToolDelta):
-            panel = self._get_panel(self._current_label)
+            panel = self._get_panel(label)
             if panel is not None:
                 panel.append_text(event.chunk, style="dim")
 

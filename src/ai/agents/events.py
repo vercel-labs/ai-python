@@ -19,6 +19,18 @@ import pydantic
 from .. import types
 
 
+class PartialToolCallResult(pydantic.BaseModel):
+    """Emitted when tool calls or other yield_from callers yield values."""
+
+    # id: str = pydantic.Field(default_factory=generate_id)
+    tool_call_id: str | None = None
+    tool_name: str | None = None
+    label: object = None
+    value: Any = None
+
+    kind: Literal["partial_tool_call_result"] = "partial_tool_call_result"
+
+
 class ToolCallResult(pydantic.BaseModel):
     """Emitted after tool calls execute — carries the result message."""
 
@@ -39,7 +51,7 @@ class HookEvent(pydantic.BaseModel):
     kind: Literal["hook"] = "hook"
 
 
-AgentEvent = types.Event | ToolCallResult | HookEvent
+AgentEvent = types.Event | ToolCallResult | HookEvent | PartialToolCallResult
 
 TerminalEvent = types.StreamEnd | ToolCallResult | HookEvent
 
@@ -49,4 +61,5 @@ __all__ = [
     "HookEvent",
     "TerminalEvent",
     "ToolCallResult",
+    "PartialToolCallResult",
 ]
