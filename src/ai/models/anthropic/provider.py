@@ -11,6 +11,7 @@ from .. import core
 from .params import AnthropicParams
 
 _BASE_URL = "https://api.anthropic.com"
+_BASE_URL_ENV = "ANTHROPIC_BASE_URL"
 _API_KEY_ENV = "ANTHROPIC_API_KEY"
 _ANTHROPIC_VERSION = "2023-06-01"
 
@@ -27,7 +28,7 @@ class _Anthropic:
 
     @property
     def base_url(self) -> str:
-        return _BASE_URL
+        return os.environ.get(_BASE_URL_ENV) or _BASE_URL
 
     @property
     def adapter(self) -> str:
@@ -52,9 +53,12 @@ class _Anthropic:
         return tools_module
 
     def client(self) -> core.client.Client:
-        """Create a :class:`Client` from env-var credentials."""
+        """Create a :class:`Client` from env-var credentials.
+
+        ``ANTHROPIC_BASE_URL`` overrides the default base URL when set.
+        """
         return core.client.Client(
-            base_url=_BASE_URL,
+            base_url=self.base_url,
             api_key=os.environ.get(_API_KEY_ENV),
         )
 
