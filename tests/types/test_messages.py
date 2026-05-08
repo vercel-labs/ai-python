@@ -5,7 +5,7 @@ from __future__ import annotations
 import pydantic
 import pytest
 
-from ai.types import messages
+from ai.types import messages, usage
 
 
 class _Weather(pydantic.BaseModel):
@@ -67,12 +67,12 @@ def test_structured_output_round_trip() -> None:
 
 
 def test_usage_add_merges_optional_fields() -> None:
-    a = messages.Usage(
+    a = usage.Usage(
         input_tokens=100,
         output_tokens=50,
         cache_read_tokens=20,
     )
-    b = messages.Usage(
+    b = usage.Usage(
         input_tokens=200,
         output_tokens=80,
         reasoning_tokens=10,
