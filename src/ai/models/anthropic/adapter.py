@@ -13,16 +13,9 @@ import pydantic
 
 from ... import types
 from ...types import events
-from ...types import messages as messages_
 from .. import core
+from . import params
 from . import tools as anthropic_tools
-from .params import (
-    AnthropicContainer,
-    AnthropicCustomSkill,
-    AnthropicDisabledThinking,
-    AnthropicParams,
-    AnthropicProviderSkill,
-)
 
 PROVIDER_NAME = "anthropic"
 
@@ -343,19 +336,23 @@ def _make_client(
     )
 
 
-def _coerce_anthropic_params(value: Any) -> AnthropicParams:
+def _coerce_anthropic_params(value: Any) -> params.AnthropicParams:
     if value is None:
-        return AnthropicParams()
-    if isinstance(value, AnthropicParams):
+        return params.AnthropicParams()
+    if isinstance(value, params.AnthropicParams):
         return value
     if isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray):
         items = list(value)
-        if len(items) == 1 and isinstance(items[0], AnthropicParams):
+        if len(items) == 1 and isinstance(items[0], params.AnthropicParams):
             return items[0]
-    raise TypeError(f"anthropic stream params must be {AnthropicParams.__name__}")
+    raise TypeError(
+        f"anthropic stream params must be {params.AnthropicParams.__name__}"
+    )
 
 
-def _container_to_wire(container: AnthropicContainer) -> str | dict[str, Any] | None:
+def _container_to_wire(
+    container: params.AnthropicContainer,
+) -> str | dict[str, Any] | None:
     if not container.skills:
         return container.id
 
@@ -367,9 +364,9 @@ def _container_to_wire(container: AnthropicContainer) -> str | dict[str, Any] | 
 
 
 def _skill_to_wire(
-    skill: AnthropicProviderSkill | AnthropicCustomSkill,
+    skill: params.AnthropicProviderSkill | params.AnthropicCustomSkill,
 ) -> dict[str, Any]:
-    if isinstance(skill, AnthropicProviderSkill):
+    if isinstance(skill, params.AnthropicProviderSkill):
         result: dict[str, Any] = {
             "type": "anthropic",
             "skill_id": skill.skill_id,
@@ -466,7 +463,7 @@ async def stream(
         api_kwargs["tools"] = wire_tools
 
     if anthropic_params.thinking is not None:
-        if not isinstance(anthropic_params.thinking, AnthropicDisabledThinking):
+        if not isinstance(anthropic_params.thinking, params.AnthropicDisabledThinking):
             api_kwargs["thinking"] = anthropic_params.thinking.model_dump(
                 exclude_none=True,
             )
@@ -623,14 +620,14 @@ async def stream(
                             if tool_id:
                                 yield events.ToolEnd(
                                     tool_call_id=tool_id,
-                                    tool_call=messages_.DUMMY_TOOL_CALL,
+                                    tool_call=types.messages.DUMMY_TOOL_CALL,
                                 )
                         elif block_type == "server_tool_use":
                             tool_id = tool_ids.get(idx)
                             if tool_id:
                                 yield events.BuiltinToolEnd(
                                     tool_call_id=tool_id,
-                                    tool_call=messages_.BuiltinToolCallPart(
+                                    tool_call=types.messages.BuiltinToolCallPart(
                                         tool_call_id=tool_id,
                                         tool_name=tool_names.get(idx, ""),
                                         provider_name=PROVIDER_NAME,
@@ -662,7 +659,7 @@ async def stream(
                                     break
                             yield events.BuiltinToolResult(
                                 tool_call_id=tool_use_id,
-                                result=messages_.BuiltinToolReturnPart(
+                                result=types.messages.BuiltinToolReturnPart(
                                     tool_call_id=tool_use_id,
                                     tool_name=tool_name,
                                     result=content_payload,
