@@ -73,7 +73,47 @@ try {
   throw e;
 }
 
-const transcript = await page.locator("body").innerText();
+// After the tool completes, the agent loops back and streams a final
+// reply.  Wait for the textarea to re-enable — useChat clears its
+// "streaming" status only when the whole turn is done — so the
+// transcript captures the post-tool agent text too.
+const textarea = page.getByPlaceholder("Ask me anything...");
+try {
+  await textarea.waitFor({ state: "visible", timeout: 30000 });
+  await page
+    .locator('textarea[placeholder="Ask me anything..."]:not([disabled])')
+    .waitFor({ timeout: 30000 });
+} catch (e) {
+  console.error("\n=== TIMEOUT waiting for post-tool stream to settle ===");
+  console.error(await page.locator("body").innerText());
+  throw e;
+}
+
+// Walk the conversation container's direct children and label each
+// item as user / assistant / tool.  All three (Message + Tool) are
+// rendered as siblings under one div in App.tsx, so we anchor on the
+// first message bubble's parent.
+const transcript = await page.evaluate(() => {
+  const sample = document.querySelector(".is-user, .is-assistant");
+  const container = sample?.parentElement;
+  if (!container) return "(no conversation container)";
+  const blocks = [];
+  for (const child of container.children) {
+    const text = child.innerText.trim();
+    let label;
+    if (child.classList.contains("is-user")) {
+      label = "USER";
+    } else if (child.classList.contains("is-assistant")) {
+      label = "ASSISTANT";
+    } else if (child.querySelector(".lucide-wrench")) {
+      label = "TOOL";
+    } else {
+      label = "OTHER";
+    }
+    blocks.push(`[${label}]\n${text}`);
+  }
+  return blocks.join("\n\n");
+});
 console.log("=== TRANSCRIPT ===");
 console.log(transcript);
 
@@ -84,6 +124,25 @@ if (transcript.includes("Awaiting Approval")) {
   for (const r of requests) console.error(r.method, r.url, r.body?.slice(0, 1000));
   console.error("\n=== RESPONSES ===");
   for (const r of responses) console.error(r.status, r.body?.slice(0, 2000));
+  process.exit(1);
+}
+
+// The agent must produce a final assistant text bubble after the tool.
+// `.is-assistant` is the class set by the Message component for
+// `from="assistant"` text parts (tool parts don't carry it), so the last
+// one is the post-tool reply.
+const assistantBubbles = page.locator(".is-assistant");
+const bubbleCount = await assistantBubbles.count();
+if (bubbleCount === 0) {
+  console.error("FAIL: no assistant text bubble rendered");
+  process.exit(1);
+}
+const finalReply = (await assistantBubbles.last().innerText()).trim();
+if (finalReply.length < 20) {
+  console.error(
+    `FAIL: final assistant reply too short (${finalReply.length} chars): ` +
+      JSON.stringify(finalReply)
+  );
   process.exit(1);
 }
 
