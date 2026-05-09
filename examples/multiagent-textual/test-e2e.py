@@ -25,7 +25,8 @@ from typing import cast
 
 HERE = Path(__file__).resolve().parent
 SESSION = f"multiagent-e2e-{os.getpid()}"
-SERVER_URL = "http://127.0.0.1:8000"
+SERVER_PORT = os.environ.get("SERVER_PORT", "8000")
+SERVER_URL = f"http://127.0.0.1:{SERVER_PORT}"
 
 
 def _check_health() -> bool:
@@ -111,7 +112,7 @@ def main() -> int:
         server_log.close()
 
     try:
-        print("Starting server on :8000...")
+        print(f"Starting server on :{SERVER_PORT}...")
         server = subprocess.Popen(
             [
                 "uv",
@@ -122,6 +123,8 @@ def main() -> int:
                 "fastapi",
                 "dev",
                 "server.py",
+                "--port",
+                SERVER_PORT,
             ],
             cwd=HERE,
             stdout=server_log,

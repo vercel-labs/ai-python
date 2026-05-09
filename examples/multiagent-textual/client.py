@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from typing import Any
 
 import pydantic
@@ -24,7 +25,7 @@ import websockets
 
 import ai
 
-WS_URL = "ws://localhost:8000/ws"
+WS_URL = f"ws://localhost:{os.environ.get('SERVER_PORT', '8000')}/ws"
 
 # ---------------------------------------------------------------------------
 # Agent panel

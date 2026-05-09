@@ -15,6 +15,11 @@ ROOT=$(cd "$HERE/.." && pwd)
 LOGS=$(mktemp -d)
 echo "Logs: $LOGS"
 
+BACKEND_PORT=${BACKEND_PORT:-8000}
+FRONTEND_PORT=${FRONTEND_PORT:-5173}
+export BACKEND_URL="http://localhost:$BACKEND_PORT"
+export FRONTEND_URL="http://localhost:$FRONTEND_PORT/"
+
 cleanup() {
     [[ -n "${BACKEND_PID:-}" ]] && kill "$BACKEND_PID" 2>/dev/null || true
     [[ -n "${FRONTEND_PID:-}" ]] && kill "$FRONTEND_PID" 2>/dev/null || true
@@ -22,22 +27,22 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "Starting backend on :8000..."
+echo "Starting backend on :$BACKEND_PORT..."
 (
     cd "$ROOT/backend"
-    uv run --frozen --with-editable ~/src/py-ai/ fastapi dev main.py
+    uv run --frozen --with-editable ~/src/py-ai/ fastapi dev main.py --port "$BACKEND_PORT"
 ) > "$LOGS/backend.log" 2>&1 &
 BACKEND_PID=$!
 
-echo "Starting frontend on :5173..."
+echo "Starting frontend on :$FRONTEND_PORT..."
 (
     cd "$ROOT/frontend"
-    pnpm dev
+    pnpm dev --port "$FRONTEND_PORT" --strictPort
 ) > "$LOGS/frontend.log" 2>&1 &
 FRONTEND_PID=$!
 
 echo "Waiting for backend..."
-until curl -sf http://127.0.0.1:8000/health > /dev/null 2>&1; do
+until curl -sf "http://127.0.0.1:$BACKEND_PORT/health" > /dev/null 2>&1; do
     if ! kill -0 "$BACKEND_PID" 2>/dev/null; then
         echo "Backend died — see $LOGS/backend.log" >&2
         exit 1
@@ -46,7 +51,7 @@ until curl -sf http://127.0.0.1:8000/health > /dev/null 2>&1; do
 done
 
 echo "Waiting for frontend..."
-until curl -sf http://127.0.0.1:5173/ > /dev/null 2>&1; do
+until curl -sf "http://127.0.0.1:$FRONTEND_PORT/" > /dev/null 2>&1; do
     if ! kill -0 "$FRONTEND_PID" 2>/dev/null; then
         echo "Frontend died — see $LOGS/frontend.log" >&2
         exit 1
