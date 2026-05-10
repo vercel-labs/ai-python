@@ -24,9 +24,10 @@ async def main() -> None:
         ai.user_message("How do I create middleware in Next.js?"),
     ]
 
-    async for event in my_agent.run(model, messages):
-        if isinstance(event, ai.events.TextDelta):
-            print(event.chunk, end="", flush=True)
+    async with my_agent.run(model, messages) as stream:
+        async for event in stream:
+            if isinstance(event, ai.events.TextDelta):
+                print(event.chunk, end="", flush=True)
     print()
 
 

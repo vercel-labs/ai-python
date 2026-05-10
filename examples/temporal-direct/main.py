@@ -187,9 +187,10 @@ class WeatherWorkflow:
         ]
 
         final_text = ""
-        async for event in weather_agent.run(model, messages):
-            if isinstance(event, ai.events.TerminalEvent):
-                final_text = event.message.text
+        async with weather_agent.run(model, messages) as stream:
+            async for event in stream:
+                if isinstance(event, ai.events.TerminalEvent):
+                    final_text = event.message.text
         return final_text
 
 

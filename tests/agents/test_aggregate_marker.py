@@ -128,8 +128,9 @@ async def test_alias_declared_tool_runs_end_to_end() -> None:
     llm = mock_llm([call, reply])
 
     all_events: list[agent_events_.AgentEvent] = []
-    async for event in my_agent.run(MOCK_MODEL, [ai.user_message("Go")]):
-        all_events.append(event)
+    async with my_agent.run(MOCK_MODEL, [ai.user_message("Go")]) as stream:
+        async for event in stream:
+            all_events.append(event)
 
     assert llm.call_count == 2
 

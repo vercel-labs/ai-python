@@ -8,7 +8,14 @@ import dataclasses
 import inspect
 import json
 import typing
-from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine, Sequence
+from collections.abc import (
+    AsyncGenerator,
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Coroutine,
+    Sequence,
+)
 from typing import Annotated, Any, Protocol, Self, get_type_hints, overload
 
 import pydantic
@@ -156,8 +163,9 @@ becomes the tool result the parent model sees::
     @ai.tool
     async def research(topic: str) -> SubAgentTool:
         sub = ai.agent(tools=[...])
-        async for event in sub.run(model, messages):
-            yield event
+        async with sub.run(model, messages) as stream:
+            async for event in stream:
+                yield event
 """
 
 
@@ -650,14 +658,16 @@ async def yield_from[T, R](
     Use inside a custom loop to stream messages from a sub-agent to the
     consumer without adding them to the parent agent's message history::
 
-        result = await yield_from(sub.run(model, msgs), label="researcher")
+        async with sub.run(model, msgs) as stream:
+            result = await yield_from(stream, label="researcher")
 
     Works with :func:`asyncio.gather` for concurrent fan-out::
 
-        r1, r2 = await asyncio.gather(
-            yield_from(a.run(model, m1), label="a"),
-            yield_from(b.run(model, m2), label="b"),
-        )
+        async with a.run(model, m1) as sa, b.run(model, m2) as sb:
+            r1, r2 = await asyncio.gather(
+                yield_from(sa, label="a"),
+                yield_from(sb, label="b"),
+            )
 
     Each forwarded event is wrapped in a :class:`PartialToolCallResult`
     carrying ``label`` (and optionally ``tool_call_id`` / ``tool_name``)
@@ -729,14 +739,21 @@ class Agent:
                 # the loop.
                 context.add(tr.get_tool_message())
 
+    @contextlib.asynccontextmanager
     async def run(
         self,
         model: models.Model[Any],
         messages: list[types.messages.Message],
         *,
         middleware: list[middleware_.Middleware] | None = None,
-    ) -> AsyncGenerator[events_.AgentEvent]:
+    ) -> AsyncIterator[AsyncGenerator[events_.AgentEvent]]:
         """Run the agent loop, yielding events to the consumer.
+
+        Used as an async context manager whose value is the event stream::
+
+            async with agent.run(model, messages) as stream:
+                async for event in stream:
+                    ...
 
         Args:
             model: The model to use for LLM calls.
@@ -789,23 +806,27 @@ class Agent:
                     continue
                 yield event
 
-        # Activate middleware for this run (and everything it calls).
-        # When middleware is None (default), inherit the parent's middleware
-        # from the context var — this lets nested agents share middleware.
-        # When middleware is explicitly provided, *extend* the parent stack
-        # so that outer cross-cutting concerns (tracing, durability) are
-        # preserved.  Pass ``middleware=[]`` to clear the stack entirely.
-        mw_token: middleware_.Token | None = None
-        if middleware is not None:
-            parent = middleware_.get()
-            mw_token = middleware_.activate(parent + middleware)
-        try:
-            chain = middleware_._build_agent_run_chain(_real)
-            async for event in chain(call):
-                yield event
-        finally:
-            if mw_token is not None:
-                middleware_.deactivate(mw_token)
+        async def _stream() -> AsyncGenerator[events_.AgentEvent]:
+            # Activate middleware for this run (and everything it calls).
+            # When middleware is None (default), inherit the parent's
+            # middleware from the context var — this lets nested agents
+            # share middleware.  When middleware is explicitly provided,
+            # *extend* the parent stack so that outer cross-cutting
+            # concerns (tracing, durability) are preserved.  Pass
+            # ``middleware=[]`` to clear the stack entirely.
+            mw_token: middleware_.Token | None = None
+            if middleware is not None:
+                parent = middleware_.get()
+                mw_token = middleware_.activate(parent + middleware)
+            try:
+                chain = middleware_._build_agent_run_chain(_real)
+                async for event in chain(call):
+                    yield event
+            finally:
+                if mw_token is not None:
+                    middleware_.deactivate(mw_token)
+
+        yield _stream()
 
 
 def agent(

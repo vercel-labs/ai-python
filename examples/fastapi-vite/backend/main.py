@@ -61,11 +61,11 @@ async def chat(request: ChatRequest) -> fastapi.responses.StreamingResponse:
     # Pre-register hook resolutions so the agent loop's hooks find them
     # immediately on the resume turn.
     ai.agents.ui.ai_sdk.apply_approvals(approvals)
-    result = agent_.chat_agent.run(agent_.MODEL, messages)
 
     async def stream_response() -> AsyncGenerator[str]:
-        async for chunk in ai.agents.ui.ai_sdk.to_sse(result):
-            yield chunk
+        async with agent_.chat_agent.run(agent_.MODEL, messages) as result:
+            async for chunk in ai.agents.ui.ai_sdk.to_sse(result):
+                yield chunk
 
     return fastapi.responses.StreamingResponse(
         stream_response(),

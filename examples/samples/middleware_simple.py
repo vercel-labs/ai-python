@@ -120,9 +120,10 @@ async def main() -> None:
     ]
 
     print("--- starting agent run ---\n")
-    async for event in my_agent.run(model, messages, middleware=[PrintMiddleware()]):
-        if isinstance(event, ai.events.TextDelta):
-            print(event.chunk, end="", flush=True)
+    async with my_agent.run(model, messages, middleware=[PrintMiddleware()]) as stream:
+        async for event in stream:
+            if isinstance(event, ai.events.TextDelta):
+                print(event.chunk, end="", flush=True)
     print("\n\n--- done ---")
 
 

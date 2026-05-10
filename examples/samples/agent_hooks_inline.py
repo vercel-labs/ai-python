@@ -84,22 +84,26 @@ async def main() -> None:
         ai.user_message("When will the robots take over?"),
     ]
 
-    async for event in my_agent.run(model, messages):
-        if isinstance(event, ai.events.TextDelta):
-            print(event.chunk, end="", flush=True)
-            continue
+    async with my_agent.run(model, messages) as stream:
+        async for event in stream:
+            if isinstance(event, ai.events.TextDelta):
+                print(event.chunk, end="", flush=True)
+                continue
 
-        # Hook signals arrive as HookEvent events.
-        if isinstance(event, ai.events.HookEvent) and event.hook.status == "pending":
-            hook_part = event.hook
-            answer = input(f"Approve {hook_part.hook_id}? [y/n] ")
-            ai.resolve_hook(
-                hook_part.hook_id,
-                Approval(
-                    granted=answer.strip().lower() in ("y", "yes"),
-                    reason="operator decision",
-                ),
-            )
+            # Hook signals arrive as HookEvent events.
+            if (
+                isinstance(event, ai.events.HookEvent)
+                and event.hook.status == "pending"
+            ):
+                hook_part = event.hook
+                answer = input(f"Approve {hook_part.hook_id}? [y/n] ")
+                ai.resolve_hook(
+                    hook_part.hook_id,
+                    Approval(
+                        granted=answer.strip().lower() in ("y", "yes"),
+                        reason="operator decision",
+                    ),
+                )
     print()
 
 

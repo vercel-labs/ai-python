@@ -93,20 +93,25 @@ async def main() -> None:
     print("--- Run 1: hook fires, no resolution, run suspends ---")
     pending_hook_labels: list[str] = []
 
-    async for event in my_agent.run(model, messages):
-        # HACK?: When we get a complete assistant message, add it to
-        # messages so it can get replayed easily.
-        if isinstance(event, ai.events.StreamEnd):
-            messages.append(event.message)
+    async with my_agent.run(model, messages) as stream:
+        async for event in stream:
+            # HACK?: When we get a complete assistant message, add it to
+            # messages so it can get replayed easily.
+            if isinstance(event, ai.events.StreamEnd):
+                messages.append(event.message)
 
-        if isinstance(event, ai.events.TextDelta):
-            print(event.chunk, end="", flush=True)
-        elif isinstance(event, ai.events.HookEvent) and event.hook.status == "pending":
-            hook_part = event.hook
-            pending_hook_labels.append(hook_part.hook_id)
-            print(
-                f"  Hook pending: {hook_part.hook_id} (metadata={hook_part.metadata})"
-            )
+            if isinstance(event, ai.events.TextDelta):
+                print(event.chunk, end="", flush=True)
+            elif (
+                isinstance(event, ai.events.HookEvent)
+                and event.hook.status == "pending"
+            ):
+                hook_part = event.hook
+                pending_hook_labels.append(hook_part.hook_id)
+                print(
+                    f"  Hook pending: {hook_part.hook_id} "
+                    f"(metadata={hook_part.metadata})"
+                )
 
     print("\n  Run interrupted; approval will be pre-registered for re-entry.\n")
 
@@ -115,11 +120,12 @@ async def main() -> None:
     for label in pending_hook_labels:
         ai.resolve_hook(label, Confirmation(approved=True, reason="user approved"))
 
-    async for event in my_agent.run(model, messages):
-        if isinstance(event, ai.events.TextDelta):
-            print(event.chunk, end="", flush=True)
-        elif isinstance(event, ai.events.HookEvent):
-            print(f"  Hook {event.hook.status}: {event.hook.hook_id}")
+    async with my_agent.run(model, messages) as stream:
+        async for event in stream:
+            if isinstance(event, ai.events.TextDelta):
+                print(event.chunk, end="", flush=True)
+            elif isinstance(event, ai.events.HookEvent):
+                print(f"  Hook {event.hook.status}: {event.hook.hook_id}")
     print()
 
     assert {"/tmp/old_logs.txt"} == FILES_DELETED, (

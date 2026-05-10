@@ -38,12 +38,13 @@ async def test_resolve_live_future() -> None:
 
     mock_llm([[text_msg("OK")]])
 
-    async for event in my_agent.run(MOCK_MODEL, [ai.user_message("go")]):
-        if not isinstance(event, agent_events_.HookEvent):
-            continue
-        # When we see the pending hook, resolve it.
-        if event.hook.status == "pending":
-            ai.resolve_hook("confirm_1", {"approved": True, "reason": "looks good"})
+    async with my_agent.run(MOCK_MODEL, [ai.user_message("go")]) as stream:
+        async for event in stream:
+            if not isinstance(event, agent_events_.HookEvent):
+                continue
+            # When we see the pending hook, resolve it.
+            if event.hook.status == "pending":
+                ai.resolve_hook("confirm_1", {"approved": True, "reason": "looks good"})
 
     assert resolved_value is not None
     assert resolved_value.approved is True
@@ -70,11 +71,12 @@ async def test_cancel_live_hook() -> None:
 
     mock_llm([[text_msg("OK")]])
 
-    async for event in my_agent.run(MOCK_MODEL, [ai.user_message("go")]):
-        if not isinstance(event, agent_events_.HookEvent):
-            continue
-        if event.hook.status == "pending":
-            await ai.cancel_hook("cancel_me", reason="denied")
+    async with my_agent.run(MOCK_MODEL, [ai.user_message("go")]) as stream:
+        async for event in stream:
+            if not isinstance(event, agent_events_.HookEvent):
+                continue
+            if event.hook.status == "pending":
+                await ai.cancel_hook("cancel_me", reason="denied")
 
     assert was_cancelled
 
@@ -106,8 +108,9 @@ async def test_pre_registered_resolution_consumed() -> None:
     ai.resolve_hook("pre_reg_1", {"approved": True})
 
     mock_llm([[text_msg("OK")]])
-    async for _msg in my_agent.run(MOCK_MODEL, [ai.user_message("go")]):
-        pass
+    async with my_agent.run(MOCK_MODEL, [ai.user_message("go")]) as stream:
+        async for _msg in stream:
+            pass
 
     assert resolved_value is not None
     assert resolved_value.approved is True
@@ -143,12 +146,13 @@ async def test_resolved_hook_emits_message() -> None:
     mock_llm([[text_msg("OK")]])
 
     hooks: list[ai.messages.HookPart[Any]] = []
-    async for event in my_agent.run(MOCK_MODEL, [ai.user_message("go")]):
-        if not isinstance(event, agent_events_.HookEvent):
-            continue
-        hooks.append(event.hook)
-        if event.hook.status == "pending":
-            ai.resolve_hook("emit_test", {"approved": False})
+    async with my_agent.run(MOCK_MODEL, [ai.user_message("go")]) as stream:
+        async for event in stream:
+            if not isinstance(event, agent_events_.HookEvent):
+                continue
+            hooks.append(event.hook)
+            if event.hook.status == "pending":
+                ai.resolve_hook("emit_test", {"approved": False})
 
     resolved = [h for h in hooks if h.status == "resolved"]
     assert len(resolved) == 1
@@ -174,9 +178,10 @@ async def test_hook_metadata_in_pending() -> None:
 
     mock_llm([[text_msg("OK")]])
     hooks: list[ai.messages.HookPart[Any]] = []
-    async for event in my_agent.run(MOCK_MODEL, [ai.user_message("go")]):
-        if isinstance(event, agent_events_.HookEvent):
-            hooks.append(event.hook)
+    async with my_agent.run(MOCK_MODEL, [ai.user_message("go")]) as stream:
+        async for event in stream:
+            if isinstance(event, agent_events_.HookEvent):
+                hooks.append(event.hook)
 
     assert len(hooks) >= 1
     assert hooks[0].metadata == {"tool": "rm -rf", "path": "/"}

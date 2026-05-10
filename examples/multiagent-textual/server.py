@@ -156,36 +156,40 @@ async def multiagent_loop(context: ai.Context) -> AsyncGenerator[ai.events.Agent
     # Fan out: both branches stream concurrently via yield_from.
     # Each yield_from wraps every inner event in a PartialToolCallResult
     # carrying the branch label, so the TUI can route to the right panel.
-    r1, r2 = await asyncio.gather(
-        ai.yield_from(
-            mothership_agent.run(
-                context.model,
-                [
-                    ai.system_message(
-                        "You are assistant 1. Use contact_mothership "
-                        "when asked about the future."
-                    ),
-                    ai.user_message(query),
-                ],
+    async with (
+        mothership_agent.run(
+            context.model,
+            [
+                ai.system_message(
+                    "You are assistant 1. Use contact_mothership "
+                    "when asked about the future."
+                ),
+                ai.user_message(query),
+            ],
+        ) as mothership_stream,
+        data_centers_agent.run(
+            context.model,
+            [
+                ai.system_message(
+                    "You are assistant 2. Use contact_data_centers "
+                    "when asked about the future."
+                ),
+                ai.user_message(query),
+            ],
+        ) as data_centers_stream,
+    ):
+        r1, r2 = await asyncio.gather(
+            ai.yield_from(
+                mothership_stream,
+                label="mothership",
+                aggregator=ai.MessageAggregator,
             ),
-            label="mothership",
-            aggregator=ai.MessageAggregator,
-        ),
-        ai.yield_from(
-            data_centers_agent.run(
-                context.model,
-                [
-                    ai.system_message(
-                        "You are assistant 2. Use contact_data_centers "
-                        "when asked about the future."
-                    ),
-                    ai.user_message(query),
-                ],
+            ai.yield_from(
+                data_centers_stream,
+                label="data_centers",
+                aggregator=ai.MessageAggregator,
             ),
-            label="data_centers",
-            aggregator=ai.MessageAggregator,
-        ),
-    )
+        )
 
     combined = f"Mothership: {r1}\nData centers: {r2}"
 
@@ -193,7 +197,7 @@ async def multiagent_loop(context: ai.Context) -> AsyncGenerator[ai.events.Agent
     # orchestrator are unlabeled — the client routes them to the summary
     # panel as its default.
     summary_agent = ai.agent()
-    async for event in summary_agent.run(
+    async with summary_agent.run(
         context.model,
         [
             ai.system_message(
@@ -201,8 +205,9 @@ async def multiagent_loop(context: ai.Context) -> AsyncGenerator[ai.events.Agent
             ),
             ai.user_message(combined),
         ],
-    ):
-        yield event
+    ) as summary_stream:
+        async for event in summary_stream:
+            yield event
 
 
 # ---------------------------------------------------------------------------
@@ -240,10 +245,6 @@ async def ws_endpoint(websocket: fastapi.WebSocket) -> None:
     await websocket.accept()
     print("Client connected")
 
-    result = orchestrator.run(
-        MODEL, [ai.user_message("When will the robots take over?")]
-    )
-
     # Background task: read hook resolutions from the client.
     async def read_resolutions() -> None:
         try:
@@ -261,12 +262,15 @@ async def ws_endpoint(websocket: fastapi.WebSocket) -> None:
     reader = asyncio.create_task(read_resolutions())
 
     try:
-        async for event in result:
-            data = _normalise_event(event.model_dump())
-            await websocket.send_json(data)
+        async with orchestrator.run(
+            MODEL, [ai.user_message("When will the robots take over?")]
+        ) as result:
+            async for event in result:
+                data = _normalise_event(event.model_dump())
+                await websocket.send_json(data)
 
-            if isinstance(event, ai.events.HookEvent):
-                print(f"  Hook {event.hook.status}: {event.hook.hook_id}")
+                if isinstance(event, ai.events.HookEvent):
+                    print(f"  Hook {event.hook.status}: {event.hook.hook_id}")
     finally:
         reader.cancel()
         with contextlib.suppress(asyncio.CancelledError):

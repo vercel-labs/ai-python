@@ -54,12 +54,16 @@ async def main() -> None:
     tools = [get_weather, get_population]
     my_agent = CustomAgent(tools=tools)
 
-    async for event in my_agent.run(
+    async with my_agent.run(
         model,
         [ai.user_message("Compare the weather and population of New York and Tokyo.")],
-    ):
-        if isinstance(event, ai.events.StreamEnd) and event.message.role == "assistant":
-            print("====", event.message.text, flush=True)
+    ) as stream:
+        async for event in stream:
+            if (
+                isinstance(event, ai.events.StreamEnd)
+                and event.message.role == "assistant"
+            ):
+                print("====", event.message.text, flush=True)
 
     print()
 

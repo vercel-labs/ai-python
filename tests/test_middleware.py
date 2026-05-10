@@ -51,10 +51,11 @@ async def test_wrap_tool_is_called() -> None:
     call2 = [text_msg("14")]
     mock_llm([call1, call2])
 
-    async for _m in my_agent.run(
+    async with my_agent.run(
         MOCK_MODEL, [ai.user_message("Double 7")], middleware=[Spy()]
-    ):
-        pass
+    ) as stream:
+        async for _m in stream:
+            pass
 
     assert len(tool_calls) == 1
     assert tool_calls[0].tool_name == "double"
@@ -84,13 +85,14 @@ async def test_wrap_hook_is_called() -> None:
 
     mock_llm([[text_msg("OK")]])
 
-    async for event in my_agent.run(
+    async with my_agent.run(
         MOCK_MODEL, [ai.user_message("go")], middleware=[Spy()]
-    ):
-        if not isinstance(event, agent_events_.HookEvent):
-            continue
-        if event.hook.status == "pending":
-            ai.resolve_hook("test_hook", {"approved": True, "reason": "ok"})
+    ) as stream:
+        async for event in stream:
+            if not isinstance(event, agent_events_.HookEvent):
+                continue
+            if event.hook.status == "pending":
+                ai.resolve_hook("test_hook", {"approved": True, "reason": "ok"})
 
     assert len(hook_calls) == 1
     assert hook_calls[0].label == "test_hook"
@@ -126,10 +128,11 @@ async def test_wrap_agent_run_ordering() -> None:
     my_agent = ai.agent()
     mock_llm([[text_msg("Hi")]])
 
-    async for _m in my_agent.run(
+    async with my_agent.run(
         MOCK_MODEL, [ai.user_message("Hi")], middleware=[Outer(), Inner()]
-    ):
-        pass
+    ) as stream:
+        async for _m in stream:
+            pass
 
     assert order == ["outer-before", "inner-before", "inner-after", "outer-after"]
 
@@ -153,9 +156,10 @@ async def test_wrap_tool_context_fields_flow_to_result() -> None:
     call2 = [text_msg("done")]
     mock_llm([call1, call2])
 
-    msgs = await collect_messages(
-        my_agent.run(MOCK_MODEL, [ai.user_message("go")], middleware=[Rewriter()])
-    )
+    async with my_agent.run(
+        MOCK_MODEL, [ai.user_message("go")], middleware=[Rewriter()]
+    ) as stream:
+        msgs = await collect_messages(stream)
     tool_result_msgs = [m for m in msgs if m.role == "tool" and m.tool_results]
 
     assert len(tool_result_msgs) >= 1
@@ -182,10 +186,11 @@ async def test_wrap_tool_rewriting_tool_call_id_breaks_history() -> None:
     mock_llm([call1, call2])
 
     with pytest.raises(ExceptionGroup) as exc_info:
-        async for _m in my_agent.run(
+        async with my_agent.run(
             MOCK_MODEL, [ai.user_message("go")], middleware=[Rewriter()]
-        ):
-            pass
+        ) as stream:
+            async for _m in stream:
+                pass
 
     assert len(exc_info.value.exceptions) == 1
     assert "orphaned-tool-result" in str(exc_info.value.exceptions[0])
@@ -207,8 +212,11 @@ async def test_model_context_messages_are_isolated() -> None:
     my_agent = ai.agent()
     mock_llm([[text_msg("Hi")]])
 
-    async for _m in my_agent.run(MOCK_MODEL, original_messages, middleware=[Mutator()]):
-        pass
+    async with my_agent.run(
+        MOCK_MODEL, original_messages, middleware=[Mutator()]
+    ) as stream:
+        async for _m in stream:
+            pass
 
     # The original list should be unmodified.
     assert len(original_messages) == 1
@@ -240,9 +248,10 @@ async def test_middleware_can_fix_bad_tool_kwargs() -> None:
     call2 = [text_msg("done")]
     mock_llm([call1, call2])
 
-    msgs = await collect_messages(
-        my_agent.run(MOCK_MODEL, [ai.user_message("go")], middleware=[ArgFixer()])
-    )
+    async with my_agent.run(
+        MOCK_MODEL, [ai.user_message("go")], middleware=[ArgFixer()]
+    ) as stream:
+        msgs = await collect_messages(stream)
     tool_result_msgs = [m for m in msgs if m.role == "tool" and m.tool_results]
 
     assert len(tool_result_msgs) >= 1

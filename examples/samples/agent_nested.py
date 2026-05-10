@@ -30,8 +30,9 @@ async def research(topic: str) -> ai.SubAgentTool:
         ai.user_message(f"Research: {topic}"),
     ]
 
-    async for event in researcher.run(model, messages):
-        yield event
+    async with researcher.run(model, messages) as stream:
+        async for event in stream:
+            yield event
 
 
 async def main() -> None:
@@ -44,15 +45,16 @@ async def main() -> None:
         ai.user_message("Tell me about Mars."),
     ]
 
-    async for event in orchestrator.run(model, messages):
-        # Subtool results
-        if isinstance(event, ai.events.PartialToolCallResult):
-            if isinstance(event.value, ai.events.TextDelta):
-                print(event.value.chunk.upper(), end="", flush=True)
-            elif isinstance(event.value, ai.events.StreamEnd):
-                print()
-        elif isinstance(event, ai.events.TextDelta):
-            print(event.chunk, end="", flush=True)
+    async with orchestrator.run(model, messages) as stream:
+        async for event in stream:
+            # Subtool results
+            if isinstance(event, ai.events.PartialToolCallResult):
+                if isinstance(event.value, ai.events.TextDelta):
+                    print(event.value.chunk.upper(), end="", flush=True)
+                elif isinstance(event.value, ai.events.StreamEnd):
+                    print()
+            elif isinstance(event, ai.events.TextDelta):
+                print(event.chunk, end="", flush=True)
     print()
 
 
