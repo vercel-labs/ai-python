@@ -5,7 +5,6 @@ from typing import Annotated, Any, Literal
 import pydantic
 
 from ... import types
-from . import params
 
 _METADATA_CONFIG = pydantic.ConfigDict(frozen=True, populate_by_name=True)
 
@@ -118,7 +117,7 @@ class AnthropicProviderMetadata(types.metadata.ProviderMetadata):
     provider: Literal["anthropic"] = "anthropic"
 
     # Input/replay options.
-    cache_control: params.AnthropicCacheControl | None = pydantic.Field(
+    cache_control: dict[str, Any] | None = pydantic.Field(
         default=None,
         validation_alias="cacheControl",
         serialization_alias="cacheControl",

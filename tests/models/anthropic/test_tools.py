@@ -4,8 +4,8 @@ The adapter must:
 
 1. Translate provider ``Tool`` declarations to their registered wire
    ``type`` / ``name`` and field set.
-2. Merge adapter-owned provider-tool betas into the ``anthropic-beta``
-   request header alongside user-supplied betas, deduplicated.
+2. Add adapter-owned provider-tool betas unless the caller supplied an
+   ``anthropic-beta`` request header.
 3. Reject mutually-exclusive domain filters at construction time
    (``allowed_domains`` + ``blocked_domains``).
 """
@@ -19,7 +19,6 @@ import pytest
 import ai
 from ai import models
 from ai.models.anthropic import adapter, anthropic
-from ai.models.anthropic import params as anthropic_params
 from ai.models.anthropic import tools as anthropic_tools
 
 from .conftest import FakeAnthropicClient
@@ -32,7 +31,7 @@ async def _capture_tools(
     monkeypatch: pytest.MonkeyPatch,
     tools: list[Any],
     *,
-    params: anthropic_params.AnthropicParams | None = None,
+    params: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     captured: dict[str, Any] = {}
     monkeypatch.setattr(
@@ -156,27 +155,20 @@ async def test_bare_tools_emit_only_type_and_name(
     ]
 
 
-async def test_betas_merge_dedup_with_user_betas(
+async def test_user_anthropic_beta_header_wins(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """User betas + tool betas merge into a single comma-joined header."""
+    """Raw ``extra_headers`` pass through instead of being rewritten."""
     captured = await _capture_tools(
         monkeypatch,
         [
             anthropic_tools.web_search(),
             anthropic_tools.web_fetch(),
         ],
-        params=anthropic_params.AnthropicParams(betas=["custom-beta-2026-01-01"]),
+        params={"extra_headers": {"anthropic-beta": "custom-beta-2026-01-01"}},
     )
 
-    header = _beta_header(captured)
-    assert header is not None
-    parts = header.split(",")
-    # User betas come first, tool betas next; both shared tool betas dedup.
-    assert parts == [
-        "custom-beta-2026-01-01",
-        "code-execution-web-tools-2026-02-09",
-    ]
+    assert _beta_header(captured) == "custom-beta-2026-01-01"
 
 
 def test_web_search_rejects_mutually_exclusive_domains() -> None:

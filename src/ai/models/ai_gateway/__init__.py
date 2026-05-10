@@ -7,12 +7,11 @@ Usage::
     model = ai_gateway("anthropic/claude-sonnet-4")
     ids = await ai_gateway.list()
 
-    # Provider-specific request options and built-in tools come from the
-    # native packages and are forwarded through the gateway transparently.
+    # Provider-specific request options pass through as raw Gateway body fields.
     async with ai.stream(
         model,
         msgs,
-        params=[anthropic.AnthropicParams(speed="fast")],
+        params={"providerOptions": {"anthropic": {"speed": "fast"}}},
         tools=[anthropic.tools.web_search(max_uses=5)],
     ) as s:
         ...
@@ -32,13 +31,9 @@ for sandboxed runtimes (e.g. Temporal workflow workers).
 """
 
 from . import errors, tools
-from .params import GatewayParams, GatewayStreamParams, ProviderOptions
 from .provider import ai_gateway
 
 __all__ = [
-    "GatewayParams",
-    "GatewayStreamParams",
-    "ProviderOptions",
     "ai_gateway",
     "errors",
     "tools",

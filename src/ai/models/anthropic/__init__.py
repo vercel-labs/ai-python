@@ -19,10 +19,9 @@ SDK at import time.
 """
 
 from . import tools
-from .params import AnthropicParams
 from .provider import anthropic
 
-__all__ = ["AnthropicParams", "anthropic", "tools"]
+__all__ = ["anthropic", "tools"]
 
 
 def __getattr__(name: str) -> object:

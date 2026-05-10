@@ -24,10 +24,7 @@ import pytest
 import ai
 from ai import models
 from ai.models.ai_gateway import adapter, ai_gateway, errors
-from ai.models.ai_gateway import params as params_
-from ai.models.anthropic import AnthropicParams
 from ai.models.core import model as model_
-from ai.models.openai import OpenAIChatParams, OpenAIResponsesParams
 from ai.types import events, messages
 
 from .conftest import mock_client, sse, user_msg
@@ -321,13 +318,11 @@ class TestRequest:
             }
         ]
 
-    async def test_gateway_merges_forwarded_provider_params(self) -> None:
+    async def test_gateway_params_pass_through_as_raw_body(self) -> None:
         captured_body: dict[str, Any] = {}
-        captured_headers: dict[str, str] = {}
 
         def handler(req: httpx.Request) -> httpx.Response:
             captured_body.update(json.loads(req.content))
-            captured_headers.update(dict(req.headers))
             return httpx.Response(
                 200,
                 text=sse({"type": "finish", "finishReason": "stop", "usage": {}}),
@@ -335,23 +330,22 @@ class TestRequest:
 
         client = mock_client(httpx.MockTransport(handler))
         model = ai_gateway("anthropic/claude-sonnet-4", client=client)
-        request_params: list[params_.GatewayStreamParams] = [
-            params_.GatewayParams(
-                order=["bedrock", "anthropic"],
-                zero_data_retention=True,
-                extra_body={"futureGatewayField": True},
-                extra_headers={"x-gateway-feature": "enabled"},
-            ),
-            params_.ProviderOptions(
-                provider="google",
-                options={"thinkingConfig": {"budgetTokens": 1024}},
-            ),
-            AnthropicParams(
-                speed="fast",
-                extra_body={"futureAnthropicField": True},
-                extra_headers={"x-forwarded-provider-feature": "enabled"},
-            ),
-        ]
+        request_params = {
+            "providerOptions": {
+                "gateway": {
+                    "order": ["bedrock", "anthropic"],
+                    "zeroDataRetention": True,
+                },
+                "anthropic": {
+                    "speed": "fast",
+                    "futureAnthropicField": True,
+                },
+                "google": {
+                    "thinkingConfig": {"budgetTokens": 1024},
+                },
+            },
+            "futureGatewayField": True,
+        }
         async with models.stream(
             model,
             [user_msg("Hi")],
@@ -374,46 +368,18 @@ class TestRequest:
             },
         }
         assert captured_body["futureGatewayField"] is True
-        assert captured_headers["x-gateway-feature"] == "enabled"
-        assert captured_headers["x-forwarded-provider-feature"] == "enabled"
 
-    async def test_gateway_rejects_duplicate_provider_param_keys(self) -> None:
+    async def test_gateway_rejects_non_dict_params(self) -> None:
         def handler(req: httpx.Request) -> httpx.Response:
             raise AssertionError("request should not be sent")
 
         client = mock_client(httpx.MockTransport(handler))
         model = ai_gateway("openai/gpt-5.4", client=client)
-        request_params: list[params_.GatewayStreamParams] = [
-            OpenAIChatParams(service_tier="auto"),
-            OpenAIResponsesParams(previous_response_id="resp_123"),
-        ]
-        with pytest.raises(ValueError, match="duplicate provider params for 'openai'"):
+        with pytest.raises(TypeError, match="dict"):
             async with models.stream(
                 model,
                 [user_msg("Hi")],
-                params=request_params,
-            ) as stream:
-                async for _ in stream:
-                    pass
-
-    async def test_gateway_rejects_provider_options_duplicate_key(self) -> None:
-        def handler(req: httpx.Request) -> httpx.Response:
-            raise AssertionError("request should not be sent")
-
-        client = mock_client(httpx.MockTransport(handler))
-        model = ai_gateway("openai/gpt-5.4", client=client)
-        request_params: list[params_.GatewayStreamParams] = [
-            params_.ProviderOptions(
-                provider="openai",
-                options={"futureOpenAIField": True},
-            ),
-            OpenAIResponsesParams(previous_response_id="resp_123"),
-        ]
-        with pytest.raises(ValueError, match="duplicate provider params for 'openai'"):
-            async with models.stream(
-                model,
-                [user_msg("Hi")],
-                params=request_params,
+                params=[{"providerOptions": {"openai": {"serviceTier": "auto"}}}],
             ) as stream:
                 async for _ in stream:
                     pass

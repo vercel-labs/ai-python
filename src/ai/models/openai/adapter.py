@@ -4,7 +4,7 @@ Message/tool conversion and streaming via the official ``openai`` SDK.
 The SDK client is constructed from :class:`Client` params on each call.
 """
 
-from collections.abc import AsyncGenerator, Sequence
+from collections.abc import AsyncGenerator, Mapping, Sequence
 from typing import Any
 
 import openai
@@ -12,7 +12,6 @@ import pydantic
 
 from ... import types
 from .. import core
-from .params import OpenAIChatParams
 
 # ---------------------------------------------------------------------------
 # Message / tool conversion — internal types → OpenAI wire format
@@ -104,8 +103,6 @@ async def _file_part_to_openai(
 
 async def _messages_to_openai(
     messages: list[types.messages.Message],
-    *,
-    system_message_mode: str = "system",
 ) -> list[dict[str, Any]]:
     """Convert internal messages to OpenAI API format.
 
@@ -172,13 +169,10 @@ async def _messages_to_openai(
                         )
 
             case "system":
-                if system_message_mode == "remove":
-                    continue
                 content_text = "".join(
                     p.text for p in msg.parts if isinstance(p, types.messages.TextPart)
                 )
-                role = "developer" if system_message_mode == "developer" else "system"
-                result.append({"role": role, "content": content_text})
+                result.append({"role": "system", "content": content_text})
 
             case "user":
                 has_files = any(
@@ -216,28 +210,12 @@ def _make_client(client: core.client.Client) -> openai.AsyncOpenAI:
     )
 
 
-def _coerce_openai_params(value: Any) -> OpenAIChatParams:
+def _coerce_params(value: Any) -> dict[str, Any]:
     if value is None:
-        return OpenAIChatParams()
-    if isinstance(value, OpenAIChatParams):
-        return value
-    if isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray):
-        items = list(value)
-        if len(items) == 1 and isinstance(items[0], OpenAIChatParams):
-            return items[0]
-    raise TypeError(f"openai stream params must be {OpenAIChatParams.__name__}")
-
-
-def _merge_extra_body(
-    api_kwargs: dict[str, Any],
-    extra_body: dict[str, Any] | None,
-) -> None:
-    """Apply raw body fields after typed params so new provider options can pass."""
-    if not extra_body:
-        return
-    merged = dict(api_kwargs.get("extra_body") or {})
-    merged.update(extra_body)
-    api_kwargs["extra_body"] = merged
+        return {}
+    if isinstance(value, Mapping):
+        return dict(value)
+    raise TypeError("openai stream params must be a dict")
 
 
 # ---------------------------------------------------------------------------
@@ -252,9 +230,6 @@ async def stream(
     *,
     tools: Sequence[types.tools.Tool] | None = None,
     output_type: type[pydantic.BaseModel] | None = None,
-    thinking: bool = False,
-    budget_tokens: int | None = None,
-    reasoning_effort: str | None = None,
     **kwargs: Any,
 ) -> AsyncGenerator[types.events.Event]:
     """Stream an LLM response via the OpenAI chat completions API.
@@ -263,14 +238,8 @@ async def stream(
     Pure delta emitter — the :class:`~ai.models.Stream` wrapper aggregates
     parts into the final :class:`~ai.types.messages.Message`.
 
-    Extra keyword arguments beyond the ``StreamFn`` protocol:
-
-    * ``thinking`` — enable reasoning/thinking output.
-    * ``budget_tokens`` — max tokens for reasoning (mutually exclusive
-      with ``reasoning_effort``).
-    * ``reasoning_effort`` — effort level: ``"none"``, ``"minimal"``,
-      ``"low"``, ``"medium"``, ``"high"``, ``"xhigh"``
-      (mutually exclusive with ``budget_tokens``).
+    ``params`` may be a raw dict of OpenAI SDK kwargs. Provider-specific
+    request options are forwarded without local validation or translation.
     """
     if tools and any(t.kind == "provider" for t in tools):
         raise NotImplementedError(
@@ -281,88 +250,37 @@ async def stream(
         )
 
     sdk_client = _make_client(client)
-    openai_params = _coerce_openai_params(kwargs.get("params"))
-    system_message_mode = openai_params.system_message_mode
-    if system_message_mode is None and openai_params.force_reasoning:
-        system_message_mode = "developer"
-    openai_messages = await _messages_to_openai(
-        messages,
-        system_message_mode=system_message_mode or "system",
-    )
+    stream_params = _coerce_params(kwargs.get("params"))
+    openai_messages = await _messages_to_openai(messages)
     openai_tools = _tools_to_openai(tools) if tools else None
 
-    api_kwargs: dict[str, Any] = {
-        "model": model.id,
-        "messages": openai_messages,
-        "stream": True,
-        "stream_options": {"include_usage": True},
+    stream_options = {
+        "include_usage": True,
+        **dict(stream_params.pop("stream_options", {}) or {}),
     }
+    api_kwargs: dict[str, Any] = dict(stream_params)
+    api_kwargs.update(
+        {
+            "model": model.id,
+            "messages": openai_messages,
+            "stream": True,
+            "stream_options": stream_options,
+        }
+    )
     if openai_tools:
         api_kwargs["tools"] = openai_tools
 
     if output_type is not None:
         from openai.lib._pydantic import to_strict_json_schema
 
-        strict_json_schema = (
-            True
-            if openai_params.strict_json_schema is None
-            else openai_params.strict_json_schema
-        )
         api_kwargs["response_format"] = {
             "type": "json_schema",
             "json_schema": {
                 "name": output_type.__name__,
                 "schema": to_strict_json_schema(output_type),
-                "strict": strict_json_schema,
+                "strict": True,
             },
         }
-
-    if openai_params.logit_bias is not None:
-        api_kwargs["logit_bias"] = openai_params.logit_bias
-    if openai_params.logprobs is not None:
-        if isinstance(openai_params.logprobs, bool):
-            api_kwargs["logprobs"] = openai_params.logprobs
-        else:
-            api_kwargs["logprobs"] = True
-            api_kwargs["top_logprobs"] = openai_params.logprobs
-    if openai_params.top_logprobs is not None:
-        api_kwargs["top_logprobs"] = openai_params.top_logprobs
-    if openai_params.store is not None:
-        api_kwargs["store"] = openai_params.store
-    if openai_params.prediction is not None:
-        api_kwargs["prediction"] = openai_params.prediction
-    if openai_params.max_completion_tokens is not None:
-        api_kwargs["max_completion_tokens"] = openai_params.max_completion_tokens
-    if openai_params.service_tier is not None:
-        api_kwargs["service_tier"] = openai_params.service_tier
-    if openai_params.metadata is not None:
-        api_kwargs["metadata"] = openai_params.metadata
-    if openai_params.user is not None:
-        api_kwargs["user"] = openai_params.user
-    if openai_params.prompt_cache_key is not None:
-        api_kwargs["prompt_cache_key"] = openai_params.prompt_cache_key
-    if openai_params.prompt_cache_retention is not None:
-        api_kwargs["prompt_cache_retention"] = openai_params.prompt_cache_retention
-    if openai_params.parallel_tool_calls is not None:
-        api_kwargs["parallel_tool_calls"] = openai_params.parallel_tool_calls
-    if openai_params.reasoning_effort is not None:
-        api_kwargs["reasoning_effort"] = openai_params.reasoning_effort
-    if openai_params.text_verbosity is not None:
-        api_kwargs["verbosity"] = openai_params.text_verbosity
-    if openai_params.safety_identifier is not None:
-        api_kwargs["safety_identifier"] = openai_params.safety_identifier
-
-    # Enable reasoning/thinking via Vercel AI Gateway's unified format
-    if thinking:
-        reasoning_config: dict[str, Any] = {"enabled": True}
-        if budget_tokens is not None:
-            reasoning_config["max_tokens"] = budget_tokens
-        elif reasoning_effort is not None:
-            reasoning_config["effort"] = reasoning_effort
-        api_kwargs["extra_body"] = {"reasoning": reasoning_config}
-    _merge_extra_body(api_kwargs, openai_params.extra_body)
-    if openai_params.extra_headers:
-        api_kwargs["extra_headers"] = dict(openai_params.extra_headers)
 
     try:
         sdk_stream = await sdk_client.chat.completions.create(**api_kwargs)

@@ -5,7 +5,7 @@ responses back to public event/message types."""
 
 import base64
 import json
-from collections.abc import AsyncGenerator, Sequence
+from collections.abc import AsyncGenerator, Mapping, Sequence
 from typing import Any
 
 import httpx
@@ -14,12 +14,9 @@ import pydantic
 from ... import types
 from .. import core
 from ..anthropic import tools as anthropic_tools
-from ..anthropic.params import AnthropicParams
 from ..openai import tools as openai_tools
-from ..openai.params import OpenAIChatParams, OpenAIResponsesParams
 from . import errors, sdk
 from . import tools as gateway_tools
-from .params import GATEWAY_STREAM_PARAMS_TYPES, GatewayParams, ProviderOptions
 
 # ---------------------------------------------------------------------------
 # Shared request helpers
@@ -239,10 +236,9 @@ async def _build_request_body(
     params: Any = None,
 ) -> dict[str, Any]:
     """Build the ``LanguageModelV3CallOptions`` request body."""
-    stream_params = _normalize_gateway_params(params)
-    body: dict[str, Any] = {
-        "prompt": await _messages_to_prompt(messages),
-    }
+    stream_params = _coerce_params(params)
+    body: dict[str, Any] = dict(stream_params)
+    body["prompt"] = await _messages_to_prompt(messages)
     if tools:
         body["tools"] = [_tool_to_v3(tool) for tool in tools]
     if output_type is not None and issubclass(output_type, pydantic.BaseModel):
@@ -251,98 +247,15 @@ async def _build_request_body(
             "schema": output_type.model_json_schema(),
             "name": output_type.__name__,
         }
-    provider_options = _provider_options_from_params(stream_params)
-    if provider_options:
-        body["providerOptions"] = provider_options
-    extra_body = _gateway_body_from_params(stream_params)
-    if extra_body:
-        body.update(extra_body)
     return body
 
 
-def _provider_options_from_params(
-    stream_params: Sequence[pydantic.BaseModel],
-) -> dict[str, Any] | None:
-    """Build Gateway providerOptions from typed params and provider raw body."""
-    provider_options: dict[str, Any] = {}
-    for param in stream_params:
-        key = _gateway_provider_options_key(param)
-        payload = _provider_options_payload(param)
-        if not payload:
-            continue
-        if key in provider_options:
-            raise ValueError(f"duplicate provider params for {key!r}")
-        provider_options[key] = payload
-    return provider_options or None
-
-
-def _normalize_gateway_params(value: Any) -> list[pydantic.BaseModel]:
-    """Accept one params object or a sequence and enforce Gateway param types."""
+def _coerce_params(value: Any) -> dict[str, Any]:
     if value is None:
-        return []
-    if isinstance(value, pydantic.BaseModel):
-        raw_items: list[Any] = [value]
-    else:
-        raw_items = list(value)
-
-    result: list[pydantic.BaseModel] = []
-    for item in raw_items:
-        if not isinstance(item, GATEWAY_STREAM_PARAMS_TYPES):
-            raise TypeError(
-                "ai-gateway streams accept GatewayParams, ProviderOptions, "
-                "OpenAIChatParams, OpenAIResponsesParams, or AnthropicParams"
-            )
-        result.append(item)
-    return result
-
-
-def _gateway_provider_options_key(param: pydantic.BaseModel) -> str:
-    """Return the providerOptions bucket name for one Gateway param wrapper."""
-    if isinstance(param, GatewayParams):
-        return "gateway"
-    if isinstance(param, ProviderOptions):
-        return param.provider
-    if isinstance(param, OpenAIChatParams | OpenAIResponsesParams):
-        return "openai"
-    if isinstance(param, AnthropicParams):
-        return "anthropic"
-    raise TypeError(f"unsupported ai-gateway params type {type(param).__name__}")
-
-
-def _provider_options_payload(param: pydantic.BaseModel) -> dict[str, Any]:
-    """Dump typed providerOptions and merge forwarded provider raw body fields."""
-    if isinstance(param, ProviderOptions):
-        return dict(param.options)
-
-    payload = param.model_dump(by_alias=True, exclude_none=True)
-    if not isinstance(param, GatewayParams):
-        extra_body = getattr(param, "extra_body", None)
-        if extra_body:
-            payload.update(extra_body)
-    return payload
-
-
-def _gateway_body_from_params(
-    stream_params: Sequence[pydantic.BaseModel],
-) -> dict[str, Any] | None:
-    """Collect raw top-level Gateway body fields from GatewayParams only."""
-    extra_body: dict[str, Any] = {}
-    for param in stream_params:
-        if isinstance(param, GatewayParams) and param.extra_body:
-            extra_body.update(param.extra_body)
-    return extra_body or None
-
-
-def _extra_headers_from_params(
-    stream_params: Sequence[pydantic.BaseModel],
-) -> dict[str, str] | None:
-    """Collect raw per-request HTTP headers from any Gateway params object."""
-    headers: dict[str, str] = {}
-    for param in stream_params:
-        extra_headers = getattr(param, "extra_headers", None)
-        if extra_headers:
-            headers.update(extra_headers)
-    return headers or None
+        return {}
+    if isinstance(value, Mapping):
+        return dict(value)
+    raise TypeError("ai-gateway stream params must be a dict")
 
 
 # ---------------------------------------------------------------------------
@@ -563,14 +476,13 @@ async def stream(
     **kwargs: Any,
 ) -> AsyncGenerator[types.events.Event]:
     """Stream an LLM response through the AI Gateway v3 protocol."""
-    stream_params = _normalize_gateway_params(kwargs.get("params"))
+    stream_params = _coerce_params(kwargs.get("params"))
     body = await _build_request_body(
         messages,
         tools=tools,
         output_type=output_type,
         params=stream_params,
     )
-    extra_headers = _extra_headers_from_params(stream_params)
     gateway = sdk.GatewayClient(client, model)
 
     try:
@@ -579,7 +491,6 @@ async def stream(
             body,
             model_type="language",
             streaming=True,
-            headers=extra_headers,
         ) as response:
             yield types.events.StreamStart()
             streamed_tool_ids: set[str] = set()

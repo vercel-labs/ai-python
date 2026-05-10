@@ -5,7 +5,7 @@ The SDK client is constructed from :class:`Client` params on each call.
 """
 
 import json
-from collections.abc import AsyncGenerator, Sequence
+from collections.abc import AsyncGenerator, Mapping, Sequence
 from typing import Any
 
 import anthropic
@@ -15,7 +15,6 @@ from ... import types
 from ...types import events
 from .. import core
 from . import metadata as anthropic_metadata
-from . import params
 from . import tools as anthropic_tools
 
 PROVIDER_NAME = "anthropic"
@@ -173,8 +172,6 @@ def _file_part_to_anthropic(
 
 async def _messages_to_anthropic(
     messages: list[types.messages.Message],
-    *,
-    send_reasoning: bool = True,
 ) -> tuple[str | None, list[dict[str, Any]]]:
     """Convert internal messages to Anthropic API format.
 
@@ -212,7 +209,7 @@ async def _messages_to_anthropic(
                                 if part_metadata is not None
                                 else None
                             )
-                            if send_reasoning and signature:
+                            if signature:
                                 content.append(
                                     {
                                         "type": "thinking",
@@ -361,61 +358,25 @@ def _make_client(
     )
 
 
-def _coerce_anthropic_params(value: Any) -> params.AnthropicParams:
+def _coerce_params(value: Any) -> dict[str, Any]:
     if value is None:
-        return params.AnthropicParams()
-    if isinstance(value, params.AnthropicParams):
-        return value
-    if isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray):
-        items = list(value)
-        if len(items) == 1 and isinstance(items[0], params.AnthropicParams):
-            return items[0]
-    raise TypeError(
-        f"anthropic stream params must be {params.AnthropicParams.__name__}"
-    )
+        return {}
+    if isinstance(value, Mapping):
+        return dict(value)
+    raise TypeError("anthropic stream params must be a dict")
 
 
-def _container_to_wire(
-    container: params.AnthropicContainer,
-) -> str | dict[str, Any] | None:
-    if not container.skills:
-        return container.id
-
-    result: dict[str, Any] = {}
-    if container.id is not None:
-        result["id"] = container.id
-    result["skills"] = [_skill_to_wire(skill) for skill in container.skills]
-    return result
-
-
-def _skill_to_wire(
-    skill: params.AnthropicProviderSkill | params.AnthropicCustomSkill,
-) -> dict[str, Any]:
-    if isinstance(skill, params.AnthropicProviderSkill):
-        result: dict[str, Any] = {
-            "type": "anthropic",
-            "skill_id": skill.skill_id,
-        }
-    else:
-        result = {
-            "type": "custom",
-            "provider_reference": skill.provider_reference,
-        }
-    if skill.version is not None:
-        result["version"] = skill.version
-    return result
-
-
-def _merge_extra_headers(
+def _add_builtin_beta_headers(
     api_kwargs: dict[str, Any],
-    extra_headers: dict[str, str] | None,
+    betas: set[str],
 ) -> None:
-    """Attach raw headers while preserving typed headers the adapter generated."""
+    """Attach tool-required beta headers unless the caller supplied one."""
+    if not betas:
+        return
     headers = dict(api_kwargs.get("extra_headers") or {})
-    if extra_headers:
-        headers.update(extra_headers)
-    if headers:
-        api_kwargs["extra_headers"] = headers
+    if not any(key.lower() == "anthropic-beta" for key in headers):
+        headers["anthropic-beta"] = ",".join(sorted(betas))
+    api_kwargs["extra_headers"] = headers
 
 
 def _result_block_content(block: Any) -> Any:
@@ -448,8 +409,6 @@ async def stream(
     *,
     tools: Sequence[types.tools.Tool] | None = None,
     output_type: type[pydantic.BaseModel] | None = None,
-    thinking: bool = False,
-    budget_tokens: int = 10000,
     **kwargs: Any,
 ) -> AsyncGenerator[events.Event]:
     """Stream an LLM response via the Anthropic messages API.
@@ -458,17 +417,12 @@ async def stream(
     Pure delta emitter — the :class:`~ai.models.Stream` wrapper aggregates
     parts into the final :class:`~ai.types.messages.Message`.
 
-    Extra keyword arguments beyond the ``StreamFn`` protocol:
-
-    * ``thinking`` — enable extended thinking output.
-    * ``budget_tokens`` — max tokens for thinking (default 10000).
+    ``params`` may be a raw dict of Anthropic SDK kwargs. Provider-specific
+    request options are forwarded without local validation or translation.
     """
     sdk_client = _make_client(client)
-    anthropic_params = _coerce_anthropic_params(kwargs.get("params"))
-    system_prompt, anthropic_messages = await _messages_to_anthropic(
-        messages,
-        send_reasoning=anthropic_params.send_reasoning is not False,
-    )
+    stream_params = _coerce_params(kwargs.get("params"))
+    system_prompt, anthropic_messages = await _messages_to_anthropic(messages)
 
     custom_tools, builtin_tools = _split_tools(tools or ())
     wire_tools = _custom_tools_to_anthropic(custom_tools) if custom_tools else []
@@ -477,83 +431,22 @@ async def stream(
         builtin_wire, builtin_betas = _builtin_tools_to_anthropic(builtin_tools)
         wire_tools.extend(builtin_wire)
 
-    api_kwargs: dict[str, Any] = {
-        "model": model.id,
-        "messages": anthropic_messages,
-        "max_tokens": 8192,
-    }
+    api_kwargs: dict[str, Any] = dict(stream_params)
+    api_kwargs.setdefault("max_tokens", 8192)
+    api_kwargs.update(
+        {
+            "model": model.id,
+            "messages": anthropic_messages,
+        }
+    )
     if system_prompt:
         api_kwargs["system"] = system_prompt
     if wire_tools:
         api_kwargs["tools"] = wire_tools
 
-    if anthropic_params.thinking is not None:
-        if not isinstance(anthropic_params.thinking, params.AnthropicDisabledThinking):
-            api_kwargs["thinking"] = anthropic_params.thinking.model_dump(
-                exclude_none=True,
-            )
-    elif thinking:
-        api_kwargs["thinking"] = {
-            "type": "enabled",
-            "budget_tokens": budget_tokens,
-        }
+    _add_builtin_beta_headers(api_kwargs, builtin_betas)
 
-    output_config: dict[str, Any] = {}
-    if anthropic_params.effort is not None:
-        output_config["effort"] = anthropic_params.effort
-    if anthropic_params.task_budget is not None:
-        output_config["task_budget"] = anthropic_params.task_budget.model_dump(
-            exclude_none=True,
-        )
-    if output_config:
-        api_kwargs["output_config"] = output_config
-
-    if anthropic_params.speed is not None:
-        api_kwargs["speed"] = anthropic_params.speed
-    if anthropic_params.inference_geo is not None:
-        api_kwargs["inference_geo"] = anthropic_params.inference_geo
-    if anthropic_params.metadata is not None:
-        api_kwargs["metadata"] = anthropic_params.metadata.model_dump(
-            exclude_none=True,
-        )
-    if anthropic_params.context_management is not None:
-        api_kwargs["context_management"] = anthropic_params.context_management
-    if anthropic_params.container is not None:
-        container = _container_to_wire(anthropic_params.container)
-        if container is not None:
-            api_kwargs["container"] = container
-    if anthropic_params.service_tier is not None:
-        api_kwargs["service_tier"] = anthropic_params.service_tier
-    if anthropic_params.cache_control is not None:
-        api_kwargs["cache_control"] = anthropic_params.cache_control.model_dump(
-            exclude_none=True,
-        )
-    if anthropic_params.mcp_servers is not None:
-        api_kwargs["mcp_servers"] = [
-            server.model_dump(exclude_none=True)
-            for server in anthropic_params.mcp_servers
-        ]
-    if anthropic_params.disable_parallel_tool_use is not None:
-        api_kwargs["tool_choice"] = {
-            "type": "auto",
-            "disable_parallel_tool_use": anthropic_params.disable_parallel_tool_use,
-        }
-    merged_betas: list[str] = []
-    seen_betas: set[str] = set()
-    for beta in list(anthropic_params.betas or ()) + sorted(builtin_betas):
-        if beta not in seen_betas:
-            seen_betas.add(beta)
-            merged_betas.append(beta)
-    if merged_betas:
-        api_kwargs["extra_headers"] = {"anthropic-beta": ",".join(merged_betas)}
-    _merge_extra_headers(api_kwargs, anthropic_params.extra_headers)
-    if anthropic_params.extra_body:
-        api_kwargs["extra_body"] = dict(anthropic_params.extra_body)
-
-    if (
-        output_type is not None
-        and anthropic_params.structured_output_mode != "json_tool"
-    ):
+    if output_type is not None:
         api_kwargs["output_format"] = output_type
 
     # Anthropic indexes content blocks by int; map to string block_ids.

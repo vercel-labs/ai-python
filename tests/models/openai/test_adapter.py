@@ -1,9 +1,7 @@
 """Tests for the OpenAI adapter's request shaping.
 
-Focused on non-trivial mappings between :class:`OpenAIChatParams` and
-the SDK kwargs (translations, derived fields) and on the explicit
-guards against unsupported built-in tool surfaces. Pure passthroughs
-are not asserted here — those are pydantic / typechecker territory.
+Focused on raw ``params`` passthrough, adapter-owned structured-output
+formatting, and explicit guards against unsupported built-in tool surfaces.
 """
 
 from __future__ import annotations
@@ -16,7 +14,6 @@ import pytest
 import ai
 from ai import models
 from ai.models.openai import adapter, openai
-from ai.models.openai import params as openai_params
 from ai.models.openai import tools as openai_tools
 from ai.types import messages
 
@@ -72,7 +69,7 @@ async def _drain(stream: Any) -> None:
         pass
 
 
-async def test_system_message_mode_developer_rewrites_role(
+async def test_system_messages_use_openai_system_role(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured = _patch(monkeypatch)
@@ -82,17 +79,15 @@ async def test_system_message_mode_developer_rewrites_role(
             _TEST_CLIENT,
             _MODEL,
             [ai.system_message("rules"), ai.user_message("Hi")],
-            params=openai_params.OpenAIChatParams(system_message_mode="developer"),
         )
     )
 
-    assert captured["messages"][0] == {"role": "developer", "content": "rules"}
+    assert captured["messages"][0] == {"role": "system", "content": "rules"}
 
 
-async def test_logprobs_int_translates_to_top_logprobs(
+async def test_raw_params_pass_through_to_sdk_kwargs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``logprobs=N`` becomes ``logprobs=True`` + ``top_logprobs=N``."""
     captured = _patch(monkeypatch)
 
     await _drain(
@@ -100,12 +95,23 @@ async def test_logprobs_int_translates_to_top_logprobs(
             _TEST_CLIENT,
             _MODEL,
             [ai.user_message("Hi")],
-            params=openai_params.OpenAIChatParams(logprobs=3),
+            params={
+                "logprobs": 3,
+                "verbosity": "low",
+                "max_completion_tokens": 128,
+                "extra_body": {"future_option": True},
+                "extra_headers": {"x-openai-feature": "enabled"},
+                "stream_options": {"include_usage": False, "custom": True},
+            },
         )
     )
 
-    assert captured["logprobs"] is True
-    assert captured["top_logprobs"] == 3
+    assert captured["logprobs"] == 3
+    assert captured["verbosity"] == "low"
+    assert captured["max_completion_tokens"] == 128
+    assert captured["extra_body"] == {"future_option": True}
+    assert captured["extra_headers"] == {"x-openai-feature": "enabled"}
+    assert captured["stream_options"] == {"include_usage": False, "custom": True}
 
 
 async def test_strict_json_schema_flows_into_response_format(
@@ -119,52 +125,13 @@ async def test_strict_json_schema_flows_into_response_format(
             _MODEL,
             [ai.user_message("Hi")],
             output_type=_Answer,
-            params=openai_params.OpenAIChatParams(strict_json_schema=False),
         )
     )
 
-    assert captured["response_format"]["json_schema"]["strict"] is False
+    assert captured["response_format"]["json_schema"]["strict"] is True
 
 
-async def test_text_verbosity_aliased_to_verbosity(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    captured = _patch(monkeypatch)
-
-    await _drain(
-        adapter.stream(
-            _TEST_CLIENT,
-            _MODEL,
-            [ai.user_message("Hi")],
-            params=openai_params.OpenAIChatParams(text_verbosity="low"),
-        )
-    )
-
-    assert captured["verbosity"] == "low"
-
-
-async def test_extra_body_and_headers_pass_through(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    captured = _patch(monkeypatch)
-
-    await _drain(
-        adapter.stream(
-            _TEST_CLIENT,
-            _MODEL,
-            [ai.user_message("Hi")],
-            params=openai_params.OpenAIChatParams(
-                extra_body={"future_option": True},
-                extra_headers={"x-openai-feature": "enabled"},
-            ),
-        )
-    )
-
-    assert captured["extra_body"] == {"future_option": True}
-    assert captured["extra_headers"] == {"x-openai-feature": "enabled"}
-
-
-async def test_invalid_params_rejected_by_adapter(
+async def test_non_dict_params_rejected_by_adapter(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch(monkeypatch)
@@ -173,10 +140,10 @@ async def test_invalid_params_rejected_by_adapter(
         _TEST_CLIENT,
         _MODEL,
         [ai.user_message("Hi")],
-        params={"reasoning_effort": "high"},
+        params=[{"reasoning_effort": "high"}],
     )
 
-    with pytest.raises(TypeError, match="OpenAIChatParams"):
+    with pytest.raises(TypeError, match="dict"):
         await _drain(stream)
 
 

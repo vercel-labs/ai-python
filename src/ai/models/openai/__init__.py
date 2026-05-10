@@ -12,10 +12,9 @@ SDK at import time.
 """
 
 from . import tools
-from .params import OpenAIChatParams, OpenAIResponsesParams
 from .provider import openai
 
-__all__ = ["OpenAIChatParams", "OpenAIResponsesParams", "openai", "tools"]
+__all__ = ["openai", "tools"]
 
 
 def __getattr__(name: str) -> object:
