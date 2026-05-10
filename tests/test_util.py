@@ -550,6 +550,69 @@ async def test_merge_restart_only_after_other_iterable_yields() -> None:
     assert src.iter_count == 1
 
 
+async def test_merge_restart_when_yield_and_stop_collide() -> None:
+    """Restart still fires when a yield and a restartable's exhaustion land
+    in the same ``asyncio.wait`` step.
+
+    If merge processes the yielding task before the stopping one inside the
+    same ``done`` set, the stopping iter's slot is still its original task
+    (not ``None``) at the moment a too-eager restart pass runs — so the
+    restartable never gets re-iterated to pick up items pushed by the
+    consumer in response to the yield.
+
+    ``done`` is a ``set`` so its iteration order is hash-driven (by task
+    ``id``); we can't force the bad order portably, so the scenario runs
+    many times to make the bad order overwhelmingly likely. Empirically
+    each iteration fails ~50% of the time with the bug, so 25 iterations
+    gives a miss-rate of ~10⁻⁸.
+    """
+
+    class _DelayedEmpty:
+        """A restartable whose ``__aiter__`` always sleeps before yielding.
+
+        With the same delay as the driver's yield, its initial-empty anext
+        completes _at the same simulated time_ as the driver's item, putting
+        both in the same ``done`` set.
+        """
+
+        def __init__(self) -> None:
+            self.iter_count = 0
+            self._items: list[Any] = []
+
+        def push(self, *items: Any) -> None:
+            self._items.extend(items)
+
+        def __aiter__(self) -> AsyncIterator[Any]:
+            self.iter_count += 1
+            items = list(self._items)
+            self._items.clear()
+
+            async def gen() -> AsyncIterator[Any]:
+                await asyncio.sleep(10)
+                for x in items:
+                    yield x
+
+            return gen()
+
+    async def one_run() -> list[str]:
+        src = _DelayedEmpty()  # initially empty: first iter yields nothing
+
+        async def driver() -> AsyncIterator[str]:
+            await asyncio.sleep(10)
+            yield "d1"
+
+        results: list[str] = []
+        async for item in util.merge(driver(), src):
+            results.append(item)
+            if item == "d1":
+                src.push("r1")
+        return results
+
+    for _ in range(25):
+        results = await one_run()
+        assert sorted(results) == ["d1", "r1"], results
+
+
 def test_merge_cleanup_on_asyncio_shutdown() -> None:
     """A leaked partially-consumed merge gen is cleaned up correctly on shutdown.
 

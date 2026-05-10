@@ -172,7 +172,10 @@ async def merge[T](
             if restart and fired:
                 # Also, we try *restarting* other stopped streams
                 # that may have more to do now.
-                # N.B: We do this *after* the yield...
+                # N.B: We do this *after* the values are yielded, so
+                # they've had a chance to trigger things, and we do it
+                # after *all* tasks have been handled, so that if a
+                # task *just* finished, we still restart it.
                 for idx, (ok, otask) in enumerate(zip(restartable, tasks, strict=True)):
                     if ok and otask is None and idx not in fired:
                         niter = decouple(aiterables[idx], task_group=tg)
