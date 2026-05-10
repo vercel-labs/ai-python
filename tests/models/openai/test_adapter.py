@@ -164,6 +164,22 @@ async def test_extra_body_and_headers_pass_through(
     assert captured["extra_headers"] == {"x-openai-feature": "enabled"}
 
 
+async def test_invalid_params_rejected_by_adapter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch(monkeypatch)
+
+    stream = adapter.stream(
+        _TEST_CLIENT,
+        _MODEL,
+        [ai.user_message("Hi")],
+        params={"reasoning_effort": "high"},
+    )
+
+    with pytest.raises(TypeError, match="OpenAIChatParams"):
+        await _drain(stream)
+
+
 async def test_builtin_tool_in_request_raises(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

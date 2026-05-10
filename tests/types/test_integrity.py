@@ -498,7 +498,7 @@ async def test_stream_sanitizes_internal_messages() -> None:
 
     async def _spy_stream(
         client: models.Client,
-        model: models.Model[pydantic.BaseModel],
+        model: models.Model,
         messages: list[messages.Message],
         *,
         tools: Sequence[ai.tools.Tool] | None = None,
@@ -554,7 +554,7 @@ async def test_generate_sanitizes_internal_messages() -> None:
 
     async def _spy_gen(
         client: models.Client,
-        model: models.Model[pydantic.BaseModel],
+        model: models.Model,
         messages: list[messages.Message],
         params: Any,
     ) -> messages.Message:

@@ -42,7 +42,7 @@ from .core.api import (
 )
 from .core.client import Client
 from .core.model import Model
-from .core.params import GenerateParams, ImageParams, StreamParams, VideoParams
+from .core.params import GenerateParams, ImageParams, VideoParams
 from .core.proto import CheckConnFn, GenerateFn, Provider, StreamFn
 from .openai import openai
 
@@ -61,7 +61,6 @@ __all__ = [
     "Stream",
     "StreamExecutor",
     "StreamFn",
-    "StreamParams",
     "StreamRequest",
     "VideoParams",
     # Provider factories

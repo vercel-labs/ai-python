@@ -1,7 +1,7 @@
 import contextlib
 import dataclasses
 from collections.abc import AsyncGenerator, AsyncIterator, Sequence
-from typing import Any, Protocol, Self, cast, runtime_checkable
+from typing import Any, Protocol, Self, runtime_checkable
 
 import pydantic
 
@@ -14,26 +14,26 @@ from . import params as params_
 
 
 @dataclasses.dataclass(frozen=True)
-class StreamRequest[ProviderParamsT: pydantic.BaseModel]:
-    model: model_.Model[ProviderParamsT]
+class StreamRequest:
+    model: model_.Model
     messages: list[types.messages.Message]
     tools: Sequence[types.tools.Tool] | None = None
     output_type: type[pydantic.BaseModel] | None = None
-    params: params_.StreamParams[ProviderParamsT] | None = None
+    params: Any = None
 
 
 @dataclasses.dataclass(frozen=True)
 class GenerateRequest:
-    model: model_.Model[Any]
+    model: model_.Model
     messages: list[types.messages.Message]
     params: params_.GenerateParams
 
 
 @runtime_checkable
 class StreamExecutor(Protocol):
-    def _do_stream[ProviderParamsT: pydantic.BaseModel](
+    def _do_stream(
         self,
-        request: StreamRequest[ProviderParamsT],
+        request: StreamRequest,
     ) -> AsyncGenerator[types.events.Event]: ...
 
 
@@ -47,9 +47,9 @@ class GenerateExecutor(Protocol):
 class Executor:
     """Default executor: dispatches to adapters via the local client."""
 
-    async def _do_stream[ProviderParamsT: pydantic.BaseModel](
+    async def _do_stream(
         self,
-        request: StreamRequest[ProviderParamsT],
+        request: StreamRequest,
     ) -> AsyncGenerator[types.events.Event]:
         c = client_.auto_client(request.model)
         fn = adapters.get_stream_adapter(request.model.adapter)
@@ -73,45 +73,6 @@ class Executor:
 
 
 _default_executor = Executor()
-
-
-# this is here because of the string-based registry for model apis
-# that erases type information
-def _normalize_stream_params[ProviderParamsT: pydantic.BaseModel](
-    model: model_.Model[ProviderParamsT],
-    value: params_.StreamParams[ProviderParamsT] | None,
-) -> params_.StreamParams[ProviderParamsT] | None:
-    if value is None:
-        return None
-    if isinstance(value, pydantic.BaseModel):
-        raw_items: list[Any] = [value]
-    else:
-        raw_items = list(value)
-
-    expected_type = getattr(model.provider, "params_type", pydantic.BaseModel)
-    normalized: list[ProviderParamsT] = []
-    for item in raw_items:
-        if not isinstance(item, pydantic.BaseModel):
-            raise TypeError(
-                "stream params must be pydantic BaseModel instances with a "
-                "provider params type"
-            )
-        if not isinstance(item, expected_type):
-            if isinstance(expected_type, tuple):
-                expected = " or ".join(type_.__name__ for type_ in expected_type)
-            else:
-                expected = expected_type.__name__
-            raise TypeError(
-                f"{model.provider.name} streams accept "
-                f"{expected}, got {type(item).__name__}"
-            )
-        normalized.append(cast(ProviderParamsT, item))
-
-    if not normalized:
-        return None
-    if len(normalized) == 1:
-        return normalized[0]
-    return normalized
 
 
 class Stream:
@@ -342,13 +303,13 @@ async def _replay_tool_calls(
 
 
 @contextlib.asynccontextmanager
-async def stream[ProviderParamsT: pydantic.BaseModel](
-    model: model_.Model[ProviderParamsT],
+async def stream(
+    model: model_.Model,
     messages: list[types.messages.Message],
     *,
     tools: Sequence[types.tools.Tool] | None = None,
     output_type: type[pydantic.BaseModel] | None = None,
-    params: params_.StreamParams[ProviderParamsT] | None = None,
+    params: Any = None,
     executor: StreamExecutor = _default_executor,
 ) -> AsyncIterator[Stream]:
     """Stream an LLM response.
@@ -368,13 +329,12 @@ async def stream[ProviderParamsT: pydantic.BaseModel](
         s = Stream(_replay_tool_calls(last), seed_message=last.model_copy(deep=True))
     else:
         prepared = integrity.prepare_messages(messages)
-        stream_params = _normalize_stream_params(model, params)
-        request = StreamRequest[ProviderParamsT](
+        request = StreamRequest(
             model,
             prepared,
             tools,
             output_type,
-            stream_params,
+            params,
         )
         s = Stream(executor._do_stream(request))
     try:
@@ -384,7 +344,7 @@ async def stream[ProviderParamsT: pydantic.BaseModel](
 
 
 async def generate(
-    model: model_.Model[Any],
+    model: model_.Model,
     messages: list[types.messages.Message],
     params: params_.GenerateParams,
     *,
@@ -396,7 +356,7 @@ async def generate(
     return await executor._do_generate(request)
 
 
-async def check_connection(model: model_.Model[Any]) -> bool:
+async def check_connection(model: model_.Model) -> bool:
     """Check whether the model's provider is reachable and the model exists."""
     c = client_.auto_client(model)
     return await model.provider.check(c, model)

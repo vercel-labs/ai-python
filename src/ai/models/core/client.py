@@ -49,7 +49,7 @@ class Client:
             self._http = None
 
 
-def auto_client(model: model_.Model[Any]) -> Client:
+def auto_client(model: model_.Model) -> Client:
     """Create a :class:`Client` from the model's connection info.
 
     Uses ``model.client`` if set, otherwise delegates to

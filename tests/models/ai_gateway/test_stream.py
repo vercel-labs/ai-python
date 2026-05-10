@@ -42,7 +42,7 @@ _TEST_MODEL = ai_gateway("test-provider/test-model")
 async def _collect(
     client: Any,
     msgs: list[messages.Message],
-    model: model_.Model[params_.GatewayStreamParams] = _TEST_MODEL,
+    model: model_.Model = _TEST_MODEL,
     **kwargs: Any,
 ) -> list[events.Event]:
     """Drain ``stream()`` and return all yielded events."""
@@ -55,7 +55,7 @@ async def _collect(
 async def _final(
     client: Any,
     msgs: list[messages.Message],
-    model: model_.Model[params_.GatewayStreamParams] = _TEST_MODEL,
+    model: model_.Model = _TEST_MODEL,
     **kwargs: Any,
 ) -> messages.Message:
     """Drain the adapter's event stream and return the aggregated message."""

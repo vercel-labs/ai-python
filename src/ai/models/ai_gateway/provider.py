@@ -8,8 +8,6 @@ from types import ModuleType
 from typing import Any
 
 from .. import core
-from ..core.params import StreamParamsType
-from .params import GATEWAY_STREAM_PARAMS_TYPES, GatewayStreamParams
 
 _BASE_URL = "https://ai-gateway.vercel.sh/v3/ai"
 _API_KEY_ENV = "AI_GATEWAY_API_KEY"
@@ -38,10 +36,6 @@ class _AIGateway:
         return "ai-gateway"
 
     @property
-    def params_type(self) -> StreamParamsType[GatewayStreamParams]:
-        return GATEWAY_STREAM_PARAMS_TYPES
-
-    @property
     def tools(self) -> ModuleType:
         """Gateway-native built-in tool factories.
 
@@ -60,9 +54,7 @@ class _AIGateway:
             api_key=os.environ.get(_API_KEY_ENV),
         )
 
-    async def check(
-        self, client: core.client.Client, model: core.model.Model[Any]
-    ) -> bool:
+    async def check(self, client: core.client.Client, model: core.model.Model) -> bool:
         """Delegate to :func:`ai_gateway.check.check`."""
         from . import check as check_
 
@@ -73,8 +65,8 @@ class _AIGateway:
         model_id: str,
         *,
         client: core.client.Client | None = None,
-    ) -> core.model.Model[GatewayStreamParams]:
-        return core.model.Model[GatewayStreamParams](
+    ) -> core.model.Model:
+        return core.model.Model(
             id=model_id,
             adapter=self.adapter,
             provider=self,

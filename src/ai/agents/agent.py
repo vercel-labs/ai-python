@@ -527,7 +527,7 @@ class ToolRunner:
 class Context(pydantic.BaseModel):
     """Everything that goes into the LLM."""
 
-    model: models.Model[Any]
+    model: models.Model
     messages: list[types.messages.Message]
     tools: list[Tool]
 
@@ -791,7 +791,7 @@ class Agent:
     @contextlib.asynccontextmanager
     async def run(
         self,
-        model: models.Model[Any],
+        model: models.Model,
         messages: list[types.messages.Message],
         *,
         middleware: list[middleware_.Middleware] | None = None,

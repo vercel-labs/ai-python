@@ -1,23 +1,17 @@
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator, Sequence
-from typing import Any, cast
+from typing import Any
 
 import pydantic
-import pytest
 
 import ai
 from ai import models
-from ai.models.openai import openai
 from ai.types import events as events_
 from ai.types import messages as messages_
 from ai.types import metadata as metadata_
 
 from ...conftest import MOCK_MODEL, MOCK_PROVIDER, MockProvider, mock_llm, text_msg
-
-
-class _MockStreamParams(pydantic.BaseModel):
-    value: str
 
 
 class _TestProviderMetadata(metadata_.ProviderMetadata):
@@ -48,7 +42,7 @@ async def test_stream_aggregates_registered_adapter_events() -> None:
 async def test_stream_tool_end_includes_aggregated_tool_call() -> None:
     async def _tool_stream(
         client: models.Client,
-        model: models.Model[pydantic.BaseModel],
+        model: models.Model,
         messages: list[messages_.Message],
         *,
         tools: Sequence[ai.tools.Tool] | None = None,
@@ -168,7 +162,7 @@ async def test_stream_uses_explicit_model_client() -> None:
 
     async def _spy_stream(
         client: models.Client,
-        model: models.Model[pydantic.BaseModel],
+        model: models.Model,
         messages: list[messages_.Message],
         *,
         tools: Sequence[ai.tools.Tool] | None = None,
@@ -182,7 +176,7 @@ async def test_stream_uses_explicit_model_client() -> None:
     models.register_stream("mock", _spy_stream)
 
     explicit = models.Client(base_url="https://custom.test", api_key="sk-custom")
-    model = models.Model[pydantic.BaseModel](
+    model = models.Model(
         id="mock-model",
         adapter="mock",
         provider=MOCK_PROVIDER,
@@ -204,7 +198,7 @@ async def test_stream_forwards_output_type_and_request_params() -> None:
 
     async def _spy_stream(
         client: models.Client,
-        model: models.Model[pydantic.BaseModel],
+        model: models.Model,
         messages: list[messages_.Message],
         *,
         tools: Sequence[ai.tools.Tool] | None = None,
@@ -218,7 +212,7 @@ async def test_stream_forwards_output_type_and_request_params() -> None:
 
     models.register_stream("mock", _spy_stream)
 
-    params = _MockStreamParams(value="ok")
+    params = {"raw": "ok"}
     async with models.stream(
         MOCK_MODEL,
         [ai.user_message("Hi")],
@@ -232,20 +226,9 @@ async def test_stream_forwards_output_type_and_request_params() -> None:
     assert received_params == [params]
 
 
-async def test_normalize_params_rejects_non_pydantic_value() -> None:
-    """``stream(...)`` rejects raw dicts (and anything not a BaseModel)."""
-    with pytest.raises(TypeError, match="pydantic BaseModel"):
-        async with models.stream(
-            openai("gpt-5.4"),
-            [ai.user_message("Hi")],
-            params=cast(Any, {"reasoning_effort": "high"}),
-        ):
-            pass
-
-
 async def test_generate_dispatches_to_registered_adapter() -> None:
     provider = MockProvider(adapter="mock-generate")
-    model = models.Model[pydantic.BaseModel](
+    model = models.Model(
         id="generate-model",
         adapter="mock-generate",
         provider=provider,
@@ -258,7 +241,7 @@ async def test_generate_dispatches_to_registered_adapter() -> None:
 
     async def _generate(
         client: models.Client,
-        model: models.Model[pydantic.BaseModel],
+        model: models.Model,
         messages: list[messages_.Message],
         params: Any = None,
     ) -> messages_.Message:
@@ -286,7 +269,7 @@ class _CheckProvider(MockProvider):
     async def check(
         self,
         client: models.Client,
-        model: models.Model[pydantic.BaseModel],
+        model: models.Model,
     ) -> bool:
         self.received_client = client
         return False
@@ -309,7 +292,7 @@ async def test_stream_replays_marked_last_assistant_with_tool_calls() -> None:
 
     async def _spy_stream(
         client: models.Client,
-        model: models.Model[pydantic.BaseModel],
+        model: models.Model,
         messages: list[messages_.Message],
         *,
         tools: Sequence[ai.tools.Tool] | None = None,
@@ -377,7 +360,7 @@ async def test_stream_does_not_replay_when_assistant_is_unmarked() -> None:
 
     async def _spy_stream(
         client: models.Client,
-        model: models.Model[pydantic.BaseModel],
+        model: models.Model,
         messages: list[messages_.Message],
         *,
         tools: Sequence[ai.tools.Tool] | None = None,

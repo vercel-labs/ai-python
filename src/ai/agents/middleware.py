@@ -52,7 +52,7 @@ if TYPE_CHECKING:
 class ModelContext:
     """Context for a model streaming call."""
 
-    model: Model[Any]
+    model: Model
     messages: list[messages_.Message]
     tools: Sequence[Tool] | None
     output_type: type[pydantic.BaseModel] | None
@@ -69,7 +69,7 @@ class ModelContext:
 class GenerateContext:
     """Context for a model generate call (images, video, etc.)."""
 
-    model: Model[Any]
+    model: Model
     messages: list[messages_.Message]
     params: Any
 

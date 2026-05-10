@@ -247,7 +247,7 @@ def _merge_extra_body(
 
 async def stream(
     client: core.client.Client,
-    model: core.model.Model[Any],
+    model: core.model.Model,
     messages: list[types.messages.Message],
     *,
     tools: Sequence[types.tools.Tool] | None = None,

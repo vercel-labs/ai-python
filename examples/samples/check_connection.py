@@ -2,11 +2,10 @@
 
 import asyncio
 import sys
-from typing import Any
 
 import ai
 
-PROVIDERS: list[tuple[str, ai.Provider[Any], str]] = [
+PROVIDERS: list[tuple[str, ai.Provider, str]] = [
     ("ai_gateway", ai.ai_gateway, "anthropic/claude-sonnet-4"),
     ("anthropic", ai.anthropic, "claude-sonnet-4-20250514"),
     ("openai", ai.openai, "gpt-5.4-mini"),
@@ -21,7 +20,7 @@ def _fail(msg: str) -> None:
     print(msg)
 
 
-async def _check(name: str, provider: ai.Provider[Any], model_id: str) -> None:
+async def _check(name: str, provider: ai.Provider, model_id: str) -> None:
     if provider.client().api_key is None:
         print(f"  [SKIP]  {provider.api_key_env} not set")
         return
@@ -36,7 +35,7 @@ async def _check(name: str, provider: ai.Provider[Any], model_id: str) -> None:
         _fail(f"  [ERR]   {name}/{model_id}: {exc}")
 
 
-async def _list_models(name: str, provider: ai.Provider[Any]) -> None:
+async def _list_models(name: str, provider: ai.Provider) -> None:
     if provider.client().api_key is None:
         return
     try:

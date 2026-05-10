@@ -555,7 +555,7 @@ def _parse_stream_part(
 
 async def stream(
     client: core.client.Client,
-    model: core.model.Model[Any],
+    model: core.model.Model,
     messages: list[types.messages.Message],
     *,
     tools: Sequence[types.tools.Tool] | None = None,
@@ -607,7 +607,7 @@ async def stream(
 
 async def _generate_image(
     client: core.client.Client,
-    model: core.model.Model[Any],
+    model: core.model.Model,
     messages: list[types.messages.Message],
     params: core.ImageParams,
 ) -> types.messages.Message:
@@ -645,7 +645,7 @@ async def _generate_image(
 
 async def _generate_video(
     client: core.client.Client,
-    model: core.model.Model[Any],
+    model: core.model.Model,
     messages: list[types.messages.Message],
     params: core.VideoParams,
 ) -> types.messages.Message:
@@ -709,7 +709,7 @@ async def _generate_video(
 
 async def generate(
     client: core.client.Client,
-    model: core.model.Model[Any],
+    model: core.model.Model,
     messages: list[types.messages.Message],
     params: core.GenerateParams,
 ) -> types.messages.Message:

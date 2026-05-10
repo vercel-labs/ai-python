@@ -20,7 +20,7 @@ class GatewayClient:
     def __init__(
         self,
         client: core.client.Client,
-        model: core.model.Model[Any] | None = None,
+        model: core.model.Model | None = None,
     ) -> None:
         self._client = client
         self._model = model

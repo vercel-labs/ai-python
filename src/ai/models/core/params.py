@@ -1,17 +1,8 @@
-from collections.abc import Sequence
 from typing import Any
 
 import pydantic
 
 _PARAMS_CONFIG = pydantic.ConfigDict(frozen=True, populate_by_name=True)
-
-type ProviderParams = pydantic.BaseModel
-type StreamParams[ProviderParamsT: pydantic.BaseModel] = (
-    ProviderParamsT | Sequence[ProviderParamsT]
-)
-type StreamParamsType[ProviderParamsT: pydantic.BaseModel] = (
-    type[ProviderParamsT] | tuple[type[ProviderParamsT], ...]
-)
 
 
 class ImageParams(pydantic.BaseModel):

@@ -15,7 +15,7 @@ messages = [
 
 
 async def main() -> None:
-    params: ai.StreamParams[GatewayStreamParams] = [
+    params: list[GatewayStreamParams] = [
         GatewayParams(sort="cost"),
         AnthropicParams(speed="fast"),
     ]

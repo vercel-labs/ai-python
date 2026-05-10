@@ -5,10 +5,8 @@ Defines the callable :data:`anthropic` provider, which satisfies the
 
 import os
 from types import ModuleType
-from typing import Any
 
 from .. import core
-from .params import AnthropicParams
 
 _BASE_URL = "https://api.anthropic.com"
 _BASE_URL_ENV = "ANTHROPIC_BASE_URL"
@@ -39,10 +37,6 @@ class _Anthropic:
         return "anthropic"
 
     @property
-    def params_type(self) -> type[AnthropicParams]:
-        return AnthropicParams
-
-    @property
     def tools(self) -> ModuleType:
         """The provider's built-in tool factories.
 
@@ -62,9 +56,7 @@ class _Anthropic:
             api_key=os.environ.get(_API_KEY_ENV),
         )
 
-    async def check(
-        self, client: core.client.Client, model: core.model.Model[Any]
-    ) -> bool:
+    async def check(self, client: core.client.Client, model: core.model.Model) -> bool:
         """Delegate to :func:`anthropic.check.check`."""
         from . import check as check_
 
@@ -75,8 +67,8 @@ class _Anthropic:
         model_id: str,
         *,
         client: core.client.Client | None = None,
-    ) -> core.model.Model[AnthropicParams]:
-        return core.model.Model[AnthropicParams](
+    ) -> core.model.Model:
+        return core.model.Model(
             id=model_id,
             adapter=self.adapter,
             provider=self,

@@ -20,7 +20,7 @@ from . import sdk
 _FAIL_STATUSES = frozenset({401, 403})
 
 
-async def check(client: core.client.Client, model: core.model.Model[Any]) -> bool:
+async def check(client: core.client.Client, model: core.model.Model) -> bool:
     """Return ``True`` if *client* can reach the gateway and *model* exists."""
     gateway = sdk.GatewayClient(client, model)
 

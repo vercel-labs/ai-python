@@ -443,7 +443,7 @@ def _result_block_content(block: Any) -> Any:
 
 async def stream(
     client: core.client.Client,
-    model: core.model.Model[Any],
+    model: core.model.Model,
     messages: list[types.messages.Message],
     *,
     tools: Sequence[types.tools.Tool] | None = None,

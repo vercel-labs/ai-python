@@ -5,10 +5,8 @@ Defines the callable :data:`openai` provider, which satisfies the
 
 import os
 from types import ModuleType
-from typing import Any
 
 from .. import core
-from .params import OpenAIChatParams
 
 _BASE_URL = "https://api.openai.com/v1"
 _BASE_URL_ENV = "OPENAI_BASE_URL"
@@ -38,10 +36,6 @@ class _OpenAI:
         return "openai"
 
     @property
-    def params_type(self) -> type[OpenAIChatParams]:
-        return OpenAIChatParams
-
-    @property
     def tools(self) -> ModuleType:
         """The provider's built-in tool factories.
 
@@ -64,9 +58,7 @@ class _OpenAI:
             api_key=os.environ.get(_API_KEY_ENV),
         )
 
-    async def check(
-        self, client: core.client.Client, model: core.model.Model[Any]
-    ) -> bool:
+    async def check(self, client: core.client.Client, model: core.model.Model) -> bool:
         """Delegate to :func:`openai.check.check`."""
         from . import check as check_
 
@@ -77,8 +69,8 @@ class _OpenAI:
         model_id: str,
         *,
         client: core.client.Client | None = None,
-    ) -> core.model.Model[OpenAIChatParams]:
-        return core.model.Model[OpenAIChatParams](
+    ) -> core.model.Model:
+        return core.model.Model(
             id=model_id,
             adapter=self.adapter,
             provider=self,

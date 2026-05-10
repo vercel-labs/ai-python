@@ -1,11 +1,10 @@
 """Streaming across all available adapter"""
 
 import asyncio
-from typing import Any
 
 import ai
 
-MODELS: list[tuple[str, ai.Provider[Any], str]] = [
+MODELS: list[tuple[str, ai.Provider, str]] = [
     ("ai_gateway", ai.ai_gateway, "anthropic/claude-sonnet-4.6"),
     ("anthropic", ai.anthropic, "claude-sonnet-4-6"),
     ("openai", ai.openai, "gpt-5.5"),
@@ -17,7 +16,7 @@ messages = [
 ]
 
 
-async def _run(name: str, provider: ai.Provider[Any], model_id: str) -> None:
+async def _run(name: str, provider: ai.Provider, model_id: str) -> None:
     print(f"\n{name} / {model_id}")
 
     if provider.client().api_key is None:

@@ -6,15 +6,13 @@ exists on the OpenAI API by hitting ``GET /v1/models/{model_id}``.
 This endpoint is free — no tokens or credits are consumed.
 """
 
-from typing import Any
-
 from .. import core
 
 # HTTP status codes that indicate bad auth or a missing model.
 _FAIL_STATUSES = frozenset({401, 403, 404})
 
 
-async def check(client: core.client.Client, model: core.model.Model[Any]) -> bool:
+async def check(client: core.client.Client, model: core.model.Model) -> bool:
     """Return ``True`` if *client* can reach OpenAI and *model* exists."""
     if not client.api_key:
         return False

@@ -2,14 +2,12 @@
 
 import dataclasses
 
-import pydantic
-
 from .client import Client
 from .proto import Provider
 
 
 @dataclasses.dataclass(frozen=True)
-class Model[ProviderParamsT: pydantic.BaseModel]:
+class Model:
     """Lightweight reference to a model on a specific provider.
 
     * ``id`` — identifier sent to the provider (e.g. ``"claude-sonnet-4-6"``).
@@ -20,5 +18,5 @@ class Model[ProviderParamsT: pydantic.BaseModel]:
 
     id: str
     adapter: str
-    provider: Provider[ProviderParamsT]
+    provider: Provider
     client: Client | None = dataclasses.field(default=None, repr=False)

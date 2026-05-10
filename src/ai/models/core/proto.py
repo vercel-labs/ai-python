@@ -15,7 +15,6 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 import pydantic
 
 from ... import types
-from . import params
 
 if TYPE_CHECKING:
     from .client import Client
@@ -23,7 +22,7 @@ if TYPE_CHECKING:
 
 
 @runtime_checkable
-class Provider[ProviderParamsT: pydantic.BaseModel](Protocol):
+class Provider(Protocol):
     """Protocol for model providers.
 
     A provider carries all provider-specific configuration and behaviour:
@@ -55,11 +54,6 @@ class Provider[ProviderParamsT: pydantic.BaseModel](Protocol):
         """Human-readable provider name (for repr, error messages)."""
         ...
 
-    @property
-    def params_type(self) -> params.StreamParamsType[ProviderParamsT]:
-        """Request-scoped stream params type accepted by this provider."""
-        ...
-
     def client(self) -> Client:
         """Create a :class:`Client` from the provider's default config.
 
@@ -68,7 +62,7 @@ class Provider[ProviderParamsT: pydantic.BaseModel](Protocol):
         """
         ...
 
-    async def check(self, client: Client, model: Model[Any]) -> bool:
+    async def check(self, client: Client, model: Model) -> bool:
         """Check whether *client* can reach this provider and *model* exists.
 
         Returns ``True`` when credentials are valid **and** the model is
@@ -85,7 +79,7 @@ class Provider[ProviderParamsT: pydantic.BaseModel](Protocol):
         model_id: str,
         *,
         client: Client | None = None,
-    ) -> Model[ProviderParamsT]:
+    ) -> Model:
         """Create a :class:`Model` for the given *model_id*."""
         ...
 
@@ -101,7 +95,7 @@ class StreamFn(Protocol):
     def __call__(
         self,
         client: Client,
-        model: Model[Any],
+        model: Model,
         messages: list[types.messages.Message],
         *,
         tools: Sequence[types.tools.Tool] | None = None,
@@ -122,7 +116,7 @@ class GenerateFn(Protocol):
     async def __call__(
         self,
         client: Client,
-        model: Model[Any],
+        model: Model,
         messages: list[types.messages.Message],
         params: Any,
     ) -> types.messages.Message: ...
@@ -147,5 +141,5 @@ class CheckConnFn(Protocol):
     async def __call__(
         self,
         client: Client,
-        model: Model[Any],
+        model: Model,
     ) -> bool: ...

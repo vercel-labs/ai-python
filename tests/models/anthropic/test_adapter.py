@@ -131,6 +131,22 @@ async def test_extra_body_passes_through(monkeypatch: pytest.MonkeyPatch) -> Non
     assert captured["extra_body"] == {"future_option": {"enabled": True}}
 
 
+async def test_invalid_params_rejected_by_adapter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_client(monkeypatch)
+
+    stream = adapter.stream(
+        _TEST_CLIENT,
+        _MODEL,
+        [ai.user_message("Hi")],
+        params={"speed": "fast"},
+    )
+
+    with pytest.raises(TypeError, match="AnthropicParams"):
+        await _drain(stream)
+
+
 async def test_disabled_thinking_is_not_sent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
