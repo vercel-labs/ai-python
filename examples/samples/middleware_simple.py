@@ -26,8 +26,8 @@ class PrintMiddleware(ai.Middleware):
 
     async def wrap_agent_run(
         self,
-        call: ai.middleware.AgentRunContext,
-        next: Callable[[ai.middleware.AgentRunContext], AsyncGenerator[Any]],
+        call: ai.Context,
+        next: Callable[[ai.Context], AsyncGenerator[Any]],
     ) -> AsyncGenerator[Any]:
         print(f">>> [run] agent starting  tools={len(call.tools)}")
         t0 = time.perf_counter()

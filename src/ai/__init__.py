@@ -27,7 +27,7 @@ from .agents import (
     tool_result,
     yield_from,
 )
-from .agents.middleware import AgentRunContext, Middleware
+from .agents.middleware import Middleware
 from .models import (
     Client,
     Executor,
@@ -119,7 +119,6 @@ __all__ = [
     "cancel_hook",
     "TOOL_APPROVAL_HOOK_TYPE",
     # Middleware
-    "AgentRunContext",
     "Middleware",
     "middleware",
     # Submodules

@@ -110,7 +110,7 @@ async def test_wrap_agent_run_ordering() -> None:
 
     class Outer(ai.Middleware):
         async def wrap_agent_run(
-            self, call: middleware.AgentRunContext, next: Any
+            self, call: ai.Context, next: Any
         ) -> AsyncGenerator[ai.events.Event]:
             order.append("outer-before")
             async for event in next(call):
@@ -119,7 +119,7 @@ async def test_wrap_agent_run_ordering() -> None:
 
     class Inner(ai.Middleware):
         async def wrap_agent_run(
-            self, call: middleware.AgentRunContext, next: Any
+            self, call: ai.Context, next: Any
         ) -> AsyncGenerator[ai.events.Event]:
             order.append("inner-before")
             async for event in next(call):

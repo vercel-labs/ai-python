@@ -45,7 +45,7 @@ type StreamResultLike = Any
 if TYPE_CHECKING:
     from ..models.core.model import Model
     from ..types import events as events_
-    from .agent import AgentTool
+    from .agent import Context
 
 
 @dataclasses.dataclass(frozen=True)
@@ -102,19 +102,6 @@ class HookContext:
         object.__setattr__(self, "metadata", dict(self.metadata))
 
 
-@dataclasses.dataclass(frozen=True)
-class AgentRunContext:
-    """Context for an agent run."""
-
-    model: Model[Any]
-    messages: list[messages_.Message]
-    tools: list[AgentTool]
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "messages", list(self.messages))
-        object.__setattr__(self, "tools", list(self.tools))
-
-
 # ---------------------------------------------------------------------------
 # Middleware base class — override the methods you care about.
 # ---------------------------------------------------------------------------
@@ -127,7 +114,7 @@ _Event = Any
 _Message = messages_.Message
 
 # Agent run next-function type: call -> async generator of events.
-_AgentRunNext = Callable[[AgentRunContext], AsyncGenerator[_Event]]
+_AgentRunNext = Callable[["Context"], AsyncGenerator[_Event]]
 
 
 class Middleware:
@@ -138,7 +125,7 @@ class Middleware:
 
     async def wrap_agent_run(
         self,
-        call: AgentRunContext,
+        call: Context,
         next: _AgentRunNext,
     ) -> AsyncGenerator[_Event]:
         """Wrap an agent run.
@@ -354,7 +341,7 @@ def _build_agent_run_chain(
     for m in reversed(mw):
 
         def _make(m: Middleware, nxt: _AgentRunNext) -> _AgentRunNext:
-            async def _wrapped(call: AgentRunContext) -> AsyncGenerator[_Event]:
+            async def _wrapped(call: Context) -> AsyncGenerator[_Event]:
                 async for event in m.wrap_agent_run(call, nxt):
                     yield event
 
@@ -365,7 +352,6 @@ def _build_agent_run_chain(
 
 
 __all__ = [
-    "AgentRunContext",
     "GenerateContext",
     "HookContext",
     "Middleware",

@@ -595,6 +595,55 @@ class LoopFn(Protocol):
     def __call__(self, context: Context) -> AsyncGenerator[events_.AgentEvent]: ...
 
 
+class AgentStream:
+    """Async-iterable wrapper around an agent run's event stream.
+
+    Exposes the run's :class:`Context` via :attr:`context` so callers can
+    inspect (or use) the live messages/tools without threading them
+    through their own bookkeeping::
+
+        async with agent.run(model, messages) as stream:
+            async for event in stream:
+                ...
+            print(stream.context.messages)
+
+    Structurally satisfies the ``AsyncGenerator`` protocol by delegating
+    to the underlying generator, so it can be passed directly to
+    :func:`yield_from` and other APIs that expect an async generator.
+    """
+
+    def __init__(
+        self,
+        gen: AsyncGenerator[events_.AgentEvent],
+        context: Context,
+    ) -> None:
+        self._gen = gen
+        self._context = context
+
+    def __aiter__(self) -> Self:
+        return self
+
+    async def __anext__(self) -> events_.AgentEvent:
+        return await self._gen.__anext__()
+
+    async def asend(self, value: Any) -> events_.AgentEvent:
+        return await self._gen.asend(value)
+
+    async def athrow(self, *args: Any, **kwargs: Any) -> events_.AgentEvent:
+        return await self._gen.athrow(*args, **kwargs)
+
+    async def aclose(self) -> None:
+        await self._gen.aclose()
+
+    @property
+    def context(self) -> Context:
+        return self._context
+
+    @property
+    def messages(self) -> list[types.messages.Message]:
+        return self._context.messages
+
+
 def tool_result(
     *items: types.messages.Message
     | types.messages.ToolResultPart
@@ -746,14 +795,16 @@ class Agent:
         messages: list[types.messages.Message],
         *,
         middleware: list[middleware_.Middleware] | None = None,
-    ) -> AsyncIterator[AsyncGenerator[events_.AgentEvent]]:
+    ) -> AsyncIterator[AgentStream]:
         """Run the agent loop, yielding events to the consumer.
 
-        Used as an async context manager whose value is the event stream::
+        Used as an async context manager whose value the event stream,
+        extended with the `context` and `messages` of the stream::
 
             async with agent.run(model, messages) as stream:
                 async for event in stream:
                     ...
+                print(stream.messages)
 
         Args:
             model: The model to use for LLM calls.
@@ -766,37 +817,29 @@ class Agent:
         ``yield_from(..., label=...)`` — the label flows via
         ``PartialToolCallResult`` rather than on individual messages.
         """
-        call = middleware_.AgentRunContext(
+        context = Context(
             model=model,
-            messages=messages,
-            tools=self._tools,
+            messages=list(messages),
+            tools=[t.tool for t in self._tools],
         )
+        context._agent_tools_by_name = {t.name: t for t in self._tools}
+        # If the final message is an assistant call with tool
+        # calls, then probably the situation is that we bailed out
+        # earlier due to unresolved hooks, and we need to arrange
+        # to replay the message now.
+        if (
+            context.messages
+            and context.messages[-1].role == "assistant"
+            and context.messages[-1].tool_calls
+        ):
+            context.messages[-1] = context.messages[-1].model_copy(
+                update={"replay": True}
+            )
 
         loop_fn = self._loop_fn or self.default_loop
 
-        async def _real(
-            call: middleware_.AgentRunContext,
-        ) -> AsyncGenerator[events_.AgentEvent]:
-            context = Context(
-                model=call.model,
-                messages=list(call.messages),
-                tools=[tool.tool for tool in call.tools],
-            )
-            context._agent_tools_by_name = {tool.name: tool for tool in call.tools}
-            # If the final message is an assistant call with tool
-            # calls, then probably the situation is that we bailed out
-            # earlier due to unresolved hooks, and we need to arrange
-            # to replay the message now.
-            if (
-                context.messages
-                and context.messages[-1].role == "assistant"
-                and context.messages[-1].tool_calls
-            ):
-                context.messages[-1] = context.messages[-1].model_copy(
-                    update={"replay": True}
-                )
-
-            source = loop_fn(context)
+        async def _real(call: Context) -> AsyncGenerator[events_.AgentEvent]:
+            source = loop_fn(call)
             async for event in runtime.run(source):
                 # Drop replay-flagged events: they're a control-flow
                 # signal for the loop's tool dispatcher (which already
@@ -820,13 +863,13 @@ class Agent:
                 mw_token = middleware_.activate(parent + middleware)
             try:
                 chain = middleware_._build_agent_run_chain(_real)
-                async for event in chain(call):
+                async for event in chain(context):
                     yield event
             finally:
                 if mw_token is not None:
                     middleware_.deactivate(mw_token)
 
-        yield _stream()
+        yield AgentStream(_stream(), context)
 
 
 def agent(

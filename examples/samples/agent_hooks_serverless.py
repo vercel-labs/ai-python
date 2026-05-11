@@ -95,11 +95,6 @@ async def main() -> None:
 
     async with my_agent.run(model, messages) as stream:
         async for event in stream:
-            # HACK?: When we get a complete assistant message, add it to
-            # messages so it can get replayed easily.
-            if isinstance(event, ai.events.StreamEnd):
-                messages.append(event.message)
-
             if isinstance(event, ai.events.TextDelta):
                 print(event.chunk, end="", flush=True)
             elif (
@@ -112,6 +107,9 @@ async def main() -> None:
                     f"  Hook pending: {hook_part.hook_id} "
                     f"(metadata={hook_part.metadata})"
                 )
+        # Pick up the assistant turn that the loop appended so the
+        # next run replays from the same point.
+        messages = stream.messages
 
     print("\n  Run interrupted; approval will be pre-registered for re-entry.\n")
 
