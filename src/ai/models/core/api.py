@@ -141,6 +141,18 @@ class Stream:
     async def aclose(self) -> None:
         await self._gen.aclose()
 
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: object,
+    ) -> bool:
+        await self.aclose()
+        return False
+
     def __aiter__(self) -> Self:
         return self
 

@@ -1,5 +1,5 @@
 import abc
-from collections.abc import Callable, Sequence
+from collections.abc import AsyncGenerator, Callable, Sequence
 from typing import Annotated, Any, Literal
 
 import pydantic
@@ -181,6 +181,78 @@ DiscriminatedEvent = Annotated[
     Event,
     pydantic.Field(discriminator="kind"),
 ]
+
+
+async def replay_message_events(
+    msg: messages.Message,
+) -> AsyncGenerator[Event]:
+    """Synthesize the events ``ai.models.stream`` would have emitted for ``msg``.
+
+    Use when you have a complete ``Message`` from a non-streaming source —
+    e.g., the result of a Temporal activity, a cached LLM response, or an
+    offline test fixture — and want to feed it through code that consumes
+    an async event stream (``ai.Stream``, ``ai.ToolRunner``, custom loops
+    that mirror the default loop's shape, etc.)::
+
+        async with ai.Stream(ai.events.replay_message_events(msg)) as stream:
+            async with ai.ToolRunner() as tr:
+                async for event in ai.util.merge(stream, tr.events()):
+                    ...
+
+    Each part is emitted as the start/delta/end triple a streaming adapter
+    would have produced, in part order, bracketed by ``StreamStart`` and
+    ``StreamEnd``. The full body of text/reasoning/tool-args is sent as a
+    single delta — the granularity of the model's original chunking is
+    not recoverable from a complete message.
+
+    Parts with no model-layer event analog — ``ToolResultPart``,
+    ``HookPart``, ``StructuredOutputPart`` — are skipped silently; they
+    are agent-layer concerns and never appear on the model stream.
+    """
+    yield StreamStart()
+    for part in msg.parts:
+        if isinstance(part, messages.TextPart):
+            yield TextStart(block_id=part.id)
+            if part.text:
+                yield TextDelta(block_id=part.id, chunk=part.text)
+            yield TextEnd(block_id=part.id)
+        elif isinstance(part, messages.ReasoningPart):
+            yield ReasoningStart(block_id=part.id)
+            if part.text:
+                yield ReasoningDelta(block_id=part.id, chunk=part.text)
+            yield ReasoningEnd(block_id=part.id)
+        elif isinstance(part, messages.ToolCallPart):
+            yield ToolStart(
+                tool_call_id=part.tool_call_id,
+                tool_name=part.tool_name,
+            )
+            if part.tool_args:
+                yield ToolDelta(
+                    tool_call_id=part.tool_call_id,
+                    chunk=part.tool_args,
+                )
+            yield ToolEnd(tool_call_id=part.tool_call_id, tool_call=part)
+        elif isinstance(part, messages.BuiltinToolCallPart):
+            yield BuiltinToolStart(
+                tool_call_id=part.tool_call_id,
+                tool_name=part.tool_name,
+            )
+            if part.tool_args:
+                yield BuiltinToolDelta(
+                    tool_call_id=part.tool_call_id,
+                    chunk=part.tool_args,
+                )
+            yield BuiltinToolEnd(tool_call_id=part.tool_call_id, tool_call=part)
+        elif isinstance(part, messages.BuiltinToolReturnPart):
+            yield BuiltinToolResult(tool_call_id=part.tool_call_id, result=part)
+        elif isinstance(part, messages.FilePart):
+            yield FileEvent(
+                block_id=part.id,
+                data=part.data,
+                media_type=part.media_type,
+                filename=part.filename,
+            )
+    yield StreamEnd()
 
 
 # ---------------------------------------------------------------------------
