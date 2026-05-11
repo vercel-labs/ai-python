@@ -1,4 +1,4 @@
-"""Integration tests for the AI Gateway v3 video generation adapter.
+"""Integration tests for the AI Gateway v4 video generation adapter.
 
 Every test exercises the real ``generate()`` function with a ``Client``
 wired to an ``httpx.MockTransport``, so the full production code path
@@ -173,7 +173,7 @@ class TestRequest:
         )
 
         assert captured["authorization"] == "Bearer sk-test"
-        assert captured["ai-video-model-specification-version"] == "3"
+        assert captured["ai-video-model-specification-version"] == "4"
         assert captured["ai-model-id"] == "google/veo-3.0-generate-001"
         assert captured["accept"] == "text/event-stream"
         assert captured["ai-gateway-auth-method"] == "api-key"
@@ -262,7 +262,7 @@ class TestRequest:
             [user_msg("test")],
             params=VideoParams(),
         )
-        assert captured_url[0] == "https://gw.test/v3/ai/video-model"
+        assert captured_url[0] == "https://gw.test/v4/ai/video-model"
 
 
 # ---------------------------------------------------------------------------

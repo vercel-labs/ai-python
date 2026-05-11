@@ -1,4 +1,4 @@
-"""Integration tests for the AI Gateway v3 streaming adapter.
+"""Integration tests for the AI Gateway v4 streaming adapter.
 
 Every test exercises the real ``stream()`` function with a ``Client``
 wired to an ``httpx.MockTransport``, so the full production code path
@@ -23,7 +23,14 @@ import pytest
 
 import ai
 from ai import models
-from ai.models.ai_gateway import adapter, ai_gateway, errors
+from ai.models.ai_gateway import (
+    GatewayFunctionToolArgs,
+    LanguageParams,
+    NamedToolChoice,
+    adapter,
+    ai_gateway,
+    errors,
+)
 from ai.models.core import model as model_
 from ai.types import events, messages
 
@@ -294,7 +301,7 @@ class TestRequest:
 
         assert captured["authorization"] == "Bearer sk-test"
         assert captured["ai-gateway-protocol-version"] == "0.0.1"
-        assert captured["ai-language-model-specification-version"] == "3"
+        assert captured["ai-language-model-specification-version"] == "4"
         assert captured["ai-language-model-id"] == "anthropic/claude-sonnet-4"
         assert captured["ai-language-model-streaming"] == "true"
         assert captured["ai-gateway-auth-method"] == "api-key"
@@ -369,6 +376,53 @@ class TestRequest:
         }
         assert captured_body["futureGatewayField"] is True
 
+    async def test_gateway_language_params_serialize_body_and_headers(self) -> None:
+        captured_body: dict[str, Any] = {}
+        captured_headers: dict[str, str] = {}
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            captured_body.update(json.loads(req.content))
+            captured_headers.update(dict(req.headers))
+            return httpx.Response(
+                200,
+                text=sse({"type": "finish", "finishReason": "stop", "usage": {}}),
+            )
+
+        client = mock_client(httpx.MockTransport(handler))
+        model = ai_gateway("anthropic/claude-sonnet-4", client=client)
+        stream = models.stream(
+            model,
+            [user_msg("Hi")],
+            params=LanguageParams(
+                max_output_tokens=128,
+                stop_sequences=["END"],
+                response_format={"type": "text"},
+                reasoning="high",
+                tool_choice=NamedToolChoice(tool_name="lookup"),
+                include_raw_chunks=True,
+                headers={"x-gateway-test": "yes", "x-dropped": None},
+                provider_options={"gateway": {"order": ["anthropic"]}},
+            ),
+        )
+        async for _ in stream:
+            pass
+
+        assert captured_body["maxOutputTokens"] == 128
+        assert captured_body["stopSequences"] == ["END"]
+        assert captured_body["responseFormat"] == {"type": "text"}
+        assert captured_body["reasoning"] == "high"
+        assert captured_body["toolChoice"] == {
+            "type": "tool",
+            "toolName": "lookup",
+        }
+        assert captured_body["includeRawChunks"] is True
+        assert captured_body["providerOptions"] == {
+            "gateway": {"order": ["anthropic"]}
+        }
+        assert "headers" not in captured_body
+        assert captured_headers["x-gateway-test"] == "yes"
+        assert "x-dropped" not in captured_headers
+
     async def test_gateway_rejects_non_dict_params(self) -> None:
         def handler(req: httpx.Request) -> httpx.Response:
             raise AssertionError("request should not be sent")
@@ -383,6 +437,22 @@ class TestRequest:
             ) as stream:
                 async for _ in stream:
                     pass
+
+    async def test_gateway_rejects_non_dict_param_headers(self) -> None:
+        def handler(req: httpx.Request) -> httpx.Response:
+            raise AssertionError("request should not be sent")
+
+        client = mock_client(httpx.MockTransport(handler))
+        model = ai_gateway("openai/gpt-5.4", client=client)
+        stream = models.stream(
+            model,
+            [user_msg("Hi")],
+            params={"headers": ["x-not-valid"]},
+        )
+
+        with pytest.raises(TypeError, match="headers"):
+            async for _ in stream:
+                pass
 
     async def test_real_tool_in_request_body(self) -> None:
         """A real ``@tool``-decorated function must appear correctly
@@ -414,9 +484,46 @@ class TestRequest:
         assert td["type"] == "function"
         assert "query" in td["inputSchema"]["properties"]
 
+    async def test_gateway_function_tool_args_extensions(self) -> None:
+        captured_body: dict[str, Any] = {}
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            captured_body.update(json.loads(req.content))
+            return httpx.Response(
+                200,
+                text=sse({"type": "finish", "finishReason": "stop", "usage": {}}),
+            )
+
+        tool = ai.tools.Tool(
+            kind="function",
+            name="lookup",
+            args=GatewayFunctionToolArgs(
+                description="Search the database.",
+                params={
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}},
+                    "required": ["query"],
+                },
+                input_examples=[{"input": {"query": "weather"}}],
+                strict=True,
+                provider_options={"gateway": {"cache": "read-through"}},
+            ),
+        )
+
+        await _collect(
+            mock_client(httpx.MockTransport(handler)),
+            [user_msg("find something")],
+            tools=[tool],
+        )
+
+        td = captured_body["tools"][0]
+        assert td["inputExamples"] == [{"input": {"query": "weather"}}]
+        assert td["strict"] is True
+        assert td["providerOptions"] == {"gateway": {"cache": "read-through"}}
+
     async def test_multi_turn_request_body(self) -> None:
         """A multi-turn conversation including a tool result must
-        serialize correctly into the v3 prompt format."""
+        serialize correctly into the v4 prompt format."""
         captured_body: dict[str, Any] = {}
 
         def handler(req: httpx.Request) -> httpx.Response:
@@ -456,7 +563,7 @@ class TestRequest:
         assert prompt[3]["role"] == "user"
 
     async def test_multi_turn_round_trip_builtin_parts(self) -> None:
-        """``BuiltinToolCallPart``/``BuiltinToolReturnPart`` serialize as v3
+        """``BuiltinToolCallPart``/``BuiltinToolReturnPart`` serialize as v4
         ``tool-call``/``tool-result`` blocks tagged ``providerExecuted: true``."""
         captured_body: dict[str, Any] = {}
 

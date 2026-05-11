@@ -1,4 +1,4 @@
-"""AI Gateway v3 adapter.
+"""AI Gateway v4 adapter.
 
 Converts internal messages to AI Gateway wire payloads and maps gateway
 responses back to public event/message types."""
@@ -16,6 +16,7 @@ from .. import core
 from ..anthropic import tools as anthropic_tools
 from ..openai import tools as openai_tools
 from . import errors, sdk
+from . import params as gateway_params
 from . import tools as gateway_tools
 
 # ---------------------------------------------------------------------------
@@ -62,21 +63,26 @@ def _file_part_to_wire(part: types.messages.FilePart) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Streaming request building — Message list → v3 prompt
+# Streaming request building — Message list → v4 prompt
 # ---------------------------------------------------------------------------
 
 
-async def _file_part_to_v3(part: types.messages.FilePart) -> dict[str, Any]:
-    """Convert a :class:`FilePart` to a v3 ``file`` content part."""
+async def _file_part_to_v4(part: types.messages.FilePart) -> dict[str, Any]:
+    """Convert a :class:`FilePart` to a v4 ``file`` content part."""
     data = part.data
-    if isinstance(data, str) and types.media.is_downloadable_url(data):
-        downloaded, _ = await core.helpers.files.download(data)
-        data = downloaded
+
+    if isinstance(data, str) and types.media.is_url(data):
+        file_data = {"type": "url", "url": data}
+    else:
+        file_data = {
+            "type": "url",
+            "url": types.media.data_to_data_url(data, part.media_type),
+        }
 
     entry: dict[str, Any] = {
         "type": "file",
         "mediaType": part.media_type,
-        "data": types.media.data_to_data_url(data, part.media_type),
+        "data": file_data,
     }
     if part.filename is not None:
         entry["filename"] = part.filename
@@ -86,7 +92,7 @@ async def _file_part_to_v3(part: types.messages.FilePart) -> dict[str, Any]:
 async def _messages_to_prompt(
     messages: list[types.messages.Message],
 ) -> list[dict[str, Any]]:
-    """Convert ``Message`` list to the v3 prompt wire format."""
+    """Convert ``Message`` list to the v4 prompt wire format."""
     result: list[dict[str, Any]] = []
 
     for msg in messages:
@@ -103,7 +109,7 @@ async def _messages_to_prompt(
                     if isinstance(p, types.messages.TextPart):
                         content.append({"type": "text", "text": p.text})
                     elif isinstance(p, types.messages.FilePart):
-                        content.append(await _file_part_to_v3(p))
+                        content.append(await _file_part_to_v4(p))
                 result.append({"role": "user", "content": content})
 
             case "assistant":
@@ -187,8 +193,8 @@ async def _messages_to_prompt(
     return result
 
 
-def _tool_to_v3(tool: types.tools.Tool) -> dict[str, Any]:
-    """Convert a tool schema blob to the v3 wire format."""
+def _tool_to_v4(tool: types.tools.Tool) -> dict[str, Any]:
+    """Convert a tool schema blob to the v4 wire format."""
     if tool.kind == "provider":
         return {
             "type": "provider",
@@ -203,12 +209,20 @@ def _tool_to_v3(tool: types.tools.Tool) -> dict[str, Any]:
     args = tool.args
     if not isinstance(args, types.tools.FunctionToolArgs):
         raise TypeError(f"function tool {tool.name!r} has invalid args")
-    return {
+    result: dict[str, Any] = {
         "type": "function",
         "name": tool.name,
         "description": args.description or "",
         "inputSchema": args.params,
     }
+    if isinstance(args, gateway_params.GatewayFunctionToolArgs):
+        if args.input_examples is not None:
+            result["inputExamples"] = args.input_examples
+        if args.strict is not None:
+            result["strict"] = args.strict
+        if args.provider_options is not None:
+            result["providerOptions"] = args.provider_options
+    return result
 
 
 def _provider_tool_id(tool: types.tools.Tool) -> str:
@@ -235,12 +249,12 @@ async def _build_request_body(
     output_type: type[Any] | None = None,
     params: Any = None,
 ) -> dict[str, Any]:
-    """Build the ``LanguageModelV3CallOptions`` request body."""
+    """Build the ``LanguageModelV4CallOptions`` request body."""
     stream_params = _coerce_params(params)
     body: dict[str, Any] = dict(stream_params)
     body["prompt"] = await _messages_to_prompt(messages)
     if tools:
-        body["tools"] = [_tool_to_v3(tool) for tool in tools]
+        body["tools"] = [_tool_to_v4(tool) for tool in tools]
     if output_type is not None and issubclass(output_type, pydantic.BaseModel):
         body["responseFormat"] = {
             "type": "json",
@@ -253,19 +267,64 @@ async def _build_request_body(
 def _coerce_params(value: Any) -> dict[str, Any]:
     if value is None:
         return {}
+    if isinstance(value, gateway_params.LanguageParams):
+        return value.model_dump(
+            mode="json",
+            by_alias=True,
+            exclude_none=True,
+            exclude={"headers"},
+        )
     if isinstance(value, Mapping):
-        return dict(value)
-    raise TypeError("ai-gateway stream params must be a dict")
+        body = dict(value)
+        body.pop("headers", None)
+        return body
+    raise TypeError("ai-gateway stream params must be a dict or LanguageParams")
+
+
+def _coerce_headers(value: Any) -> dict[str, str] | None:
+    if value is None:
+        return None
+    if isinstance(value, gateway_params.LanguageParams):
+        raw_headers = value.headers
+    elif isinstance(value, Mapping):
+        raw_headers = value.get("headers")
+    else:
+        raise TypeError("ai-gateway stream params must be a dict or LanguageParams")
+
+    if raw_headers is None:
+        return None
+    if not isinstance(raw_headers, Mapping):
+        raise TypeError("ai-gateway stream params headers must be a dict")
+    headers = {str(k): str(v) for k, v in raw_headers.items() if v is not None}
+    return headers or None
 
 
 # ---------------------------------------------------------------------------
-# Streaming response parsing — v3 stream parts → public Event
+# Streaming response parsing — v4 stream parts → public Event
 # ---------------------------------------------------------------------------
 
 
 def _is_provider_executed(data: dict[str, Any]) -> bool:
-    """Whether a v3 tool part marks itself as provider-executed."""
+    """Whether a v4 tool part marks itself as provider-executed."""
     return bool(data.get("providerExecuted") or data.get("provider_executed"))
+
+
+def _provider_metadata(data: dict[str, Any]) -> dict[str, Any] | None:
+    metadata = data.get("providerMetadata") or data.get("provider_metadata")
+    return metadata if isinstance(metadata, dict) else None
+
+
+def _file_data_to_framework(data: Any) -> str | bytes:
+    if isinstance(data, dict):
+        match data.get("type"):
+            case "data" | "base64":
+                value = data.get("data", "")
+                return value if isinstance(value, (str, bytes)) else str(value)
+            case "url":
+                return str(data.get("url", ""))
+            case _:
+                return ""
+    return data if isinstance(data, (str, bytes)) else str(data)
 
 
 def _expand_tool_call(
@@ -282,14 +341,23 @@ def _expand_tool_call(
         return []
     if provider_executed_ids is None:
         provider_executed_ids = set()
+    provider_metadata = _provider_metadata(data)
     tool_name = data.get("toolName", "")
     tool_input = data.get("input", "")
     args_str = tool_input if isinstance(tool_input, str) else json.dumps(tool_input)
     if _is_provider_executed(data) or tc_id in provider_executed_ids:
         provider_executed_ids.add(tc_id)
         return [
-            types.events.BuiltinToolStart(tool_call_id=tc_id, tool_name=tool_name),
-            types.events.BuiltinToolDelta(tool_call_id=tc_id, chunk=args_str),
+            types.events.BuiltinToolStart(
+                tool_call_id=tc_id,
+                tool_name=tool_name,
+                provider_metadata=provider_metadata,
+            ),
+            types.events.BuiltinToolDelta(
+                tool_call_id=tc_id,
+                chunk=args_str,
+                provider_metadata=provider_metadata,
+            ),
             types.events.BuiltinToolEnd(
                 tool_call_id=tc_id,
                 tool_call=types.messages.BuiltinToolCallPart(
@@ -297,19 +365,30 @@ def _expand_tool_call(
                     tool_name=tool_name,
                     tool_args=args_str,
                 ),
+                provider_metadata=provider_metadata,
             ),
         ]
     return [
-        types.events.ToolStart(tool_call_id=tc_id, tool_name=tool_name),
-        types.events.ToolDelta(tool_call_id=tc_id, chunk=args_str),
+        types.events.ToolStart(
+            tool_call_id=tc_id,
+            tool_name=tool_name,
+            provider_metadata=provider_metadata,
+        ),
+        types.events.ToolDelta(
+            tool_call_id=tc_id,
+            chunk=args_str,
+            provider_metadata=provider_metadata,
+        ),
         types.events.ToolEnd(
-            tool_call_id=tc_id, tool_call=types.messages.DUMMY_TOOL_CALL
+            tool_call_id=tc_id,
+            tool_call=types.messages.DUMMY_TOOL_CALL,
+            provider_metadata=provider_metadata,
         ),
     ]
 
 
 def _parse_usage(data: Any) -> types.usage.Usage:
-    """Parse v3 usage data into an internal ``Usage``."""
+    """Parse gateway usage data into an internal ``Usage``."""
     if not isinstance(data, dict):
         return types.usage.Usage()
 
@@ -340,37 +419,60 @@ def _parse_stream_part(
     streamed_tool_ids: set[str],
     provider_executed_ids: set[str] | None = None,
 ) -> list[types.events.Event]:
-    """Convert a ``LanguageModelV3StreamPart`` to public events."""
+    """Convert supported ``LanguageModelV4StreamPart`` values to public events."""
     if provider_executed_ids is None:
         provider_executed_ids = set()
+    provider_metadata = _provider_metadata(data)
     match data.get("type", ""):
         case "text-start":
-            return [types.events.TextStart(block_id=data.get("id", "text"))]
+            return [
+                types.events.TextStart(
+                    block_id=data.get("id", "text"),
+                    provider_metadata=provider_metadata,
+                )
+            ]
 
         case "text-delta":
             return [
                 types.events.TextDelta(
                     block_id=data.get("id", "text"),
                     chunk=data.get("textDelta", data.get("delta", "")),
+                    provider_metadata=provider_metadata,
                 )
             ]
 
         case "text-end":
-            return [types.events.TextEnd(block_id=data.get("id", "text"))]
+            return [
+                types.events.TextEnd(
+                    block_id=data.get("id", "text"),
+                    provider_metadata=provider_metadata,
+                )
+            ]
 
         case "reasoning-start":
-            return [types.events.ReasoningStart(block_id=data.get("id", "reasoning"))]
+            return [
+                types.events.ReasoningStart(
+                    block_id=data.get("id", "reasoning"),
+                    provider_metadata=provider_metadata,
+                )
+            ]
 
         case "reasoning-delta":
             return [
                 types.events.ReasoningDelta(
                     block_id=data.get("id", "reasoning"),
                     chunk=data.get("delta", ""),
+                    provider_metadata=provider_metadata,
                 )
             ]
 
         case "reasoning-end":
-            return [types.events.ReasoningEnd(block_id=data.get("id", "reasoning"))]
+            return [
+                types.events.ReasoningEnd(
+                    block_id=data.get("id", "reasoning"),
+                    provider_metadata=provider_metadata,
+                )
+            ]
 
         case "tool-input-start":
             tcid = data.get("id", "")
@@ -381,12 +483,14 @@ def _parse_stream_part(
                     types.events.BuiltinToolStart(
                         tool_call_id=tcid,
                         tool_name=data.get("toolName", ""),
+                        provider_metadata=provider_metadata,
                     )
                 ]
             return [
                 types.events.ToolStart(
                     tool_call_id=tcid,
                     tool_name=data.get("toolName", ""),
+                    provider_metadata=provider_metadata,
                 )
             ]
 
@@ -397,12 +501,14 @@ def _parse_stream_part(
                     types.events.BuiltinToolDelta(
                         tool_call_id=tcid,
                         chunk=data.get("delta", ""),
+                        provider_metadata=provider_metadata,
                     )
                 ]
             return [
                 types.events.ToolDelta(
                     tool_call_id=tcid,
                     chunk=data.get("delta", ""),
+                    provider_metadata=provider_metadata,
                 )
             ]
 
@@ -416,12 +522,14 @@ def _parse_stream_part(
                             tool_call_id=tcid,
                             tool_name="",
                         ),
+                        provider_metadata=provider_metadata,
                     )
                 ]
             return [
                 types.events.ToolEnd(
                     tool_call_id=tcid,
                     tool_call=types.messages.DUMMY_TOOL_CALL,
+                    provider_metadata=provider_metadata,
                 )
             ]
 
@@ -444,23 +552,36 @@ def _parse_stream_part(
                             result=output,
                             is_error=is_error,
                         ),
+                        provider_metadata=provider_metadata,
                     )
                 ]
             return []
 
-        case "file":
+        case "file" | "reasoning-file":
             return [
                 types.events.FileEvent(
                     block_id=data.get("id", ""),
                     media_type=data.get("mediaType", "application/octet-stream"),
-                    data=data.get("data", ""),
+                    data=_file_data_to_framework(data.get("data", "")),
+                    provider_metadata=provider_metadata,
                 )
             ]
 
         case "finish":
             usage_data = data.get("usage")
             usage = _parse_usage(usage_data) if usage_data else None
-            return [types.events.StreamEnd(usage=usage)]
+            return [
+                types.events.StreamEnd(
+                    usage=usage,
+                    provider_metadata=provider_metadata,
+                )
+            ]
+
+        case "error":
+            raise errors.GatewayResponseError(
+                message=f"Gateway stream error: {data.get('error')}",
+                response=data,
+            )
 
         case _:
             return []
@@ -475,8 +596,9 @@ async def stream(
     output_type: type[pydantic.BaseModel] | None = None,
     **kwargs: Any,
 ) -> AsyncGenerator[types.events.Event]:
-    """Stream an LLM response through the AI Gateway v3 protocol."""
-    stream_params = _coerce_params(kwargs.get("params"))
+    """Stream an LLM response through the AI Gateway v4 protocol."""
+    stream_params = kwargs.get("params")
+    headers = _coerce_headers(stream_params)
     body = await _build_request_body(
         messages,
         tools=tools,
@@ -491,6 +613,7 @@ async def stream(
             body,
             model_type="language",
             streaming=True,
+            headers=headers,
         ) as response:
             yield types.events.StreamStart()
             streamed_tool_ids: set[str] = set()

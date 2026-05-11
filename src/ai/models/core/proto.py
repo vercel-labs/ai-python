@@ -1,7 +1,7 @@
 """Adapter function protocols.
 
 An *adapter function* translates between our ``Message`` types and a specific
-provider API (e.g. ``"ai-gateway-v3"``, ``"anthropic-messages"``).
+provider API (e.g. ``"ai-gateway-v4"``, ``"anthropic-messages"``).
 
 Adapter functions are plain async generators / coroutines — no base class
 required.  The protocols below exist only for static type-checking.

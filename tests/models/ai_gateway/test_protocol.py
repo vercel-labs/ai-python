@@ -1,4 +1,4 @@
-"""Tests for the v3 protocol serialization and deserialization.
+"""Tests for the v4 protocol serialization and deserialization.
 
 Focus areas:
 - ``_messages_to_prompt``: the critical outgoing translation layer
@@ -13,7 +13,6 @@ end-to-end in ``test_stream.py`` via real HTTP round-trips.
 from __future__ import annotations
 
 import json
-from unittest.mock import AsyncMock, patch
 
 import pydantic
 
@@ -136,8 +135,7 @@ class TestMessagesToPrompt:
         assert tr["output"]["value"] == "Connection timeout"
 
     async def test_user_message_with_image_url(self) -> None:
-        """FilePart with image URL -> downloaded and converted to data: URL."""
-        fake_jpeg = b"\xff\xd8\xff\xe0"
+        """FilePart with image URL -> tagged v4 URL file data."""
         msgs = [
             messages.Message(
                 role="user",
@@ -149,20 +147,18 @@ class TestMessagesToPrompt:
                 ],
             )
         ]
-        with patch(
-            "ai.models.core.helpers.files.download",
-            new_callable=AsyncMock,
-            return_value=(fake_jpeg, "image/jpeg"),
-        ):
-            result = await adapter._messages_to_prompt(msgs)
+        result = await adapter._messages_to_prompt(msgs)
         content = result[0]["content"]
         assert content[0] == {"type": "text", "text": "Look at this"}
         assert content[1]["type"] == "file"
         assert content[1]["mediaType"] == "image/jpeg"
-        assert content[1]["data"].startswith("data:image/jpeg;base64,")
+        assert content[1]["data"] == {
+            "type": "url",
+            "url": "https://example.com/cat.jpg",
+        }
 
     async def test_user_message_with_file_bytes(self) -> None:
-        """FilePart with bytes -> v3 file content part with data URL."""
+        """FilePart with bytes -> v4 URL-tagged data URL."""
         msgs = [
             messages.Message(
                 role="user",
@@ -177,7 +173,8 @@ class TestMessagesToPrompt:
         part = result[0]["content"][0]
         assert part["type"] == "file"
         assert part["mediaType"] == "image/png"
-        assert part["data"].startswith("data:image/png;base64,")
+        assert part["data"]["type"] == "url"
+        assert part["data"]["url"].startswith("data:image/png;base64,")
         assert part["filename"] == "pic.png"
 
     async def test_pending_tool_call_no_tool_message(self) -> None:
@@ -291,7 +288,7 @@ class TestParseStreamPartComplex:
         assert done.usage.input_tokens == 10
         assert done.usage.output_tokens == 20
 
-    def test_finish_v3_nested_usage(self) -> None:
+    def test_finish_nested_usage(self) -> None:
         events = adapter._parse_stream_part(
             {
                 "type": "finish",
@@ -337,6 +334,34 @@ class TestParseStreamPartComplex:
         assert events[0].media_type == "image/png"
         assert events[0].data == "iVBORw0KGgo="
 
+    def test_v4_tagged_file_part(self) -> None:
+        events = adapter._parse_stream_part(
+            {
+                "type": "file",
+                "id": "f1",
+                "mediaType": "image/png",
+                "data": {"type": "data", "data": "iVBORw0KGgo="},
+            },
+            set(),
+        )
+        assert len(events) == 1
+        assert isinstance(events[0], events_.FileEvent)
+        assert events[0].data == "iVBORw0KGgo="
+
+    def test_v4_url_file_part(self) -> None:
+        events = adapter._parse_stream_part(
+            {
+                "type": "file",
+                "id": "f1",
+                "mediaType": "image/png",
+                "data": {"type": "url", "url": "https://example.com/img.png"},
+            },
+            set(),
+        )
+        assert len(events) == 1
+        assert isinstance(events[0], events_.FileEvent)
+        assert events[0].data == "https://example.com/img.png"
+
     def test_file_part_defaults(self) -> None:
         """A minimal ``file`` part uses sensible defaults."""
         events = adapter._parse_stream_part({"type": "file", "data": "somedata"}, set())
@@ -360,7 +385,7 @@ class TestParseUsage:
         assert usage.input_tokens == 10
         assert usage.output_tokens == 20
 
-    def test_v3_nested_format(self) -> None:
+    def test_nested_format(self) -> None:
         usage = adapter._parse_usage(
             {
                 "inputTokens": {

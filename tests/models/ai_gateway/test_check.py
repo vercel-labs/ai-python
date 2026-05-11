@@ -27,7 +27,7 @@ def _gateway_client(
             return httpx.Response(credits_status, content=credits_body.encode())
         return httpx.Response(config_status, content=config_bytes)
 
-    client = client_.Client(base_url="https://gateway.test/v3/ai", api_key=api_key)
+    client = client_.Client(base_url="https://gateway.test/v4/ai", api_key=api_key)
     client._http = httpx.AsyncClient(transport=httpx.MockTransport(_handler))
     return client
 

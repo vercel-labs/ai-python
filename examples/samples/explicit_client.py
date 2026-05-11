@@ -7,7 +7,7 @@ import ai
 
 # Explicit client — useful for custom auth, proxies, or self-hosted gateways.
 client = ai.Client(
-    base_url="https://ai-gateway.vercel.sh/v3/ai",
+    base_url="https://ai-gateway.vercel.sh/v4/ai",
     api_key=os.environ["AI_GATEWAY_API_KEY"],
     headers={"X-Custom-Header": "example"},
 )

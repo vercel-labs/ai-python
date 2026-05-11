@@ -9,7 +9,7 @@ from typing import Any
 
 from .. import core
 
-_BASE_URL = "https://ai-gateway.vercel.sh/v3/ai"
+_BASE_URL = "https://ai-gateway.vercel.sh/v4/ai"
 _API_KEY_ENV = "AI_GATEWAY_API_KEY"
 
 
@@ -29,7 +29,7 @@ class _AIGateway:
 
     @property
     def adapter(self) -> str:
-        return "ai-gateway-v3"
+        return "ai-gateway-v4"
 
     @property
     def name(self) -> str:

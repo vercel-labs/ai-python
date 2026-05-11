@@ -1,7 +1,7 @@
 """Tests for the AI Gateway built-in tool surface.
 
 The gateway adapter accepts native ``anthropic.tools.*``, ``openai.tools.*``,
-and ``ai_gateway.tools.*`` instances and serializes them as v3 ``provider``
+and ``ai_gateway.tools.*`` instances and serializes them as v4 ``provider``
 blocks of the shape ``{type, id, name, args}`` with camelCase ``args`` keys.
 """
 

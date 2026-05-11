@@ -1,4 +1,4 @@
-"""AI Gateway v3 HTTP API"""
+"""AI Gateway v4 HTTP API"""
 
 import json
 from collections.abc import AsyncGenerator, AsyncIterator
@@ -12,8 +12,9 @@ from .. import core
 from . import errors
 
 _PROTOCOL_VERSION = "0.0.1"
+_MODEL_SPECIFICATION_VERSION = "4"
 
-ModelType = Literal["language", "image", "video"]
+ModelType = Literal["language", "image", "video", "embedding", "reranking"]
 
 
 class GatewayClient:
@@ -61,14 +62,30 @@ class GatewayClient:
         }
 
         if model_type == "language":
-            headers["ai-language-model-specification-version"] = "3"
+            headers["ai-language-model-specification-version"] = (
+                _MODEL_SPECIFICATION_VERSION
+            )
             headers["ai-language-model-id"] = self._model.id
             headers["ai-language-model-streaming"] = str(streaming).lower()
         elif model_type == "image":
-            headers["ai-image-model-specification-version"] = "3"
+            headers["ai-image-model-specification-version"] = (
+                _MODEL_SPECIFICATION_VERSION
+            )
             headers["ai-model-id"] = self._model.id
         elif model_type == "video":
-            headers["ai-video-model-specification-version"] = "3"
+            headers["ai-video-model-specification-version"] = (
+                _MODEL_SPECIFICATION_VERSION
+            )
+            headers["ai-model-id"] = self._model.id
+        elif model_type == "embedding":
+            headers["ai-embedding-model-specification-version"] = (
+                _MODEL_SPECIFICATION_VERSION
+            )
+            headers["ai-model-id"] = self._model.id
+        elif model_type == "reranking":
+            headers["ai-reranking-model-specification-version"] = (
+                _MODEL_SPECIFICATION_VERSION
+            )
             headers["ai-model-id"] = self._model.id
 
         if accept is not None:

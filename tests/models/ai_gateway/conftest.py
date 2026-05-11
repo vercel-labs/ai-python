@@ -20,7 +20,7 @@ def mock_client(
     handler: httpx.MockTransport, *, api_key: str = "test-key"
 ) -> client_.Client:
     """Create a Client wired to a mock transport."""
-    c = client_.Client(base_url="https://gw.test/v3/ai", api_key=api_key)
+    c = client_.Client(base_url="https://gw.test/v4/ai", api_key=api_key)
     c._http = httpx.AsyncClient(transport=handler)
     return c
 

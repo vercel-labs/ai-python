@@ -23,7 +23,7 @@ async def test_list_gets_config_with_gateway_headers_and_sorts_ids() -> None:
             },
         )
 
-    client = client_.Client(base_url="https://gateway.test/v3/ai", api_key="sk-test")
+    client = client_.Client(base_url="https://gateway.test/v4/ai", api_key="sk-test")
     client._http = httpx.AsyncClient(transport=httpx.MockTransport(_handler))
 
     try:
@@ -31,7 +31,7 @@ async def test_list_gets_config_with_gateway_headers_and_sorts_ids() -> None:
     finally:
         await client.aclose()
 
-    assert captured_urls == ["https://gateway.test/v3/ai/config"]
+    assert captured_urls == ["https://gateway.test/v4/ai/config"]
     assert captured_headers["authorization"] == "Bearer sk-test"
     assert captured_headers["ai-gateway-protocol-version"] == "0.0.1"
     assert ids == ["anthropic/claude-a", "openai/gpt-z"]

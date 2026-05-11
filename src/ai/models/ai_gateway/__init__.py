@@ -30,12 +30,27 @@ not pull in ``httpx`` and other I/O libraries at import time.  This matters
 for sandboxed runtimes (e.g. Temporal workflow workers).
 """
 
-from . import errors, tools
+from . import errors, params, tools
+from .params import (
+    AutoToolChoice,
+    GatewayFunctionToolArgs,
+    LanguageParams,
+    NamedToolChoice,
+    NoneToolChoice,
+    RequiredToolChoice,
+)
 from .provider import ai_gateway
 
 __all__ = [
+    "GatewayFunctionToolArgs",
+    "LanguageParams",
+    "AutoToolChoice",
+    "NamedToolChoice",
+    "NoneToolChoice",
+    "RequiredToolChoice",
     "ai_gateway",
     "errors",
+    "params",
     "tools",
 ]
 

@@ -1,4 +1,4 @@
-"""Integration tests for the AI Gateway v3 image generation adapter.
+"""Integration tests for the AI Gateway v4 image generation adapter.
 
 Every test exercises the real ``generate()`` function with a ``Client``
 wired to an ``httpx.MockTransport``, so the full production code path
@@ -126,7 +126,7 @@ class TestRequest:
         await generate(client, model, [user_msg("Hi")], ImageParams())
 
         assert captured["authorization"] == "Bearer sk-test"
-        assert captured["ai-image-model-specification-version"] == "3"
+        assert captured["ai-image-model-specification-version"] == "4"
         assert captured["ai-model-id"] == "openai/gpt-image-1"
         assert captured["ai-gateway-auth-method"] == "api-key"
 
@@ -178,7 +178,7 @@ class TestRequest:
         client = mock_client(httpx.MockTransport(handler))
         await generate(client, _IMAGE_MODEL, [user_msg("test")], ImageParams())
 
-        assert captured_url[0] == "https://gw.test/v3/ai/image-model"
+        assert captured_url[0] == "https://gw.test/v4/ai/image-model"
 
 
 # ---------------------------------------------------------------------------
