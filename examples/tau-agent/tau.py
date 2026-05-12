@@ -10,7 +10,9 @@ we'll grow real coding capabilities on top of.
 
 from __future__ import annotations
 
+import json
 import os
+from typing import Any
 
 import rich.text
 import textual
@@ -21,6 +23,7 @@ import textual.events
 import textual.message
 import textual.widgets
 import textual.worker
+import tools as tools_
 
 import ai
 
@@ -30,7 +33,14 @@ MODEL_ID = _raw_model if ":" in _raw_model else f"gateway:{_raw_model}"
 SYSTEM_PROMPT = """\
 You are tau, a focused coding assistant running inside a terminal TUI.
 Keep replies concise and use code blocks when showing code.
+
+You have access to the read, write, edit, bash, grep, find, and ls
+tools.  Mutating tools (write, edit, bash) require operator approval.
 """
+
+# How many characters of a tool result to show inline; the full result
+# still goes to the model.
+RESULT_PREVIEW_CHARS = 400
 
 
 # ===========================================================================
@@ -53,22 +63,73 @@ async def chat_loop(app: TauApp) -> None:
         # Pop one queued message into history per turn so the model sees
         # a clean user → assistant → user → … sequence.
         app.messages.append(ai.user_message(app.pending.pop(0)))
-        bubble = app.transcript.add_bubble("assistant")
+        # One assistant bubble per turn for streamed text; tool calls
+        # get their own bubbles below.
+        text_bubble: Bubble | None = None
+        tool_bubbles: dict[str, Bubble] = {}
         try:
             async with app.agent.run(app.model, app.messages) as stream:
                 async for event in stream:
                     if isinstance(event, ai.events.TextDelta):
-                        # Stay glued to the bottom only if we're already
-                        # there — don't yank a scrolled-up reader down.
+                        if text_bubble is None:
+                            text_bubble = app.transcript.add_bubble("assistant")
                         following = app.transcript.at_bottom
-                        bubble.append(event.chunk)
+                        text_bubble.append(event.chunk)
                         if following:
                             app.transcript.scroll_end(animate=False)
+                    elif isinstance(event, ai.events.ToolEnd):
+                        tc = event.tool_call
+                        bubble = app.transcript.add_bubble(
+                            "tool", _format_tool_call(tc.tool_name, tc.tool_args)
+                        )
+                        tool_bubbles[tc.tool_call_id] = bubble
+                        # The next text chunk should start a fresh bubble
+                        # so tool output and prose stay separated.
+                        text_bubble = None
+                    elif isinstance(event, ai.events.ToolCallResult):
+                        for part in event.results:
+                            tb: Bubble | None = tool_bubbles.get(part.tool_call_id)
+                            if tb is None:
+                                tb = app.transcript.add_bubble(
+                                    "tool",
+                                    f"→ {part.tool_name}(?)",
+                                )
+                            tb.append(_format_tool_result(part.result, part.is_error))
+                    elif isinstance(event, ai.events.HookEvent):
+                        app.on_hook_event(event.hook)
                 # Persist whatever the agent added (assistant + tool turns)
                 # so the next turn sees the full history.
                 app.messages = list(stream.messages)
         except Exception as exc:  # noqa: BLE001 — surface in the UI
             app.transcript.add_bubble("system", f"error: {exc}")
+
+
+def _format_tool_call(name: str, raw_args: str) -> str:
+    try:
+        args = json.loads(raw_args) if raw_args else {}
+    except json.JSONDecodeError:
+        return f"→ {name}({raw_args})"
+    rendered = ", ".join(f"{k}={_short_value(v)}" for k, v in args.items())
+    return f"→ {name}({rendered})"
+
+
+def _short_value(v: Any) -> str:
+    s = json.dumps(v, ensure_ascii=False) if not isinstance(v, str) else repr(v)
+    if len(s) > 80:
+        s = s[:77] + "…"
+    return s
+
+
+def _format_tool_result(result: Any, is_error: bool) -> str:
+    text = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False)
+    if len(text) > RESULT_PREVIEW_CHARS:
+        text = (
+            text[:RESULT_PREVIEW_CHARS]
+            + f"… [+{len(text) - RESULT_PREVIEW_CHARS} chars]"
+        )
+    marker = "✗" if is_error else "←"
+    indented = "\n  ".join(text.splitlines() or [""])
+    return f"\n  {marker} {indented}"
 
 
 # ---------------------------------------------------------------------------
@@ -94,6 +155,9 @@ class Bubble(textual.widgets.Static):
     Bubble.system {
         color: $text-muted;
         text-style: italic;
+    }
+    Bubble.tool {
+        color: $text-muted;
     }
     """
 
@@ -233,7 +297,7 @@ class TauApp(textual.app.App[None]):
     def __init__(self) -> None:
         super().__init__()
         self.model = ai.get_model(MODEL_ID)
-        self.agent = ai.agent()
+        self.agent = ai.agent(tools=tools_.TOOLS)
         # The full conversation, including the system prompt.  We mutate
         # this in place so the agent always sees the entire history.
         self.messages = [ai.system_message(SYSTEM_PROMPT)]
@@ -242,6 +306,11 @@ class TauApp(textual.app.App[None]):
         # stays clean.
         self.pending = []
         self._busy = False
+        # Approval hooks waiting for operator y/n.  FIFO queue: only the
+        # head hook is "active" — ``_active_hook`` mirrors it for fast
+        # access from the composer.
+        self._hook_queue: list[ai.messages.HookPart[Any]] = []
+        self._active_hook: ai.messages.HookPart[Any] | None = None
 
     def compose(self) -> textual.app.ComposeResult:
         yield Transcript(id="transcript")
@@ -272,6 +341,30 @@ class TauApp(textual.app.App[None]):
         if not text:
             return
 
+        # Approval mode: a tool is waiting for y/n.  Plain y/n/yes/no
+        # resolves the active hook; anything else falls through and is
+        # queued as a regular message (the hook stays pending).
+        if self._active_hook is not None:
+            low = text.lower()
+            if low in ("y", "yes", "n", "no"):
+                granted = low in ("y", "yes")
+                hook = self._active_hook
+                self._active_hook = None
+                ai.resolve_hook(
+                    hook.hook_id,
+                    ai.tools.ToolApproval(
+                        granted=granted,
+                        reason="operator approved" if granted else "operator denied",
+                    ),
+                )
+                self.transcript.add_bubble(
+                    "system",
+                    f"{'approved' if granted else 'denied'}: "
+                    f"{hook.metadata.get('tool', '?')}",
+                )
+                self._activate_next_hook()
+                return
+
         self.transcript.add_bubble("user", text)
         # All submissions enter the queue; ``run_turn`` is the sole
         # consumer.  The user bubble shows up immediately so the message
@@ -294,16 +387,48 @@ class TauApp(textual.app.App[None]):
     # Helpers
     # ------------------------------------------------------------------
 
+    # ------------------------------------------------------------------
+    # Hook plumbing
+    # ------------------------------------------------------------------
+
+    def on_hook_event(self, hook: ai.messages.HookPart[Any]) -> None:
+        if hook.status == "pending":
+            self._hook_queue.append(hook)
+            self._activate_next_hook()
+        elif hook.status in ("resolved", "cancelled"):
+            # Drop from queue if it was sitting there waiting.
+            self._hook_queue = [
+                h for h in self._hook_queue if h.hook_id != hook.hook_id
+            ]
+            if self._active_hook and self._active_hook.hook_id == hook.hook_id:
+                self._active_hook = None
+                self._activate_next_hook()
+
+    def _activate_next_hook(self) -> None:
+        if self._active_hook is not None or not self._hook_queue:
+            self._refresh_placeholder()
+            return
+        self._active_hook = self._hook_queue.pop(0)
+        tool = self._active_hook.metadata.get("tool", "?")
+        self.transcript.add_bubble("system", f"approval needed: {tool}")
+        self._refresh_placeholder()
+
+    def _refresh_placeholder(self) -> None:
+        inp = self.query_one("#composer", Composer)
+        if self._active_hook is not None:
+            tool = self._active_hook.metadata.get("tool", "?")
+            inp.placeholder = f"approve {tool}? [y/n]"
+        elif self._busy:
+            inp.placeholder = "tau is thinking… (type to queue your next message)"
+        else:
+            inp.placeholder = "message tau…"
+
     def _set_busy(self, busy: bool) -> None:
         self._busy = busy
-        inp = self.query_one("#composer", Composer)
         # Composer stays enabled while busy — the user can keep typing
-        # and queue the next message.  Only the placeholder changes.
-        inp.placeholder = (
-            "tau is thinking… (type to queue your next message)"
-            if busy
-            else "message tau…"
-        )
+        # and queue the next message.  Placeholder reflects the active
+        # state.
+        self._refresh_placeholder()
 
 
 if __name__ == "__main__":
