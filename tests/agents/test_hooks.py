@@ -181,7 +181,7 @@ async def test_hook_metadata_in_pending() -> None:
                 metadata={"tool": "rm -rf", "path": "/"},
                 interrupt_loop=True,
             )
-        except ai.agents.hooks.HookAbortError:
+        except ai.agents.hooks.HookPendingError:
             return
 
     mock_llm([[text_msg("OK")]])

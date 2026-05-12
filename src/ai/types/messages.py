@@ -28,7 +28,7 @@ class ToolResultPart(pydantic.BaseModel):
     tool_name: str
     result: Any = None
     is_error: bool = False
-    is_hook_abort: bool = False
+    is_hook_pending: bool = False
     provider_metadata: dict[str, Any] | None = None
 
     kind: Literal["tool_result"] = "tool_result"
@@ -42,7 +42,7 @@ class ToolCallPart(pydantic.BaseModel):
     tool_args: str
     provider_metadata: dict[str, Any] | None = None
 
-    # Runtime cache used by replay-from-hook-abort flows: when a prior
+    # Runtime cache used by replay-from-pending-hook flows: when a prior
     # run completed this tool call but a sibling tool call was suspended
     # on a hook, we fold the completed result onto the ``ToolCallPart``
     # so re-execution short-circuits to the cached value instead of

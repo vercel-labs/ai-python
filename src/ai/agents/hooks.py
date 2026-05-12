@@ -63,7 +63,7 @@ _live_hooks: dict[
 _pending_resolutions: dict[str, dict[str, Any]] = {}
 
 
-class HookAbortError(Exception):
+class HookPendingError(Exception):
     """Exception for aborting due to a hook"""
 
     type: str = "gateway_error"
@@ -151,7 +151,7 @@ async def _hook_impl(call: middleware_.HookContext) -> pydantic.BaseModel:
         # then signal a hook error.
         await asyncio.sleep(0)
         if not future.done():
-            future.set_exception(HookAbortError(hook_part))
+            future.set_exception(HookPendingError(hook_part))
 
     # Await resolution — may be resolved externally or cancelled.
     resolution = await future

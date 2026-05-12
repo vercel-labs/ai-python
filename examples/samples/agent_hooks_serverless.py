@@ -58,7 +58,7 @@ class GatedCall:
                 metadata={"tool": tc.name, "kwargs": tc.kwargs},
                 interrupt_loop=True,  # serverless: cancel if unresolved
             )
-        except ai.agents.hooks.HookAbortError as e:
+        except ai.agents.hooks.HookPendingError as e:
             return ai.pending_tool_result(e.hook, tool_call_id=tc.id, tool_name=tc.name)
         if approval.granted:
             return await tc()
