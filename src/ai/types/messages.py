@@ -1,6 +1,5 @@
-import importlib
 import uuid
-from typing import Annotated, Any, Literal, Self
+from typing import Annotated, Any, Literal, Self, overload
 
 import pydantic
 
@@ -110,56 +109,6 @@ class HookPart[T](pydantic.BaseModel):
     model_config = pydantic.ConfigDict(frozen=True)
 
 
-# todo redo this structured output situation and simplify it
-def _resolve_class(fully_qualified_name: str) -> type[pydantic.BaseModel]:
-    """Import and return a class from its fully qualified name.
-
-    E.g. ``"myapp.models.WeatherForecast"`` → the ``WeatherForecast`` class.
-    """
-    module_path, _, class_name = fully_qualified_name.rpartition(".")
-    if not module_path:
-        raise ImportError(
-            f"Cannot resolve '{fully_qualified_name}': "
-            "expected a fully qualified name like 'mypackage.module.ClassName'"
-        )
-    module = importlib.import_module(module_path)
-    cls = getattr(module, class_name, None)
-    if cls is None:
-        raise ImportError(f"Module '{module_path}' has no attribute '{class_name}'")
-    if not (isinstance(cls, type) and issubclass(cls, pydantic.BaseModel)):
-        raise TypeError(
-            f"'{fully_qualified_name}' is not a pydantic.BaseModel subclass"
-        )
-    return cls
-
-
-class StructuredOutputPart(pydantic.BaseModel):
-    """Part containing a validated structured output from the LLM.
-
-    ``data`` stores the parsed JSON dict (always serializable).
-    ``output_type_name`` stores the fully qualified class name so the typed
-    Pydantic model can be lazily rehydrated via the ``value`` property.
-    """
-
-    model_config = pydantic.ConfigDict(frozen=True)
-
-    id: str = pydantic.Field(default_factory=generate_id)
-    data: dict[str, Any]
-    output_type_name: str
-    kind: Literal["structured_output"] = "structured_output"
-    provider_metadata: dict[str, Any] | None = None
-
-    _hydrated: Any = pydantic.PrivateAttr(default=None)
-
-    @property
-    def value(self) -> Any:
-        """Lazily resolve the output type class and validate ``data`` into it."""
-        if self._hydrated is None:
-            cls = _resolve_class(self.output_type_name)
-            self._hydrated = cls.model_validate(self.data)
-        return self._hydrated
-
-
 class FilePart(pydantic.BaseModel):
     """File, image, or audio content part.
 
@@ -229,7 +178,6 @@ Part = Annotated[
     | BuiltinToolReturnPart
     | ReasoningPart
     | HookPart[Any]
-    | StructuredOutputPart
     | FilePart,
     pydantic.Field(discriminator="kind"),
 ]
@@ -289,10 +237,26 @@ class Message(pydantic.BaseModel):
     def videos(self) -> list[FilePart]:
         return [p for p in self.files if p.media_type.startswith("video/")]
 
-    @property
-    def output(self) -> Any:
-        """Parsed structured output from the first structured-output part."""
-        for part in self.parts:
-            if isinstance(part, StructuredOutputPart):
-                return part.value
-        return None
+    @overload
+    def get_output(self, output_type: None = None) -> str: ...
+    @overload
+    def get_output[T: pydantic.BaseModel](self, output_type: type[T]) -> T: ...
+    def get_output(self, output_type: type[pydantic.BaseModel] | None = None) -> Any:
+        """Return the final output of this assistant turn.
+
+        With no ``output_type``, returns the concatenated text content.
+        With a Pydantic model class, validates the text as JSON against
+        it and returns the parsed instance.
+
+        Raises :class:`ValueError` unless the message is a *final*
+        assistant message: role ``"assistant"`` with no pending tool calls.
+        """
+        if self.role != "assistant" or self.tool_calls:
+            raise ValueError(
+                "get_output() requires a final assistant message "
+                "(role='assistant' with no tool calls); "
+                f"got role={self.role!r} with {len(self.tool_calls)} tool call(s)"
+            )
+        if output_type is None:
+            return self.text
+        return output_type.model_validate_json(self.text)

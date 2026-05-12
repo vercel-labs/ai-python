@@ -16,9 +16,23 @@ from collections.abc import (
     Coroutine,
     Sequence,
 )
-from typing import Annotated, Any, Protocol, Self, get_type_hints, overload
+from contextlib import AbstractAsyncContextManager
+from typing import (
+    Annotated,
+    Any,
+    Generic,
+    Protocol,
+    Self,
+    cast,
+    get_type_hints,
+    overload,
+)
 
 import pydantic
+
+# ``typing.TypeVar`` lacks the ``default=`` kwarg on Python <3.13.
+# Use the typing_extensions backport so this works on 3.12 too.
+from typing_extensions import TypeVar  # noqa: UP035
 
 from .. import models, types, util
 from ..types import builders
@@ -606,6 +620,9 @@ class Context(pydantic.BaseModel):
     model: models.Model
     messages: list[types.messages.Message]
     tools: list[Tool]
+    output_type: type[pydantic.BaseModel] | None = pydantic.Field(
+        default=None, exclude=True, repr=False
+    )
 
     _agent_tools_by_name: dict[str, AgentTool] = pydantic.PrivateAttr(
         default_factory=dict
@@ -672,7 +689,13 @@ class Context(pydantic.BaseModel):
             self.messages.append(msg)
 
 
-class AgentStream:
+# Agent run output type.  Defaults to ``str``: when ``Agent.run`` was
+# called without an ``output_type``, ``AgentStream.output`` returns the
+# final assistant message's concatenated text.
+AgentOutputT = TypeVar("AgentOutputT", default=str)
+
+
+class AgentStream(Generic[AgentOutputT]):
     """Async-iterable wrapper around an agent run's event stream.
 
     Exposes the run's :class:`Context` via :attr:`context` so callers can
@@ -719,6 +742,18 @@ class AgentStream:
     @property
     def messages(self) -> list[types.messages.Message]:
         return self._context.messages
+
+    @property
+    def output(self) -> AgentOutputT:
+        """Return the run's output, parsed as the ``output_type`` given to ``run``.
+
+        Defaults to the final assistant message's concatenated text.
+        When an ``output_type`` was passed, the assistant message's text
+        is validated as JSON against that type and the parsed instance
+        is returned.
+        """
+        last = self._context.messages[-1]
+        return cast(AgentOutputT, last.get_output(self._context.output_type))
 
 
 def tool_result(
@@ -894,14 +929,31 @@ class Agent:
                 # the loop.
                 context.add(tr.get_tool_message())
 
-    @contextlib.asynccontextmanager
-    async def run(
+    @overload
+    def run(
         self,
         model: models.Model,
         messages: list[types.messages.Message],
         *,
         middleware: list[middleware_.Middleware] | None = None,
-    ) -> AsyncIterator[AgentStream]:
+    ) -> AbstractAsyncContextManager[AgentStream[str]]: ...
+    @overload
+    def run[T: pydantic.BaseModel](
+        self,
+        model: models.Model,
+        messages: list[types.messages.Message],
+        *,
+        output_type: type[T],
+        middleware: list[middleware_.Middleware] | None = None,
+    ) -> AbstractAsyncContextManager[AgentStream[T]]: ...
+    def run(
+        self,
+        model: models.Model,
+        messages: list[types.messages.Message],
+        *,
+        output_type: type[pydantic.BaseModel] | None = None,
+        middleware: list[middleware_.Middleware] | None = None,
+    ) -> AbstractAsyncContextManager[AgentStream[Any]]:
         """Run the agent loop, yielding events to the consumer.
 
         Used as an async context manager whose value the event stream,
@@ -915,6 +967,9 @@ class Agent:
         Args:
             model: The model to use for LLM calls.
             messages: Initial conversation messages.
+            output_type: Optional Pydantic model the model's output must
+                conform to.  When set, ``stream.output`` validates the
+                final assistant message's text against it.
             middleware: Optional list of middleware to apply to this run.
                 First in the list = outermost.  Middleware wraps model
                 calls, tool calls, hooks, and the run itself.
@@ -923,10 +978,24 @@ class Agent:
         ``yield_from(..., label=...)`` — the label flows via
         ``PartialToolCallResult`` rather than on individual messages.
         """
+        return self._run(
+            model, messages, output_type=output_type, middleware=middleware
+        )
+
+    @contextlib.asynccontextmanager
+    async def _run(
+        self,
+        model: models.Model,
+        messages: list[types.messages.Message],
+        *,
+        output_type: type[pydantic.BaseModel] | None,
+        middleware: list[middleware_.Middleware] | None,
+    ) -> AsyncIterator[AgentStream[Any]]:
         context = Context(
             model=model,
             messages=list(messages),
             tools=[t.tool for t in self._tools],
+            output_type=output_type,
         )
         context._agent_tools_by_name = {t.name: t for t in self._tools}
         _process_interrupted_hooks(context.messages)

@@ -120,7 +120,7 @@ def test_internal_strict_raises() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Internal parts (HookPart, StructuredOutputPart)
+# Internal parts (HookPart)
 # ---------------------------------------------------------------------------
 
 

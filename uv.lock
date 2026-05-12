@@ -1036,6 +1036,7 @@ dependencies = [
     { name = "mcp" },
     { name = "openai" },
     { name = "pydantic" },
+    { name = "typing-extensions" },
     { name = "vercel" },
 ]
 
@@ -1058,6 +1059,7 @@ requires-dist = [
     { name = "mcp", specifier = ">=1.18.0" },
     { name = "openai", specifier = ">=2.14.0" },
     { name = "pydantic", specifier = ">=2.12.5" },
+    { name = "typing-extensions", specifier = ">=4.15.0" },
     { name = "vercel", specifier = ">=0.3.8" },
 ]
 

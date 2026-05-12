@@ -206,8 +206,8 @@ async def replay_message_events(
     not recoverable from a complete message.
 
     Parts with no model-layer event analog — ``ToolResultPart``,
-    ``HookPart``, ``StructuredOutputPart`` — are skipped silently; they
-    are agent-layer concerns and never appear on the model stream.
+    ``HookPart`` — are skipped silently; they are agent-layer concerns
+    and never appear on the model stream.
     """
     yield StreamStart()
     for part in msg.parts:

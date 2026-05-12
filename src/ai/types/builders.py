@@ -18,7 +18,6 @@ from .messages import (
     Message,
     Part,
     ReasoningPart,
-    StructuredOutputPart,
     TextPart,
     ToolCallPart,
     ToolResultPart,
@@ -30,7 +29,6 @@ _PART_TYPES = (
     ToolResultPart,
     ReasoningPart,
     HookPart,
-    StructuredOutputPart,
     FilePart,
 )
 

@@ -139,8 +139,6 @@ async def emit_events_for_messages(
                     media_type=part.media_type,
                     data=part.data if isinstance(part.data, str) else "",
                 )
-            # StructuredOutputPart is not a streamed part; tests that need it
-            # construct a tailored adapter directly.
     yield events_.StreamEnd(usage=usage)
 
 

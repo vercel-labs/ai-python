@@ -2,68 +2,9 @@
 
 from __future__ import annotations
 
-import pydantic
 import pytest
 
 from ai.types import messages, usage
-
-
-class _Weather(pydantic.BaseModel):
-    city: str
-    temperature: float
-
-
-_WEATHER_DATA = {"city": "SF", "temperature": 62.0}
-_WEATHER_TYPE_NAME = f"{_Weather.__module__}.{_Weather.__qualname__}"
-
-
-def test_structured_output_part_value() -> None:
-    part = messages.StructuredOutputPart(
-        data=_WEATHER_DATA, output_type_name=_WEATHER_TYPE_NAME
-    )
-    val = part.value
-    assert isinstance(val, _Weather)
-    assert val.city == "SF"
-    assert part.value is val
-
-
-def test_structured_output_part_bad_class_name() -> None:
-    part = messages.StructuredOutputPart(
-        data=_WEATHER_DATA, output_type_name="nonexistent.module.Cls"
-    )
-    with pytest.raises(ImportError):
-        _ = part.value
-
-
-def test_message_output_from_part() -> None:
-    m = messages.Message(
-        id="m1",
-        role="assistant",
-        parts=[
-            messages.TextPart(text="{}"),
-            messages.StructuredOutputPart(
-                data=_WEATHER_DATA, output_type_name=_WEATHER_TYPE_NAME
-            ),
-        ],
-    )
-    assert isinstance(m.output, _Weather)
-    assert m.output.city == "SF"
-
-
-def test_structured_output_round_trip() -> None:
-    m = messages.Message(
-        id="m1",
-        role="assistant",
-        parts=[
-            messages.TextPart(text="{}"),
-            messages.StructuredOutputPart(
-                data=_WEATHER_DATA, output_type_name=_WEATHER_TYPE_NAME
-            ),
-        ],
-    )
-    restored = messages.Message.model_validate(m.model_dump())
-    assert isinstance(restored.output, _Weather)
-    assert restored.output.city == "SF"
 
 
 def test_usage_add_merges_optional_fields() -> None:
