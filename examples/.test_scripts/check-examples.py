@@ -31,6 +31,12 @@ EXAMPLES: list[tuple[str, Path, list[str], list[str]]] = [
         ["."],
     ),
     (
+        "tau-agent",
+        REPO / "examples" / "tau-agent",
+        ["textual"],
+        ["."],
+    ),
+    (
         "temporal-direct",
         REPO / "examples" / "temporal-direct",
         ["temporalio"],
