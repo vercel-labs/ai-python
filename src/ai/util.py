@@ -19,6 +19,33 @@ class _Stop:
 _STOP = _Stop()
 
 
+class AsyncIterableQueue[T](asyncio.Queue[_Stop | T]):
+    """An asyncio.Queue that you can iterate over.
+
+    Call athrow or astop to stop it.
+    Can not be iterated on by multiple tasks!
+    """
+
+    def __init__(self, maxsize: int = 0) -> None:
+        super().__init__(maxsize)
+
+    async def __aiter__(self) -> AsyncIterator[T]:
+        while True:
+            el = await self.get()
+            if isinstance(el, _Stop):
+                if el.exception:
+                    raise el.exception
+                else:
+                    return
+            yield el
+
+    async def athrow(self, e: Exception) -> None:
+        await self.put(_Stop(exception=e))
+
+    async def astop(self) -> None:
+        await self.put(_STOP)
+
+
 @contextlib.asynccontextmanager
 async def unwrap_generator_exit() -> AsyncIterator[None]:
     """Convert a ``BaseExceptionGroup`` of only ``GeneratorExit``s into a single one.
@@ -75,7 +102,7 @@ async def decouple[T](
     generators are closed, so we should be OK.
 
     """
-    queue: asyncio.Queue[_Stop | T] = asyncio.Queue(size)
+    queue: AsyncIterableQueue[T] = AsyncIterableQueue(size)
 
     async def worker() -> None:
         async with maybe_aclosing(iter):
@@ -100,13 +127,7 @@ async def decouple[T](
         task = asyncio.create_task(worker())
 
     try:
-        while True:
-            el = await queue.get()
-            if isinstance(el, _Stop):
-                if el.exception:
-                    raise el.exception
-                else:
-                    return
+        async for el in queue:
             yield el
     finally:
         # cancel is a no-op if a task is already done or cancelled

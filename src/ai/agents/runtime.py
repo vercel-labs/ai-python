@@ -7,6 +7,7 @@ import contextvars
 from collections.abc import AsyncGenerator, AsyncIterable, Awaitable
 from typing import Any
 
+from .. import util
 from ..types import events as events_
 from ..types import messages as messages_
 from . import hooks as hooks_
@@ -22,8 +23,8 @@ class Runtime:
     _SENTINEL = _Sentinel()
 
     def __init__(self) -> None:
-        self._event_queue: asyncio.Queue[events_.AgentEvent | Runtime._Sentinel] = (
-            asyncio.Queue()
+        self._event_queue: util.AsyncIterableQueue[events_.AgentEvent] = (
+            util.AsyncIterableQueue()
         )
         self._hook_labels: set[str] = set()
 
@@ -35,7 +36,7 @@ class Runtime:
         await self.put_event(events_.HookEvent(message=msg, hook=hook_part))
 
     async def signal_done(self) -> None:
-        await self._event_queue.put(self._SENTINEL)
+        await self._event_queue.astop()
 
     def track_hook_label(self, label: str) -> None:
         """Register a hook label for cleanup when the run ends."""
@@ -92,8 +93,5 @@ async def run(
     async with asyncio.TaskGroup() as tg:
         tg.create_task(_stop_when_done(rt, _drain()))
 
-        while True:
-            item = await rt._event_queue.get()
-            if isinstance(item, Runtime._Sentinel):
-                return
+        async for item in rt._event_queue:
             yield item
