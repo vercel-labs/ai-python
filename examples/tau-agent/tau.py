@@ -33,6 +33,40 @@ Keep replies concise and use code blocks when showing code.
 """
 
 
+# ===========================================================================
+# Agent loop — the only place that touches the `ai` library.
+#
+# Everything below this function is plain Textual widgets and app plumbing.
+# Read this function to understand what tau does; read the rest to
+# understand how the TUI renders it.
+# ===========================================================================
+
+
+async def chat_loop(app: TauApp) -> None:
+    """Drain the pending queue, running one agent turn per queued message.
+
+    Reads from ``app.pending`` and ``app.messages``; writes streamed
+    text into a fresh assistant bubble on ``app.transcript``.  All
+    interaction with the ``ai`` library lives here.
+    """
+    while app.pending:
+        # Pop one queued message into history per turn so the model sees
+        # a clean user → assistant → user → … sequence.
+        app.messages.append(ai.user_message(app.pending.pop(0)))
+        bubble = app.transcript.add_bubble("assistant")
+        try:
+            async with app.agent.run(app.model, app.messages) as stream:
+                async for event in stream:
+                    if isinstance(event, ai.events.TextDelta):
+                        bubble.append(event.chunk)
+                        app.transcript.scroll_end(animate=False)
+                # Persist whatever the agent added (assistant + tool turns)
+                # so the next turn sees the full history.
+                app.messages = list(stream.messages)
+        except Exception as exc:  # noqa: BLE001 — surface in the UI
+            app.transcript.add_bubble("system", f"error: {exc}")
+
+
 # ---------------------------------------------------------------------------
 # Widgets
 # ---------------------------------------------------------------------------
@@ -175,20 +209,25 @@ class TauApp(textual.app.App[None]):
 
     TITLE = "tau"
 
+    # State read by ``chat_loop``.  Public on purpose — the agent
+    # function is meant to be readable next to the app.
+    model: ai.Model
+    agent: ai.Agent
+    messages: list[ai.messages.Message]
+    pending: list[str]
+
     def __init__(self) -> None:
         super().__init__()
-        self._model = ai.get_model(MODEL_ID)
-        self._agent = ai.agent()
+        self.model = ai.get_model(MODEL_ID)
+        self.agent = ai.agent()
         # The full conversation, including the system prompt.  We mutate
         # this in place so the agent always sees the entire history.
-        self._messages: list[ai.messages.Message] = [
-            ai.system_message(SYSTEM_PROMPT),
-        ]
-        self._busy = False
+        self.messages = [ai.system_message(SYSTEM_PROMPT)]
         # User messages typed while a turn is streaming.  Drained one at
         # a time at the end of each turn so user/assistant alternation
         # stays clean.
-        self._pending: list[str] = []
+        self.pending = []
+        self._busy = False
 
     def compose(self) -> textual.app.ComposeResult:
         yield Transcript(id="transcript")
@@ -196,9 +235,12 @@ class TauApp(textual.app.App[None]):
             yield Composer(placeholder="message tau…", id="composer")
 
     def on_mount(self) -> None:
-        transcript = self.query_one("#transcript", Transcript)
-        transcript.add_bubble("system", f"connected — model: {MODEL_ID}")
+        self.transcript.add_bubble("system", f"connected — model: {MODEL_ID}")
         self.query_one("#composer", Composer).focus()
+
+    @property
+    def transcript(self) -> Transcript:
+        return self.query_one("#transcript", Transcript)
 
     # ------------------------------------------------------------------
     # Input → turn
@@ -216,13 +258,12 @@ class TauApp(textual.app.App[None]):
         if not text:
             return
 
-        transcript = self.query_one("#transcript", Transcript)
-        transcript.add_bubble("user", text)
+        self.transcript.add_bubble("user", text)
         # All submissions enter the queue; ``run_turn`` is the sole
         # consumer.  The user bubble shows up immediately so the message
         # feels sent even when it won't reach the model until the
         # current turn finishes.
-        self._pending.append(text)
+        self.pending.append(text)
 
         if not self._busy:
             self._set_busy(True)
@@ -230,25 +271,8 @@ class TauApp(textual.app.App[None]):
 
     @textual.work(exclusive=True, group="turn")
     async def run_turn(self) -> None:
-        transcript = self.query_one("#transcript", Transcript)
-
         try:
-            while self._pending:
-                # Pop one queued message into history per turn so the
-                # model sees a clean user → assistant → user → … sequence.
-                self._messages.append(ai.user_message(self._pending.pop(0)))
-                bubble = transcript.add_bubble("assistant")
-                try:
-                    async with self._agent.run(self._model, self._messages) as stream:
-                        async for event in stream:
-                            if isinstance(event, ai.events.TextDelta):
-                                bubble.append(event.chunk)
-                                transcript.scroll_end(animate=False)
-                        # Persist whatever the agent added (assistant + tool
-                        # turns) so the next turn sees the full history.
-                        self._messages = list(stream.messages)
-                except Exception as exc:  # noqa: BLE001 — surface in the UI
-                    transcript.add_bubble("system", f"error: {exc}")
+            await chat_loop(self)
         finally:
             self._set_busy(False)
 
