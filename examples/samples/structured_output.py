@@ -29,9 +29,9 @@ async def main() -> None:
                 print()
 
     # After iteration, s.output validates the streamed JSON against
-    # the output_type the stream was opened with.
+    # the output_type the stream was opened with.  ``Stream[Recipe]``
+    # types ``s.output`` as ``Recipe``.
     recipe = s.output
-    assert isinstance(recipe, Recipe)
     print(f"\n\nParsed recipe: {recipe.name}")
     print(f"  Ingredients: {', '.join(recipe.ingredients)}")
     print(f"  Prep time: {recipe.prep_time_minutes} min")

@@ -2,9 +2,13 @@ import contextlib
 import dataclasses
 from collections.abc import AsyncGenerator, AsyncIterator, Sequence
 from contextlib import AbstractAsyncContextManager
-from typing import Any, Protocol, Self, overload, runtime_checkable
+from typing import Any, Generic, Protocol, Self, cast, overload, runtime_checkable
 
 import pydantic
+
+# ``typing.TypeVar`` lacks the ``default=`` kwarg on Python <3.13.
+# Use the typing_extensions backport so this works on 3.12 too.
+from typing_extensions import TypeVar  # noqa: UP035
 
 from ... import types
 from ...types import integrity
@@ -12,6 +16,11 @@ from . import adapters
 from . import client as client_
 from . import model as model_
 from . import params as params_
+
+# Stream output type.  Defaults to ``str``: when the stream was opened
+# without an ``output_type``, ``Stream.output`` returns the concatenated
+# message text.
+StreamOutputT = TypeVar("StreamOutputT", default=str)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -76,7 +85,7 @@ class Executor:
 _default_executor = Executor()
 
 
-class Stream:
+class Stream(Generic[StreamOutputT]):
     """Async-iterable wrapper around an adapter's event stream."""
 
     def __init__(
@@ -84,7 +93,7 @@ class Stream:
         gen: AsyncGenerator[types.events.Event],
         *,
         seed_message: types.messages.Message | None = None,
-        output_type: type[pydantic.BaseModel] | None = None,
+        output_type: type[StreamOutputT] | None = None,
     ) -> None:
         """Wrap an event generator.
 
@@ -105,7 +114,10 @@ class Stream:
             role="assistant", parts=[]
         )
         self._parts: dict[str, types.messages.Part] = {}
-        self._output_type = output_type
+        # ``output_type`` is typed against the public ``StreamOutputT`` type
+        # param for ergonomics; internally we know it's a Pydantic model
+        # subclass (or None for the text-default case).
+        self._output_type = cast(type[pydantic.BaseModel] | None, output_type)
 
     async def aclose(self) -> None:
         await self._gen.aclose()
@@ -152,7 +164,7 @@ class Stream:
         return self._message.tool_calls
 
     @property
-    def output(self) -> Any:
+    def output(self) -> StreamOutputT:
         """Return the streamed output as the ``output_type`` passed in.
 
         Defaults to the concatenated message text.  When a Pydantic
@@ -160,8 +172,10 @@ class Stream:
         it and returns the parsed instance.
         """
         if self._output_type is None:
-            return self._message.text
-        return self._output_type.model_validate_json(self._message.text)
+            return cast(StreamOutputT, self._message.text)
+        return cast(
+            StreamOutputT, self._output_type.model_validate_json(self._message.text)
+        )
 
     def _aggregate_event(self, event: types.events.Event) -> dict[str, Any]:
         updates: dict[str, Any] = {}
@@ -338,20 +352,36 @@ class StreamContext(Protocol):
 def stream(
     *,
     context: StreamContext,
-    output_type: type[pydantic.BaseModel] | None = None,
     params: Any = None,
     executor: StreamExecutor = _default_executor,
-) -> AbstractAsyncContextManager[Stream]: ...
+) -> AbstractAsyncContextManager[Stream[str]]: ...
 @overload
-def stream[ProviderParamsT: pydantic.BaseModel](
+def stream[T: pydantic.BaseModel](
+    *,
+    context: StreamContext,
+    output_type: type[T],
+    params: Any = None,
+    executor: StreamExecutor = _default_executor,
+) -> AbstractAsyncContextManager[Stream[T]]: ...
+@overload
+def stream(
     model: model_.Model,
     messages: list[types.messages.Message],
     *,
     tools: Sequence[types.tools.Tool] | None = None,
-    output_type: type[pydantic.BaseModel] | None = None,
     params: Any = None,
     executor: StreamExecutor = _default_executor,
-) -> AbstractAsyncContextManager[Stream]: ...
+) -> AbstractAsyncContextManager[Stream[str]]: ...
+@overload
+def stream[T: pydantic.BaseModel](
+    model: model_.Model,
+    messages: list[types.messages.Message],
+    *,
+    tools: Sequence[types.tools.Tool] | None = None,
+    output_type: type[T],
+    params: Any = None,
+    executor: StreamExecutor = _default_executor,
+) -> AbstractAsyncContextManager[Stream[T]]: ...
 def stream(
     model: model_.Model | None = None,
     messages: list[types.messages.Message] | None = None,
@@ -361,7 +391,7 @@ def stream(
     output_type: type[pydantic.BaseModel] | None = None,
     params: Any = None,
     executor: StreamExecutor = _default_executor,
-) -> AbstractAsyncContextManager[Stream]:
+) -> AbstractAsyncContextManager[Stream[Any]]:
     """Stream an LLM response.
 
     Used as an async context manager whose value is the :class:`Stream`.
@@ -405,7 +435,7 @@ async def _stream(
     output_type: type[pydantic.BaseModel] | None,
     params: Any,
     executor: StreamExecutor,
-) -> AsyncIterator[Stream]:
+) -> AsyncIterator[Stream[Any]]:
     if messages and messages[-1].replay:
         last = messages[-1]
         s = Stream(
