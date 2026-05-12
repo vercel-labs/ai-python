@@ -2,8 +2,8 @@
 
 import dataclasses
 
+from ...providers import base
 from .client import Client
-from .proto import Provider
 
 
 @dataclasses.dataclass(frozen=True)
@@ -18,5 +18,5 @@ class Model:
 
     id: str
     adapter: str
-    provider: Provider
+    provider: base.Provider
     client: Client | None = dataclasses.field(default=None, repr=False)

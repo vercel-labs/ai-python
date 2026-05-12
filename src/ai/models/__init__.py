@@ -30,6 +30,7 @@ Usage::
     ids = await openai.list()
 """
 
+from ..providers.base import Provider
 from .core.adapters import register_generate, register_stream
 from .core.api import (
     Executor,
@@ -45,7 +46,7 @@ from .core.api import (
 from .core.client import Client
 from .core.model import Model
 from .core.params import GenerateParams, ImageParams, VideoParams
-from .core.proto import CheckConnFn, GenerateFn, Provider, StreamFn
+from .core.proto import CheckConnFn, GenerateFn, StreamFn
 
 __all__ = [
     # Core types

@@ -3,6 +3,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
+from ai import models
 from ai.models.core import client as client_
 from ai.providers.openai import openai, openai_like
 
@@ -82,6 +83,7 @@ def test_openai_like_creates_generic_compatible_provider(
     assert model.id == "custom-model"
     assert model.adapter == "openai"
     assert model.provider is provider
+    assert isinstance(provider, models.Provider)
 
 
 def test_openai_like_reads_custom_base_url_env(
@@ -95,3 +97,25 @@ def test_openai_like_reads_custom_base_url_env(
     )
 
     assert provider.base_url == "https://proxy.example.com/v1"
+
+
+def test_openai_like_expands_config_envs_in_base_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "account-123")
+    provider = openai_like(
+        name="cloudflare",
+        base_url=(
+            "https://api.cloudflare.com/client/v4/accounts/"
+            "${CLOUDFLARE_ACCOUNT_ID}/ai/v1"
+        ),
+        config_envs=("CLOUDFLARE_ACCOUNT_ID",),
+    )
+
+    assert provider.config_envs == ("CLOUDFLARE_ACCOUNT_ID",)
+    assert provider.base_url == (
+        "https://api.cloudflare.com/client/v4/accounts/account-123/ai/v1"
+    )
+    assert provider.client().base_url == (
+        "https://api.cloudflare.com/client/v4/accounts/account-123/ai/v1"
+    )

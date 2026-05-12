@@ -15,73 +15,13 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 import pydantic
 
 from ... import types
+from ...providers.base import Provider as Provider
 
 if TYPE_CHECKING:
     from .client import Client
     from .model import Model
 
-
-@runtime_checkable
-class Provider(Protocol):
-    """Protocol for model providers.
-
-    A provider carries all provider-specific configuration and behaviour:
-    API endpoint, authentication, client creation, connection checks, and
-    model enumeration.  Model objects hold only pure metadata (``id``,
-    ``adapter``) plus a back-reference to their provider.
-
-    Implementations must be **callable** — ``provider(model_id)`` returns
-    a :class:`Model`.
-    """
-
-    @property
-    def api_key_env(self) -> str | None:
-        """Env var name that holds the API key (e.g. ``"OPENAI_API_KEY"``)."""
-        ...
-
-    @property
-    def base_url(self) -> str:
-        """Default base URL for the provider API."""
-        ...
-
-    @property
-    def adapter(self) -> str:
-        """Wire-protocol key used to look up stream/generate adapters."""
-        ...
-
-    @property
-    def name(self) -> str:
-        """Human-readable provider name (for repr, error messages)."""
-        ...
-
-    def client(self) -> Client:
-        """Create a :class:`Client` from the provider's default config.
-
-        Reads ``api_key_env`` from the environment and uses ``base_url``
-        as the endpoint.
-        """
-        ...
-
-    async def check(self, client: Client, model: Model) -> bool:
-        """Check whether *client* can reach this provider and *model* exists.
-
-        Returns ``True`` when credentials are valid **and** the model is
-        available.  Non-auth transport errors should be raised.
-        """
-        ...
-
-    async def list(self, *, client: Client | None = None) -> list[str]:
-        """List available model IDs from the provider API."""
-        ...
-
-    def __call__(
-        self,
-        model_id: str,
-        *,
-        client: Client | None = None,
-    ) -> Model:
-        """Create a :class:`Model` for the given *model_id*."""
-        ...
+__all__ = ["CheckConnFn", "GenerateFn", "Provider", "StreamFn"]
 
 
 @runtime_checkable

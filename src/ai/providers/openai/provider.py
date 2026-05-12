@@ -1,38 +1,40 @@
 """OpenAI-compatible providers."""
 
-import dataclasses
-import os
+from collections.abc import Iterable
 from types import ModuleType
 
 from ...models import core
+from .. import base
 
 _BASE_URL = "https://api.openai.com/v1"
 _BASE_URL_ENV = "OPENAI_BASE_URL"
 _API_KEY_ENV = "OPENAI_API_KEY"
 
 
-@dataclasses.dataclass(frozen=True)
-class OpenAICompatibleProvider:
+class OpenAICompatibleProvider(base.Provider):
     """Callable provider for OpenAI-compatible APIs.
 
     ``provider("gpt-5.4")`` returns a :class:`Model` that uses the OpenAI
     chat-completions adapter.
     """
 
-    name: str
-    default_base_url: str
-    api_key_env: str | None = None
-    base_url_env: str | None = None
-
-    @property
-    def adapter(self) -> str:
-        return "openai"
-
-    @property
-    def base_url(self) -> str:
-        if self.base_url_env:
-            return os.environ.get(self.base_url_env) or self.default_base_url
-        return self.default_base_url
+    def __init__(
+        self,
+        *,
+        name: str,
+        default_base_url: str,
+        api_key_env: str | None = None,
+        base_url_env: str | None = None,
+        config_envs: Iterable[str] | None = None,
+    ) -> None:
+        super().__init__(
+            name=name,
+            adapter="openai",
+            base_url=default_base_url,
+            api_key_env=api_key_env,
+            base_url_env=base_url_env,
+            config_envs=config_envs,
+        )
 
     @property
     def tools(self) -> ModuleType:
@@ -47,34 +49,11 @@ class OpenAICompatibleProvider:
 
         return tools_module
 
-    def client(self) -> core.client.Client:
-        """Create a :class:`Client` from env-var credentials.
-
-        ``base_url_env`` overrides the default base URL when configured.
-        """
-        return core.client.Client(
-            base_url=self.base_url,
-            api_key=os.environ.get(self.api_key_env) if self.api_key_env else None,
-        )
-
     async def check(self, client: core.client.Client, model: core.model.Model) -> bool:
         """Delegate to :func:`openai.check.check`."""
         from . import check as check_
 
         return await check_.check(client, model)
-
-    def __call__(
-        self,
-        model_id: str,
-        *,
-        client: core.client.Client | None = None,
-    ) -> core.model.Model:
-        return core.model.Model(
-            id=model_id,
-            adapter=self.adapter,
-            provider=self,
-            client=client,
-        )
 
     async def list(self, *, client: core.client.Client | None = None) -> list[str]:
         """List available model IDs from the OpenAI-compatible API."""
@@ -85,9 +64,6 @@ class OpenAICompatibleProvider:
         data: list[dict[str, object]] = response.json().get("data", [])
         return sorted(str(m["id"]) for m in data)
 
-    def __repr__(self) -> str:
-        return self.name
-
 
 def openai_like(
     *,
@@ -95,6 +71,7 @@ def openai_like(
     base_url: str,
     api_key_env: str | None = None,
     base_url_env: str | None = None,
+    config_envs: Iterable[str] | None = None,
 ) -> OpenAICompatibleProvider:
     """Create a provider for an OpenAI-compatible API."""
     return OpenAICompatibleProvider(
@@ -102,6 +79,7 @@ def openai_like(
         default_base_url=base_url,
         api_key_env=api_key_env,
         base_url_env=base_url_env,
+        config_envs=config_envs,
     )
 
 

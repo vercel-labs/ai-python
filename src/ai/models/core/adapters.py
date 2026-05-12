@@ -6,7 +6,7 @@ are imported lazily on first use to keep import-time lightweight.
 .. note::
 
     Connection checks are no longer dispatched through a registry.
-    Each :class:`~ai.models.core.proto.Provider` implements ``check()``
+    Each :class:`~ai.providers.base.Provider` implements ``check()``
     directly, and :func:`~ai.models.core.api.check_connection` delegates
     to ``model.provider.check()``.
 """
