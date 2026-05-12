@@ -184,6 +184,10 @@ class TauApp(textual.app.App[None]):
             ai.system_message(SYSTEM_PROMPT),
         ]
         self._busy = False
+        # User messages typed while a turn is streaming.  Drained one at
+        # a time at the end of each turn so user/assistant alternation
+        # stays clean.
+        self._pending: list[str] = []
 
     def compose(self) -> textual.app.ComposeResult:
         yield Transcript(id="transcript")
@@ -208,32 +212,42 @@ class TauApp(textual.app.App[None]):
 
     async def on_composer_submitted(self, event: Composer.Submitted) -> None:
         text = event.value.strip()
-        if not text or self._busy:
+        if not text:
             return
 
         transcript = self.query_one("#transcript", Transcript)
         transcript.add_bubble("user", text)
-        self._messages.append(ai.user_message(text))
+        # All submissions enter the queue; ``run_turn`` is the sole
+        # consumer.  The user bubble shows up immediately so the message
+        # feels sent even when it won't reach the model until the
+        # current turn finishes.
+        self._pending.append(text)
 
-        self._set_busy(True)
-        self.run_turn()
+        if not self._busy:
+            self._set_busy(True)
+            self.run_turn()
 
     @textual.work(exclusive=True, group="turn")
     async def run_turn(self) -> None:
         transcript = self.query_one("#transcript", Transcript)
-        bubble = transcript.add_bubble("assistant")
 
         try:
-            async with self._agent.run(self._model, self._messages) as stream:
-                async for event in stream:
-                    if isinstance(event, ai.events.TextDelta):
-                        bubble.append(event.chunk)
-                        transcript.scroll_end(animate=False)
-                # Persist whatever the agent added (assistant + tool turns)
-                # so the next turn sees the full history.
-                self._messages = list(stream.messages)
-        except Exception as exc:  # noqa: BLE001 — surface errors in the UI
-            transcript.add_bubble("system", f"error: {exc}")
+            while self._pending:
+                # Pop one queued message into history per turn so the
+                # model sees a clean user → assistant → user → … sequence.
+                self._messages.append(ai.user_message(self._pending.pop(0)))
+                bubble = transcript.add_bubble("assistant")
+                try:
+                    async with self._agent.run(self._model, self._messages) as stream:
+                        async for event in stream:
+                            if isinstance(event, ai.events.TextDelta):
+                                bubble.append(event.chunk)
+                                transcript.scroll_end(animate=False)
+                        # Persist whatever the agent added (assistant + tool
+                        # turns) so the next turn sees the full history.
+                        self._messages = list(stream.messages)
+                except Exception as exc:  # noqa: BLE001 — surface in the UI
+                    transcript.add_bubble("system", f"error: {exc}")
         finally:
             self._set_busy(False)
 
@@ -244,10 +258,13 @@ class TauApp(textual.app.App[None]):
     def _set_busy(self, busy: bool) -> None:
         self._busy = busy
         inp = self.query_one("#composer", Composer)
-        inp.disabled = busy
-        inp.placeholder = "tau is thinking…" if busy else "message tau…"
-        if not busy:
-            inp.focus()
+        # Composer stays enabled while busy — the user can keep typing
+        # and queue the next message.  Only the placeholder changes.
+        inp.placeholder = (
+            "tau is thinking… (type to queue your next message)"
+            if busy
+            else "message tau…"
+        )
 
 
 if __name__ == "__main__":
