@@ -271,17 +271,17 @@ class Aggregator[Item, Result, ModelResult]:
     @abc.abstractmethod
     def snapshot(self) -> Result: ...
 
-    def to_model_output(self) -> ModelResult:
+    def get_model_output(self) -> ModelResult:
         """Return the model-facing value derived from this aggregator's state.
 
-        Default implementation defers to :meth:`from_snapshot`; subclasses
+        Default implementation defers to :meth:`to_model_output`; subclasses
         with non-trivial state may override either or both.
         """
-        return type(self).from_snapshot(self.snapshot())
+        return type(self).to_model_output(self.snapshot())
 
     @classmethod
     @abc.abstractmethod
-    def from_snapshot(cls, snapshot: Result) -> ModelResult:
+    def to_model_output(cls, snapshot: Result) -> ModelResult:
         """Stateless conversion: snapshot -> model-facing value.
 
         Called on inbound (when a tool result round-trips back from the

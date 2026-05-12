@@ -360,7 +360,7 @@ def _parse(
                 tool_call_id=tool_call_id,
                 tool_name=tool_name,
                 result=snapshot,
-                model_result=agg_cls.from_snapshot(snapshot),
+                model_result=agg_cls.to_model_output(snapshot),
                 is_error=False,
             )
         return messages_.ToolResultPart(

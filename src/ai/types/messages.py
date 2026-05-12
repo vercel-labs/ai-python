@@ -35,7 +35,7 @@ class ToolResultPart(pydantic.BaseModel):
     # The value the LLM sees on its next turn.  For most tools this is
     # identical to ``result``; for aggregator-backed tools
     # (sub-agents, streaming-text) it's derived from the aggregator's
-    # `to_model_output`.
+    # `get_model_output`.
     model_result: Any = pydantic.Field(default=None, repr=False)
 
     kind: Literal["tool_result"] = "tool_result"

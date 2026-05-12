@@ -186,7 +186,7 @@ def test_to_messages_decodes_subagent_tool_output() -> None:
     """A sub-agent tool's wire UIMessage decodes back to MessageBundle.
 
     Round-trip: ``model_result`` is recomputed via the aggregator's
-    ``from_snapshot``, and ``result`` carries the rich MessageBundle so
+    ``to_model_output``, and ``result`` carries the rich MessageBundle so
     a subsequent UI render gets the same shape we sent.
     """
     # Wire shape: a tool-_research_tool part with output = UIMessage{parts=[text]}.

@@ -119,7 +119,7 @@ def _process_interrupted_hooks(messages: list[types.messages.Message]) -> None:
 
 class SimpleAggregator[Item, Result](events_.Aggregator[Item, Result, Result]):
     @classmethod
-    def from_snapshot(cls, snapshot: Result) -> Result:
+    def to_model_output(cls, snapshot: Result) -> Result:
         return snapshot
 
 
@@ -169,7 +169,7 @@ class MessageAggregator(events_.Aggregator[events_.AgentEvent, MessageBundle, st
         return MessageBundle(messages=tuple(self._messages))
 
     @classmethod
-    def from_snapshot(cls, snapshot: MessageBundle) -> str:
+    def to_model_output(cls, snapshot: MessageBundle) -> str:
         for m in reversed(snapshot.messages):
             if m.role == "assistant" and m.text:
                 return m.text
@@ -491,7 +491,7 @@ class ToolCall:
                         aggregator=tool.aggregator,
                     )
                     result = agg.snapshot()
-                    model_result = agg.to_model_output()
+                    model_result = agg.get_model_output()
                 else:
                     result = await tool.fn(**kwargs)
                     model_result = result
@@ -890,7 +890,7 @@ async def yield_from[T, S, R](
         tool_call_id=tool_call_id,
         label=label,
     )
-    return agg.to_model_output()
+    return agg.get_model_output()
 
 
 async def _aggregate_from[T, S, R](
