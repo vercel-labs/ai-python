@@ -58,8 +58,12 @@ async def chat_loop(app: TauApp) -> None:
             async with app.agent.run(app.model, app.messages) as stream:
                 async for event in stream:
                     if isinstance(event, ai.events.TextDelta):
+                        # Stay glued to the bottom only if we're already
+                        # there — don't yank a scrolled-up reader down.
+                        following = app.transcript.at_bottom
                         bubble.append(event.chunk)
-                        app.transcript.scroll_end(animate=False)
+                        if following:
+                            app.transcript.scroll_end(animate=False)
                 # Persist whatever the agent added (assistant + tool turns)
                 # so the next turn sees the full history.
                 app.messages = list(stream.messages)
@@ -118,7 +122,7 @@ class Transcript(textual.containers.VerticalScroll):
     Transcript {
         height: 1fr;
         padding: 1 2 0 2;
-        scrollbar-gutter: stable;
+        scrollbar-size: 0 0;
     }
     """
 
@@ -127,6 +131,16 @@ class Transcript(textual.containers.VerticalScroll):
         self.mount(bubble)
         self.scroll_end(animate=False)
         return bubble
+
+    @property
+    def at_bottom(self) -> bool:
+        """True when the scrollback is at (or within 1 row of) the end.
+
+        Used to decide whether streaming text should auto-scroll: if
+        the user has scrolled up to read earlier output, we don't yank
+        them back down on every chunk.
+        """
+        return self.scroll_y >= self.max_scroll_y - 1
 
 
 class Composer(textual.widgets.TextArea):
