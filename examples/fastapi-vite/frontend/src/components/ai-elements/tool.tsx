@@ -1,6 +1,12 @@
 "use client";
 
-import type { DynamicToolUIPart, ToolUIPart } from "ai";
+import {
+  isTextUIPart,
+  isToolUIPart,
+  type DynamicToolUIPart,
+  type ToolUIPart,
+  type UIMessage,
+} from "ai";
 import type { ComponentProps, ReactNode } from "react";
 
 import { Badge } from "@/components/ui/badge";
@@ -134,44 +140,47 @@ export type ToolOutputProps = ComponentProps<"div"> & {
   errorText: ToolPart["errorText"];
 };
 
-type UIMessageLike = {
-  role?: string;
-  parts?: unknown[];
-};
-
-function asUIMessage(x: unknown): UIMessageLike | null {
-  if (!x || typeof x !== "object" || Array.isArray(x)) return null;
-  const obj = x as UIMessageLike;
-  return Array.isArray(obj.parts) ? obj : null;
-}
-
-function renderUIParts(parts: unknown[]): ReactNode {
-  return parts.map((raw, i) => {
-    if (!raw || typeof raw !== "object") return null;
-    const part = raw as { type?: string; text?: string };
-
-    if (part.type === "text" && typeof part.text === "string") {
+export function renderUIPart(
+  part: UIMessage["parts"][number],
+  key: number,
+): ReactNode {
+  if (isTextUIPart(part)) {
+    return (
+      <div key={key} className="p-3 text-sm leading-relaxed">
+        <MessageResponse>{part.text}</MessageResponse>
+      </div>
+    );
+  }
+  if (isToolUIPart(part)) {
+    const isComplete = part.state === "output-available";
+    if (part.type === "dynamic-tool") {
+      const dyn = part as DynamicToolUIPart;
       return (
-        <div key={i} className="p-3 text-sm leading-relaxed">
-          <MessageResponse>{part.text}</MessageResponse>
-        </div>
-      );
-    }
-    if (typeof part.type === "string" && part.type.startsWith("tool-")) {
-      const tool = raw as ToolUIPart;
-      const isComplete = tool.state === "output-available";
-      return (
-        <Tool key={i} defaultOpen={isComplete}>
-          <ToolHeader type={tool.type} state={tool.state} />
+        <Tool key={key} defaultOpen={isComplete}>
+          <ToolHeader
+            type="dynamic-tool"
+            state={dyn.state}
+            toolName={dyn.toolName}
+          />
           <ToolContent>
-            <ToolInput input={tool.input} />
-            <ToolOutput output={tool.output} errorText={tool.errorText} />
+            <ToolInput input={dyn.input} />
+            <ToolOutput output={dyn.output} errorText={dyn.errorText} />
           </ToolContent>
         </Tool>
       );
     }
-    return null;
-  });
+    const tool = part as ToolUIPart;
+    return (
+      <Tool key={key} defaultOpen={isComplete}>
+        <ToolHeader type={tool.type} state={tool.state} />
+        <ToolContent>
+          <ToolInput input={tool.input} />
+          <ToolOutput output={tool.output} errorText={tool.errorText} />
+        </ToolContent>
+      </Tool>
+    );
+  }
+  return null;
 }
 
 export const ToolOutput = ({
@@ -186,10 +195,7 @@ export const ToolOutput = ({
 
   let Output = <div>{output as ReactNode}</div>;
 
-  const message = asUIMessage(output);
-  if (message) {
-    Output = <div className="space-y-2">{renderUIParts(message.parts ?? [])}</div>;
-  } else if (typeof output === "string") {
+  if (typeof output === "string") {
     Output = (
       <div className="p-3 text-sm leading-relaxed">
         <MessageResponse>{output}</MessageResponse>

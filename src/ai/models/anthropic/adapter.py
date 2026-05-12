@@ -260,8 +260,8 @@ async def _messages_to_anthropic(
                         entry: dict[str, Any] = {
                             "type": "tool_result",
                             "tool_use_id": part.tool_call_id,
-                            "content": str(part.result)
-                            if part.result is not None
+                            "content": str(part.model_result)
+                            if part.model_result is not None
                             else "",
                         }
                         if part.is_error:

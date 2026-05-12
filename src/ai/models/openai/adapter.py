@@ -162,8 +162,8 @@ async def _messages_to_openai(
                             {
                                 "role": "tool",
                                 "tool_call_id": part.tool_call_id,
-                                "content": str(part.result)
-                                if part.result is not None
+                                "content": str(part.model_result)
+                                if part.model_result is not None
                                 else "",
                             }
                         )

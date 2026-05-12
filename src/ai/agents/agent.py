@@ -118,8 +118,9 @@ def _process_interrupted_hooks(messages: list[types.messages.Message]) -> None:
 
 
 class SimpleAggregator[Item, Result](events_.Aggregator[Item, Result, Result]):
-    def to_model_output(self) -> Result:
-        return self.snapshot()
+    @classmethod
+    def from_snapshot(cls, snapshot: Result) -> Result:
+        return snapshot
 
 
 class ConcatAggregator(SimpleAggregator[str, str]):
@@ -167,8 +168,9 @@ class MessageAggregator(events_.Aggregator[events_.AgentEvent, MessageBundle, st
     def snapshot(self) -> MessageBundle:
         return MessageBundle(messages=tuple(self._messages))
 
-    def to_model_output(self) -> str:
-        for m in reversed(self._messages):
+    @classmethod
+    def from_snapshot(cls, snapshot: MessageBundle) -> str:
+        for m in reversed(snapshot.messages):
             if m.role == "assistant" and m.text:
                 return m.text
         return ""
@@ -471,21 +473,28 @@ class ToolCall:
         tool = self._tool
 
         async def _real(call: middleware_.ToolContext) -> events_.ToolCallResult:
+            result: Any
+            model_result: Any
             try:
                 kwargs = _validate_kwargs(tool, call.kwargs)
                 if tool.is_gen:
                     # Generator tool (e.g. agent-as-a-tool): drain the async
-                    # generator, forward each yielded message to the runtime for
-                    # real-time streaming, and return the final text as the result.
+                    # generator, forward each yielded value to the runtime for
+                    # real-time streaming, then capture both the aggregator
+                    # snapshot (the rich shape that flows to the UI) and the
+                    # model-facing value (what the LLM sees on its next turn).
                     assert tool.aggregator
-                    result = await yield_from(
+                    agg = await _aggregate_from(
                         tool.fn(**kwargs),
                         tool_call_id=call.tool_call_id,
                         tool_name=call.tool_name,
                         aggregator=tool.aggregator,
                     )
+                    result = agg.snapshot()
+                    model_result = agg.to_model_output()
                 else:
                     result = await tool.fn(**kwargs)
+                    model_result = result
             except Exception as exc:
                 # A nested runtime (e.g. a sub-agent run inside this
                 # tool) raises errors wrapped in a singleton TaskGroup
@@ -506,6 +515,7 @@ class ToolCall:
                     tool_call_id=call.tool_call_id,
                     tool_name=call.tool_name,
                     result=result,
+                    model_result=model_result,
                 )
             )
 
@@ -842,10 +852,10 @@ def pending_tool_result(
     return events_.ToolCallResult(message=msg, results=msg.tool_results)
 
 
-async def yield_from[T, R](
+async def yield_from[T, S, R](
     source: AsyncGenerator[T],
     *,
-    aggregator: Callable[[], events_.Aggregator[T, object, R]],
+    aggregator: Callable[[], events_.Aggregator[T, S, R]],
     # TODO: is this what we really want for labelling?
     tool_name: str | None = None,
     tool_call_id: str | None = None,
@@ -873,6 +883,31 @@ async def yield_from[T, R](
 
     Returns the final message's text (empty string if no messages).
     """
+    agg = await _aggregate_from(
+        source,
+        aggregator=aggregator,
+        tool_name=tool_name,
+        tool_call_id=tool_call_id,
+        label=label,
+    )
+    return agg.to_model_output()
+
+
+async def _aggregate_from[T, S, R](
+    source: AsyncGenerator[T],
+    *,
+    aggregator: Callable[[], events_.Aggregator[T, S, R]],
+    tool_name: str | None = None,
+    tool_call_id: str | None = None,
+    label: object = None,
+) -> events_.Aggregator[T, S, R]:
+    """Drain *source* into a fresh aggregator, forwarding partial events.
+
+    Returns the live aggregator so callers can consume both the snapshot
+    (the rich shape stored on ``ToolResultPart.result``) and the
+    model-facing value (``ToolResultPart.model_result``) without
+    re-aggregating.
+    """
     agg = aggregator()
 
     rt = runtime.get_runtime()
@@ -888,7 +923,7 @@ async def yield_from[T, R](
                     aggregator_factory=aggregator,
                 )
             )
-    return agg.to_model_output()
+    return agg
 
 
 class Agent:

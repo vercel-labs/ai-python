@@ -271,8 +271,24 @@ class Aggregator[Item, Result, ModelResult]:
     @abc.abstractmethod
     def snapshot(self) -> Result: ...
 
+    def to_model_output(self) -> ModelResult:
+        """Return the model-facing value derived from this aggregator's state.
+
+        Default implementation defers to :meth:`from_snapshot`; subclasses
+        with non-trivial state may override either or both.
+        """
+        return type(self).from_snapshot(self.snapshot())
+
+    @classmethod
     @abc.abstractmethod
-    def to_model_output(self) -> ModelResult: ...
+    def from_snapshot(cls, snapshot: Result) -> ModelResult:
+        """Stateless conversion: snapshot -> model-facing value.
+
+        Called on inbound (when a tool result round-trips back from the
+        wire) and anywhere else a snapshot needs to be re-derived
+        without a live aggregator instance.
+        """
+        ...
 
 
 class PartialToolCallResult(pydantic.BaseModel):

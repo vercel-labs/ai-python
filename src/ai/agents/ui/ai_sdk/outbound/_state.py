@@ -23,6 +23,23 @@ def _tool_error_text(part: messages_.ToolResultPart) -> str:
     return "Tool execution failed"
 
 
+def _to_wire_output(snapshot: Any) -> Any:
+    """Convert an aggregator snapshot to its UI wire representation.
+
+    For ``MessageBundle`` (sub-agent transcripts) this produces a single
+    ``UIMessage`` assistant bubble — the canonical AI SDK shape.  Other
+    snapshot types pass through unchanged.
+
+    Returns ``None`` if the bundle has no assistant anchor yet (e.g. a
+    streaming sub-agent that has produced no messages); callers should
+    skip emitting in that case.
+    """
+    if isinstance(snapshot, MessageBundle):
+        ui_msgs = history.to_ui_messages(list(snapshot.messages))
+        return ui_msgs[-1] if ui_msgs else None
+    return snapshot
+
+
 class _StreamState:
     """Single-pass state across one ``to_stream()`` call."""
 
@@ -218,10 +235,17 @@ class _StreamState:
                     )
                 )
             else:
+                wire_output = _to_wire_output(part.result)
+                if wire_output is None:
+                    # Aggregator produced no anchor (e.g. sub-agent
+                    # tool that yielded nothing).  Skip the final
+                    # output emit; preliminaries already covered the
+                    # streaming view if any.
+                    continue
                 out.append(
                     protocol.ToolOutputAvailablePart(
                         tool_call_id=part.tool_call_id,
-                        output=part.result,
+                        output=wire_output,
                     )
                 )
 
@@ -254,24 +278,16 @@ class _StreamState:
             self.partial_aggregators[tcid] = agg
         agg.feed(event.value)
 
-        snapshot = agg.snapshot()
-        # MessageBundle is the snapshot type for sub-agent streams.  The
-        # AI SDK frontend speaks UIMessage, so convert here rather than
-        # leaking internal Message shape onto the wire.  A sub-agent's
-        # bundle contains only assistant/tool/internal messages, so
-        # ``to_ui_messages`` produces a single bubble (or none yet, if
-        # there's no assistant anchor) — take the last and skip emit if
-        # absent.
-        if isinstance(snapshot, MessageBundle):
-            ui_msgs = history.to_ui_messages(list(snapshot.messages))
-            if not ui_msgs:
-                return out
-            snapshot = ui_msgs[-1]
+        wire_output = _to_wire_output(agg.snapshot())
+        if wire_output is None:
+            # Sub-agent bundle without an assistant anchor yet — wait
+            # for more events before emitting.
+            return out
 
         out.append(
             protocol.ToolOutputAvailablePart(
                 tool_call_id=tcid,
-                output=snapshot,
+                output=wire_output,
                 preliminary=True,
             )
         )

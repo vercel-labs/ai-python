@@ -30,8 +30,21 @@ class ToolResultPart(pydantic.BaseModel):
     is_hook_pending: bool = False
     provider_metadata: dict[str, Any] | None = None
 
+    # The value the LLM sees on its next turn.  For most tools this is
+    # identical to ``result``; for aggregator-backed tools (sub-agents,
+    # streaming-text) it's a scalar derived from the rich snapshot via
+    # ``Aggregator.from_snapshot``.
+    model_result: Any = pydantic.Field(default=None, repr=False)
+
     kind: Literal["tool_result"] = "tool_result"
     model_config = pydantic.ConfigDict(frozen=True)
+
+    @pydantic.model_validator(mode="before")
+    @classmethod
+    def _default_model_result(cls, data: Any) -> Any:
+        if isinstance(data, dict) and "model_result" not in data:
+            data = {**data, "model_result": data.get("result")}
+        return data
 
 
 class ToolCallPart(pydantic.BaseModel):

@@ -3,7 +3,7 @@ import {
   DefaultChatTransport,
   lastAssistantMessageIsCompleteWithApprovalResponses,
 } from "ai";
-import type { ToolUIPart } from "ai";
+import type { ToolUIPart, UIMessage } from "ai";
 import { CheckIcon, XIcon } from "lucide-react";
 import { Fragment } from "react";
 
@@ -33,6 +33,7 @@ import {
   PromptInputSubmit,
 } from "@/components/ai-elements/prompt-input";
 import {
+  renderUIPart,
   Tool,
   ToolHeader,
   ToolContent,
@@ -140,10 +141,19 @@ export default function App() {
                                 </ConfirmationActions>
                               </Confirmation>
 
-                              <ToolOutput
-                                output={toolPart.output}
-                                errorText={toolPart.errorText}
-                              />
+                              {toolPart.type === "tool-talk_to_mothership" &&
+                              toolPart.state === "output-available" ? (
+                                <div className="space-y-2">
+                                  {(toolPart.output as UIMessage).parts.map(
+                                    (p, i) => renderUIPart(p, i),
+                                  )}
+                                </div>
+                              ) : (
+                                <ToolOutput
+                                  output={toolPart.output}
+                                  errorText={toolPart.errorText}
+                                />
+                              )}
                             </ToolContent>
                           </Tool>
                         );

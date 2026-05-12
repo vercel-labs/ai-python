@@ -164,13 +164,15 @@ async def _messages_to_prompt(
                             {
                                 "type": "error-text",
                                 "value": (
-                                    str(part.result) if part.result is not None else ""
+                                    str(part.model_result)
+                                    if part.model_result is not None
+                                    else ""
                                 ),
                             }
                             if part.is_error
                             else {
                                 "type": "json",
-                                "value": part.result,
+                                "value": part.model_result,
                             }
                         )
                         tool_results.append(

@@ -9,6 +9,7 @@ import pydantic
 
 import ai
 from ai import models
+from ai.agents.agent import MessageBundle
 from ai.types import events as agent_events_
 from ai.types import events as events_
 from ai.types import messages as messages_
@@ -168,7 +169,13 @@ async def test_yield_from_nested_agent() -> None:
     tool_results = [
         e for e in all_events if isinstance(e, agent_events_.ToolCallResult)
     ]
-    assert tool_results[0].results[0].result == "Mars has two moons."
+    # MessageAggregator stores the rich MessageBundle as `result` and the
+    # extracted assistant text as `model_result` (the value the parent
+    # LLM sees on its next turn).
+    sub_part = tool_results[0].results[0]
+    assert isinstance(sub_part.result, MessageBundle)
+    assert sub_part.result.messages[0].text == "Mars has two moons."
+    assert sub_part.model_result == "Mars has two moons."
 
     # The outer LLM's second call (index 2) must NOT contain any inner
     # agent messages.  It should only see: the original user message,
