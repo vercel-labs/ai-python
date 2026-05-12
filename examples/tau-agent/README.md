@@ -1,9 +1,23 @@
 # tau-agent
 
-`tau` is a coding-agent demo built on the `ai` library.  This is the
-chat-bot baseline — single process, Textual TUI, streaming replies, no
-tools yet.  Future iterations will grow real coding capabilities on
-top.
+`tau` is a coding-agent demo built on the `ai` library.  Single
+process, Textual TUI, streaming replies, pi-style tool surface:
+
+- **`read`** — read files; offset/limit pagination with continuation hints
+- **`write`** — create / overwrite a file *(requires approval)*
+- **`edit`** — exact-match str_replace, multiple disjoint edits per call *(requires approval)*
+- **`bash`** — run a shell command in cwd, output truncated to the last 50KB / 2000 lines *(requires approval)*
+- **`grep`** — regex search (skips `.git`, `node_modules`, etc.)
+- **`find`** — glob match
+- **`ls`** — directory listing
+
+Approval-gated tools fire a `ToolApproval` hook; the composer turns
+into a `[y/n]` prompt mid-turn.  Unrelated text typed during a
+pending approval falls through to the message queue — the hook stays
+pending until you give it a y or n.
+
+No workspace jail.  The approval gate is the safety mechanism;
+everything else relies on you watching the prompts.
 
 ## Setup
 
