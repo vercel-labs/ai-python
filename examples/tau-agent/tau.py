@@ -39,6 +39,10 @@ import tools as tools_
 
 MODEL_ID = os.environ.get("TAU_MODEL", "anthropic/claude-sonnet-4.6")
 
+STREAM_PARAMS: dict[str, Any] = {
+    "providerOptions": {"gateway": {"caching": "auto"}},
+}
+
 _ADVERTISE = os.environ.get("TAU_ADVERTISE", "") == "1"
 
 SYSTEM_PROMPT = """\
@@ -89,7 +93,9 @@ async def chat_loop(app: TauApp) -> None:
         text_bubble: Bubble | None = None
         tool_bubbles: dict[str, Bubble] = {}
         try:
-            async with app.agent.run(app.model, app.messages) as stream:
+            async with app.agent.run(
+                app.model, app.messages, params=STREAM_PARAMS
+            ) as stream:
                 async for event in stream:
                     if isinstance(event, ai.events.TextDelta):
                         if text_bubble is None:
@@ -505,12 +511,12 @@ class TauApp(textual.app.App[None]):
         if self._last_usage is not None:
             ctx = self._last_usage.input_tokens + self._last_usage.output_tokens
             parts.append(f"ctx: ~{ctx:,}")
-        parts.append(f"in: {u.input_tokens:,}")
-        parts.append(f"out: {u.output_tokens:,}")
+        # input_tokens includes cache-read; subtract to show uncached.
+        uncached_in = u.input_tokens - (u.cache_read_tokens or 0)
+        parts.append(f"in: {uncached_in:,}")
         if u.cache_read_tokens:
-            parts.append(f"cache-read: {u.cache_read_tokens:,}")
-        if u.cache_write_tokens:
-            parts.append(f"cache-write: {u.cache_write_tokens:,}")
+            parts.append(f"cached: {u.cache_read_tokens:,}")
+        parts.append(f"out: {u.output_tokens:,}")
         self.query_one("#usage-bar", textual.widgets.Static).update("  ".join(parts))
 
     @property
