@@ -287,14 +287,55 @@ class Composer(textual.widgets.TextArea):
         self.styles.height = n + 2
 
 
+class ApprovalTracker:
+    """Session-scoped approval state for tool hooks.
+
+    Tracks "always approve" decisions so subsequent identical commands
+    (or all commands) can be auto-resolved without prompting.
+    """
+
+    def __init__(self) -> None:
+        self._approve_all = False
+        self._approved_commands: set[str] = set()
+
+    def check(self, hook: ai.messages.HookPart[Any]) -> bool | None:
+        """Return True to auto-approve, False to auto-deny, None to prompt."""
+        if self._approve_all:
+            return True
+        tool = hook.metadata.get("tool", "")
+        kwargs = hook.metadata.get("kwargs", {}) or {}
+        if tool == "bash":
+            cmd = kwargs.get("command", "")
+            if cmd in self._approved_commands:
+                return True
+        return None
+
+    def approve_command(self, hook: ai.messages.HookPart[Any]) -> None:
+        """Remember to always approve this exact command."""
+        kwargs = hook.metadata.get("kwargs", {}) or {}
+        cmd = kwargs.get("command", "")
+        if cmd:
+            self._approved_commands.add(cmd)
+
+    def approve_all(self) -> None:
+        """Auto-approve every future tool call this session."""
+        self._approve_all = True
+
+
 class HookPrompt(textual.widgets.Static):
     """Approval prompt for a pending tool-approval hook.
 
     Mounts above the composer when a hook fires.  Focusable; single-key
-    shortcuts (``y``/``a`` approve, ``n``/``d`` deny) resolve it.
+    shortcuts resolve it:
+
+    - ``y`` approve once
+    - ``n`` deny
+    - ``!`` always approve this exact command
+    - ``a`` always approve all commands
+
     Tab/shift-tab cycles focus back to the composer if the user wants
     to look something up before deciding — the hook stays pending and
-    the agent stays blocked until y/n.
+    the agent stays blocked.
     """
 
     DEFAULT_CSS = """
@@ -312,17 +353,21 @@ class HookPrompt(textual.widgets.Static):
     """
 
     BINDINGS = [
-        textual.binding.Binding("y,a", "decide(True)", "approve", show=True),
-        textual.binding.Binding("n,d", "decide(False)", "deny", show=True),
+        textual.binding.Binding("y", "decide('yes')", "approve", show=True),
+        textual.binding.Binding("n", "decide('no')", "deny", show=True),
+        textual.binding.Binding(
+            "exclamation_mark", "decide('always_this')", "always this", show=True
+        ),
+        textual.binding.Binding("a", "decide('always_all')", "always all", show=True),
     ]
 
     can_focus = True
 
     class Decided(textual.message.Message):
-        def __init__(self, hook_id: str, granted: bool) -> None:
+        def __init__(self, hook_id: str, decision: str) -> None:
             super().__init__()
             self.hook_id = hook_id
-            self.granted = granted
+            self.decision = decision  # 'yes' | 'no' | 'always_this' | 'always_all'
 
     def __init__(self, hook: ai.messages.HookPart[Any]) -> None:
         super().__init__()
@@ -336,13 +381,17 @@ class HookPrompt(textual.widgets.Static):
         body.append("  " + _format_kwargs(kwargs), style="dim")
         body.append("\n  ")
         body.append("[y]", style="bold green")
-        body.append(" approve   ")
+        body.append(" yes  ")
         body.append("[n]", style="bold red")
-        body.append(" deny")
+        body.append(" no  ")
+        body.append("[!]", style="bold cyan")
+        body.append(" always this  ")
+        body.append("[a]", style="bold cyan")
+        body.append(" always all")
         self.update(body)
 
-    def action_decide(self, granted: bool) -> None:
-        self.post_message(self.Decided(self._hook_id, granted))
+    def action_decide(self, decision: str) -> None:
+        self.post_message(self.Decided(self._hook_id, decision))
 
 
 def _format_kwargs(kwargs: dict[str, Any]) -> str:
@@ -415,6 +464,7 @@ class TauApp(textual.app.App[None]):
         # access from the composer.
         self._hook_queue: list[ai.messages.HookPart[Any]] = []
         self._active_hook: ai.messages.HookPart[Any] | None = None
+        self._approval = ApprovalTracker()
 
         # Session history — every message is persisted to a JSONL file.
         self._resume_path = resume_path
@@ -565,6 +615,11 @@ class TauApp(textual.app.App[None]):
 
     def on_hook_event(self, hook: ai.messages.HookPart[Any]) -> None:
         if hook.status == "pending":
+            # Check if the tracker can auto-resolve this hook.
+            decision = self._approval.check(hook)
+            if decision is not None:
+                self._resolve_hook(hook, granted=decision)
+                return
             self._hook_queue.append(hook)
             self._activate_next_hook()
         elif hook.status in ("resolved", "cancelled"):
@@ -593,24 +648,30 @@ class TauApp(textual.app.App[None]):
         self._active_hook = None
         self.query_one("#composer", Composer).focus()
 
-    async def on_hook_prompt_decided(self, event: HookPrompt.Decided) -> None:
-        # The widget only fires this for the currently-displayed hook,
-        # which is also ``self._active_hook``.
-        hook = self._active_hook
-        if hook is None or hook.hook_id != event.hook_id:
-            return
+    def _resolve_hook(self, hook: ai.messages.HookPart[Any], *, granted: bool) -> None:
+        """Resolve a hook and show a transcript note."""
         ai.resolve_hook(
             hook.hook_id,
             ai.tools.ToolApproval(
-                granted=event.granted,
-                reason="operator approved" if event.granted else "operator denied",
+                granted=granted,
+                reason="operator approved" if granted else "operator denied",
             ),
         )
         self.transcript.add_bubble(
             "system",
-            f"{'approved' if event.granted else 'denied'}: "
-            f"{hook.metadata.get('tool', '?')}",
+            f"{'approved' if granted else 'denied'}: {hook.metadata.get('tool', '?')}",
         )
+
+    async def on_hook_prompt_decided(self, event: HookPrompt.Decided) -> None:
+        hook = self._active_hook
+        if hook is None or hook.hook_id != event.hook_id:
+            return
+        granted = event.decision != "no"
+        if event.decision == "always_this":
+            self._approval.approve_command(hook)
+        elif event.decision == "always_all":
+            self._approval.approve_all()
+        self._resolve_hook(hook, granted=granted)
         self._dismiss_active_prompt()
         self._activate_next_hook()
 
