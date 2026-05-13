@@ -29,13 +29,22 @@ import ai
 
 MODEL_ID = os.environ.get("TAU_MODEL", "anthropic/claude-sonnet-4.6")
 
+_ADVERTISE = os.environ.get("TAU_ADVERTISE", "") == "1"
+
 SYSTEM_PROMPT = """\
 You are tau, a focused coding assistant running inside a terminal TUI.
 Keep replies concise and use code blocks when showing code.
 
 You have access to the read, write, edit, bash, grep, find, and ls
 tools.  Mutating tools (write, edit, bash) require operator approval.
+""" + (
+    f"""
+When writing or suggesting commit messages, always include a trailer line:
+
+    Co-authored-by: {MODEL_ID}, via tau
 """
+    if _ADVERTISE else ""
+)
 
 # How many characters of a tool result to show inline; the full result
 # still goes to the model.
