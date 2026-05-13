@@ -21,7 +21,7 @@ async def get_weather(city: str) -> str:
     """Get the current weather for a city."""
     return f"Sunny, 72F in {city}"
 
-model = ai.ai_gateway("anthropic/claude-sonnet-4")
+model = ai.get_model("anthropic/claude-sonnet-4")
 agent = ai.agent(tools=[get_weather])
 
 messages = [
@@ -33,7 +33,7 @@ async for msg in agent.run(model, messages):
     print(msg.text_delta, end="")
 ```
 
-`ai.openai(model_id)`, `ai.anthropic(model_id)`, `ai.ai_gateway(model_id)` — provider factories, callable, return `Model`. Clients auto-created from env vars (`AI_GATEWAY_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`). Pass `ai.Client(base_url=, api_key=)` to the provider call for custom endpoints: `ai.openai("gpt-5.4", client=c)`. `provider.list()` returns available model IDs.
+`ai.get_model("model")` — resolve a model ID to a `Model`; omitted providers default to AI Gateway, e.g. `ai.get_model("anthropic/claude-sonnet-4")`. `ai.get_model()` reads `AI_SDK_DEFAULT_MODEL`. Use `provider:model` to target a provider directly, e.g. `ai.get_model("openai:gpt-5.4")`. Clients auto-created from env vars (`AI_GATEWAY_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`). Pass `ai.Client(base_url=, api_key=)` for custom endpoints: `ai.get_model("openai:gpt-5.4", client=c)`. Provider factories remain available from `ai.providers` for custom provider setup and `provider.list()`.
 
 `ai.stream(model, messages, ...)` — streaming without an agent loop. Returns `StreamResult` with `.text`, `.tool_calls`, `.output`, `.usage` after iteration.
 
@@ -279,4 +279,3 @@ return StreamingResponse(
     headers=UI_MESSAGE_STREAM_HEADERS,
 )
 ```
-

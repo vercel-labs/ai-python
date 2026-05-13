@@ -13,12 +13,50 @@ def test_get_resolves_provider_qualified_model_id() -> None:
     assert model.provider is openai
 
 
-def test_get_resolves_slash_qualified_model_id() -> None:
-    model = models.get_model("anthropic/claude-sonnet-4-5")
+def test_get_resolves_provider_qualified_anthropic_model_id() -> None:
+    model = models.get_model("anthropic:claude-sonnet-4-5")
 
     assert model.id == "claude-sonnet-4-5"
     assert model.adapter == "anthropic"
     assert model.provider is anthropic
+
+
+def test_get_defaults_to_gateway_when_provider_is_omitted() -> None:
+    model = models.get_model("anthropic/claude-sonnet-4")
+
+    assert model.id == "anthropic/claude-sonnet-4"
+    assert model.adapter == "ai-gateway-v3"
+    assert model.provider is ai_gateway
+
+
+def test_get_uses_default_model_env_when_model_id_is_omitted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AI_SDK_DEFAULT_MODEL", "anthropic/claude-sonnet-4")
+
+    model = models.get_model()
+
+    assert model.id == "anthropic/claude-sonnet-4"
+    assert model.adapter == "ai-gateway-v3"
+    assert model.provider is ai_gateway
+
+
+def test_get_rejects_missing_default_model_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("AI_SDK_DEFAULT_MODEL", raising=False)
+
+    with pytest.raises(ai.ConfigurationError, match="AI_SDK_DEFAULT_MODEL"):
+        models.get_model()
+
+
+def test_get_rejects_empty_default_model_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AI_SDK_DEFAULT_MODEL", "")
+
+    with pytest.raises(ai.ConfigurationError, match="AI_SDK_DEFAULT_MODEL"):
+        models.get_model()
 
 
 def test_provider_from_id_resolves_openai_compatible_provider() -> None:
@@ -57,6 +95,7 @@ def test_provider_from_id_resolves_gateway_provider() -> None:
 
 def test_provider_from_id_resolves_gateway_alias() -> None:
     assert models.Provider.from_id("ai-gateway") is ai_gateway
+    assert models.Provider.from_id("gateway") is ai_gateway
 
 
 def test_get_resolves_gateway_alias() -> None:
@@ -65,6 +104,9 @@ def test_get_resolves_gateway_alias() -> None:
     assert model.id == "alibaba/qwen-3-14b"
     assert model.adapter == "ai-gateway-v3"
     assert model.provider is ai_gateway
+
+    gateway_model = models.get_model("gateway:alibaba/qwen-3-14b")
+    assert gateway_model == model
 
 
 def test_get_uses_model_provider_config_for_anthropic_compatibility() -> None:
@@ -110,6 +152,6 @@ def test_get_rejects_unsupported_provider_package() -> None:
         models.get_model("google:gemini-2.5-pro")
 
 
-def test_get_rejects_unqualified_model_id() -> None:
-    with pytest.raises(ValueError, match="known provider id"):
-        models.get_model("gpt-5")
+def test_get_rejects_empty_model_id() -> None:
+    with pytest.raises(ValueError, match="must not be empty"):
+        models.get_model("")

@@ -50,7 +50,7 @@ async def contact_mothership(query: str) -> str:
 
 
 async def main() -> None:
-    model = ai.ai_gateway("anthropic/claude-sonnet-4")
+    model = ai.get_model("anthropic/claude-sonnet-4")
     agent = ai.agent(tools=[contact_mothership])
 
     messages = [
@@ -92,7 +92,7 @@ import ai
 
 
 async def main() -> None:
-    model = ai.ai_gateway("anthropic/claude-sonnet-4")
+    model = ai.get_model("anthropic/claude-sonnet-4")
     messages = [
         ai.system_message("Be concise."),
         ai.user_message("Explain why the robots keep asking about batteries."),

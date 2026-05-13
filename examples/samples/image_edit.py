@@ -11,7 +11,7 @@ import pathlib
 
 import ai
 
-model = ai.ai_gateway("openai/gpt-image-1")
+model = ai.get_model("gateway:openai/gpt-image-1")
 
 
 async def main() -> None:

@@ -12,7 +12,7 @@ messages = [
     ),
 ]
 
-model = ai.ai_gateway("anthropic/claude-sonnet-4.6")
+model = ai.get_model("gateway:anthropic/claude-sonnet-4.6")
 
 
 def _strip_encrypted(value: object) -> object:

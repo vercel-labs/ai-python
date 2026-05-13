@@ -12,7 +12,7 @@ client = ai.Client(
     headers={"X-Custom-Header": "example"},
 )
 
-model = ai.ai_gateway("anthropic/claude-sonnet-4", client=client)
+model = ai.get_model("gateway:anthropic/claude-sonnet-4", client=client)
 
 messages = [ai.user_message("Hello!")]
 

@@ -26,7 +26,7 @@ async def contact_mothership(query: str) -> str:
 
 
 async def main() -> None:
-    model = ai.ai_gateway("anthropic/claude-sonnet-4")
+    model = ai.get_model("gateway:anthropic/claude-sonnet-4")
     agent = ai.agent(tools=[contact_mothership])
 
     messages = [
@@ -54,9 +54,11 @@ An `ai.Model` is a config object you pass to `ai.stream` to get an LLM reply.
 It accepts tool schemas but does not execute custom tools.
 
 ```python
-model = ai.ai_gateway("openai/gpt-5.4")
-model = ai.openai("gpt-5.4")
-model = ai.anthropic("claude-sonnet-4-6")
+model = ai.get_model()  # reads AI_SDK_DEFAULT_MODEL
+model = ai.get_model("openai/gpt-5.4")  # provider omitted: defaults to gateway
+model = ai.get_model("gateway:openai/gpt-5.4")
+model = ai.get_model("openai:gpt-5.4")
+model = ai.get_model("anthropic:claude-sonnet-4-6")
 ```
 
 Structured output:

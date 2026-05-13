@@ -3,15 +3,15 @@
 Usage::
 
     import ai
-    from ai.providers import openai, openai_like, anthropic, anthropic_like, ai_gateway
+    from ai.providers import openai_like, anthropic_like
 
-    model = openai("gpt-5.4")
+    model = ai.get_model("openai:gpt-5.4")
     model = openai_like(name="local", base_url="http://localhost:11434/v1")("llama3")
-    model = anthropic("claude-sonnet-4-6")
+    model = ai.get_model("anthropic:claude-sonnet-4-6")
     model = anthropic_like(name="custom", base_url="https://anthropic.example.com")(
         "claude-sonnet-4-6"
     )
-    model = ai_gateway("anthropic/claude-sonnet-4")
+    model = ai.get_model("anthropic/claude-sonnet-4")  # defaults to Gateway
 
     # stream — auto-creates client from env vars
     msgs = [ai.user_message("hello")]
@@ -22,7 +22,7 @@ Usage::
 
     # explicit client for custom auth
     client = ai.Client(base_url="https://custom.example.com/v1", api_key="sk-...")
-    model = openai("gpt-5.4", client=client)
+    model = ai.get_model("openai:gpt-5.4", client=client)
     async with ai.stream(model, msgs) as s:
         ...
 

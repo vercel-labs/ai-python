@@ -6,7 +6,7 @@ import pydantic
 
 import ai
 
-model = ai.ai_gateway("anthropic/claude-sonnet-4.6")
+model = ai.get_model("gateway:anthropic/claude-sonnet-4.6")
 
 
 class Recipe(pydantic.BaseModel):

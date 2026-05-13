@@ -42,7 +42,7 @@ async def contact_mothership(query: str) -> str:
 
 
 async def main() -> None:
-    model = ai.ai_gateway("anthropic/claude-sonnet-4")
+    model = ai.get_model("anthropic/claude-sonnet-4")
     agent = ai.agent(tools=[contact_mothership])
     messages = [
         ai.system_message(
@@ -118,7 +118,7 @@ sees the aggregated result on the next turn.
 Use `ai.SubAgentTool` when a tool should stream events from another agent:
 
 ```python
-mothership_model = ai.ai_gateway("anthropic/claude-sonnet-4")
+mothership_model = ai.get_model("anthropic/claude-sonnet-4")
 
 
 @ai.tool

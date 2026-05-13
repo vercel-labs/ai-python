@@ -58,7 +58,7 @@ class Approval(pydantic.BaseModel):
 # Model
 # ---------------------------------------------------------------------------
 
-MODEL = ai.ai_gateway("anthropic/claude-sonnet-4")
+MODEL = ai.get_model("gateway:anthropic/claude-sonnet-4")
 
 
 # ---------------------------------------------------------------------------

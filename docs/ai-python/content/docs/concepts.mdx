@@ -12,11 +12,28 @@ framework-specific shape.
 
 ## Start with models and messages
 
-A model is a lightweight reference to a provider model. Create one with a
-provider factory:
+A model is a lightweight reference to a provider model. Create one with
+`ai.get_model`. If you omit the provider prefix, the model routes through AI
+Gateway:
 
 ```python
-model = ai.ai_gateway("anthropic/claude-sonnet-4")
+model = ai.get_model("anthropic/claude-sonnet-4")
+```
+
+You can also set `AI_SDK_DEFAULT_MODEL` and call `get_model` without arguments:
+
+```bash
+export AI_SDK_DEFAULT_MODEL="anthropic/claude-sonnet-4"
+```
+
+```python
+model = ai.get_model()
+```
+
+Use a `provider:model` ID when you want to target a specific provider directly:
+
+```python
+model = ai.get_model("openai:gpt-5")
 ```
 
 Messages are the conversation history you send to the model. Use message

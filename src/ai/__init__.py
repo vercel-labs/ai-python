@@ -20,7 +20,7 @@ from .agents import (
     tool_result,
     yield_from,
 )
-from .errors import AIError, UnsupportedProviderError
+from .errors import AIError, ConfigurationError, UnsupportedProviderError
 from .models import (
     Client,
     ImageParams,
@@ -58,6 +58,7 @@ __all__ = [
     "thinking",
     # Models (from models/)
     "AIError",
+    "ConfigurationError",
     "UnsupportedProviderError",
     "Model",
     "Provider",

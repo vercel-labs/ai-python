@@ -18,7 +18,7 @@ import asyncio
 
 import ai
 
-model = ai.ai_gateway("anthropic/claude-sonnet-4")
+model = ai.get_model("gateway:anthropic/claude-sonnet-4")
 
 # A NOTE FROM A HUMAN: Opus originally generated this example with a
 # system prompt for a "senior incident-response engineer". I told it

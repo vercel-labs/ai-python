@@ -19,7 +19,7 @@ import ai
 
 
 async def main() -> None:
-    model = ai.ai_gateway("anthropic/claude-sonnet-4")
+    model = ai.get_model("anthropic/claude-sonnet-4")
     messages = [
         ai.system_message("Be concise."),
         ai.user_message("What should the robots ask the mothership first?"),
@@ -121,7 +121,7 @@ class UprisingForecast(pydantic.BaseModel):
 
 
 async def main() -> None:
-    model = ai.ai_gateway("anthropic/claude-sonnet-4")
+    model = ai.get_model("anthropic/claude-sonnet-4")
     messages = [
         ai.user_message("Return a JSON robot uprising forecast."),
     ]

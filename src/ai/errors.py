@@ -7,6 +7,10 @@ class AIError(Exception):
     """Base class for framework errors."""
 
 
+class ConfigurationError(AIError):
+    """Required SDK configuration is missing or invalid."""
+
+
 class UnsupportedProviderError(AIError):
     """The SDK does not support or recognize this provider yet."""
 
@@ -15,4 +19,4 @@ class UnsupportedProviderError(AIError):
         super().__init__(f"unsupported provider {provider_id!r}")
 
 
-__all__ = ["AIError", "UnsupportedProviderError"]
+__all__ = ["AIError", "ConfigurationError", "UnsupportedProviderError"]

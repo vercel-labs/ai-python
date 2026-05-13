@@ -12,7 +12,7 @@ if ai.anthropic.client().api_key is None:
     print(f"[SKIP] {ai.anthropic.api_key_env} not set")
     sys.exit(0)
 
-model = ai.anthropic("claude-sonnet-4-6")
+model = ai.get_model("anthropic:claude-sonnet-4-6")
 
 messages = [
     ai.system_message("Be concise. Cite sources you use. The year is 2026"),

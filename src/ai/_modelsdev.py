@@ -10,7 +10,7 @@ if TYPE_CHECKING:
 
 _ENV_REFERENCE_RE = re.compile(r"\$\{?([A-Z_][A-Z0-9_]*)\}?")
 _SECRET_ENV_MARKERS = ("API_KEY", "TOKEN", "SECRET", "BEARER")
-_PROVIDER_ID_ALIASES = {"ai-gateway": "vercel"}
+_PROVIDER_ID_ALIASES = {"ai-gateway": "vercel", "gateway": "vercel"}
 
 
 def parse_model_id(model_id: str) -> modelsdotdev.ModelRef:
