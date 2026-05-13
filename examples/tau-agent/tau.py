@@ -415,6 +415,7 @@ class TauApp(textual.app.App[None]):
         self._session_path: pathlib.Path | None = None
         self._saved_count: int = 0  # messages already written to disk
         self._total_usage: ai.types.usage.Usage = ai.types.usage.Usage()
+        self._last_usage: ai.types.usage.Usage | None = None
 
     def compose(self) -> textual.app.ComposeResult:
         yield Transcript(id="transcript")
@@ -486,10 +487,13 @@ class TauApp(textual.app.App[None]):
     def _refresh_usage(self) -> None:
         """Re-derive cumulative usage from all messages."""
         total = ai.types.usage.Usage()
+        last_usage: ai.types.usage.Usage | None = None
         for msg in self.messages:
             if msg.usage is not None:
                 total = total + msg.usage
+                last_usage = msg.usage
         self._total_usage = total
+        self._last_usage = last_usage
         self._update_usage_display()
 
     def _update_usage_display(self) -> None:
@@ -498,7 +502,11 @@ class TauApp(textual.app.App[None]):
         if u.total_tokens == 0:
             return
         parts: list[str] = []
-        parts.append(f"tokens  in: {u.input_tokens:,}")
+        # Approximate current context size: last turn's in + out.
+        if self._last_usage is not None:
+            ctx = self._last_usage.input_tokens + self._last_usage.output_tokens
+            parts.append(f"ctx: ~{ctx:,}")
+        parts.append(f"in: {u.input_tokens:,}")
         parts.append(f"out: {u.output_tokens:,}")
         if u.cache_read_tokens:
             parts.append(f"cache-read: {u.cache_read_tokens:,}")
