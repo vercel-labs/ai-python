@@ -23,6 +23,7 @@ import sys
 from typing import Any
 
 import ai
+import ai.types.usage
 import rich.text
 import textual
 import textual.app
@@ -122,6 +123,8 @@ async def chat_loop(app: TauApp) -> None:
                 # so the next turn sees the full history.
                 app.messages = list(stream.messages)
                 app._save_messages()
+                # Accumulate token usage from new messages.
+                app._refresh_usage()
         except Exception as exc:  # noqa: BLE001 — surface in the UI
             app.transcript.add_bubble("system", f"error: {exc}")
 
@@ -363,6 +366,11 @@ class TauApp(textual.app.App[None]):
         border: round $surface-lighten-2;
         background: $surface;
     }
+    #usage-bar {
+        height: 1;
+        padding: 0 1;
+        color: $text-muted;
+    }
     """
 
     BINDINGS = [
@@ -406,12 +414,14 @@ class TauApp(textual.app.App[None]):
         self._session_id: str = ""
         self._session_path: pathlib.Path | None = None
         self._saved_count: int = 0  # messages already written to disk
+        self._total_usage: ai.types.usage.Usage = ai.types.usage.Usage()
 
     def compose(self) -> textual.app.ComposeResult:
         yield Transcript(id="transcript")
         with textual.containers.Container(id="composer-dock"):
             # Hook prompts get mounted here via ``before=#composer``.
             yield Composer(placeholder="message tau…", id="composer")
+            yield textual.widgets.Static("", id="usage-bar")
 
     def on_mount(self) -> None:
         if self._resume_path is not None:
@@ -463,6 +473,7 @@ class TauApp(textual.app.App[None]):
             f"resumed session {self._session_id} "
             f"({len(self.messages) - 1} messages) — model: {MODEL_ID}",
         )
+        self._refresh_usage()
 
     def _save_messages(self) -> None:
         """Append any new messages to the session JSONL file."""
@@ -471,6 +482,29 @@ class TauApp(textual.app.App[None]):
         self._saved_count = session_.append_messages(
             self._session_path, self.messages, after=self._saved_count
         )
+
+    def _refresh_usage(self) -> None:
+        """Re-derive cumulative usage from all messages."""
+        total = ai.types.usage.Usage()
+        for msg in self.messages:
+            if msg.usage is not None:
+                total = total + msg.usage
+        self._total_usage = total
+        self._update_usage_display()
+
+    def _update_usage_display(self) -> None:
+        """Show cumulative token usage in the footer bar."""
+        u = self._total_usage
+        if u.total_tokens == 0:
+            return
+        parts: list[str] = []
+        parts.append(f"tokens  in: {u.input_tokens:,}")
+        parts.append(f"out: {u.output_tokens:,}")
+        if u.cache_read_tokens:
+            parts.append(f"cache-read: {u.cache_read_tokens:,}")
+        if u.cache_write_tokens:
+            parts.append(f"cache-write: {u.cache_write_tokens:,}")
+        self.query_one("#usage-bar", textual.widgets.Static).update("  ".join(parts))
 
     @property
     def transcript(self) -> Transcript:
