@@ -28,10 +28,12 @@ def test_aggregate_marker_extracted_from_direct_annotated() -> None:
     """Bare ``Annotated[..., Aggregate(...)]`` on the return type."""
 
     @ai.tool
-    async def t() -> Annotated[AsyncGenerator[str], ai.Aggregate(ai.LastAggregator)]:
+    async def t() -> Annotated[
+        AsyncGenerator[str], ai.agents.Aggregate(ai.agents.LastAggregator)
+    ]:
         yield "x"
 
-    assert isinstance(_factory(t), ai.LastAggregator)
+    assert isinstance(_factory(t), ai.agents.LastAggregator)
 
 
 def test_aggregate_marker_extracted_from_alias() -> None:
@@ -41,7 +43,7 @@ def test_aggregate_marker_extracted_from_alias() -> None:
     async def t() -> ai.StreamingStatusTool[str]:
         yield "x"
 
-    assert isinstance(_factory(t), ai.LastAggregator)
+    assert isinstance(_factory(t), ai.agents.LastAggregator)
 
 
 def test_sub_agent_tool_alias_extracted() -> None:
@@ -51,7 +53,7 @@ def test_sub_agent_tool_alias_extracted() -> None:
     async def t() -> ai.SubAgentTool:
         yield ai.events.StreamStart()
 
-    assert isinstance(_factory(t), ai.MessageAggregator)
+    assert isinstance(_factory(t), ai.agents.MessageAggregator)
 
 
 def test_streaming_text_tool_alias_extracted() -> None:
@@ -63,7 +65,7 @@ def test_streaming_text_tool_alias_extracted() -> None:
         yield "world"
 
     agg = _factory(t)
-    assert isinstance(agg, ai.ConcatAggregator)
+    assert isinstance(agg, ai.agents.ConcatAggregator)
     agg.feed("hello")
     agg.feed("world")
     assert agg.snapshot() == "helloworld"
@@ -74,13 +76,13 @@ def test_aggregate_kwarg_passed_to_factory() -> None:
 
     @ai.tool
     async def t() -> Annotated[
-        AsyncGenerator[str], ai.Aggregate(ai.ConcatAggregator, delim="|")
+        AsyncGenerator[str], ai.agents.Aggregate(ai.agents.ConcatAggregator, delim="|")
     ]:
         yield "a"
         yield "b"
 
     agg = _factory(t)
-    assert isinstance(agg, ai.ConcatAggregator)
+    assert isinstance(agg, ai.agents.ConcatAggregator)
     agg.feed("a")
     agg.feed("b")
     assert agg.snapshot() == "a|b"
@@ -90,7 +92,7 @@ def test_kwarg_and_marker_conflict_raises() -> None:
     """Specifying both ``aggregator=`` and an Aggregate marker is an error."""
     with pytest.raises(TypeError, match="aggregator"):
 
-        @ai.tool(aggregator=ai.LastAggregator)
+        @ai.tool(aggregator=ai.agents.LastAggregator)
         async def t() -> ai.StreamingStatusTool[str]:
             yield "x"
 
@@ -102,8 +104,8 @@ def test_multiple_aggregate_markers_raise() -> None:
         @ai.tool
         async def t() -> Annotated[
             AsyncGenerator[str],
-            ai.Aggregate(ai.LastAggregator),
-            ai.Aggregate(ai.ConcatAggregator),
+            ai.agents.Aggregate(ai.agents.LastAggregator),
+            ai.agents.Aggregate(ai.agents.ConcatAggregator),
         ]:
             yield "x"
 

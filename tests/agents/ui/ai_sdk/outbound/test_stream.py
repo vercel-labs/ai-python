@@ -160,19 +160,19 @@ async def test_partial_tool_results_emit_preliminary_outputs() -> None:
                 tool_call_id="tc1",
                 tool_name="search",
                 value="hit 1, ",
-                aggregator_factory=ai.ConcatAggregator,
+                aggregator_factory=ai.agents.ConcatAggregator,
             ),
             agent_events_.PartialToolCallResult(
                 tool_call_id="tc1",
                 tool_name="search",
                 value="hit 2, ",
-                aggregator_factory=ai.ConcatAggregator,
+                aggregator_factory=ai.agents.ConcatAggregator,
             ),
             agent_events_.PartialToolCallResult(
                 tool_call_id="tc1",
                 tool_name="search",
                 value="hit 3",
-                aggregator_factory=ai.ConcatAggregator,
+                aggregator_factory=ai.agents.ConcatAggregator,
             ),
         ]
     )
@@ -205,7 +205,7 @@ async def test_partial_message_bundle_becomes_ui_message() -> None:
                 tool_call_id="tc1",
                 tool_name="research",
                 value=agent_events_.ToolCallResult(message=inner_msg, results=[]),
-                aggregator_factory=ai.MessageAggregator,
+                aggregator_factory=ai.agents.MessageAggregator,
             ),
         ]
     )

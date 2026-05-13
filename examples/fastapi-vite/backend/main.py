@@ -74,7 +74,7 @@ async def chat(request: ChatRequest) -> fastapi.responses.StreamingResponse:
                         isinstance(event, ai.events.HookEvent)
                         and event.hook.status == "pending"
                     ):
-                        ai.agents.abort_pending_hook(event.hook)
+                        ai.abort_pending_hook(event.hook)
                     yield event
 
             async for chunk in ai.agents.ui.ai_sdk.to_sse(process()):

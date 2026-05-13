@@ -21,7 +21,7 @@ import pydantic
 import ai
 
 
-class PrintMiddleware(ai.Middleware):
+class PrintMiddleware(ai.agents.Middleware):
     """Logs every execution surface to stdout."""
 
     async def wrap_agent_run(
@@ -40,8 +40,8 @@ class PrintMiddleware(ai.Middleware):
 
     async def wrap_model(
         self,
-        call: ai.middleware.ModelContext,
-        next: Callable[[ai.middleware.ModelContext], Awaitable[Any]],
+        call: ai.agents.middleware.ModelContext,
+        next: Callable[[ai.agents.middleware.ModelContext], Awaitable[Any]],
     ) -> Any:
         print(f"\n>>> [model] calling {call.model.id}")
         print(f"    messages: {len(call.messages)}")
@@ -55,8 +55,10 @@ class PrintMiddleware(ai.Middleware):
 
     async def wrap_generate(
         self,
-        call: ai.middleware.GenerateContext,
-        next: Callable[[ai.middleware.GenerateContext], Awaitable[ai.messages.Message]],
+        call: ai.agents.middleware.GenerateContext,
+        next: Callable[
+            [ai.agents.middleware.GenerateContext], Awaitable[ai.messages.Message]
+        ],
     ) -> ai.messages.Message:
         print(f"\n>>> [generate] calling {call.model.id}")
         print(f"    messages: {len(call.messages)}")
@@ -68,9 +70,9 @@ class PrintMiddleware(ai.Middleware):
 
     async def wrap_tool(
         self,
-        call: ai.middleware.ToolContext,
+        call: ai.agents.middleware.ToolContext,
         next: Callable[
-            [ai.middleware.ToolContext], Awaitable[ai.events.ToolCallResult]
+            [ai.agents.middleware.ToolContext], Awaitable[ai.events.ToolCallResult]
         ],
     ) -> ai.events.ToolCallResult:
         print(f"\n>>> [tool] {call.tool_name}({call.kwargs})")
@@ -86,8 +88,10 @@ class PrintMiddleware(ai.Middleware):
 
     async def wrap_hook(
         self,
-        call: ai.middleware.HookContext,
-        next: Callable[[ai.middleware.HookContext], Awaitable[pydantic.BaseModel]],
+        call: ai.agents.middleware.HookContext,
+        next: Callable[
+            [ai.agents.middleware.HookContext], Awaitable[pydantic.BaseModel]
+        ],
     ) -> pydantic.BaseModel:
         print(f"\n>>> [hook] {call.label}  payload={call.payload.__name__}")
 

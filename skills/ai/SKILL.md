@@ -89,15 +89,15 @@ async def research(topic: str) -> ai.SubAgentTool:
         yield event         # final assistant text becomes the tool result
 ```
 
-These aliases expand to `Annotated[AsyncGenerator[T], ai.Aggregate(Aggregator)]`. For a parameterized aggregator, write the marker directly:
+These aliases expand to `Annotated[AsyncGenerator[T], ai.agents.Aggregate(Aggregator)]`. For a parameterized aggregator, write the marker directly:
 
 ```python
-type Joined = Annotated[AsyncGenerator[str], ai.Aggregate(ai.ConcatAggregator, delim="\n")]
+type Joined = Annotated[AsyncGenerator[str], ai.agents.Aggregate(ai.agents.ConcatAggregator, delim="\n")]
 ```
 
-Or pass the factory as a keyword argument: `@ai.tool(aggregator=ai.LastAggregator)`. Specifying both an annotation marker and the kwarg raises `TypeError`.
+Or pass the factory as a keyword argument: `@ai.tool(aggregator=ai.agents.LastAggregator)`. Specifying both an annotation marker and the kwarg raises `TypeError`.
 
-Built-in aggregators: `ai.ConcatAggregator`, `ai.LastAggregator`, `ai.MessageAggregator`. Subclass `ai.SimpleAggregator[Item, Result]` (in/out same type) or `ai.events.Aggregator[Item, Result, ModelResult]` (separate model output) for custom ones.
+Built-in aggregators: `ai.agents.ConcatAggregator`, `ai.agents.LastAggregator`, `ai.agents.MessageAggregator`. Subclass `ai.agents.SimpleAggregator[Item, Result]` (in/out same type) or `ai.events.Aggregator[Item, Result, ModelResult]` (separate model output) for custom ones.
 
 ## Custom agent loops
 
@@ -166,12 +166,12 @@ async def multi(model: ai.Model, query: str) -> str:
         ai.yield_from(
             researcher.run(model, msgs1),
             label="researcher",
-            aggregator=ai.MessageAggregator,
+            aggregator=ai.agents.MessageAggregator,
         ),
         ai.yield_from(
             analyst.run(model, msgs2),
             label="analyst",
-            aggregator=ai.MessageAggregator,
+            aggregator=ai.agents.MessageAggregator,
         ),
     )
     return f"{r1}\n{r2}"
@@ -282,10 +282,10 @@ return StreamingResponse(
 
 ## Middleware
 
-Subclass `ai.Middleware` and override the wrap methods you need. Pass to `agent.run(..., middleware=[...])`. Run-scoped, composable, first in list = outermost.
+Subclass `ai.agents.Middleware` and override the wrap methods you need. Pass to `agent.run(..., middleware=[...])`. Run-scoped, composable, first in list = outermost.
 
 ```python
-class LoggingMiddleware(ai.Middleware):
+class LoggingMiddleware(ai.agents.Middleware):
     async def wrap_model(self, call, next):
         print(f"calling {call.model.id}")
         result = await next(call)

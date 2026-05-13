@@ -124,7 +124,7 @@ async def llm_call_activity(params: LLMParams) -> LLMResult:
         for t in params.tool_schemas
     ]
 
-    async with ai.models.stream(model, messages, tools=tools) as s:
+    async with ai.stream(model, messages, tools=tools) as s:
         async for _event in s:
             pass
         if s.message is None:
@@ -170,7 +170,7 @@ async def _replay_as_stream(
 # wrap_tool, same as without middleware.
 
 
-class TemporalMiddleware(ai.Middleware):
+class TemporalMiddleware(ai.agents.Middleware):
     """Routes LLM calls and tool executions through Temporal activities."""
 
     def __init__(self, tool_schemas: list[dict[str, Any]]) -> None:
@@ -178,7 +178,7 @@ class TemporalMiddleware(ai.Middleware):
 
     async def wrap_model(
         self,
-        call: ai.middleware.ModelContext,
+        call: ai.agents.middleware.ModelContext,
         next: Any,
     ) -> Any:
         """LLM call → Temporal activity.
@@ -200,7 +200,7 @@ class TemporalMiddleware(ai.Middleware):
 
     async def wrap_tool(
         self,
-        call: ai.middleware.ToolContext,
+        call: ai.agents.middleware.ToolContext,
         next: Any,
     ) -> ai.events.ToolCallResult:
         """Tool execution → Temporal activity."""

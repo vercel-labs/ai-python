@@ -6,7 +6,7 @@ The tool's aggregator decides how the yielded values are combined into
 the final tool result that goes back to the model.
 
 Here the aggregator is declared via the :data:`ai.StreamingStatusTool`
-return-type alias — equivalent to ``@ai.tool(aggregator=ai.LastAggregator)``.
+return-type alias — equivalent to ``@ai.tool(aggregator=ai.agents.LastAggregator)``.
 """
 
 import asyncio

@@ -69,7 +69,7 @@ async def main() -> None:
                     f"  Hook pending: {hook_part.hook_id} "
                     f"(metadata={hook_part.metadata})"
                 )
-                ai.agents.abort_pending_hook(hook_part)
+                ai.abort_pending_hook(hook_part)
 
         # Pick up the assistant turn that the loop appended so the
         # next run replays from the same point.
@@ -81,7 +81,7 @@ async def main() -> None:
     # -- Second run: pre-register resolution, replay from checkpoint --
     print("--- Run 2: pre-register approval, resume from checkpoint ---")
     for label in pending_hook_labels:
-        ai.agents.resolve_hook(
+        ai.resolve_hook(
             label, ai.tools.ToolApproval(granted=True, reason="user granted")
         )
 

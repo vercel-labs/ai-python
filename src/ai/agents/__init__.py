@@ -1,4 +1,4 @@
-from . import mcp, ui
+from . import mcp, middleware, ui
 from .agent import (
     Agent,
     AgentTool,
@@ -30,6 +30,7 @@ from .hooks import (
     hook,
     resolve_hook,
 )
+from .middleware import Middleware
 
 __all__ = [
     "Agent",
@@ -41,6 +42,8 @@ __all__ = [
     "MessageAggregator",
     "MessageBundle",
     "SimpleAggregator",
+    "Middleware",
+    "middleware",
     "StreamingTextTool",
     "SubAgentTool",
     "Tool",

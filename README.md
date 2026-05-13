@@ -85,7 +85,7 @@ ai.tool_result     ai.tool_result_part  ai.file_part  ai.thinking
 ### Middleware
 
 ```
-ai.Middleware                    base class — subclass and override wrap methods
+ai.agents.Middleware             base class — subclass and override wrap methods
 agent.run(..., middleware=[m])   run-scoped, first = outermost
 ```
 

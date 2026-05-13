@@ -27,7 +27,7 @@ from ..conftest import (
 # ---------------------------------------------------------------------------
 
 
-@ai.tool(aggregator=ai.LastAggregator)
+@ai.tool(aggregator=ai.agents.LastAggregator)
 async def progress_tool(query: str) -> AsyncGenerator[str]:
     """Tool that streams progress, then returns a final answer."""
     yield "Working..."
@@ -109,7 +109,7 @@ async def inner_fact(topic: str) -> str:
     return f"Fact about {topic}"
 
 
-@ai.tool(aggregator=ai.MessageAggregator)
+@ai.tool(aggregator=ai.agents.MessageAggregator)
 async def research_tool(topic: str) -> AsyncGenerator[agent_events_.AgentEvent]:
     """Nested agent that researches a topic."""
     inner = ai.agent(tools=[inner_fact])

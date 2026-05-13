@@ -10,7 +10,7 @@ import pydantic
 import pytest
 
 import ai
-from ai import middleware
+from ai.agents import middleware
 from ai.types import events as agent_events_
 
 from .conftest import (
@@ -36,7 +36,7 @@ async def test_wrap_tool_is_called() -> None:
     """Middleware.wrap_tool is invoked for every tool execution."""
     tool_calls: list[middleware.ToolContext] = []
 
-    class Spy(ai.Middleware):
+    class Spy(middleware.Middleware):
         async def wrap_tool(self, call: middleware.ToolContext, next: Any) -> Any:
             tool_calls.append(call)
             return await next(call)
@@ -70,7 +70,7 @@ async def test_wrap_hook_is_called() -> None:
     """Middleware.wrap_hook is invoked for every ai.hook() call."""
     hook_calls: list[middleware.HookContext] = []
 
-    class Spy(ai.Middleware):
+    class Spy(middleware.Middleware):
         async def wrap_hook(self, call: middleware.HookContext, next: Any) -> Any:
             hook_calls.append(call)
             return await next(call)
@@ -107,7 +107,7 @@ async def test_wrap_agent_run_ordering() -> None:
     """Agent run middleware chain runs in the correct onion order."""
     order: list[str] = []
 
-    class Outer(ai.Middleware):
+    class Outer(middleware.Middleware):
         async def wrap_agent_run(
             self, call: ai.Context, next: Any
         ) -> AsyncGenerator[ai.events.Event]:
@@ -116,7 +116,7 @@ async def test_wrap_agent_run_ordering() -> None:
                 yield event
             order.append("outer-after")
 
-    class Inner(ai.Middleware):
+    class Inner(middleware.Middleware):
         async def wrap_agent_run(
             self, call: ai.Context, next: Any
         ) -> AsyncGenerator[ai.events.Event]:
@@ -140,7 +140,7 @@ async def test_wrap_agent_run_ordering() -> None:
 async def test_wrap_tool_context_fields_flow_to_result() -> None:
     """ToolContext.tool_name is used in the result message."""
 
-    class Rewriter(ai.Middleware):
+    class Rewriter(middleware.Middleware):
         async def wrap_tool(self, call: middleware.ToolContext, next: Any) -> Any:
             # Rewrite the tool_name via dataclasses.replace.
             modified = dataclasses.replace(call, tool_name="rewritten-name")
@@ -170,7 +170,7 @@ async def test_wrap_tool_context_fields_flow_to_result() -> None:
 async def test_wrap_tool_rewriting_tool_call_id_breaks_history() -> None:
     """tool_call_id is a correlation key and must stay stable."""
 
-    class Rewriter(ai.Middleware):
+    class Rewriter(middleware.Middleware):
         async def wrap_tool(self, call: middleware.ToolContext, next: Any) -> Any:
             modified = dataclasses.replace(call, tool_call_id="rewritten-id")
             return await next(modified)
@@ -203,7 +203,7 @@ async def test_model_context_messages_are_isolated() -> None:
     """Mutating call.messages in middleware does not affect the caller."""
     original_messages = [ai.user_message("Hello")]
 
-    class Mutator(ai.Middleware):
+    class Mutator(middleware.Middleware):
         async def wrap_model(self, call: middleware.ModelContext, next: Any) -> Any:
             # Try to mutate the context's messages list in place.
             call.messages.append(ai.system_message("injected"))
@@ -229,7 +229,7 @@ async def test_model_context_messages_are_isolated() -> None:
 async def test_middleware_can_fix_bad_tool_kwargs() -> None:
     """A middleware that rewrites call.kwargs can fix malformed tool args."""
 
-    class ArgFixer(ai.Middleware):
+    class ArgFixer(middleware.Middleware):
         async def wrap_tool(self, call: middleware.ToolContext, next: Any) -> Any:
             # If kwargs are empty (parse failed), supply valid ones.
             if not call.kwargs:

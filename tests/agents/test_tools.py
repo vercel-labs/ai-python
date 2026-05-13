@@ -74,7 +74,7 @@ async def test_tool_call_with_json_args() -> None:
         tool_name="add",
         tool_args='{"a": 1, "b": 2}',
     )
-    result = await ai.ToolCall(part=part, tool=add)()
+    result = await ai.agents.ToolCall(part=part, tool=add)()
     assert result.results[0].result == 3
 
 
@@ -92,7 +92,7 @@ async def test_tool_call_returns_tool_message() -> None:
         tool_name="double",
         tool_args='{"x": 5}',
     )
-    tc = ai.ToolCall(part=part, tool=double)
+    tc = ai.agents.ToolCall(part=part, tool=double)
     result = await tc()
 
     assert tc.fn.__name__ == "double"
@@ -116,7 +116,7 @@ async def test_tool_call_catches_errors() -> None:
         tool_name="fail",
         tool_args='{"x": 1}',
     )
-    tc = ai.ToolCall(part=part, tool=fail)
+    tc = ai.agents.ToolCall(part=part, tool=fail)
     result = await tc()
 
     assert result.results[0].is_error
@@ -150,7 +150,7 @@ async def test_tool_call_unwraps_singleton_exceptiongroup() -> None:
         tool_name="fail_via_group",
         tool_args='{"x": 1}',
     )
-    tc = ai.ToolCall(part=part, tool=fail_via_group)
+    tc = ai.agents.ToolCall(part=part, tool=fail_via_group)
     result = await tc()
 
     assert result.results[0].is_error
@@ -171,7 +171,7 @@ async def test_tool_call_allows_kwarg_overrides() -> None:
         tool_name="double",
         tool_args='{"x": 5}',
     )
-    tc = ai.ToolCall(part=part, tool=double)
+    tc = ai.agents.ToolCall(part=part, tool=double)
 
     result = await tc(x=7)
 
@@ -189,7 +189,7 @@ async def test_tool_call_override_validation_failure() -> None:
         tool_name="double",
         tool_args='{"x": 5}',
     )
-    tc = ai.ToolCall(part=part, tool=double)
+    tc = ai.agents.ToolCall(part=part, tool=double)
 
     with pytest.raises(pydantic.ValidationError):
         await tc(x="bad")
@@ -206,7 +206,7 @@ async def test_tool_call_malformed_args_become_error_message() -> None:
         tool_name="double",
         tool_args='{"x": ',
     )
-    tc = ai.ToolCall(part=part, tool=double)
+    tc = ai.agents.ToolCall(part=part, tool=double)
 
     result = await tc()
 

@@ -111,7 +111,7 @@ def _gated_agent(
             while context.keep_running():
                 async with (
                     ai.stream(context=context) as s,
-                    ai.agents.ToolRunner() as tr,
+                    ai.ToolRunner() as tr,
                 ):
                     async for event in ai.util.merge(s, tr.events()):
                         yield event
@@ -181,12 +181,12 @@ class Orchestrator(ai.Agent):
                 ai.yield_from(
                     mothership_stream,
                     label="mothership",
-                    aggregator=ai.MessageAggregator,
+                    aggregator=ai.agents.MessageAggregator,
                 ),
                 ai.yield_from(
                     data_centers_stream,
                     label="data_centers",
-                    aggregator=ai.MessageAggregator,
+                    aggregator=ai.agents.MessageAggregator,
                 ),
             )
 
