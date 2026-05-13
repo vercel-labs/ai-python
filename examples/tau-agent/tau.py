@@ -108,17 +108,19 @@ async def _run_turn(app: TauApp) -> None:
     async with app.agent.run(app.model, app.messages, params=STREAM_PARAMS) as stream:
         try:
             async for event in stream:
+                following = app.transcript.at_bottom
                 if isinstance(event, ai.events.TextDelta):
                     if text_bubble is None:
-                        text_bubble = app.transcript.add_bubble("assistant")
-                    following = app.transcript.at_bottom
+                        text_bubble = app.transcript.add_bubble(
+                            "assistant", auto_scroll=False
+                        )
                     text_bubble.append(event.chunk)
-                    if following:
-                        app.transcript.scroll_end(animate=False)
                 elif isinstance(event, ai.events.ToolEnd):
                     tc = event.tool_call
                     bubble = app.transcript.add_bubble(
-                        "tool", _format_tool_call(tc.tool_name, tc.tool_args)
+                        "tool",
+                        _format_tool_call(tc.tool_name, tc.tool_args),
+                        auto_scroll=False,
                     )
                     tool_bubbles[tc.tool_call_id] = bubble
                     # The next text chunk should start a fresh bubble
@@ -131,10 +133,13 @@ async def _run_turn(app: TauApp) -> None:
                             tb = app.transcript.add_bubble(
                                 "tool",
                                 f"→ {part.tool_name}(?)",
+                                auto_scroll=False,
                             )
                         tb.append(_format_tool_result(part.result, part.is_error))
                 elif isinstance(event, ai.events.HookEvent):
                     app.on_hook_event(event.hook)
+                if following:
+                    app.transcript.scroll_end(animate=False)
         except asyncio.CancelledError:
             interrupted = True
         # Persist whatever the agent added (assistant + tool turns)
@@ -236,10 +241,13 @@ class Transcript(textual.containers.VerticalScroll):
     }
     """
 
-    def add_bubble(self, role: str, text: str = "") -> Bubble:
+    def add_bubble(
+        self, role: str, text: str = "", *, auto_scroll: bool = True
+    ) -> Bubble:
         bubble = Bubble(role, text)
         self.mount(bubble)
-        self.scroll_end(animate=False)
+        if auto_scroll:
+            self.scroll_end(animate=False)
         return bubble
 
     @property
