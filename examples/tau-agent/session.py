@@ -25,7 +25,7 @@ from __future__ import annotations
 import json
 import os
 import pathlib
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import ai
@@ -48,7 +48,7 @@ def _ensure_dir() -> None:
 
 def new_session_id() -> str:
     """Timestamp-based, human-readable session ID."""
-    return datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    return datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
 
 
 # ---------------------------------------------------------------------------
@@ -63,7 +63,7 @@ def _meta_line(session_id: str, model: str) -> str:
             "session_id": session_id,
             "model": model,
             "cwd": os.getcwd(),
-            "created": datetime.now(timezone.utc).isoformat(),
+            "created": datetime.now(UTC).isoformat(),
         },
         ensure_ascii=False,
     )
@@ -158,7 +158,9 @@ def resolve_session(session_id: str | None) -> pathlib.Path | None:
     return None
 
 
-def load_messages(path: pathlib.Path) -> tuple[dict[str, Any], list[ai.messages.Message]]:
+def load_messages(
+    path: pathlib.Path,
+) -> tuple[dict[str, Any], list[ai.messages.Message]]:
     """Load session metadata + messages from a JSONL file.
 
     Returns ``(meta_dict, messages_list)``.  The system message is

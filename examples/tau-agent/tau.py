@@ -22,6 +22,7 @@ import pathlib
 import sys
 from typing import Any
 
+import ai
 import rich.text
 import textual
 import textual.app
@@ -31,10 +32,9 @@ import textual.events
 import textual.message
 import textual.widgets
 import textual.worker
-import tools as tools_
-import session as session_
 
-import ai
+import session as session_
+import tools as tools_
 
 MODEL_ID = os.environ.get("TAU_MODEL", "anthropic/claude-sonnet-4.6")
 
@@ -52,7 +52,8 @@ When writing or suggesting commit messages, always include a trailer line:
 
     Co-authored-by: {MODEL_ID}, via tau
 """
-    if _ADVERTISE else ""
+    if _ADVERTISE
+    else ""
 )
 
 # How many characters of a tool result to show inline; the full result
@@ -452,7 +453,9 @@ class TauApp(textual.app.App[None]):
             elif msg.role == "tool":
                 for part in msg.parts:
                     if hasattr(part, "result"):
-                        preview = _format_tool_result(part.result, getattr(part, "is_error", False))
+                        preview = _format_tool_result(
+                            part.result, getattr(part, "is_error", False)
+                        )
                         self.transcript.add_bubble("tool", preview)
         self.transcript.add_bubble(
             "system",
@@ -580,19 +583,22 @@ def _parse_args() -> argparse.Namespace:
     )
     group = parser.add_mutually_exclusive_group()
     group.add_argument(
-        "--resume", "-r",
+        "--resume",
+        "-r",
         action="store_true",
         default=False,
         help="Resume the most recent session.",
     )
     group.add_argument(
-        "--session", "-s",
+        "--session",
+        "-s",
         metavar="ID",
         default=None,
         help="Resume a specific session by ID (or unique prefix).",
     )
     group.add_argument(
-        "--list", "-l",
+        "--list",
+        "-l",
         action="store_true",
         default=False,
         help="List saved sessions and exit.",
