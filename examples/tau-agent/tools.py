@@ -273,7 +273,7 @@ async def read(
 # ---------------------------------------------------------------------------
 
 
-@ai.tool(require_approval=True)
+@ai.tool
 async def write(path: str, content: str) -> str:
     """Write content to a file.
 
@@ -307,7 +307,7 @@ class TextEdit(pydantic.BaseModel):
     )
 
 
-@ai.tool(require_approval=True)
+@ai.tool
 async def edit(path: str, edits: list[TextEdit]) -> str:
     """Edit a single file using exact text replacement.
 

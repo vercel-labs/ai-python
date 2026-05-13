@@ -4,8 +4,8 @@
 process, Textual TUI, streaming replies, pi-style tool surface:
 
 - **`read`** — read files; offset/limit pagination with continuation hints
-- **`write`** — create / overwrite a file *(requires approval)*
-- **`edit`** — exact-match str_replace, multiple disjoint edits per call *(requires approval)*
+- **`write`** — create / overwrite a file
+- **`edit`** — exact-match str_replace, multiple disjoint edits per call
 - **`bash`** — run a shell command in cwd, output truncated to the last 50KB / 2000 lines *(requires approval)*
 - **`grep`** — regex search (skips `.git`, `node_modules`, etc.)
 - **`find`** — glob match
