@@ -255,6 +255,68 @@ class Composer(textual.widgets.TextArea):
         self.styles.height = n + 2
 
 
+class HookPrompt(textual.widgets.Static):
+    """Approval prompt for a pending tool-approval hook.
+
+    Mounts above the composer when a hook fires.  Focusable; single-key
+    shortcuts (``y``/``a`` approve, ``n``/``d`` deny) resolve it.
+    Tab/shift-tab cycles focus back to the composer if the user wants
+    to look something up before deciding — the hook stays pending and
+    the agent stays blocked until y/n.
+    """
+
+    DEFAULT_CSS = """
+    HookPrompt {
+        height: auto;
+        padding: 0 1;
+        border: round $warning;
+        background: $surface;
+        margin-bottom: 1;
+    }
+    HookPrompt:focus {
+        border: round $warning;
+        background: $surface-lighten-1;
+    }
+    """
+
+    BINDINGS = [
+        textual.binding.Binding("y,a", "decide(True)", "approve", show=True),
+        textual.binding.Binding("n,d", "decide(False)", "deny", show=True),
+    ]
+
+    can_focus = True
+
+    class Decided(textual.message.Message):
+        def __init__(self, hook_id: str, granted: bool) -> None:
+            super().__init__()
+            self.hook_id = hook_id
+            self.granted = granted
+
+    def __init__(self, hook: ai.messages.HookPart[Any]) -> None:
+        super().__init__()
+        self._hook_id = hook.hook_id
+        tool = hook.metadata.get("tool", "?")
+        kwargs = hook.metadata.get("kwargs", {}) or {}
+        body = rich.text.Text()
+        body.append("approve ", style="bold yellow")
+        body.append(tool, style="bold")
+        body.append("?\n")
+        body.append("  " + _format_kwargs(kwargs), style="dim")
+        body.append("\n  ")
+        body.append("[y]", style="bold green")
+        body.append(" approve   ")
+        body.append("[n]", style="bold red")
+        body.append(" deny")
+        self.update(body)
+
+    def action_decide(self, granted: bool) -> None:
+        self.post_message(self.Decided(self._hook_id, granted))
+
+
+def _format_kwargs(kwargs: dict[str, Any]) -> str:
+    return ", ".join(f"{k}={_short_value(v)}" for k, v in kwargs.items()) or "—"
+
+
 # ---------------------------------------------------------------------------
 # App
 # ---------------------------------------------------------------------------
@@ -268,6 +330,7 @@ class TauApp(textual.app.App[None]):
     #composer-dock {
         dock: bottom;
         height: auto;
+        layout: vertical;
         /* dock: bottom ignores horizontal margins, so the inset lives here */
         padding: 0 1 1 1;
     }
@@ -315,6 +378,7 @@ class TauApp(textual.app.App[None]):
     def compose(self) -> textual.app.ComposeResult:
         yield Transcript(id="transcript")
         with textual.containers.Container(id="composer-dock"):
+            # Hook prompts get mounted here via ``before=#composer``.
             yield Composer(placeholder="message tau…", id="composer")
 
     def on_mount(self) -> None:
@@ -341,30 +405,6 @@ class TauApp(textual.app.App[None]):
         if not text:
             return
 
-        # Approval mode: a tool is waiting for y/n.  Plain y/n/yes/no
-        # resolves the active hook; anything else falls through and is
-        # queued as a regular message (the hook stays pending).
-        if self._active_hook is not None:
-            low = text.lower()
-            if low in ("y", "yes", "n", "no"):
-                granted = low in ("y", "yes")
-                hook = self._active_hook
-                self._active_hook = None
-                ai.resolve_hook(
-                    hook.hook_id,
-                    ai.tools.ToolApproval(
-                        granted=granted,
-                        reason="operator approved" if granted else "operator denied",
-                    ),
-                )
-                self.transcript.add_bubble(
-                    "system",
-                    f"{'approved' if granted else 'denied'}: "
-                    f"{hook.metadata.get('tool', '?')}",
-                )
-                self._activate_next_hook()
-                return
-
         self.transcript.add_bubble("user", text)
         # All submissions enter the queue; ``run_turn`` is the sole
         # consumer.  The user bubble shows up immediately so the message
@@ -384,10 +424,6 @@ class TauApp(textual.app.App[None]):
             self._set_busy(False)
 
     # ------------------------------------------------------------------
-    # Helpers
-    # ------------------------------------------------------------------
-
-    # ------------------------------------------------------------------
     # Hook plumbing
     # ------------------------------------------------------------------
 
@@ -401,34 +437,57 @@ class TauApp(textual.app.App[None]):
                 h for h in self._hook_queue if h.hook_id != hook.hook_id
             ]
             if self._active_hook and self._active_hook.hook_id == hook.hook_id:
-                self._active_hook = None
+                self._dismiss_active_prompt()
                 self._activate_next_hook()
 
     def _activate_next_hook(self) -> None:
         if self._active_hook is not None or not self._hook_queue:
-            self._refresh_placeholder()
             return
-        self._active_hook = self._hook_queue.pop(0)
-        tool = self._active_hook.metadata.get("tool", "?")
-        self.transcript.add_bubble("system", f"approval needed: {tool}")
-        self._refresh_placeholder()
+        hook = self._hook_queue.pop(0)
+        self._active_hook = hook
+        prompt = HookPrompt(hook)
+        dock = self.query_one("#composer-dock", textual.containers.Container)
+        composer = self.query_one("#composer", Composer)
+        dock.mount(prompt, before=composer)
+        prompt.focus()
 
-    def _refresh_placeholder(self) -> None:
-        inp = self.query_one("#composer", Composer)
-        if self._active_hook is not None:
-            tool = self._active_hook.metadata.get("tool", "?")
-            inp.placeholder = f"approve {tool}? [y/n]"
-        elif self._busy:
-            inp.placeholder = "tau is thinking… (type to queue your next message)"
-        else:
-            inp.placeholder = "message tau…"
+    def _dismiss_active_prompt(self) -> None:
+        for prompt in self.query(HookPrompt).results():
+            prompt.remove()
+        self._active_hook = None
+        self.query_one("#composer", Composer).focus()
+
+    async def on_hook_prompt_decided(self, event: HookPrompt.Decided) -> None:
+        # The widget only fires this for the currently-displayed hook,
+        # which is also ``self._active_hook``.
+        hook = self._active_hook
+        if hook is None or hook.hook_id != event.hook_id:
+            return
+        ai.resolve_hook(
+            hook.hook_id,
+            ai.tools.ToolApproval(
+                granted=event.granted,
+                reason="operator approved" if event.granted else "operator denied",
+            ),
+        )
+        self.transcript.add_bubble(
+            "system",
+            f"{'approved' if event.granted else 'denied'}: "
+            f"{hook.metadata.get('tool', '?')}",
+        )
+        self._dismiss_active_prompt()
+        self._activate_next_hook()
 
     def _set_busy(self, busy: bool) -> None:
         self._busy = busy
         # Composer stays enabled while busy — the user can keep typing
-        # and queue the next message.  Placeholder reflects the active
-        # state.
-        self._refresh_placeholder()
+        # and queue the next message.  Only the placeholder changes.
+        inp = self.query_one("#composer", Composer)
+        inp.placeholder = (
+            "tau is thinking… (type to queue your next message)"
+            if busy
+            else "message tau…"
+        )
 
 
 if __name__ == "__main__":
