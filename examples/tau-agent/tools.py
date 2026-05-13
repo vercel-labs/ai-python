@@ -18,9 +18,8 @@ import pathlib
 import re
 from typing import Literal
 
-import pydantic
-
 import ai
+import pydantic
 
 # ---------------------------------------------------------------------------
 # Truncation — match pi's defaults

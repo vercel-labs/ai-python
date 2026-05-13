@@ -1,1 +1,18 @@
+<<<<<<< HEAD
 .tau/
+||||||| parent of 9884d0a ([tau] Add session history with persist/resume support)
+=======
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+dist/
+
+# Environment
+.env
+.env*.local
+
+# Tau session history
+.tau/
+>>>>>>> 9884d0a ([tau] Add session history with persist/resume support)

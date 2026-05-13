@@ -10,3 +10,14 @@ dependencies = [
 
 [tool.uv.sources]
 ai = { path = "../..", editable = true }
+
+[tool.ruff]
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.15.12",
+]
