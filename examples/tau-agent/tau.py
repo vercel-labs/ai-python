@@ -24,6 +24,7 @@ from typing import Any
 
 import ai
 import ai.types.usage
+import rich.markdown
 import rich.text
 import textual
 import textual.app
@@ -198,18 +199,21 @@ class Bubble(textual.widgets.Static):
         super().__init__()
         self.add_class(role)
         self._role = role
-        self._text = rich.text.Text()
+        self._raw = ""
         if initial:
             self.append(initial)
         else:
             self._redraw()
 
     def append(self, chunk: str) -> None:
-        self._text.append(chunk)
+        self._raw += chunk
         self._redraw()
 
     def _redraw(self) -> None:
-        self.update(self._text)
+        if self._role == "assistant":
+            self.update(rich.markdown.Markdown(self._raw))
+        else:
+            self.update(rich.text.Text(self._raw))
 
 
 class Transcript(textual.containers.VerticalScroll):
