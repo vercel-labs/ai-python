@@ -13,7 +13,7 @@ from typing import Any
 import httpx
 
 import ai
-from ai.providers.anthropic import AnthropicCompatibleProvider, check
+from ai.providers.anthropic import AnthropicCompatibleProvider
 
 
 def _client_with_mock(
@@ -39,7 +39,7 @@ def _client_with_mock(
 
 async def test_200_returns_true() -> None:
     model = _client_with_mock(200, {"id": "claude-opus-4-6", "type": "model"})
-    assert await check.check(model) is True
+    assert await model.provider.check(model) is True
 
 
 async def test_custom_anthropic_version_header() -> None:
@@ -61,5 +61,6 @@ async def test_custom_anthropic_version_header() -> None:
         ),
     )
 
-    assert await check.check(ai.Model("custom-model", provider=provider)) is True
+    model = ai.Model("custom-model", provider=provider)
+    assert await provider.check(model) is True
     assert captured_headers["anthropic-version"] == "2024-01-01"

@@ -6,23 +6,25 @@ from collections.abc import Iterable, Mapping
 from types import ModuleType
 from typing import TYPE_CHECKING, ClassVar
 
+import httpx
+import openai
+
 from .. import base
 
 if TYPE_CHECKING:
-    import httpx
     import modelsdotdev
-    import openai
 
-    OpenAIClient = httpx.AsyncClient | openai.AsyncOpenAI
-else:
-    OpenAIClient = object
+    from ...models.core import model as model_
+
+OpenAIClient = httpx.AsyncClient | openai.AsyncOpenAI
 
 _BASE_URL = "https://api.openai.com/v1"
 _BASE_URL_ENV = "OPENAI_BASE_URL"
 _API_KEY_ENV = "OPENAI_API_KEY"
+_FAIL_STATUSES = frozenset({401, 403, 404})
 
 
-class OpenAICompatibleProvider(base.Provider):
+class OpenAICompatibleProvider(base.Provider[openai.AsyncOpenAI]):
     """Provider configuration for OpenAI-compatible APIs."""
 
     handles: ClassVar[tuple[str, ...]] = (
@@ -43,15 +45,14 @@ class OpenAICompatibleProvider(base.Provider):
         env: Mapping[str, str] | None = None,
         client: OpenAIClient | None = None,
     ) -> None:
-        import httpx as _httpx
-        import openai as _openai
-
-        if isinstance(client, _openai.AsyncOpenAI):
+        if isinstance(client, openai.AsyncOpenAI):
             sdk_client = client
             http_client = None
-        elif isinstance(client, _httpx.AsyncClient) or client is None:
+            self._has_user_sdk_client = True
+        elif isinstance(client, httpx.AsyncClient) or client is None:
             sdk_client = None
             http_client = client
+            self._has_user_sdk_client = False
         else:
             raise TypeError(
                 "OpenAI providers require an httpx.AsyncClient or openai.AsyncOpenAI"
@@ -66,21 +67,39 @@ class OpenAICompatibleProvider(base.Provider):
             base_url_env=base_url_env,
             config_envs=config_envs,
             env=env,
-            client=http_client,
         )
-        self._sdk_client = sdk_client
+        self._close_client_on_aclose = sdk_client is None and http_client is None
+        if sdk_client is None:
+            sdk_client = self._make_sdk_client(http_client=http_client)
+        self._set_client(sdk_client)
+
+    def _make_sdk_client(
+        self,
+        *,
+        http_client: httpx.AsyncClient | None = None,
+    ) -> openai.AsyncOpenAI:
+        return openai.AsyncOpenAI(
+            base_url=self.base_url,
+            api_key=self.api_key or "",
+            http_client=http_client,
+        )
 
     @property
-    def sdk_client(self) -> openai.AsyncOpenAI | None:
-        """User-provided OpenAI SDK client, if configured."""
-        return self._sdk_client
+    def sdk_client(self) -> openai.AsyncOpenAI:
+        """Provider SDK client used for OpenAI-compatible API requests."""
+        return self.client
 
     def is_configured(self) -> bool:
-        if self.sdk_client is not None:
+        if self._has_user_sdk_client:
             return True
         if not self.api_key:
             return False
         return super().is_configured()
+
+    async def aclose(self) -> None:
+        """Close the provider-owned SDK client, if any."""
+        if self._close_client_on_aclose:
+            await self.client.close()
 
     @classmethod
     def from_modelsdev_provider(
@@ -92,7 +111,7 @@ class OpenAICompatibleProvider(base.Provider):
         api_key: str | None = None,
         env: Mapping[str, str] | None = None,
         client: OpenAIClient | None = None,
-    ) -> base.Provider:
+    ) -> base.Provider[openai.AsyncOpenAI]:
         resolved_base_url = base_url or base.provider_base_url(
             provider,
             model_provider_config,
@@ -130,18 +149,20 @@ class OpenAICompatibleProvider(base.Provider):
 
     async def list(self) -> list[str]:
         """List available model IDs from the OpenAI-compatible API."""
-        if self.sdk_client is not None:
-            sdk_models = await self.sdk_client.models.list()
-            return sorted(str(m.id) for m in sdk_models.data)
+        sdk_models = await self.sdk_client.models.list()
+        return sorted(str(m.id) for m in sdk_models.data)
 
-        headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
-        response = await self.http.get(
-            f"{self.base_url.rstrip('/')}/models",
-            headers=headers,
-        )
-        response.raise_for_status()
-        response_data: list[dict[str, object]] = response.json().get("data", [])
-        return sorted(str(m["id"]) for m in response_data)
+    async def check(self, model: model_.Model) -> bool:
+        """Return ``True`` when credentials are valid and the model exists."""
+        if not self.is_configured():
+            return False
+        try:
+            await self.sdk_client.models.retrieve(model.id)
+        except openai.APIStatusError as exc:
+            if exc.status_code in _FAIL_STATUSES:
+                return False
+            raise
+        return True
 
 
 __all__ = ["OpenAICompatibleProvider"]

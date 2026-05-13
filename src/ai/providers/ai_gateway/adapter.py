@@ -484,12 +484,15 @@ async def stream(
         output_type=output_type,
         params=stream_params,
     )
-    gateway = gateway_client.GatewayClient(model.provider, model)
+    if not isinstance(model.provider.client, gateway_client.GatewayClient):
+        raise TypeError("AI Gateway adapter requires a GatewayClient")
+    gateway = model.provider.client
 
     try:
         async with gateway.stream(
             "language-model",
             body,
+            model=model,
             model_type="language",
             streaming=True,
         ) as response:
@@ -533,8 +536,12 @@ async def _generate_image(
     if input_files:
         body["files"] = [_file_part_to_wire(f) for f in input_files]
 
-    gateway = gateway_client.GatewayClient(model.provider, model)
-    response = await gateway.post_json("image-model", body, model_type="image")
+    if not isinstance(model.provider.client, gateway_client.GatewayClient):
+        raise TypeError("AI Gateway adapter requires a GatewayClient")
+    gateway = model.provider.client
+    response = await gateway.post_json(
+        "image-model", body, model=model, model_type="image"
+    )
 
     data = response.json()
     raw_images: list[str] = data.get("images", [])
@@ -570,11 +577,14 @@ async def _generate_video(
     if input_files:
         body["image"] = _file_part_to_wire(input_files[0])
 
-    gateway = gateway_client.GatewayClient(model.provider, model)
+    if not isinstance(model.provider.client, gateway_client.GatewayClient):
+        raise TypeError("AI Gateway adapter requires a GatewayClient")
+    gateway = model.provider.client
 
     async with gateway.stream(
         "video-model",
         body,
+        model=model,
         model_type="video",
         accept="text/event-stream",
         timeout=httpx.Timeout(timeout=600.0, connect=10.0),

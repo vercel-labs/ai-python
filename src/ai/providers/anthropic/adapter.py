@@ -1,7 +1,7 @@
 """Anthropic adapter — messages API.
 
 Message/tool conversion and streaming via the official ``anthropic`` SDK.
-The SDK client is constructed from provider configuration on each call.
+Anthropic-compatible providers own the SDK client used by this adapter.
 """
 
 import json
@@ -335,16 +335,13 @@ def _to_content_list(content: Any) -> list[dict[str, Any]]:
 def _make_client(
     model: core.model.Model,
 ) -> anthropic.AsyncAnthropic:
-    """Construct an ``AsyncAnthropic`` from the model's provider."""
+    """Return an ``AsyncAnthropic`` for the model's provider."""
     provider = model.provider
     if isinstance(provider, provider_.AnthropicCompatibleProvider):
-        client = provider.sdk_client
-        if client is not None:
-            return client
+        return provider.sdk_client
     return anthropic.AsyncAnthropic(
         base_url=provider.base_url,
         api_key=provider.api_key or "",
-        http_client=provider.http,
     )
 
 

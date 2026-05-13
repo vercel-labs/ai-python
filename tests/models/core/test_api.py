@@ -267,15 +267,21 @@ async def test_generate_dispatches_to_registered_adapter() -> None:
 class _CheckProvider(MockProvider):
     def __init__(self) -> None:
         super().__init__(adapter="mock-check")
+        self.checked_model: models.Model | None = None
+
+    async def check(self, model: models.Model) -> bool:
+        self.checked_model = model
+        return True
 
 
-async def test_check_connection_delegates_to_model() -> None:
+async def test_check_connection_delegates_to_model_provider() -> None:
     provider = _CheckProvider()
     model = models.Model("mock-model", provider=provider)
 
     result = await models.check_connection(model)
 
-    assert result is False
+    assert result is True
+    assert provider.checked_model is model
 
 
 async def test_stream_replays_marked_last_assistant_with_tool_calls() -> None:

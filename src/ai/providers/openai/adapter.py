@@ -1,7 +1,7 @@
 """OpenAI adapter — chat completions API.
 
 Message/tool conversion and streaming via the official ``openai`` SDK.
-The SDK client is constructed from provider configuration on each call.
+OpenAI-compatible providers own the SDK client used by this adapter.
 """
 
 from collections.abc import AsyncGenerator, Mapping, Sequence
@@ -205,16 +205,13 @@ async def _messages_to_openai(
 
 
 def _make_client(model: core.model.Model) -> openai.AsyncOpenAI:
-    """Construct an ``AsyncOpenAI`` from the model's provider."""
+    """Return an ``AsyncOpenAI`` for the model's provider."""
     provider = model.provider
     if isinstance(provider, provider_.OpenAICompatibleProvider):
-        client = provider.sdk_client
-        if client is not None:
-            return client
+        return provider.sdk_client
     return openai.AsyncOpenAI(
         base_url=provider.base_url,
         api_key=provider.api_key or "",
-        http_client=provider.http,
     )
 
 

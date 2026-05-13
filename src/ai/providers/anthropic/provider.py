@@ -6,24 +6,26 @@ from collections.abc import Iterable, Mapping
 from types import ModuleType
 from typing import TYPE_CHECKING, ClassVar
 
+import anthropic
+import httpx
+
 from .. import base
 
 if TYPE_CHECKING:
-    import anthropic
-    import httpx
     import modelsdotdev
 
-    AnthropicClient = httpx.AsyncClient | anthropic.AsyncAnthropic
-else:
-    AnthropicClient = object
+    from ...models.core import model as model_
+
+AnthropicClient = httpx.AsyncClient | anthropic.AsyncAnthropic
 
 _BASE_URL = "https://api.anthropic.com"
 _BASE_URL_ENV = "ANTHROPIC_BASE_URL"
 _API_KEY_ENV = "ANTHROPIC_API_KEY"
 _ANTHROPIC_VERSION = "2023-06-01"
+_FAIL_STATUSES = frozenset({401, 403, 404})
 
 
-class AnthropicCompatibleProvider(base.Provider):
+class AnthropicCompatibleProvider(base.Provider[anthropic.AsyncAnthropic]):
     """Callable provider for Anthropic-compatible APIs."""
 
     handles: ClassVar[tuple[str, ...]] = ("anthropic", "@ai-sdk/anthropic")
@@ -41,15 +43,14 @@ class AnthropicCompatibleProvider(base.Provider):
         env: Mapping[str, str] | None = None,
         client: AnthropicClient | None = None,
     ) -> None:
-        import anthropic as _anthropic
-        import httpx as _httpx
-
-        if isinstance(client, _anthropic.AsyncAnthropic):
+        if isinstance(client, anthropic.AsyncAnthropic):
             sdk_client = client
             http_client = None
-        elif isinstance(client, _httpx.AsyncClient) or client is None:
+            self._has_user_sdk_client = True
+        elif isinstance(client, httpx.AsyncClient) or client is None:
             sdk_client = None
             http_client = client
+            self._has_user_sdk_client = False
         else:
             raise TypeError(
                 "Anthropic providers require an httpx.AsyncClient or "
@@ -65,22 +66,41 @@ class AnthropicCompatibleProvider(base.Provider):
             base_url_env=base_url_env,
             config_envs=config_envs,
             env=env,
-            client=http_client,
         )
         self.anthropic_version = anthropic_version
-        self._sdk_client = sdk_client
+        self._close_client_on_aclose = sdk_client is None and http_client is None
+        if sdk_client is None:
+            sdk_client = self._make_sdk_client(http_client=http_client)
+        self._set_client(sdk_client)
+
+    def _make_sdk_client(
+        self,
+        *,
+        http_client: httpx.AsyncClient | None = None,
+    ) -> anthropic.AsyncAnthropic:
+        return anthropic.AsyncAnthropic(
+            base_url=self.base_url,
+            api_key=self.api_key or "",
+            http_client=http_client,
+            default_headers={"anthropic-version": self.anthropic_version},
+        )
 
     @property
-    def sdk_client(self) -> anthropic.AsyncAnthropic | None:
-        """User-provided Anthropic SDK client, if configured."""
-        return self._sdk_client
+    def sdk_client(self) -> anthropic.AsyncAnthropic:
+        """Provider SDK client used for Anthropic-compatible API requests."""
+        return self.client
 
     def is_configured(self) -> bool:
-        if self.sdk_client is not None:
+        if self._has_user_sdk_client:
             return True
         if not self.api_key:
             return False
         return super().is_configured()
+
+    async def aclose(self) -> None:
+        """Close the provider-owned SDK client, if any."""
+        if self._close_client_on_aclose:
+            await self.client.close()
 
     @classmethod
     def from_modelsdev_provider(
@@ -92,7 +112,7 @@ class AnthropicCompatibleProvider(base.Provider):
         api_key: str | None = None,
         env: Mapping[str, str] | None = None,
         client: AnthropicClient | None = None,
-    ) -> base.Provider:
+    ) -> base.Provider[anthropic.AsyncAnthropic]:
         resolved_base_url = base_url or base.provider_base_url(
             provider,
             model_provider_config,
@@ -127,20 +147,20 @@ class AnthropicCompatibleProvider(base.Provider):
 
     async def list(self) -> list[str]:
         """List available model IDs from the Anthropic API."""
-        if self.sdk_client is not None:
-            sdk_models = await self.sdk_client.models.list()
-            return sorted(str(m.id) for m in sdk_models.data)
+        sdk_models = await self.sdk_client.models.list()
+        return sorted(str(m.id) for m in sdk_models.data)
 
-        headers = {
-            "x-api-key": self.api_key or "",
-            "anthropic-version": self.anthropic_version,
-        }
-        response = await self.http.get(
-            f"{self.base_url.rstrip('/')}/v1/models", headers=headers
-        )
-        response.raise_for_status()
-        response_data: list[dict[str, object]] = response.json().get("data", [])
-        return sorted(str(m["id"]) for m in response_data)
+    async def check(self, model: model_.Model) -> bool:
+        """Return ``True`` when credentials are valid and the model exists."""
+        if not self.is_configured():
+            return False
+        try:
+            await self.sdk_client.models.retrieve(model.id)
+        except anthropic.APIStatusError as exc:
+            if exc.status_code in _FAIL_STATUSES:
+                return False
+            raise
+        return True
 
 
 __all__ = ["AnthropicCompatibleProvider"]

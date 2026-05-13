@@ -14,7 +14,6 @@ from .. import errors
 
 if TYPE_CHECKING:
     from ....models.core import model as model_
-    from ...base import Provider
 
 _PROTOCOL_VERSION = "0.0.1"
 
@@ -31,42 +30,46 @@ class GatewayClient:
 
     def __init__(
         self,
-        provider: Provider,
-        model: model_.Model | None = None,
+        *,
+        base_url: str,
+        api_key: str | None = None,
+        client: httpx.AsyncClient | None = None,
     ) -> None:
-        self._provider = provider
-        self._model = model
+        self.base_url = base_url
+        self.api_key = api_key
+        self._http = client or httpx.AsyncClient(
+            timeout=httpx.Timeout(timeout=300.0, connect=10.0),
+        )
+        self._owns_http = client is None
 
-    @property
-    def base_url(self) -> str:
-        return self._provider.base_url.rstrip("/")
+    async def aclose(self) -> None:
+        if self._owns_http and not self._http.is_closed:
+            await self._http.aclose()
 
     def url(self, path: str) -> str:
-        return f"{self.base_url}/{path.lstrip('/')}"
+        return f"{self.base_url.rstrip('/')}/{path.lstrip('/')}"
 
     def origin_url(self, path: str) -> str:
-        parsed = urlparse(self.base_url)
+        parsed = urlparse(self.base_url.rstrip("/"))
         return f"{parsed.scheme}://{parsed.netloc}/{path.lstrip('/')}"
 
     def protocol_headers(self) -> dict[str, str]:
         headers = {
             "ai-gateway-protocol-version": _PROTOCOL_VERSION,
         }
-        if self._provider.api_key:
-            headers["Authorization"] = f"Bearer {self._provider.api_key}"
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
             headers["ai-gateway-auth-method"] = "api-key"
         return headers
 
     def model_headers(
         self,
+        model: model_.Model,
         model_type: ModelType,
         *,
         streaming: bool = False,
         accept: str | None = None,
     ) -> dict[str, str]:
-        if self._model is None:
-            raise ValueError("Gateway model headers require a model.")
-
         headers = {
             "Content-Type": "application/json",
             **self.protocol_headers(),
@@ -74,14 +77,14 @@ class GatewayClient:
 
         if model_type == "language":
             headers["ai-language-model-specification-version"] = "3"
-            headers["ai-language-model-id"] = self._model.id
+            headers["ai-language-model-id"] = model.id
             headers["ai-language-model-streaming"] = str(streaming).lower()
         elif model_type == "image":
             headers["ai-image-model-specification-version"] = "3"
-            headers["ai-model-id"] = self._model.id
+            headers["ai-model-id"] = model.id
         elif model_type == "video":
             headers["ai-video-model-specification-version"] = "3"
-            headers["ai-model-id"] = self._model.id
+            headers["ai-model-id"] = model.id
 
         if accept is not None:
             headers["accept"] = accept
@@ -96,7 +99,7 @@ class GatewayClient:
         headers: dict[str, str] | None = None,
     ) -> httpx.Response:
         url = self.origin_url(path) if origin else self.url(path)
-        return await self._provider.http.get(
+        return await self._http.get(
             url,
             headers=headers or self.protocol_headers(),
         )
@@ -106,20 +109,21 @@ class GatewayClient:
         path: str,
         body: dict[str, Any],
         *,
+        model: model_.Model,
         model_type: ModelType,
         timeout: httpx.Timeout | float | None = None,
     ) -> httpx.Response:
         if timeout is None:
-            response = await self._provider.http.post(
+            response = await self._http.post(
                 self.url(path),
                 json=body,
-                headers=self.model_headers(model_type),
+                headers=self.model_headers(model, model_type),
             )
         else:
-            response = await self._provider.http.post(
+            response = await self._http.post(
                 self.url(path),
                 json=body,
-                headers=self.model_headers(model_type),
+                headers=self.model_headers(model, model_type),
                 timeout=timeout,
             )
         await self.raise_for_error(response)
@@ -131,6 +135,7 @@ class GatewayClient:
         path: str,
         body: dict[str, Any],
         *,
+        model: model_.Model,
         model_type: ModelType,
         streaming: bool = False,
         accept: str | None = None,
@@ -138,6 +143,7 @@ class GatewayClient:
         timeout: httpx.Timeout | float | None = None,
     ) -> AsyncIterator[httpx.Response]:
         request_headers = self.model_headers(
+            model,
             model_type,
             streaming=streaming,
             accept=accept,
@@ -146,14 +152,14 @@ class GatewayClient:
             request_headers.update(headers)
 
         stream = (
-            self._provider.http.stream(
+            self._http.stream(
                 "POST",
                 self.url(path),
                 json=body,
                 headers=request_headers,
             )
             if timeout is None
-            else self._provider.http.stream(
+            else self._http.stream(
                 "POST",
                 self.url(path),
                 json=body,
@@ -174,7 +180,7 @@ class GatewayClient:
         raise errors.create_gateway_error(
             response_body=response.text,
             status_code=response.status_code,
-            api_key_provided=bool(self._provider.api_key),
+            api_key_provided=bool(self.api_key),
         )
 
     async def iter_sse(

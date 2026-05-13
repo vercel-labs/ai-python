@@ -6,8 +6,8 @@ are imported lazily on first use to keep import-time lightweight.
 .. note::
 
     Connection checks are no longer dispatched through a registry.
-    :func:`~ai.models.core.api.check_connection` delegates to
-    :meth:`ai.models.Model.check`.
+    :func:`~ai.models.core.api.check_connection` delegates through
+    :meth:`ai.models.Model.check` to the model's provider.
 """
 
 from . import proto

@@ -52,19 +52,7 @@ class Model:
         Non-auth transport errors are raised so callers can distinguish
         misconfiguration from provider outages.
         """
-        if self.adapter == "ai-gateway-v3":
-            from ...providers.ai_gateway import check as gateway_check
-
-            return await gateway_check.check(self)
-        if self.adapter == "openai":
-            from ...providers.openai import check as openai_check
-
-            return await openai_check.check(self)
-        if self.adapter == "anthropic":
-            from ...providers.anthropic import check as anthropic_check
-
-            return await anthropic_check.check(self)
-        return False
+        return await self.provider.check(self)
 
 
 def get_model(model_id: str | None = None) -> Model:
