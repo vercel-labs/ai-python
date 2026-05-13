@@ -1,10 +1,113 @@
 ---
-title: Welcome to Geistdocs
-description: Start writing documentation with Geistdocs.
+title: Getting Started
+description: Build LLM-powered apps and agents in Python with the ai SDK.
+type: guide
+summary: Install the ai SDK, configure provider credentials, and stream your first agent run.
 ---
 
-# Welcome to Geistdocs
+# Getting Started
 
-- Edit `content/docs/index.mdx`.
-- Add more pages in `content/docs`.
-- Update `content/docs/meta.json` to control the sidebar.
+The AI SDK for Python is toolkit for building LLM-powered applications and
+agent loops. It provides composable primitives — models, messages, tools,
+agents, and hooks, that you wire together with plain Python.
+
+## Prerequisites
+
+- **Python 3.12+**
+- **uv** (recommended), **pip**, or other dependency manager.
+
+## Install
+
+```bash title="Terminal"
+uv add ai
+```
+
+Then import the package:
+
+```python
+import ai
+```
+
+## Your first agent
+
+This example defines one tool and lets the default agent loop drive it:
+
+```python title="hello_agent.py"
+import asyncio
+import ai
+
+
+@ai.tool
+async def contact_mothership(query: str) -> str:
+    """Contact the mothership for important decisions."""
+    return "Soon."
+
+
+async def main() -> None:
+    model = ai.ai_gateway("anthropic/claude-sonnet-4")
+    agent = ai.agent(tools=[contact_mothership])
+
+    messages = [
+        ai.system_message(
+            "Use the contact_mothership tool when asked about the future."
+        ),
+        ai.user_message("When will the robots take over?"),
+    ]
+
+    async with agent.run(model, messages) as stream:
+        async for event in stream:
+            if isinstance(event, ai.events.TextDelta):
+                print(event.chunk, end="", flush=True)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+Run it:
+
+```bash title="Terminal"
+uv run hello_agent.py
+```
+
+You'll see the model's reply stream to the terminal, with the `contact_mothership`
+tool called transparently when the model decides it needs the data.
+
+## Streaming without an agent
+
+If you don't need a tool-execution loop, call `ai.stream` directly:
+
+```python title="stream.py"
+import asyncio
+import ai
+
+
+async def main() -> None:
+    model = ai.ai_gateway("anthropic/claude-sonnet-4")
+    messages = [
+        ai.system_message("Be concise."),
+        ai.user_message("Explain why the sky is blue in two sentences."),
+    ]
+
+    async with ai.stream(model, messages) as s:
+        async for event in s:
+            if isinstance(event, ai.events.TextDelta):
+                print(event.chunk, end="", flush=True)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+After iteration, `s.text`, `s.tool_calls`, `s.output`, and `s.usage` are all
+populated.
+
+## What's next
+
+- **Samples** — focused, single-file examples live in
+  [`examples/samples/`](https://github.com/vercel/ai-python/tree/main/examples/samples).
+- **End-to-end demos** — `fastapi-vite` (web chat with human-in-the-loop
+  approval), `multiagent-textual` (parallel agents with a terminal UI),
+  `temporal-direct` and `temporal-middleware` (durable agent runs).
+- **Concepts to explore next** — structured output, streaming tools,
+  custom agent loops, hooks, middleware, and MCP integration.
