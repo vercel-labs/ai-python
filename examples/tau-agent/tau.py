@@ -507,7 +507,6 @@ class TauApp(textual.app.App[None]):
 
     BINDINGS = [
         textual.binding.Binding("ctrl+c", "quit", "quit", priority=True),
-        textual.binding.Binding("ctrl+d", "quit", "quit", priority=True),
         textual.binding.Binding("escape", "interrupt", "interrupt", priority=True),
     ]
 
