@@ -363,7 +363,7 @@ async def edit(path: str, edits: list[TextEdit]) -> str:
 
 
 @ai.tool(require_approval=True)
-async def bash(command: str, timeout: float | None = None) -> str:
+async def bash(command: str, timeout: float | None = None) -> ai.StreamingTextTool:
     """Execute a bash command in the current working directory.
 
     Returns stdout and stderr.  Output is truncated to the last 2000
@@ -375,32 +375,48 @@ async def bash(command: str, timeout: float | None = None) -> str:
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
     )
+    assert proc.stdout is not None
+    buf: list[str] = []
+    timed_out = False
+    deadline = (
+        asyncio.get_event_loop().time() + timeout if timeout is not None else None
+    )
     try:
-        out_b, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        async for raw in proc.stdout:
+            if deadline is not None and asyncio.get_event_loop().time() > deadline:
+                raise TimeoutError
+            line = raw.decode("utf-8", errors="replace")
+            buf.append(line)
+            yield line
     except TimeoutError:
+        timed_out = True
         proc.kill()
         await proc.wait()
-        return f"[Timed out after {timeout}s]"
+        yield f"\n[Timed out after {timeout}s]\n"
+        return
 
-    text = out_b.decode("utf-8", errors="replace")
+    await proc.wait()
+
+    # After streaming, check if we need to append metadata.
+    text = "".join(buf)
     tr = truncate_tail(text)
-    out = tr.content
     if tr.truncated:
         if tr.truncated_by == "lines":
-            out += (
+            yield (
                 f"\n\n[Truncated: showing last {tr.output_lines} of "
                 f"{tr.total_lines} lines]"
             )
         else:
-            out += (
+            yield (
                 f"\n\n[Truncated: showing last {format_size(tr.output_bytes)} "
                 f"of {format_size(tr.total_bytes)}]"
             )
 
-    if proc.returncode and proc.returncode != 0:
-        out += f"\n\n[Exit code: {proc.returncode}]"
+    if not timed_out and proc.returncode and proc.returncode != 0:
+        yield f"\n\n[Exit code: {proc.returncode}]"
 
-    return out or "[no output]"
+    if not buf and not timed_out:
+        yield "[no output]"
 
 
 # ---------------------------------------------------------------------------
