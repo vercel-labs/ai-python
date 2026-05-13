@@ -82,16 +82,6 @@ ai.system_message  ai.user_message  ai.assistant_message  ai.tool_message
 ai.tool_result     ai.tool_result_part  ai.file_part  ai.thinking
 ```
 
-### Middleware
-
-```
-ai.agents.Middleware             base class — subclass and override wrap methods
-agent.run(..., middleware=[m])   run-scoped, first = outermost
-```
-
-Five wrap surfaces: `wrap_agent_run`, `wrap_model`, `wrap_generate`, `wrap_tool`, `wrap_hook`.
-Each receives a context dataclass and a `next` callable. Default implementations pass through.
-
 ### Integrations
 
 ```
@@ -127,5 +117,3 @@ Small focused samples live in `examples/samples/`. End-to-end demos:
 - `examples/fastapi-vite/` -- FastAPI backend + Vite frontend with hook-based tool approval
 - `examples/multiagent-textual/` -- Textual TUI with parallel agents and interactive hook resolution
 - `examples/temporal-direct/` -- durable agent with a custom loop (every I/O call is a Temporal activity)
-- `examples/temporal-middleware/` -- durable agent via middleware (default loop, I/O routed to Temporal activities)
-- `examples/samples/middleware_simple.py` -- middleware that logs all five execution surfaces

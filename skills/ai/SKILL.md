@@ -1,6 +1,6 @@
 ---
 name: ai
-description: Python `ai` module — models, agents, hooks, middleware, MCP, structured output
+description: Python `ai` module — models, agents, hooks, MCP, structured output
 ---
 
 # ai
@@ -280,24 +280,3 @@ return StreamingResponse(
 )
 ```
 
-## Middleware
-
-Subclass `ai.agents.Middleware` and override the wrap methods you need. Pass to `agent.run(..., middleware=[...])`. Run-scoped, composable, first in list = outermost.
-
-```python
-class LoggingMiddleware(ai.agents.Middleware):
-    async def wrap_model(self, call, next):
-        print(f"calling {call.model.id}")
-        result = await next(call)
-        print("stream started")
-        return result
-
-    async def wrap_tool(self, call, next):
-        print(f"tool {call.tool_name}({call.kwargs})")
-        return await next(call)
-
-async for msg in agent.run(model, messages, middleware=[LoggingMiddleware()]):
-    ...
-```
-
-Five surfaces: `wrap_agent_run`, `wrap_model`, `wrap_generate`, `wrap_tool`, `wrap_hook`. Each receives a frozen context dataclass and a `next` callable. Use `dataclasses.replace(call, ...)` to modify before passing to `next`.

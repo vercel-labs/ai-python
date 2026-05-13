@@ -41,7 +41,6 @@ TEXT_SAMPLES = [
     Sample("agent_nested.py"),
     Sample("streaming_tool.py"),
     Sample("explicit_client.py"),
-    Sample("middleware_simple.py"),
     Sample("multimodal_input.py"),
     Sample("check_connection.py"),
     Sample("agent_hooks.py", stdin="y\n"),
