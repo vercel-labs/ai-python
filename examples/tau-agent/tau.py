@@ -287,16 +287,58 @@ class Composer(textual.widgets.TextArea):
         self.styles.height = n + 2
 
 
+# Tools grouped by category for approval purposes.
+_READ_TOOLS = frozenset({"read", "grep", "find", "ls"})
+_WRITE_TOOLS = frozenset({"write", "edit"})
+_FILE_TOOLS = _READ_TOOLS | _WRITE_TOOLS
+
+
+def _tool_path(hook: ai.messages.HookPart[Any]) -> pathlib.Path | None:
+    """Extract and resolve the path argument from a file-tool hook."""
+    kwargs = hook.metadata.get("kwargs", {}) or {}
+    raw = kwargs.get("path")
+    if raw is None:
+        return None
+    return pathlib.Path(raw).expanduser().resolve()
+
+
 class ApprovalTracker:
     """Session-scoped approval state for tool hooks.
 
     Tracks "always approve" decisions so subsequent identical commands
     (or all commands) can be auto-resolved without prompting.
+
+    File I/O tools are auto-approved when the target path is under the
+    working directory.  Paths outside cwd require a prompt; one of the
+    options is to permanently allow a directory for reads or writes.
     """
 
     def __init__(self) -> None:
+        self._cwd = pathlib.Path.cwd().resolve()
         self._approve_all = False
         self._approved_commands: set[str] = set()
+        # Extra directory trees approved per category.
+        self._approved_read_dirs: set[pathlib.Path] = set()
+        self._approved_write_dirs: set[pathlib.Path] = set()
+
+    def _path_ok(self, tool: str, path: pathlib.Path | None) -> bool:
+        """Check if *path* is in an approved directory for *tool*."""
+        if path is None:
+            # Tools like grep/find/ls default to cwd when path is None.
+            return True
+        # Always allow anything under cwd.
+        try:
+            path.relative_to(self._cwd)
+            return True
+        except ValueError:
+            pass
+        # Check extra approved dirs.
+        dirs = (
+            self._approved_read_dirs
+            if tool in _READ_TOOLS
+            else self._approved_write_dirs
+        )
+        return any(path == d or d in path.parents for d in dirs)
 
     def check(self, hook: ai.messages.HookPart[Any]) -> bool | None:
         """Return True to auto-approve, False to auto-deny, None to prompt."""
@@ -304,6 +346,8 @@ class ApprovalTracker:
             return True
         tool = hook.metadata.get("tool", "")
         kwargs = hook.metadata.get("kwargs", {}) or {}
+        if tool in _FILE_TOOLS:
+            return True if self._path_ok(tool, _tool_path(hook)) else None
         if tool == "bash":
             cmd = kwargs.get("command", "")
             if cmd in self._approved_commands:
@@ -311,11 +355,23 @@ class ApprovalTracker:
         return None
 
     def approve_command(self, hook: ai.messages.HookPart[Any]) -> None:
-        """Remember to always approve this exact command."""
+        """Remember to always approve this exact bash command."""
         kwargs = hook.metadata.get("kwargs", {}) or {}
         cmd = kwargs.get("command", "")
         if cmd:
             self._approved_commands.add(cmd)
+
+    def approve_directory(self, hook: ai.messages.HookPart[Any]) -> None:
+        """Allow all future operations in this path's directory."""
+        tool = hook.metadata.get("tool", "")
+        path = _tool_path(hook)
+        if path is None:
+            return
+        directory = path if path.is_dir() else path.parent
+        if tool in _READ_TOOLS:
+            self._approved_read_dirs.add(directory)
+        elif tool in _WRITE_TOOLS:
+            self._approved_write_dirs.add(directory)
 
     def approve_all(self) -> None:
         """Auto-approve every future tool call this session."""
@@ -326,12 +382,10 @@ class HookPrompt(textual.widgets.Static):
     """Approval prompt for a pending tool-approval hook.
 
     Mounts above the composer when a hook fires.  Focusable; single-key
-    shortcuts resolve it:
+    shortcuts resolve it.  The available options depend on the tool:
 
-    - ``y`` approve once
-    - ``n`` deny
-    - ``!`` always approve this exact command
-    - ``a`` always approve all commands
+    **bash**: ``[y]`` yes ``[n]`` no ``[!]`` always this ``[a]`` all
+    **file I/O**: ``[y]`` yes ``[n]`` no ``[d]`` allow dir ``[a]`` all
 
     Tab/shift-tab cycles focus back to the composer if the user wants
     to look something up before deciding — the hook stays pending and
@@ -358,6 +412,7 @@ class HookPrompt(textual.widgets.Static):
         textual.binding.Binding(
             "exclamation_mark", "decide('always_this')", "always this", show=True
         ),
+        textual.binding.Binding("d", "decide('allow_dir')", "allow dir", show=True),
         textual.binding.Binding("a", "decide('always_all')", "always all", show=True),
     ]
 
@@ -367,13 +422,16 @@ class HookPrompt(textual.widgets.Static):
         def __init__(self, hook_id: str, decision: str) -> None:
             super().__init__()
             self.hook_id = hook_id
-            self.decision = decision  # 'yes' | 'no' | 'always_this' | 'always_all'
+            # 'yes' | 'no' | 'always_this' | 'allow_dir' | 'always_all'
+            self.decision = decision
 
     def __init__(self, hook: ai.messages.HookPart[Any]) -> None:
         super().__init__()
         self._hook_id = hook.hook_id
         tool = hook.metadata.get("tool", "?")
         kwargs = hook.metadata.get("kwargs", {}) or {}
+        is_file_tool = tool in _FILE_TOOLS
+
         body = rich.text.Text()
         body.append("approve ", style="bold yellow")
         body.append(tool, style="bold")
@@ -384,8 +442,12 @@ class HookPrompt(textual.widgets.Static):
         body.append(" yes  ")
         body.append("[n]", style="bold red")
         body.append(" no  ")
-        body.append("[!]", style="bold cyan")
-        body.append(" always this  ")
+        if is_file_tool:
+            body.append("[d]", style="bold cyan")
+            body.append(" allow dir  ")
+        else:
+            body.append("[!]", style="bold cyan")
+            body.append(" always this  ")
         body.append("[a]", style="bold cyan")
         body.append(" always all")
         self.update(body)
@@ -669,6 +731,8 @@ class TauApp(textual.app.App[None]):
         granted = event.decision != "no"
         if event.decision == "always_this":
             self._approval.approve_command(hook)
+        elif event.decision == "allow_dir":
+            self._approval.approve_directory(hook)
         elif event.decision == "always_all":
             self._approval.approve_all()
         self._resolve_hook(hook, granted=granted)

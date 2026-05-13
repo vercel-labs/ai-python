@@ -192,7 +192,7 @@ def truncate_tail(
 # ---------------------------------------------------------------------------
 
 
-@ai.tool
+@ai.tool(require_approval=True)
 async def read(
     path: str,
     offset: int | None = None,
@@ -272,7 +272,7 @@ async def read(
 # ---------------------------------------------------------------------------
 
 
-@ai.tool
+@ai.tool(require_approval=True)
 async def write(path: str, content: str) -> str:
     """Write content to a file.
 
@@ -306,7 +306,7 @@ class TextEdit(pydantic.BaseModel):
     )
 
 
-@ai.tool
+@ai.tool(require_approval=True)
 async def edit(path: str, edits: list[TextEdit]) -> str:
     """Edit a single file using exact text replacement.
 
@@ -408,7 +408,7 @@ async def bash(command: str, timeout: float | None = None) -> str:
 # ---------------------------------------------------------------------------
 
 
-@ai.tool
+@ai.tool(require_approval=True)
 async def grep(
     pattern: str,
     path: str | None = None,
@@ -509,7 +509,7 @@ async def grep(
 # ---------------------------------------------------------------------------
 
 
-@ai.tool
+@ai.tool(require_approval=True)
 async def find(
     pattern: str,
     path: str | None = None,
@@ -563,7 +563,7 @@ async def find(
 # ---------------------------------------------------------------------------
 
 
-@ai.tool
+@ai.tool(require_approval=True)
 async def ls(path: str | None = None, limit: int = 500) -> str:
     """List directory contents.
 
