@@ -31,11 +31,6 @@ EXAMPLES: list[tuple[str, Path, list[str]]] = [
         REPO / "examples" / "temporal-direct",
         ["temporalio"],
     ),
-    (
-        "temporal-middleware",
-        REPO / "examples" / "temporal-middleware",
-        ["temporalio"],
-    ),
 ]
 
 

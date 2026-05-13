@@ -25,7 +25,7 @@ import pydantic
 
 from .. import types
 from ..types import messages as messages_
-from . import middleware as middleware_
+from . import _middleware as middleware_
 from . import runtime as runtime_
 
 # ---------------------------------------------------------------------------

@@ -38,8 +38,8 @@ from typing_extensions import TypeVar  # noqa: UP035
 from .. import models, types, util
 from ..types import builders
 from ..types import events as events_
+from . import _middleware as middleware_
 from . import hooks as hooks_
-from . import middleware as middleware_
 from . import runtime
 
 
@@ -1110,7 +1110,7 @@ class Agent:
         messages: list[types.messages.Message],
         *,
         params: Any = None,
-        middleware: list[middleware_.Middleware] | None = None,
+        _middleware: list[middleware_._Middleware] | None = None,
     ) -> AbstractAsyncContextManager[AgentStream[str]]: ...
     @overload
     def run[T: pydantic.BaseModel](
@@ -1120,7 +1120,7 @@ class Agent:
         *,
         output_type: type[T],
         params: Any = None,
-        middleware: list[middleware_.Middleware] | None = None,
+        _middleware: list[middleware_._Middleware] | None = None,
     ) -> AbstractAsyncContextManager[AgentStream[T]]: ...
     def run(
         self,
@@ -1129,7 +1129,7 @@ class Agent:
         *,
         output_type: type[pydantic.BaseModel] | None = None,
         params: Any = None,
-        middleware: list[middleware_.Middleware] | None = None,
+        _middleware: list[middleware_._Middleware] | None = None,
     ) -> AbstractAsyncContextManager[AgentStream[Any]]:
         """Run the agent loop, yielding events to the consumer.
 
@@ -1147,9 +1147,6 @@ class Agent:
             output_type: Optional Pydantic model the model's output must
                 conform to.  When set, ``stream.output`` validates the
                 final assistant message's text against it.
-            middleware: Optional list of middleware to apply to this run.
-                First in the list = outermost.  Middleware wraps model
-                calls, tool calls, hooks, and the run itself.
 
         To attribute a sub-agent's events to a branch, wrap the run in
         ``yield_from(..., label=...)`` — the label flows via
@@ -1160,7 +1157,7 @@ class Agent:
             messages,
             output_type=output_type,
             params=params,
-            middleware=middleware,
+            _middleware=_middleware,
         )
 
     @contextlib.asynccontextmanager
@@ -1171,7 +1168,7 @@ class Agent:
         *,
         output_type: type[pydantic.BaseModel] | None,
         params: Any,
-        middleware: list[middleware_.Middleware] | None,
+        _middleware: list[middleware_._Middleware] | None,
     ) -> AsyncIterator[AgentStream[Any]]:
         context = Context(
             model=model,
@@ -1202,11 +1199,11 @@ class Agent:
             # share middleware.  When middleware is explicitly provided,
             # *extend* the parent stack so that outer cross-cutting
             # concerns (tracing, durability) are preserved.  Pass
-            # ``middleware=[]`` to clear the stack entirely.
+            # ``_middleware=[]`` to clear the stack entirely.
             mw_token: middleware_.Token | None = None
-            if middleware is not None:
+            if _middleware is not None:
                 parent = middleware_.get()
-                mw_token = middleware_.activate(parent + middleware)
+                mw_token = middleware_.activate(parent + _middleware)
             try:
                 chain = middleware_._build_agent_run_chain(_real)
                 async for event in chain(context):

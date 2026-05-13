@@ -116,7 +116,7 @@ _Message = messages_.Message
 _AgentRunNext = Callable[["Context"], AsyncGenerator[_Event]]
 
 
-class Middleware:
+class _Middleware:
     """Base middleware class.  Override the methods you need.
 
     Default implementations call ``next(call)`` — a transparent pass-through.
@@ -202,22 +202,22 @@ class Middleware:
 # Run-scoped middleware via ContextVar
 # ---------------------------------------------------------------------------
 
-_active: contextvars.ContextVar[list[Middleware]] = contextvars.ContextVar(
+_active: contextvars.ContextVar[list[_Middleware]] = contextvars.ContextVar(
     "middleware",
 )
 
-_EMPTY: list[Middleware] = []
+_EMPTY: list[_Middleware] = []
 
 
-def get() -> list[Middleware]:
+def get() -> list[_Middleware]:
     """Return the middleware stack for the current run (empty if none)."""
     return _active.get(_EMPTY)
 
 
-Token = contextvars.Token[list[Middleware]]
+Token = contextvars.Token[list[_Middleware]]
 
 
-def activate(mw: list[Middleware]) -> Token:
+def activate(mw: list[_Middleware]) -> Token:
     """Set the middleware stack for the current run.  Returns a token for reset."""
     return _active.set(mw)
 
@@ -249,7 +249,7 @@ def _build_model_chain(
     for m in reversed(mw):
 
         def _make(
-            m: Middleware,
+            m: _Middleware,
             nxt: Callable[[ModelContext], Awaitable[StreamResultLike]],
         ) -> Callable[[ModelContext], Awaitable[StreamResultLike]]:
             async def _wrapped(call: ModelContext) -> StreamResultLike:
@@ -272,7 +272,7 @@ def _build_generate_chain(
     for m in reversed(mw):
 
         def _make(
-            m: Middleware, nxt: Callable[[GenerateContext], Awaitable[_Message]]
+            m: _Middleware, nxt: Callable[[GenerateContext], Awaitable[_Message]]
         ) -> Callable[[GenerateContext], Awaitable[_Message]]:
             async def _wrapped(call: GenerateContext) -> _Message:
                 return await m.wrap_generate(call, nxt)
@@ -294,7 +294,7 @@ def _build_tool_chain(
     for m in reversed(mw):
 
         def _make(
-            m: Middleware,
+            m: _Middleware,
             nxt: Callable[[ToolContext], Awaitable[events_.ToolCallResult]],
         ) -> Callable[[ToolContext], Awaitable[events_.ToolCallResult]]:
             async def _wrapped(call: ToolContext) -> events_.ToolCallResult:
@@ -317,7 +317,7 @@ def _build_hook_chain(
     for m in reversed(mw):
 
         def _make(
-            m: Middleware,
+            m: _Middleware,
             nxt: Callable[[HookContext], Awaitable[pydantic.BaseModel]],
         ) -> Callable[[HookContext], Awaitable[pydantic.BaseModel]]:
             async def _wrapped(call: HookContext) -> pydantic.BaseModel:
@@ -339,7 +339,7 @@ def _build_agent_run_chain(
     chain = real
     for m in reversed(mw):
 
-        def _make(m: Middleware, nxt: _AgentRunNext) -> _AgentRunNext:
+        def _make(m: _Middleware, nxt: _AgentRunNext) -> _AgentRunNext:
             async def _wrapped(call: Context) -> AsyncGenerator[_Event]:
                 async for event in m.wrap_agent_run(call, nxt):
                     yield event
@@ -353,10 +353,10 @@ def _build_agent_run_chain(
 __all__ = [
     "GenerateContext",
     "HookContext",
-    "Middleware",
     "ModelContext",
     "StreamResultLike",
     "ToolContext",
+    "_Middleware",
     "activate",
     "deactivate",
     "get",
