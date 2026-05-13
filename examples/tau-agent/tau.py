@@ -16,6 +16,7 @@ resumed:
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import os
 import pathlib
@@ -91,6 +92,9 @@ async def chat_loop(app: TauApp) -> None:
         app._save_messages()
         try:
             await _run_turn(app)
+        except asyncio.CancelledError:
+            app.transcript.add_bubble("system", "interrupted")
+            raise
         except Exception as exc:  # noqa: BLE001 — surface in the UI
             app.transcript.add_bubble("system", f"error: {exc}")
 
@@ -101,41 +105,47 @@ async def _run_turn(app: TauApp) -> None:
     # get their own bubbles below.
     text_bubble: Bubble | None = None
     tool_bubbles: dict[str, Bubble] = {}
+    interrupted = False
     async with app.agent.run(app.model, app.messages, params=STREAM_PARAMS) as stream:
-        async for event in stream:
-            if isinstance(event, ai.events.TextDelta):
-                if text_bubble is None:
-                    text_bubble = app.transcript.add_bubble("assistant")
-                following = app.transcript.at_bottom
-                text_bubble.append(event.chunk)
-                if following:
-                    app.transcript.scroll_end(animate=False)
-            elif isinstance(event, ai.events.ToolEnd):
-                tc = event.tool_call
-                bubble = app.transcript.add_bubble(
-                    "tool", _format_tool_call(tc.tool_name, tc.tool_args)
-                )
-                tool_bubbles[tc.tool_call_id] = bubble
-                # The next text chunk should start a fresh bubble
-                # so tool output and prose stay separated.
-                text_bubble = None
-            elif isinstance(event, ai.events.ToolCallResult):
-                for part in event.results:
-                    tb: Bubble | None = tool_bubbles.get(part.tool_call_id)
-                    if tb is None:
-                        tb = app.transcript.add_bubble(
-                            "tool",
-                            f"→ {part.tool_name}(?)",
-                        )
-                    tb.append(_format_tool_result(part.result, part.is_error))
-            elif isinstance(event, ai.events.HookEvent):
-                app.on_hook_event(event.hook)
+        try:
+            async for event in stream:
+                if isinstance(event, ai.events.TextDelta):
+                    if text_bubble is None:
+                        text_bubble = app.transcript.add_bubble("assistant")
+                    following = app.transcript.at_bottom
+                    text_bubble.append(event.chunk)
+                    if following:
+                        app.transcript.scroll_end(animate=False)
+                elif isinstance(event, ai.events.ToolEnd):
+                    tc = event.tool_call
+                    bubble = app.transcript.add_bubble(
+                        "tool", _format_tool_call(tc.tool_name, tc.tool_args)
+                    )
+                    tool_bubbles[tc.tool_call_id] = bubble
+                    # The next text chunk should start a fresh bubble
+                    # so tool output and prose stay separated.
+                    text_bubble = None
+                elif isinstance(event, ai.events.ToolCallResult):
+                    for part in event.results:
+                        tb: Bubble | None = tool_bubbles.get(part.tool_call_id)
+                        if tb is None:
+                            tb = app.transcript.add_bubble(
+                                "tool",
+                                f"→ {part.tool_name}(?)",
+                            )
+                        tb.append(_format_tool_result(part.result, part.is_error))
+                elif isinstance(event, ai.events.HookEvent):
+                    app.on_hook_event(event.hook)
+        except asyncio.CancelledError:
+            interrupted = True
         # Persist whatever the agent added (assistant + tool turns)
-        # so the next turn sees the full history.
+        # so the next turn sees the full history.  On interruption we
+        # still save the partial state so context isn't lost.
         app.messages = list(stream.messages)
         app._save_messages()
-        # Accumulate token usage from new messages.
         app._refresh_usage()
+    if interrupted:
+        raise asyncio.CancelledError
 
 
 def _format_tool_call(name: str, raw_args: str) -> str:
@@ -499,6 +509,7 @@ class TauApp(textual.app.App[None]):
     BINDINGS = [
         textual.binding.Binding("ctrl+c", "quit", "quit", priority=True),
         textual.binding.Binding("ctrl+d", "quit", "quit", priority=True),
+        textual.binding.Binding("escape", "interrupt", "interrupt", priority=True),
     ]
 
     TITLE = "tau"
@@ -532,6 +543,7 @@ class TauApp(textual.app.App[None]):
         self._hook_queue: list[ai.messages.HookPart[Any]] = []
         self._active_hook: ai.messages.HookPart[Any] | None = None
         self._approval = ApprovalTracker()
+        self._turn_worker: textual.worker.Worker[None] | None = None
 
         # Session history — every message is persisted to a JSONL file.
         self._resume_path = resume_path
@@ -671,10 +683,20 @@ class TauApp(textual.app.App[None]):
 
     @textual.work(exclusive=True, group="turn")
     async def run_turn(self) -> None:
+        self._turn_worker = textual.worker.get_current_worker()
         try:
             await chat_loop(self)
         finally:
+            self._turn_worker = None
             self._set_busy(False)
+
+    def action_interrupt(self) -> None:
+        """Cancel the running turn on ESC."""
+        if self._turn_worker is not None:
+            self._turn_worker.cancel()
+            # Dismiss any pending approval prompt and clear the queue.
+            self._hook_queue.clear()
+            self._dismiss_active_prompt()
 
     # ------------------------------------------------------------------
     # Hook plumbing
