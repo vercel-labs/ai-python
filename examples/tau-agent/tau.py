@@ -86,52 +86,54 @@ async def chat_loop(app: TauApp) -> None:
         # Pop one queued message into history per turn so the model sees
         # a clean user → assistant → user → … sequence.
         app.messages.append(ai.user_message(app.pending.pop(0)))
-        # Persist the user message immediately.
         app._save_messages()
-        # One assistant bubble per turn for streamed text; tool calls
-        # get their own bubbles below.
-        text_bubble: Bubble | None = None
-        tool_bubbles: dict[str, Bubble] = {}
         try:
-            async with app.agent.run(
-                app.model, app.messages, params=STREAM_PARAMS
-            ) as stream:
-                async for event in stream:
-                    if isinstance(event, ai.events.TextDelta):
-                        if text_bubble is None:
-                            text_bubble = app.transcript.add_bubble("assistant")
-                        following = app.transcript.at_bottom
-                        text_bubble.append(event.chunk)
-                        if following:
-                            app.transcript.scroll_end(animate=False)
-                    elif isinstance(event, ai.events.ToolEnd):
-                        tc = event.tool_call
-                        bubble = app.transcript.add_bubble(
-                            "tool", _format_tool_call(tc.tool_name, tc.tool_args)
-                        )
-                        tool_bubbles[tc.tool_call_id] = bubble
-                        # The next text chunk should start a fresh bubble
-                        # so tool output and prose stay separated.
-                        text_bubble = None
-                    elif isinstance(event, ai.events.ToolCallResult):
-                        for part in event.results:
-                            tb: Bubble | None = tool_bubbles.get(part.tool_call_id)
-                            if tb is None:
-                                tb = app.transcript.add_bubble(
-                                    "tool",
-                                    f"→ {part.tool_name}(?)",
-                                )
-                            tb.append(_format_tool_result(part.result, part.is_error))
-                    elif isinstance(event, ai.events.HookEvent):
-                        app.on_hook_event(event.hook)
-                # Persist whatever the agent added (assistant + tool turns)
-                # so the next turn sees the full history.
-                app.messages = list(stream.messages)
-                app._save_messages()
-                # Accumulate token usage from new messages.
-                app._refresh_usage()
+            await _run_turn(app)
         except Exception as exc:  # noqa: BLE001 — surface in the UI
             app.transcript.add_bubble("system", f"error: {exc}")
+
+
+async def _run_turn(app: TauApp) -> None:
+    """Execute a single agent turn, streaming events into the transcript."""
+    # One assistant bubble per turn for streamed text; tool calls
+    # get their own bubbles below.
+    text_bubble: Bubble | None = None
+    tool_bubbles: dict[str, Bubble] = {}
+    async with app.agent.run(app.model, app.messages, params=STREAM_PARAMS) as stream:
+        async for event in stream:
+            if isinstance(event, ai.events.TextDelta):
+                if text_bubble is None:
+                    text_bubble = app.transcript.add_bubble("assistant")
+                following = app.transcript.at_bottom
+                text_bubble.append(event.chunk)
+                if following:
+                    app.transcript.scroll_end(animate=False)
+            elif isinstance(event, ai.events.ToolEnd):
+                tc = event.tool_call
+                bubble = app.transcript.add_bubble(
+                    "tool", _format_tool_call(tc.tool_name, tc.tool_args)
+                )
+                tool_bubbles[tc.tool_call_id] = bubble
+                # The next text chunk should start a fresh bubble
+                # so tool output and prose stay separated.
+                text_bubble = None
+            elif isinstance(event, ai.events.ToolCallResult):
+                for part in event.results:
+                    tb: Bubble | None = tool_bubbles.get(part.tool_call_id)
+                    if tb is None:
+                        tb = app.transcript.add_bubble(
+                            "tool",
+                            f"→ {part.tool_name}(?)",
+                        )
+                    tb.append(_format_tool_result(part.result, part.is_error))
+            elif isinstance(event, ai.events.HookEvent):
+                app.on_hook_event(event.hook)
+        # Persist whatever the agent added (assistant + tool turns)
+        # so the next turn sees the full history.
+        app.messages = list(stream.messages)
+        app._save_messages()
+        # Accumulate token usage from new messages.
+        app._refresh_usage()
 
 
 def _format_tool_call(name: str, raw_args: str) -> str:
