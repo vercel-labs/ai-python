@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+dist/
+
+# Environment
+.env
+.env*.local
+
+# Tau session history
+.tau/

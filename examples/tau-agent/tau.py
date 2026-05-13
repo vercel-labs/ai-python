@@ -2,16 +2,24 @@
 
 Single-process Textual TUI.  The user types a message, it gets appended
 to a running conversation history, and the agent streams its reply into
-a new assistant bubble.  No tools yet — this is the chat-bot baseline
-we'll grow real coding capabilities on top of.
+a new assistant bubble.
 
-    uv run python tau.py
+Sessions are persisted to ``.tau/sessions/`` as JSONL files and can be
+resumed:
+
+    uv run python tau.py                # new session
+    uv run python tau.py --resume       # resume most recent session
+    uv run python tau.py --session ID   # resume a specific session
+    uv run python tau.py --list         # list saved sessions
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
+import pathlib
+import sys
 from typing import Any
 
 import rich.text
@@ -24,6 +32,7 @@ import textual.message
 import textual.widgets
 import textual.worker
 import tools as tools_
+import session as session_
 
 import ai
 
@@ -71,6 +80,8 @@ async def chat_loop(app: TauApp) -> None:
         # Pop one queued message into history per turn so the model sees
         # a clean user → assistant → user → … sequence.
         app.messages.append(ai.user_message(app.pending.pop(0)))
+        # Persist the user message immediately.
+        app._save_messages()
         # One assistant bubble per turn for streamed text; tool calls
         # get their own bubbles below.
         text_bubble: Bubble | None = None
@@ -108,6 +119,7 @@ async def chat_loop(app: TauApp) -> None:
                 # Persist whatever the agent added (assistant + tool turns)
                 # so the next turn sees the full history.
                 app.messages = list(stream.messages)
+                app._save_messages()
         except Exception as exc:  # noqa: BLE001 — surface in the UI
             app.transcript.add_bubble("system", f"error: {exc}")
 
@@ -365,23 +377,33 @@ class TauApp(textual.app.App[None]):
     messages: list[ai.messages.Message]
     pending: list[str]
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        resume_path: pathlib.Path | None = None,
+    ) -> None:
         super().__init__()
         self.model = ai.ai_gateway(MODEL_ID)
         self.agent = ai.agent(tools=tools_.TOOLS)
         # The full conversation, including the system prompt.  We mutate
         # this in place so the agent always sees the entire history.
-        self.messages = [ai.system_message(SYSTEM_PROMPT)]
+        self.messages: list[ai.messages.Message] = [ai.system_message(SYSTEM_PROMPT)]
         # User messages typed while a turn is streaming.  Drained one at
         # a time at the end of each turn so user/assistant alternation
         # stays clean.
-        self.pending = []
+        self.pending: list[str] = []
         self._busy = False
         # Approval hooks waiting for operator y/n.  FIFO queue: only the
         # head hook is "active" — ``_active_hook`` mirrors it for fast
         # access from the composer.
         self._hook_queue: list[ai.messages.HookPart[Any]] = []
         self._active_hook: ai.messages.HookPart[Any] | None = None
+
+        # Session history — every message is persisted to a JSONL file.
+        self._resume_path = resume_path
+        self._session_id: str = ""
+        self._session_path: pathlib.Path | None = None
+        self._saved_count: int = 0  # messages already written to disk
 
     def compose(self) -> textual.app.ComposeResult:
         yield Transcript(id="transcript")
@@ -390,8 +412,61 @@ class TauApp(textual.app.App[None]):
             yield Composer(placeholder="message tau…", id="composer")
 
     def on_mount(self) -> None:
-        self.transcript.add_bubble("system", f"connected — model: {MODEL_ID}")
+        if self._resume_path is not None:
+            self._restore_session(self._resume_path)
+        else:
+            self._start_new_session()
         self.query_one("#composer", Composer).focus()
+
+    # ------------------------------------------------------------------
+    # Session persistence
+    # ------------------------------------------------------------------
+
+    def _start_new_session(self) -> None:
+        self._session_id = session_.new_session_id()
+        self._session_path = session_.create_session(self._session_id, MODEL_ID)
+        # Persist the system message.
+        self._saved_count = session_.append_messages(
+            self._session_path, self.messages, after=0
+        )
+        self.transcript.add_bubble(
+            "system",
+            f"connected — model: {MODEL_ID}  session: {self._session_id}",
+        )
+
+    def _restore_session(self, path: pathlib.Path) -> None:
+        meta, messages = session_.load_messages(path)
+        self._session_id = meta.get("session_id", path.stem)
+        self._session_path = path
+        if messages:
+            self.messages = messages
+        self._saved_count = len(self.messages)  # already on disk
+        # Replay conversation into transcript bubbles.
+        for msg in self.messages:
+            if msg.role == "system":
+                continue  # don't clutter the UI with the system prompt
+            if msg.role == "user":
+                self.transcript.add_bubble("user", msg.text)
+            elif msg.role == "assistant":
+                self.transcript.add_bubble("assistant", msg.text)
+            elif msg.role == "tool":
+                for part in msg.parts:
+                    if hasattr(part, "result"):
+                        preview = _format_tool_result(part.result, getattr(part, "is_error", False))
+                        self.transcript.add_bubble("tool", preview)
+        self.transcript.add_bubble(
+            "system",
+            f"resumed session {self._session_id} "
+            f"({len(self.messages) - 1} messages) — model: {MODEL_ID}",
+        )
+
+    def _save_messages(self) -> None:
+        """Append any new messages to the session JSONL file."""
+        if self._session_path is None:
+            return
+        self._saved_count = session_.append_messages(
+            self._session_path, self.messages, after=self._saved_count
+        )
 
     @property
     def transcript(self) -> Transcript:
@@ -498,5 +573,65 @@ class TauApp(textual.app.App[None]):
         )
 
 
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        prog="tau",
+        description="tau — a coding-agent TUI",
+    )
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument(
+        "--resume", "-r",
+        action="store_true",
+        default=False,
+        help="Resume the most recent session.",
+    )
+    group.add_argument(
+        "--session", "-s",
+        metavar="ID",
+        default=None,
+        help="Resume a specific session by ID (or unique prefix).",
+    )
+    group.add_argument(
+        "--list", "-l",
+        action="store_true",
+        default=False,
+        help="List saved sessions and exit.",
+    )
+    return parser.parse_args()
+
+
+def _print_sessions() -> None:
+    sessions = session_.list_sessions()
+    if not sessions:
+        print("No saved sessions.")
+        return
+    print(f"{'SESSION ID':<20} {'MODEL':<35} {'CWD'}")
+    print("─" * 80)
+    for s in sessions:
+        sid = s.get("session_id", "?")
+        model = s.get("model", "?")
+        cwd = s.get("cwd", "?")
+        print(f"{sid:<20} {model:<35} {cwd}")
+
+
 if __name__ == "__main__":
-    TauApp().run()
+    args = _parse_args()
+
+    if args.list:
+        _print_sessions()
+        sys.exit(0)
+
+    resume_path: pathlib.Path | None = None
+
+    if args.resume:
+        resume_path = session_.resolve_session(None)
+        if resume_path is None:
+            print("No sessions to resume.", file=sys.stderr)
+            sys.exit(1)
+    elif args.session:
+        resume_path = session_.resolve_session(args.session)
+        if resume_path is None:
+            print(f"Session not found: {args.session}", file=sys.stderr)
+            sys.exit(1)
+
+    TauApp(resume_path=resume_path).run()
