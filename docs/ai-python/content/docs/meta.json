@@ -4,8 +4,7 @@
   "root": true,
   "pages": [
     "index",
-    "concepts",
-    "streaming",
-    "agents"
+    "basics",
+    "core-framework"
   ]
 }

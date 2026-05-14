@@ -1,0 +1,40 @@
+---
+title: Streaming Tools
+description: Understand async-generator tools and aggregation.
+type: conceptual
+summary: Learn how streaming tools emit partial output while producing a final model-facing result.
+---
+
+Use this page for generator tools, partial results, and aggregators.
+
+## Async-generator tools
+
+Async-generator tools can stream partial output while they run. Use
+`ai.StreamingTextTool` when yielded strings should be concatenated into the
+tool result:
+
+```python
+@ai.tool
+async def draft_mothership_reply(topic: str) -> ai.StreamingTextTool:
+    """Draft a reply from the mothership."""
+    yield "Consulting "
+    yield "the "
+    yield "mothership..."
+```
+
+## Partial tool results
+
+Partial yields appear as `ai.events.PartialToolCallResult` events. The model
+sees the aggregated result on the next turn.
+
+## Aggregators
+
+## Model-facing input
+
+## Rich snapshots
+
+## Streaming text tools
+
+## Status tools
+
+## Subagent tools

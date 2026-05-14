@@ -1,0 +1,77 @@
+---
+title: Agents
+description: Run the default agent loop with tools.
+type: guide
+summary: Create agents, run the default loop, inspect results, and understand multi-turn tool use.
+---
+
+Use an agent when the model needs to call tools and continue with the tool
+results. The default agent loop is built from the same primitives you can use
+directly: `ai.stream`, `ToolRunner`, messages, and events.
+
+## Create an agent
+
+An agent wraps `ai.stream` in a loop. It streams model output, executes requested
+tools, appends tool results to history, and repeats until the model returns a
+final assistant message.
+
+```python
+agent = ai.agent(tools=[contact_mothership])
+
+async with agent.run(model, messages) as stream:
+    async for event in stream:
+        if isinstance(event, ai.events.TextDelta):
+            print(event.chunk, end="", flush=True)
+```
+
+Use `ai.agent` for the default loop. Subclass `ai.Agent` and override
+`async def loop()` when you need to change control flow.
+
+## Run the default loop
+
+Create an agent with tools, then call `agent.run`:
+
+```python title="agent_loop.py"
+import asyncio
+import ai
+
+
+@ai.tool
+async def contact_mothership(query: str) -> str:
+    """Contact the mothership for important decisions."""
+    return "Soon."
+
+
+async def main() -> None:
+    model = ai.get_model("anthropic/claude-sonnet-4")
+    agent = ai.agent(tools=[contact_mothership])
+    messages = [
+        ai.system_message(
+            "Use the contact_mothership tool when asked about the future."
+        ),
+        ai.user_message("When will the robots take over?"),
+    ]
+
+    async with agent.run(model, messages) as stream:
+        async for event in stream:
+            if isinstance(event, ai.events.TextDelta):
+                print(event.chunk, end="", flush=True)
+
+    print(stream.output)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+## Inspect the run result
+
+The stream yields model events and agent events. After the run finishes,
+`stream.messages` contains the updated history, and `stream.output` contains
+the final assistant output.
+
+## Understand multi-turn behavior
+
+## Pass params and structured output
+
+## Choose agents or direct streaming

@@ -1,0 +1,81 @@
+---
+title: Tools
+description: Define and use tools in model and agent workflows.
+type: guide
+summary: Define function tools, design schemas, handle tool errors, use schema-only tools, provider tools, and MCP tools.
+---
+
+Use this page as the main user-facing reference for tool usage.
+
+## Define function tools
+
+Decorate an async function with `@ai.tool`:
+
+```python
+import ai
+
+
+@ai.tool
+async def contact_mothership(query: str) -> str:
+    """Contact the mothership for important decisions."""
+    return "Soon."
+```
+
+The tool name comes from the function name. The model receives the function
+parameters as a JSON schema and the docstring as the tool description.
+
+## Design tool schemas
+
+The function signature becomes the tool schema. The docstring becomes the tool
+description the model sees.
+
+## Validate arguments
+
+## Handle tool errors
+
+## Use schema-only tools
+
+## Use provider-executed tools
+
+Provider-executed tools run on the provider side. Pass them to `ai.stream` in
+the `tools` list:
+
+```python
+messages = [
+    ai.user_message("Check the latest mothership telemetry reports."),
+]
+
+async with ai.stream(
+    model,
+    messages,
+    tools=[ai.anthropic.tools.web_search(max_uses=3)],
+) as stream:
+    async for event in stream:
+        if isinstance(event, ai.events.TextDelta):
+            print(event.chunk, end="", flush=True)
+```
+
+When you route through AI Gateway, you can use provider-specific tool factories
+and AI Gateway tool factories:
+
+```python
+tools = [
+    ai.anthropic.tools.web_search(max_uses=3),
+    ai.ai_gateway.tools.perplexity_search(max_results=5),
+]
+```
+
+## Use MCP tools
+
+The Model Context Protocol (MCP) adapter converts server tools into agent tools:
+
+```python
+tools = await ai.mcp.get_http_tools(
+    "http://localhost:3000/mcp",
+    headers={"Authorization": "Bearer your_access_token_here"},
+)
+
+agent = ai.agent(tools=tools)
+```
+
+Use `ai.mcp.get_stdio_tools` for subprocess-based MCP servers.

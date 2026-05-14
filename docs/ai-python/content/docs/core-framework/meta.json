@@ -1,0 +1,13 @@
+{
+  "title": "Core Framework",
+  "description": "Understand the internals of streams, agents, tools, hooks, and runtime behavior.",
+  "pages": [
+    "streams",
+    "agent-loop",
+    "tool-dispatch",
+    "hooks",
+    "streaming-tools",
+    "message-history",
+    "adapters-and-providers"
+  ]
+}

@@ -1,0 +1,46 @@
+---
+title: Custom Loops
+description: Customize agent control flow.
+type: guide
+summary: Override the agent loop to customize scheduling, routing, history updates, logging, and tool execution.
+---
+
+Use this page for user-written agent loops built from the framework primitives.
+
+## When to customize the loop
+
+Override `loop` when you need custom scheduling, logging, durability, or
+branching. Keep the same pattern when you still want SDK-managed history and
+tool resolution.
+
+## Use the standard loop shape
+
+The default loop keeps running while the last message needs more work. On each
+turn, it streams the model response and schedules tool calls:
+
+```python
+class CustomAgent(ai.Agent):
+    async def loop(self, context: ai.Context):
+        while context.keep_running():
+            async with (
+                ai.stream(context=context) as stream,
+                ai.ToolRunner() as tool_runner,
+            ):
+                async for event in ai.util.merge(stream, tool_runner.events()):
+                    yield event
+
+                    if isinstance(event, ai.events.ToolEnd):
+                        tool_call = context.resolve(event.tool_call)
+                        tool_runner.schedule(tool_call)
+
+                context.add(stream.message)
+                context.add(tool_runner.get_tool_message())
+```
+
+## Resolve and schedule tool calls
+
+## Add messages to history
+
+## Run tools sequentially
+
+## Add logging or routing

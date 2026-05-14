@@ -1,0 +1,15 @@
+{
+  "title": "Basics",
+  "description": "Build applications with the AI SDK for Python.",
+  "pages": [
+    "streaming",
+    "messages-and-events",
+    "providers",
+    "tools",
+    "agents",
+    "custom-loops",
+    "subagents-and-multi-agent",
+    "human-in-the-loop",
+    "ai-sdk-ui"
+  ]
+}

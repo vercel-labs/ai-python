@@ -1,0 +1,39 @@
+---
+title: Basics
+description: Build applications with the AI SDK for Python.
+type: guide
+summary: Learn the main workflows for models, messages, streams, tools, agents, and UI integrations.
+---
+
+The AI SDK for Python is built around a small set of primitives. Each primitive
+does one job and uses regular Python values where possible, so you can combine
+the SDK with your own application code instead of moving your code into a
+framework-specific shape.
+
+## What you can build
+
+Use this section for the user-facing workflows most applications need:
+configuring providers, building messages, streaming responses, defining tools,
+running agents, composing subagents, adding approvals, generating media, and
+connecting to AI SDK UI clients.
+
+## Main primitives
+
+- Models identify the provider model to call.
+- Messages carry the conversation history.
+- Streams yield events as model output arrives.
+- Tools let models request host-side or provider-side actions.
+- Agents run the tool loop for you.
+- Hooks pause a workflow for external input.
+
+## Recommended learning path
+
+Start with providers, messages, streaming, tools, and agents. Then move to
+custom loops, subagents, human-in-the-loop workflows, media generation, and UI
+integration as your application needs them.
+
+## Example map
+
+Focused samples live in `examples/samples/`. End-to-end demos live in
+`examples/fastapi-vite`, `examples/multiagent-textual`, and
+`examples/temporal-direct`.

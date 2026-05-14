@@ -1,8 +1,8 @@
 ---
 title: Getting Started
-description: Build LLM-powered apps and agents in Python with the AI SDK.
+description: Build LLM-powered apps and agents.
 type: guide
-summary: Install the AI SDK, configure provider credentials, and stream your first agent run.
+summary: Install the AI SDK and stream your first agent run.
 ---
 
 The AI SDK for Python is a toolkit for building large language model (LLM)
@@ -14,18 +14,11 @@ async Python.
 
 - **Python 3.12 or later.**
 - **uv**, **pip**, or another Python dependency manager.
-- **An AI Gateway API key.**
 
 ## Install
 
 ```bash title="Terminal"
 uv add ai
-```
-
-Set your AI Gateway API key:
-
-```bash title="Terminal"
-export AI_GATEWAY_API_KEY=your_api_key_here
 ```
 
 Then import the package in Python:
@@ -113,7 +106,7 @@ After iteration, `s.message`, `s.text`, `s.tool_calls`, `s.output`, and
 
 ## What's next
 
-- **Core concepts**: Learn the small set of primitives that shape the SDK.
+- **Core concepts**: Learn the primitives that shape the SDK.
 - **Streaming**: Stream model responses and inspect events.
 - **Agents**: Add tools, customize the loop, and handle approvals.
 - **Samples**: Focused, single-file examples live in

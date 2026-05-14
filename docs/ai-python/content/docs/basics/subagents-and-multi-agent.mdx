@@ -1,0 +1,41 @@
+---
+title: Subagents and Multi-Agent
+description: Compose agents and stream nested agent output.
+type: guide
+summary: Run subagents as tools, stream nested output, run agents in parallel, route labels, and fan in results.
+---
+
+Use this page for agent composition patterns.
+
+## Run a subagent as a tool
+
+Use `ai.SubAgentTool` when a tool should stream events from another agent:
+
+```python
+mothership_model = ai.get_model("anthropic/claude-sonnet-4")
+
+
+@ai.tool
+async def ask_mothership(topic: str) -> ai.SubAgentTool:
+    """Ask a specialist agent for mothership guidance."""
+    sub_agent = ai.agent()
+    sub_messages = [
+        ai.system_message("Answer as the mothership operations desk."),
+        ai.user_message(topic),
+    ]
+
+    async with sub_agent.run(mothership_model, sub_messages) as stream:
+        async for event in stream:
+            yield event
+```
+
+The parent stream receives the sub-agent events. The parent model sees the final
+assistant text from the sub-agent as the tool result.
+
+## Stream subagent output
+
+## Run agents in parallel
+
+## Route labeled output
+
+## Fan in results

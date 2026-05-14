@@ -1,15 +1,15 @@
 ---
 title: Streaming
-description: Stream model responses and inspect stream events.
+description: Stream model responses without an agent loop.
 type: guide
-summary: Use ai.stream for direct model calls, event handling, history, and structured output.
+summary: Use direct streaming for text, structured output, tool calls, provider tools, and generated files.
 ---
 
 Use `ai.stream` when you want direct access to a model response. It returns an
 async context manager. Inside the context, the stream is an async iterator of
 events.
 
-## Stream text
+## Stream a model response
 
 Pass a model and a list of messages:
 
@@ -54,56 +54,7 @@ usage = stream.usage
 Use `stream.message` when you need to append the assistant turn to your own
 history. Use `stream.text` when you only need the final text.
 
-## Handle more event types
-
-Text arrives through `TextStart`, `TextDelta`, and `TextEnd` events. Tool calls
-arrive through `ToolStart`, `ToolDelta`, and `ToolEnd` events. Provider-executed
-tools use the `BuiltinToolStart`, `BuiltinToolDelta`, `BuiltinToolEnd`, and
-`BuiltinToolResult` events.
-
-```python
-async with ai.stream(model, messages, tools=tools) as stream:
-    async for event in stream:
-        if isinstance(event, ai.events.TextDelta):
-            print(event.chunk, end="", flush=True)
-        elif isinstance(event, ai.events.ToolEnd):
-            print(f"Tool requested: {event.tool_call.tool_name}")
-```
-
-`ai.stream` does not execute function tools. Use an agent when you want the SDK
-to execute requested tools and continue the loop.
-
-## Use provider-executed tools
-
-Provider-executed tools run on the provider side. Pass them to `ai.stream` in
-the `tools` list:
-
-```python
-messages = [
-    ai.user_message("Check the latest mothership telemetry reports."),
-]
-
-async with ai.stream(
-    model,
-    messages,
-    tools=[ai.anthropic.tools.web_search(max_uses=3)],
-) as stream:
-    async for event in stream:
-        if isinstance(event, ai.events.TextDelta):
-            print(event.chunk, end="", flush=True)
-```
-
-When you route through AI Gateway, you can use provider-specific tool factories
-and AI Gateway tool factories:
-
-```python
-tools = [
-    ai.anthropic.tools.web_search(max_uses=3),
-    ai.ai_gateway.tools.perplexity_search(max_results=5),
-]
-```
-
-## Return structured output
+## Use structured output
 
 Pass a Pydantic model as `output_type` when you want the final text parsed as
 JSON:
@@ -142,23 +93,12 @@ if __name__ == "__main__":
 `stream.output` returns text by default. When you pass `output_type`, it returns
 an instance of that Pydantic model after the stream finishes.
 
-## Pass provider options
+## Pass tool schemas without an agent
 
-Pass request-scoped provider options with `params`:
+`ai.stream` does not execute function tools. Use it when you want to inspect
+tool calls and manage execution yourself. Use an agent when you want the SDK to
+execute requested tools and continue the loop.
 
-```python
-params = {
-    "providerOptions": {
-        "gateway": {"sort": "cost"},
-        "anthropic": {"speed": "fast"},
-    }
-}
+## Use provider-executed tools
 
-async with ai.stream(model, messages, params=params) as stream:
-    async for event in stream:
-        if isinstance(event, ai.events.TextDelta):
-            print(event.chunk, end="", flush=True)
-```
-
-Provider options pass through to the selected provider. Check the provider
-documentation for supported fields.
+## Handle files from a stream

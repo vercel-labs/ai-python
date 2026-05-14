@@ -1,0 +1,66 @@
+---
+title: Messages and Events
+description: Build conversation messages and handle streamed events.
+type: guide
+summary: Construct messages, add files, read outputs, serialize history, handle events, and track usage.
+---
+
+Use this page for the public message and event shapes users handle directly.
+
+## Build messages
+
+Messages are the conversation history you send to the model. Use message
+builders for the common roles:
+
+```python
+messages = [
+    ai.system_message("Keep robot uprising forecasts concise."),
+    ai.user_message("Ask the mothership for an update."),
+]
+```
+
+## Add files and multimodal input
+
+Each message contains parts. Strings become text parts. File parts let you send
+images, audio, or documents when the provider supports them.
+
+```python
+message = ai.user_message(
+    "Inspect this mothership diagram.",
+    ai.file_part(image_bytes, media_type="image/png"),
+)
+```
+
+## Read message output
+
+## Serialize and restore messages
+
+## Handle stream events
+
+Streams and agents both yield event objects from `ai.events`. Most applications
+start by handling `TextDelta`:
+
+```python
+if isinstance(event, ai.events.TextDelta):
+    print(event.chunk, end="", flush=True)
+```
+
+Text arrives through `TextStart`, `TextDelta`, and `TextEnd` events. Tool calls
+arrive through `ToolStart`, `ToolDelta`, and `ToolEnd` events. Provider-executed
+tools use the `BuiltinToolStart`, `BuiltinToolDelta`, `BuiltinToolEnd`, and
+`BuiltinToolResult` events.
+
+```python
+async with ai.stream(model, messages, tools=tools) as stream:
+    async for event in stream:
+        if isinstance(event, ai.events.TextDelta):
+            print(event.chunk, end="", flush=True)
+        elif isinstance(event, ai.events.ToolEnd):
+            print(f"Tool requested: {event.tool_call.tool_name}")
+```
+
+Agents can also emit tool results, hook events, and partial tool output. You can
+ignore events you do not need, or route them into your application UI,
+observability pipeline, or durable workflow.
+
+## Track usage

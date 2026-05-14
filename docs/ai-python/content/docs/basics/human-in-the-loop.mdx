@@ -1,0 +1,66 @@
+---
+title: Human in the Loop
+description: Add approvals and external decisions to agent runs.
+type: guide
+summary: Use tool approvals, manual hooks, cancellation, denial, and serverless resume flows.
+---
+
+Use this page for application-level approval and suspension workflows.
+
+## Require tool approval
+
+Pass `require_approval=True` to `@ai.tool` when a tool needs approval:
+
+```python
+@ai.tool(require_approval=True)
+async def notify_mothership(message: str) -> str:
+    """Notify the mothership."""
+    return f"Sent: {message}"
+```
+
+When the model calls the tool, the agent emits a hook event. Resolve it with
+`ai.resolve_hook`:
+
+```python
+ai.resolve_hook(
+    "approve_tool_call_id_here",
+    ai.tools.ToolApproval(granted=True, reason="approved"),
+)
+```
+
+## Resolve approvals in a live app
+
+## Build manual hooks
+
+Hooks let an agent suspend while your application waits for external input,
+such as a human approval:
+
+```python
+approval = await ai.hook(
+    "approve_contact_mothership",
+    payload=ai.tools.ToolApproval,
+    metadata={"tool": "contact_mothership"},
+)
+```
+
+Resolve the hook from another part of your application:
+
+```python
+ai.resolve_hook(
+    "approve_contact_mothership",
+    {"granted": True, "reason": "approved"},
+)
+```
+
+Use hooks when a tool or workflow needs a decision that cannot happen inside the
+model call.
+
+## Deny or cancel work
+
+## Resume in serverless flows
+
+For serverless or resumable flows, keep the pending hook part from the emitted
+event, call `ai.abort_pending_hook(hook_part)` to end the current run, persist
+`stream.messages`, and call `ai.resolve_hook` before replaying the agent.
+
+## Persist approval state

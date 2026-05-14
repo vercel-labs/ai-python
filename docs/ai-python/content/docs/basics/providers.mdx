@@ -1,0 +1,65 @@
+---
+title: Providers
+description: Configure providers, models, clients, and provider options.
+type: guide
+summary: Create models, configure credentials, use custom clients, list models, and check connections.
+---
+
+Use this page for provider setup and request configuration.
+
+## Create a model
+
+A model is a lightweight reference to a provider model. Create one with
+`ai.get_model`. If you omit the provider prefix, the model routes through AI
+Gateway:
+
+```python
+model = ai.get_model("anthropic/claude-sonnet-4")
+```
+
+You can also set `AI_SDK_DEFAULT_MODEL` and call `get_model` without arguments:
+
+```bash
+export AI_SDK_DEFAULT_MODEL="anthropic/claude-sonnet-4"
+```
+
+```python
+model = ai.get_model()
+```
+
+Use a `provider:model` ID when you want to target a specific provider directly:
+
+```python
+model = ai.get_model("openai:gpt-5")
+```
+
+## Configure credentials
+
+## Override base URLs
+
+## Use an explicit client
+
+## List models
+
+## Check a connection
+
+## Provider-specific params
+
+Pass request-scoped provider options with `params`:
+
+```python
+params = {
+    "providerOptions": {
+        "gateway": {"sort": "cost"},
+        "anthropic": {"speed": "fast"},
+    }
+}
+
+async with ai.stream(model, messages, params=params) as stream:
+    async for event in stream:
+        if isinstance(event, ai.events.TextDelta):
+            print(event.chunk, end="", flush=True)
+```
+
+Provider options pass through to the selected provider. Check the provider
+documentation for supported fields.
