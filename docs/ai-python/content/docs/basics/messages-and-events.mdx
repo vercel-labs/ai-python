@@ -5,7 +5,8 @@ type: guide
 summary: Construct messages, add files, read outputs, serialize history, handle events, and track usage.
 ---
 
-Use this page for the public message and event shapes users handle directly.
+Messages are Pydantic models. Events are also Pydantic models, so you can
+pattern-match, serialize, and persist them when your app needs that.
 
 ## Build messages
 
@@ -33,7 +34,36 @@ message = ai.user_message(
 
 ## Read message output
 
+Assistant messages expose common part collections:
+
+```python
+message = stream.message
+
+print(message.text)
+print(message.reasoning)
+print(message.tool_calls)
+print(message.files)
+```
+
+Use `get_output` for a final assistant message. With no type, it returns text.
+With a Pydantic model, it validates the text as JSON:
+
+```python
+answer = message.get_output()
+forecast = message.get_output(Forecast)
+```
+
 ## Serialize and restore messages
+
+Messages round-trip through Pydantic JSON:
+
+```python
+encoded = [message.model_dump(mode="json") for message in stream.messages]
+restored = [ai.messages.Message.model_validate(item) for item in encoded]
+```
+
+Persist `stream.messages` after an agent run when you want to continue the
+conversation later.
 
 ## Handle stream events
 
@@ -64,3 +94,16 @@ ignore events you do not need, or route them into your application UI,
 observability pipeline, or durable workflow.
 
 ## Track usage
+
+Providers attach usage to events when they report it. The latest value is also
+available on the final message and stream:
+
+```python
+async with ai.stream(model, messages) as stream:
+    async for event in stream:
+        if event.usage is not None:
+            print(event.usage)
+
+print(stream.usage)
+print(stream.message.usage)
+```

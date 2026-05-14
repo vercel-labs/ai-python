@@ -101,4 +101,51 @@ execute requested tools and continue the loop.
 
 ## Use provider-executed tools
 
+Provider-executed tools run inside the provider or gateway. They appear in the
+stream as built-in tool events and do not need a Python function:
+
+```python
+tools = [ai.providers.anthropic.tools.web_search(max_uses=3)]
+
+async with ai.stream(model, messages, tools=tools) as stream:
+    async for event in stream:
+        if isinstance(event, ai.events.BuiltinToolEnd):
+            print(event.tool_call.tool_name)
+        elif isinstance(event, ai.events.BuiltinToolResult):
+            print(event.result.result)
+        elif isinstance(event, ai.events.TextDelta):
+            print(event.chunk, end="", flush=True)
+```
+
+When you route through AI Gateway, you can also pass gateway tools:
+
+```python
+tools = [ai.providers.ai_gateway.tools.perplexity_search(max_results=5)]
+```
+
 ## Handle files from a stream
+
+Generated files arrive as `FileEvent` events and are also added to the final
+assistant message:
+
+```python
+async with ai.stream(model, messages) as stream:
+    async for event in stream:
+        if isinstance(event, ai.events.FileEvent):
+            print(event.media_type, event.filename)
+
+for file in stream.message.files:
+    print(file.media_type)
+```
+
+Use `ai.generate` for dedicated image and video models:
+
+```python
+result = await ai.generate(
+    model,
+    [ai.user_message("A watercolor mothership over a quiet city.")],
+    ai.ImageParams(n=1, aspect_ratio="16:9"),
+)
+
+image = result.images[0]
+```

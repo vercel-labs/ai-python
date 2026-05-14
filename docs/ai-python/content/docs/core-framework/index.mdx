@@ -5,12 +5,51 @@ type: conceptual
 summary: Learn how the core framework coordinates stream aggregation, agent loops, tools, hooks, history, adapters, and runtime state.
 ---
 
-Use this section for the framework mechanics behind the user-facing APIs.
+The core framework is the set of small pieces behind the public APIs. Providers
+produce events, streams aggregate those events into messages, agents decide
+when to call tools, and hooks suspend work until external input arrives.
 
 ## Architecture overview
 
+The runtime has four main layers:
+
+- Providers translate `Message` lists and `Tool` schemas to remote APIs.
+- `ai.stream` wraps provider events and builds the assistant message.
+- `Agent.loop` runs the stream -> tool -> stream cycle.
+- The runtime queue carries agent events, hook events, and partial tool output
+  to the consumer.
+
 ## Data flow
+
+```python
+messages = [ai.user_message("Ask the mothership for launch status.")]
+
+async with agent.run(model, messages) as stream:
+    async for event in stream:
+        ...
+
+updated_history = stream.messages
+```
+
+The flow is:
+
+1. The model receives prepared messages and tool schemas.
+2. The stream yields text, reasoning, tool-call, built-in-tool, file, and usage
+   events.
+3. The stream aggregates events into one assistant message.
+4. The agent resolves tool calls, runs tools, appends tool results, and repeats.
 
 ## Extension points
 
+- Use `params` for request-scoped provider options.
+- Define `@ai.tool` functions for agent-executed tools.
+- Use provider tool factories for provider-executed tools.
+- Override `Agent.loop` when scheduling or history updates need custom logic.
+- Add hooks when the loop needs external input.
+- Use the AI SDK UI adapter to translate events to UI stream parts.
+
 ## Internal state boundaries
+
+Messages are the durable boundary. Streams, tool runners, live hook futures,
+and provider clients are runtime state. Persist `stream.messages`, not live
+runtime objects.

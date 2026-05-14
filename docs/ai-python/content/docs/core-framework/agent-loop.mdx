@@ -5,16 +5,80 @@ type: conceptual
 summary: Learn how agents stream model output, dispatch tools, update history, and decide when to stop.
 ---
 
-Use this page for the mechanics of `Agent.loop`.
+`Agent.loop` is the default control flow for model calls and tool execution. It
+is intentionally small so you can override it when needed.
 
 ## Default loop lifecycle
 
+```python
+while context.keep_running():
+    async with (
+        ai.stream(context=context) as stream,
+        ai.ToolRunner() as tool_runner,
+    ):
+        async for event in ai.util.merge(stream, tool_runner.events()):
+            yield event
+            if isinstance(event, ai.events.ToolEnd):
+                tool_runner.schedule(context.resolve(event.tool_call))
+
+        context.add(stream.message)
+        context.add(tool_runner.get_tool_message())
+```
+
 ## Context state
+
+`Context` holds the model, messages, model-facing tool schemas, structured
+output type, request params, and the private executable tool registry.
+
+```python
+context.model
+context.messages
+context.tools
+context.params
+```
 
 ## Keep-running rules
 
+`context.keep_running()` returns `True` while the last message still needs work:
+
+- No messages means stop.
+- A final assistant message means stop.
+- A pending hook result means stop until the hook resolves.
+- A replay-marked assistant message means dispatch its tool calls again.
+
 ## Message history updates
+
+Each model turn adds one assistant message. Each tool batch adds one tool
+message:
+
+```python
+context.add(stream.message)
+context.add(tool_runner.get_tool_message())
+```
+
+Replay-marked assistant messages are skipped to avoid duplicate history.
 
 ## Tool-result turns
 
+`ToolRunner` collects `ToolCallResult` events and merges their result parts into
+one `role="tool"` message:
+
+```python
+tool_message = tool_runner.get_tool_message()
+context.add(tool_message)
+```
+
+The next model turn receives that tool message as context.
+
 ## Final output
+
+`AgentStream.output` reads the final assistant message. With no `output_type`,
+it returns text. With `output_type`, it validates JSON into that Pydantic model:
+
+```python
+async with agent.run(model, messages, output_type=Forecast) as stream:
+    async for event in stream:
+        ...
+
+forecast = stream.output
+```

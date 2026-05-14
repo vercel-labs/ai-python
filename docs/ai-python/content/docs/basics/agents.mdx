@@ -72,6 +72,68 @@ the final assistant output.
 
 ## Understand multi-turn behavior
 
+Each loop turn streams one assistant message. If the message contains tool
+calls, the agent executes them, appends one tool-result message, and starts the
+next model turn.
+
+```python
+async with agent.run(model, messages) as stream:
+    async for event in stream:
+        if isinstance(event, ai.events.ToolCallResult):
+            for result in event.results:
+                print(result.tool_name, result.result)
+        elif isinstance(event, ai.events.TextDelta):
+            print(event.chunk, end="", flush=True)
+
+history = stream.messages
+```
+
+Use `stream.messages` when you want to persist the complete conversation after
+the run.
+
 ## Pass params and structured output
 
+Pass provider options with `params`. Pass a Pydantic model with `output_type`
+when the final assistant text should validate as JSON:
+
+```python
+import pydantic
+
+
+class Forecast(pydantic.BaseModel):
+    answer: str
+    eta: str
+
+
+async with agent.run(
+    model,
+    [ai.user_message("Return a JSON mothership forecast.")],
+    output_type=Forecast,
+    params={"temperature": 0},
+) as stream:
+    async for event in stream:
+        if isinstance(event, ai.events.TextDelta):
+            print(event.chunk, end="", flush=True)
+
+forecast = stream.output
+print(forecast.eta)
+```
+
 ## Choose agents or direct streaming
+
+Use `ai.stream` when you want one model response and you will handle any tool
+calls yourself. Use an agent when the SDK should execute Python tools, append
+tool results, and keep looping until the assistant returns a final answer.
+
+```python
+# Direct stream: inspect tool calls yourself.
+async with ai.stream(model, messages, tools=[get_weather.tool]) as stream:
+    async for event in stream:
+        ...
+
+# Agent: execute registered tools.
+agent = ai.agent(tools=[get_weather])
+async with agent.run(model, messages) as stream:
+    async for event in stream:
+        ...
+```

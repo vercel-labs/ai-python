@@ -12,28 +12,40 @@ framework-specific shape.
 
 ## What you can build
 
-Use this section for the user-facing workflows most applications need:
-configuring providers, building messages, streaming responses, defining tools,
-running agents, composing subagents, adding approvals, generating media, and
-connecting to AI SDK UI clients.
+Start with the model call, then add the pieces your app needs:
+
+- Stream text or structured JSON from a model.
+- Send images, audio, documents, and generated files through messages.
+- Define Python tools and let an agent execute them.
+- Pause tools for approval with hooks.
+- Run subagents as tools and stream their output.
+- Bridge agent streams to AI SDK UI clients over Server-Sent Events (SSE).
 
 ## Main primitives
 
-- Models identify the provider model to call.
-- Messages carry the conversation history.
-- Streams yield events as model output arrives.
-- Tools let models request host-side or provider-side actions.
-- Agents run the tool loop for you.
-- Hooks pause a workflow for external input.
+- `Model` identifies the provider model to call.
+- `Message` carries conversation history as typed parts.
+- `ai.stream` yields model events and aggregates the assistant message.
+- `@ai.tool` exposes Python functions to models.
+- `Agent` runs the stream -> tool -> stream loop.
+- `ai.hook` pauses a workflow for external input.
 
 ## Recommended learning path
 
-Start with providers, messages, streaming, tools, and agents. Then move to
-custom loops, subagents, human-in-the-loop workflows, media generation, and UI
-integration as your application needs them.
+Read providers, messages, streaming, tools, and agents first. Then add custom
+loops, subagents, human-in-the-loop workflows, and UI integration when your app
+needs those control points.
 
 ## Example map
 
-Focused samples live in `examples/samples/`. End-to-end demos live in
-`examples/fastapi-vite`, `examples/multiagent-textual`, and
-`examples/temporal-direct`.
+Focused samples live in `examples/samples/`:
+
+- `stream.py` streams text from a model.
+- `tools_schema.py` passes a schema-only tool to a model.
+- `agent_simple.py` runs the default agent loop.
+- `agent_custom_loop.py` overrides `Agent.loop`.
+- `streaming_tool.py` streams partial output from a tool.
+- `agent_nested.py` runs a subagent as a tool.
+
+End-to-end demos live in `examples/fastapi-vite`,
+`examples/multiagent-textual`, and `examples/temporal-direct`.

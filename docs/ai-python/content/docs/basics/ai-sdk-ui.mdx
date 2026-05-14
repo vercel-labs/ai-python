@@ -5,16 +5,100 @@ type: guide
 summary: Parse UI messages, apply approvals, stream SSE responses, set headers, and rebuild UI history.
 ---
 
-Use this page for the frontend integration surface.
+The AI SDK UI adapter converts between AI SDK UI messages and the Python
+runtime message/event types.
 
 ## Parse UI messages
 
+Accept `UIMessage` values from an AI SDK UI client, then convert them to
+runtime messages:
+
+```python
+class ChatRequest(pydantic.BaseModel):
+    messages: list[ai.agents.ui.ai_sdk.UIMessage]
+
+
+@app.post("/chat")
+async def chat(request: ChatRequest):
+    messages, approvals = ai.agents.ui.ai_sdk.to_messages(request.messages)
+```
+
+`to_messages` also extracts approval responses from tool parts.
+
 ## Apply approval responses
+
+Register extracted approvals before resuming the agent:
+
+```python
+messages, approvals = ai.agents.ui.ai_sdk.to_messages(request.messages)
+ai.agents.ui.ai_sdk.apply_approvals(approvals)
+
+async with chat_agent.run(model, messages) as stream:
+    ...
+```
+
+The hook registry stores each approval until the matching tool-approval hook
+runs.
 
 ## Stream SSE responses
 
+Use `to_sse` to convert agent events to AI SDK UI stream chunks:
+
+```python
+@app.post("/chat")
+async def chat(request: ChatRequest) -> fastapi.responses.StreamingResponse:
+    messages, approvals = ai.agents.ui.ai_sdk.to_messages(request.messages)
+    ai.agents.ui.ai_sdk.apply_approvals(approvals)
+
+    async def stream_response():
+        async with chat_agent.run(model, messages) as stream:
+            async for chunk in ai.agents.ui.ai_sdk.to_sse(stream):
+                yield chunk
+
+    return fastapi.responses.StreamingResponse(
+        stream_response(),
+        headers=ai.agents.ui.ai_sdk.UI_MESSAGE_STREAM_HEADERS,
+    )
+```
+
 ## Set response headers
+
+Return the adapter headers on every streamed response:
+
+```python
+headers = ai.agents.ui.ai_sdk.UI_MESSAGE_STREAM_HEADERS
+```
+
+These headers identify the response as an AI SDK UI message stream.
 
 ## Rebuild UI history
 
+Convert stored runtime messages back to AI SDK UI messages for history
+endpoints:
+
+```python
+@app.get("/chat/{session_id}")
+async def get_chat(session_id: str):
+    saved = await load_messages(session_id)
+    return ai.agents.ui.ai_sdk.to_ui_messages(saved)
+```
+
+The adapter groups assistant, tool, and internal hook messages into one
+assistant UI message.
+
 ## Support streaming tool output
+
+Generator tools and subagents emit `PartialToolCallResult` events. The UI
+adapter folds those partial values into the corresponding tool output:
+
+```python
+@ai.tool
+async def draft_mothership_reply(topic: str) -> ai.StreamingTextTool:
+    """Draft a reply from the mothership."""
+    yield "Checking "
+    yield "mothership "
+    yield f"records for {topic}."
+```
+
+For subagents, `ai.SubAgentTool` streams nested events and stores the nested
+assistant message as the tool output.

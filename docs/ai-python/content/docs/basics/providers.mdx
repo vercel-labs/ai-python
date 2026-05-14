@@ -5,7 +5,8 @@ type: guide
 summary: Create models, configure credentials, use custom clients, list models, and check connections.
 ---
 
-Use this page for provider setup and request configuration.
+Providers own credentials, base URLs, headers, clients, and adapter dispatch.
+Models are lightweight references that point at a provider.
 
 ## Create a model
 
@@ -35,13 +36,84 @@ model = ai.get_model("openai:gpt-5")
 
 ## Configure credentials
 
+The default gateway route reads `AI_GATEWAY_API_KEY`:
+
+```bash title="Terminal"
+export AI_GATEWAY_API_KEY="your_access_token_here"
+```
+
+Direct providers read their provider-specific keys:
+
+```bash title="Terminal"
+export OPENAI_API_KEY="your_access_token_here"
+export ANTHROPIC_API_KEY="your_access_token_here"
+```
+
 ## Override base URLs
+
+Pass `base_url` when you create an explicit provider:
+
+```python
+provider = ai.get_provider(
+    "openai",
+    base_url="http://localhost:1234/v1",
+    api_key="your_access_token_here",
+)
+
+model = ai.Model("local-model", provider=provider)
+```
+
+OpenAI and Anthropic direct providers also read `OPENAI_BASE_URL` and
+`ANTHROPIC_BASE_URL`.
 
 ## Use an explicit client
 
+Pass an upstream client when your app owns transport configuration:
+
+```python
+import httpx
+import ai
+
+
+client = httpx.AsyncClient(timeout=30)
+provider = ai.get_provider(
+    "openai",
+    base_url="http://localhost:1234/v1",
+    api_key="your_access_token_here",
+    client=client,
+)
+model = ai.Model("local-model", provider=provider)
+```
+
+Close explicit providers when your app shuts down:
+
+```python
+await provider.aclose()
+```
+
 ## List models
 
+Use the provider API when you need model IDs from the remote service:
+
+```python
+provider = ai.get_provider("anthropic")
+models = await provider.list_models()
+print(models[:5])
+```
+
 ## Check a connection
+
+Use `ai.probe` to check credentials and model availability without generating
+tokens:
+
+```python
+model = ai.get_model("gateway:anthropic/claude-sonnet-4")
+
+try:
+    await ai.probe(model)
+except ai.ProviderError as exc:
+    print(f"Provider is unavailable: {exc}")
+```
 
 ## Provider-specific params
 

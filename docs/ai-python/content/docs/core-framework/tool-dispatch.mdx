@@ -5,18 +5,91 @@ type: conceptual
 summary: Learn how tool schemas become executable calls and how tool results flow back into history.
 ---
 
-Use this page for the internal tool execution pipeline.
+Tool dispatch starts with a streamed `ToolCallPart` and ends with a
+`ToolResultPart` in message history.
 
 ## Tool schema creation
 
+`@ai.tool` inspects the async function signature and creates a Pydantic
+validator plus a model-facing `Tool` declaration:
+
+```python
+@ai.tool
+async def contact_mothership(query: str) -> str:
+    """Contact the mothership for important decisions."""
+    return "Soon."
+```
+
+The tool name is the function name. The docstring becomes the description.
+
 ## Bound tool calls
+
+When the model emits a tool call, `context.resolve` binds the streamed
+`ToolCallPart` to the registered `AgentTool`:
+
+```python
+if isinstance(event, ai.events.ToolEnd):
+    tool_call = context.resolve(event.tool_call)
+```
+
+The bound call exposes `id`, `name`, `fn`, and validated `kwargs`.
 
 ## Argument validation
 
+Arguments are JSON-decoded from `tool_args` and validated before the function
+runs:
+
+```python
+kwargs = tool_call.kwargs
+```
+
+Validation failures return an error tool result, so the agent can continue with
+the error in history.
+
 ## Concurrent scheduling
+
+`ToolRunner.schedule` starts each call in a task group. `ToolRunner.events()`
+yields results as tasks finish:
+
+```python
+tool_runner.schedule(context.resolve(event.tool_call))
+```
+
+This lets multiple tool calls from one assistant turn run concurrently.
 
 ## Tool result aggregation
 
+Each successful call creates a `ToolResultPart`. `ToolRunner.get_tool_message`
+merges all collected results into one tool message:
+
+```python
+message = tool_runner.get_tool_message()
+context.add(message)
+```
+
 ## Error results
 
+Tool exceptions are caught and converted to error results:
+
+```python
+if isinstance(event, ai.events.ToolCallResult) and event.exception:
+    log_exception(event.exception)
+```
+
+The model receives a string error result. The event keeps the original
+exception for logging.
+
 ## Approval-gated dispatch
+
+Tools declared with `require_approval=True` are wrapped in an approval hook.
+The call runs only after the hook resolves with `granted=True`:
+
+```python
+@ai.tool(require_approval=True)
+async def notify_mothership(message: str) -> str:
+    """Notify the mothership."""
+    return f"Sent: {message}"
+```
+
+If the hook is denied, the agent returns an error tool result. If the run aborts
+while the hook is pending, the pending result marks the history for replay.

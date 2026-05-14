@@ -5,7 +5,8 @@ type: guide
 summary: Use tool approvals, manual hooks, cancellation, denial, and serverless resume flows.
 ---
 
-Use this page for application-level approval and suspension workflows.
+Hooks let an agent suspend while your application waits for a decision. Tool
+approvals are the built-in hook workflow.
 
 ## Require tool approval
 
@@ -29,6 +30,25 @@ ai.resolve_hook(
 ```
 
 ## Resolve approvals in a live app
+
+Listen for pending hook events and resolve the matching hook from another task,
+request handler, or UI callback:
+
+```python
+async with agent.run(model, messages) as stream:
+    async for event in stream:
+        if (
+            isinstance(event, ai.events.HookEvent)
+            and event.hook.status == "pending"
+        ):
+            print(event.hook.hook_id, event.hook.metadata)
+
+# Later, from the approval path:
+ai.resolve_hook(
+    "approve_tool_call_id_here",
+    ai.tools.ToolApproval(granted=True, reason="approved"),
+)
+```
 
 ## Build manual hooks
 
@@ -57,6 +77,21 @@ model call.
 
 ## Deny or cancel work
 
+Return a denial by resolving the hook with `granted=False`:
+
+```python
+ai.resolve_hook(
+    "approve_tool_call_id_here",
+    ai.tools.ToolApproval(granted=False, reason="not allowed"),
+)
+```
+
+Cancel a live hook when the waiting workflow should stop:
+
+```python
+await ai.cancel_hook("approve_tool_call_id_here", reason="client disconnected")
+```
+
 ## Resume in serverless flows
 
 For serverless or resumable flows, keep the pending hook part from the emitted
@@ -64,3 +99,19 @@ event, call `ai.abort_pending_hook(hook_part)` to end the current run, persist
 `stream.messages`, and call `ai.resolve_hook` before replaying the agent.
 
 ## Persist approval state
+
+Persist `stream.messages` when a run stops on a pending hook. When the user
+responds, restore those messages, register the resolution, and run the same
+agent again:
+
+```python
+messages, approvals = ai.agents.ui.ai_sdk.to_messages(ui_messages)
+ai.agents.ui.ai_sdk.apply_approvals(approvals)
+
+async with agent.run(model, messages) as stream:
+    async for event in stream:
+        ...
+```
+
+The agent marks interrupted assistant turns for replay, so the resumed run can
+dispatch the original tool call without asking the model to emit it again.

@@ -5,7 +5,8 @@ type: guide
 summary: Define function tools, design schemas, handle tool errors, use schema-only tools, provider tools, and MCP tools.
 ---
 
-Use this page as the main user-facing reference for tool usage.
+Tools can be schema-only declarations for direct streaming, executable Python
+functions for agents, or provider-executed tools that run outside your process.
 
 ## Define function tools
 
@@ -29,11 +30,71 @@ parameters as a JSON schema and the docstring as the tool description.
 The function signature becomes the tool schema. The docstring becomes the tool
 description the model sees.
 
+```python
+@ai.tool
+async def scan_sector(sector: str, depth: int = 1) -> str:
+    """Scan a mothership sector at the requested depth."""
+    return f"{sector}: clear at depth {depth}"
+```
+
+The model receives `sector` as a required string and `depth` as an optional
+integer with a default.
+
 ## Validate arguments
+
+Tool arguments validate through the generated Pydantic model before your
+function runs:
+
+```python
+@ai.tool
+async def set_alert_level(level: int) -> str:
+    """Set the mothership alert level."""
+    return f"Alert level set to {level}"
+```
+
+If the model sends `{"level": "high"}`, validation fails and the agent returns
+an error tool result instead of calling the function.
 
 ## Handle tool errors
 
+Tool exceptions become `ToolCallResult` events with `is_error=True`. The model
+sees the error text on the next turn:
+
+```python
+async with agent.run(model, messages) as stream:
+    async for event in stream:
+        if isinstance(event, ai.events.ToolCallResult):
+            for result in event.results:
+                if result.is_error:
+                    print(f"{result.tool_name} failed: {result.result}")
+```
+
+The original exception is available on `event.exception` for logging.
+
 ## Use schema-only tools
+
+Pass `ai.Tool` objects directly to `ai.stream` when you want the model to emit
+tool calls but you do not want the SDK to execute them:
+
+```python
+tool = ai.Tool(
+    kind="function",
+    name="contact_mothership",
+    args=ai.tools.FunctionToolArgs(
+        description="Contact the mothership.",
+        params={
+            "type": "object",
+            "properties": {"query": {"type": "string"}},
+            "required": ["query"],
+        },
+    ),
+)
+
+async with ai.stream(model, messages, tools=[tool]) as stream:
+    async for event in stream:
+        if isinstance(event, ai.events.ToolEnd):
+            print(event.tool_call.tool_args)
+```
 
 ## Use provider-executed tools
 
@@ -48,7 +109,7 @@ messages = [
 async with ai.stream(
     model,
     messages,
-    tools=[ai.anthropic.tools.web_search(max_uses=3)],
+    tools=[ai.providers.anthropic.tools.web_search(max_uses=3)],
 ) as stream:
     async for event in stream:
         if isinstance(event, ai.events.TextDelta):
@@ -60,8 +121,8 @@ and AI Gateway tool factories:
 
 ```python
 tools = [
-    ai.anthropic.tools.web_search(max_uses=3),
-    ai.ai_gateway.tools.perplexity_search(max_results=5),
+    ai.providers.anthropic.tools.web_search(max_uses=3),
+    ai.providers.ai_gateway.tools.perplexity_search(max_results=5),
 ]
 ```
 
