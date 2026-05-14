@@ -4,18 +4,23 @@ Message/tool conversion and streaming via the official ``anthropic`` SDK.
 Anthropic-compatible providers own the SDK client used by this protocol.
 """
 
+from __future__ import annotations
+
+import base64
 import json
 from collections.abc import AsyncGenerator, Mapping, Sequence
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-import anthropic
 import pydantic
 
 from ... import types
 from ...models import core
 from ...types import events
-from . import errors
+from . import _sdk, errors
 from . import tools as anthropic_tools
+
+if TYPE_CHECKING:
+    import anthropic
 
 PROVIDER_NAME = "anthropic"
 
@@ -159,9 +164,7 @@ def _file_part_to_anthropic(
                 "source": {"type": "url", "url": part.data},
             }
         else:
-            import base64 as _b64
-
-            text_data = _b64.b64decode(part.data).decode("utf-8")
+            text_data = base64.b64decode(part.data).decode("utf-8")
         return {
             "type": "document",
             "source": {
@@ -390,6 +393,7 @@ async def stream(
     ``params`` may be a raw dict of Anthropic SDK kwargs. Provider-specific
     request options are forwarded without local validation or translation.
     """
+    anthropic_sdk = _sdk.import_sdk(provider=provider)
     stream_params = _coerce_params(params)
     system_prompt, anthropic_messages = await _messages_to_anthropic(messages)
 
@@ -573,7 +577,7 @@ async def stream(
                 raw=sdk_usage.model_dump(exclude_none=True) or None,
             )
             yield events.StreamEnd(usage=usage)
-    except anthropic.AnthropicError as exc:
+    except anthropic_sdk.AnthropicError as exc:
         raise errors.map_error(
             exc,
             provider=provider,

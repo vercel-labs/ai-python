@@ -29,6 +29,10 @@ class ConfigurationError(AIError):
     """Required SDK configuration is missing or invalid."""
 
 
+class InstallationError(ConfigurationError):
+    """Required optional dependency is not installed."""
+
+
 class ProviderError(AIError):
     """Base class for errors raised by model providers."""
 
@@ -307,6 +311,7 @@ __all__ = [
     "AIError",
     "ConfigurationError",
     "HTTPErrorContext",
+    "InstallationError",
     "ProviderAPIError",
     "ProviderAuthenticationError",
     "ProviderBadRequestError",

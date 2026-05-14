@@ -2,24 +2,25 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
-import openai
 
 from ... import errors as ai_errors
+from . import _sdk
 
-_STATUS_ERROR_MAP: dict[
-    type[openai.APIStatusError], type[ai_errors.ProviderAPIError]
-] = {
-    openai.BadRequestError: ai_errors.ProviderBadRequestError,
-    openai.AuthenticationError: ai_errors.ProviderAuthenticationError,
-    openai.PermissionDeniedError: ai_errors.ProviderPermissionDeniedError,
-    openai.NotFoundError: ai_errors.ProviderNotFoundError,
-    openai.ConflictError: ai_errors.ProviderConflictError,
-    openai.UnprocessableEntityError: ai_errors.ProviderUnprocessableEntityError,
-    openai.RateLimitError: ai_errors.ProviderRateLimitError,
-    openai.InternalServerError: ai_errors.ProviderInternalServerError,
+if TYPE_CHECKING:
+    import openai
+
+_STATUS_ERROR_MAP: dict[str, type[ai_errors.ProviderAPIError]] = {
+    "BadRequestError": ai_errors.ProviderBadRequestError,
+    "AuthenticationError": ai_errors.ProviderAuthenticationError,
+    "PermissionDeniedError": ai_errors.ProviderPermissionDeniedError,
+    "NotFoundError": ai_errors.ProviderNotFoundError,
+    "ConflictError": ai_errors.ProviderConflictError,
+    "UnprocessableEntityError": ai_errors.ProviderUnprocessableEntityError,
+    "RateLimitError": ai_errors.ProviderRateLimitError,
+    "InternalServerError": ai_errors.ProviderInternalServerError,
 }
 
 
@@ -30,7 +31,8 @@ def map_error(
     model_id: str | None = None,
 ) -> ai_errors.ProviderAPIError:
     """Map an OpenAI SDK exception to the public provider hierarchy."""
-    if isinstance(exc, openai.APITimeoutError):
+    openai_sdk = _sdk.import_sdk(provider=provider or "openai")
+    if isinstance(exc, openai_sdk.APITimeoutError):
         return _provider_error(
             ai_errors.ProviderTimeoutError,
             exc,
@@ -38,7 +40,7 @@ def map_error(
             model_id=model_id,
             is_retryable=True,
         )
-    if isinstance(exc, openai.APIConnectionError):
+    if isinstance(exc, openai_sdk.APIConnectionError):
         return _provider_error(
             ai_errors.ProviderConnectionError,
             exc,
@@ -46,16 +48,20 @@ def map_error(
             model_id=model_id,
             is_retryable=True,
         )
-    if isinstance(exc, openai.APIResponseValidationError):
+    if isinstance(exc, openai_sdk.APIResponseValidationError):
         return _provider_error(
             ai_errors.ProviderResponseError,
             exc,
             provider=provider,
             model_id=model_id,
         )
-    if isinstance(exc, openai.APIStatusError):
-        return _map_status_error(exc, provider=provider, model_id=model_id)
-    if isinstance(exc, openai.APIError):
+    if isinstance(exc, openai_sdk.APIStatusError):
+        return _map_status_error(
+            exc,
+            provider=provider,
+            model_id=model_id,
+        )
+    if isinstance(exc, openai_sdk.APIError):
         return _provider_error(
             ai_errors.ProviderAPIError,
             exc,
@@ -80,7 +86,7 @@ def _map_status_error(
         cls: type[ai_errors.ProviderAPIError] = ai_errors.ProviderModelNotFoundError
     else:
         cls = _STATUS_ERROR_MAP.get(
-            type(exc)
+            type(exc).__name__
         ) or ai_errors.http_status_to_provider_status_error_class(exc.status_code)
     return _provider_error(cls, exc, provider=provider, model_id=model_id)
 

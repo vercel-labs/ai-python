@@ -7,14 +7,15 @@ from types import ModuleType
 from typing import TYPE_CHECKING, Any, ClassVar
 
 import httpx
-import openai
 
 from ... import errors as ai_errors
 from .. import base
-from . import errors
+from . import _sdk, errors, protocol
+from . import tools as tools_module
 
 if TYPE_CHECKING:
     import modelsdotdev
+    import openai
     import pydantic
 
     from ...models.core import model as model_
@@ -22,14 +23,18 @@ if TYPE_CHECKING:
     from ...types import messages as messages_
     from ...types import tools as tools_
 
-OpenAIClient = httpx.AsyncClient | openai.AsyncOpenAI
+    OpenAIClient = httpx.AsyncClient | openai.AsyncOpenAI
+    OpenAISDKClient = openai.AsyncOpenAI
+else:
+    OpenAIClient = Any
+    OpenAISDKClient = Any
 
 _BASE_URL = "https://api.openai.com/v1"
 _BASE_URL_ENV = "OPENAI_BASE_URL"
 _API_KEY_ENV = "OPENAI_API_KEY"
 
 
-class OpenAICompatibleProvider(base.Provider[openai.AsyncOpenAI]):
+class OpenAICompatibleProvider(base.Provider[OpenAISDKClient]):
     """Provider configuration for OpenAI-compatible APIs."""
 
     handles: ClassVar[tuple[str, ...]] = (
@@ -51,7 +56,11 @@ class OpenAICompatibleProvider(base.Provider[openai.AsyncOpenAI]):
         env: Mapping[str, str] | None = None,
         client: OpenAIClient | None = None,
     ) -> None:
-        if isinstance(client, openai.AsyncOpenAI):
+        openai_sdk = None
+        if client is not None and not isinstance(client, httpx.AsyncClient):
+            openai_sdk = _sdk.import_sdk(provider=name)
+
+        if openai_sdk is not None and isinstance(client, openai_sdk.AsyncOpenAI):
             sdk_client = client
             http_client = None
             self._has_user_sdk_client = True
@@ -84,8 +93,9 @@ class OpenAICompatibleProvider(base.Provider[openai.AsyncOpenAI]):
         self,
         *,
         http_client: httpx.AsyncClient | None = None,
-    ) -> openai.AsyncOpenAI:
-        return openai.AsyncOpenAI(
+    ) -> OpenAISDKClient:
+        openai_sdk = _sdk.import_sdk(provider=self.name)
+        return openai_sdk.AsyncOpenAI(
             base_url=self.base_url,
             api_key=self.api_key or "",
             default_headers=self.headers,
@@ -93,7 +103,7 @@ class OpenAICompatibleProvider(base.Provider[openai.AsyncOpenAI]):
         )
 
     @property
-    def sdk_client(self) -> openai.AsyncOpenAI:
+    def sdk_client(self) -> OpenAISDKClient:
         """Provider SDK client used for OpenAI-compatible API requests."""
         return self.client
 
@@ -119,8 +129,6 @@ class OpenAICompatibleProvider(base.Provider[openai.AsyncOpenAI]):
         params: Any = None,
     ) -> AsyncGenerator[events.Event]:
         """Stream via the OpenAI chat completions protocol."""
-        from . import protocol
-
         return protocol.stream(
             self.sdk_client,
             model,
@@ -142,7 +150,7 @@ class OpenAICompatibleProvider(base.Provider[openai.AsyncOpenAI]):
         headers: Mapping[str, str] | None = None,
         env: Mapping[str, str] | None = None,
         client: OpenAIClient | None = None,
-    ) -> base.Provider[openai.AsyncOpenAI]:
+    ) -> base.Provider[OpenAISDKClient]:
         resolved_base_url = base_url or base.provider_base_url(
             provider,
             model_provider_config,
@@ -175,15 +183,14 @@ class OpenAICompatibleProvider(base.Provider[openai.AsyncOpenAI]):
         passed; route via the AI Gateway provider until a Responses
         protocol ships.
         """
-        from . import tools as tools_module
-
         return tools_module
 
     async def list_models(self) -> list[str]:
         """List available model IDs from the OpenAI-compatible API."""
+        openai_sdk = _sdk.import_sdk(provider=self.name)
         try:
             sdk_models = await self.sdk_client.models.list()
-        except openai.OpenAIError as exc:
+        except openai_sdk.OpenAIError as exc:
             raise errors.map_error(exc, provider=self.name) from exc
         return sorted(str(m.id) for m in sdk_models.data)
 
@@ -194,9 +201,10 @@ class OpenAICompatibleProvider(base.Provider[openai.AsyncOpenAI]):
                 f"provider {self.name!r} is not configured",
                 provider=self.name,
             )
+        openai_sdk = _sdk.import_sdk(provider=self.name)
         try:
             await self.sdk_client.models.retrieve(model.id)
-        except openai.OpenAIError as exc:
+        except openai_sdk.OpenAIError as exc:
             raise errors.map_error(
                 exc,
                 provider=self.name,

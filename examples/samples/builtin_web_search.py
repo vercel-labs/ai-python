@@ -1,21 +1,13 @@
 """Anthropic built-in web search.
+
 https://docs.anthropic.com/en/docs/build-with-claude/tool-use/web-search-tool
 """
 
 import asyncio
 import json
-import sys
 
 import ai
 from ai.providers.anthropic import tools as anthropic_tools
-
-provider = ai.get_provider("anthropic")
-
-if not provider.is_configured():
-    print(f"[SKIP] {provider.name} provider is not configured")
-    sys.exit(0)
-
-model = ai.get_model("anthropic:claude-sonnet-4-6")
 
 messages = [
     ai.system_message("Be concise. Cite sources you use. The year is 2026"),
@@ -51,6 +43,13 @@ def format(value: object) -> str:
 
 
 async def main() -> None:
+    provider = ai.get_provider("anthropic")
+    if not provider.is_configured():
+        print(f"[SKIP] {provider.name} provider is not configured")
+        return
+
+    model = ai.Model("claude-sonnet-4-6", provider=provider)
+
     async with ai.stream(model, messages, tools=tools) as s:
         async for event in s:
             match event:

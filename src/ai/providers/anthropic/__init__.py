@@ -17,7 +17,8 @@ Usage::
     ) as s:
         ...
 
-The protocol module is loaded lazily by provider methods.
+The optional upstream Anthropic SDK is loaded lazily when the provider creates
+or uses an SDK client.
 """
 
 from . import tools

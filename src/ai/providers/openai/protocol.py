@@ -4,15 +4,20 @@ Message/tool conversion and streaming via the official ``openai`` SDK.
 OpenAI-compatible providers own the SDK client used by this protocol.
 """
 
-from collections.abc import AsyncGenerator, Mapping, Sequence
-from typing import Any
+from __future__ import annotations
 
-import openai
+import base64
+from collections.abc import AsyncGenerator, Mapping, Sequence
+from typing import TYPE_CHECKING, Any
+
 import pydantic
 
 from ... import types
 from ...models import core
-from . import errors
+from . import _sdk, errors
+
+if TYPE_CHECKING:
+    import openai
 
 # ---------------------------------------------------------------------------
 # Message / tool conversion — internal types → OpenAI wire format
@@ -94,9 +99,7 @@ async def _file_part_to_openai(
         elif types.media.is_url(data):
             text_content = data
         else:
-            import base64 as _b64
-
-            text_content = _b64.b64decode(data).decode("utf-8")
+            text_content = base64.b64decode(data).decode("utf-8")
         return {"type": "text", "text": text_content}
 
     raise ValueError(f"Unsupported media type for OpenAI: {mt}")
@@ -219,6 +222,7 @@ async def stream(
     provider: str,
 ) -> AsyncGenerator[types.events.Event]:
     """Stream through the OpenAI chat completions protocol using *sdk_client*."""
+    openai_sdk = _sdk.import_sdk(provider=provider)
     if tools and any(t.kind == "provider" for t in tools):
         raise NotImplementedError(
             "OpenAI built-in tools require the Responses API. "
@@ -248,13 +252,13 @@ async def stream(
         api_kwargs["tools"] = openai_tools
 
     if output_type is not None:
-        from openai.lib._pydantic import to_strict_json_schema
+        openai_pydantic = _sdk.import_pydantic(provider=provider)
 
         api_kwargs["response_format"] = {
             "type": "json_schema",
             "json_schema": {
                 "name": output_type.__name__,
-                "schema": to_strict_json_schema(output_type),
+                "schema": openai_pydantic.to_strict_json_schema(output_type),
                 "strict": True,
             },
         }
@@ -366,7 +370,7 @@ async def stream(
                         tc["started"] = False
 
         yield types.events.StreamEnd(usage=usage)
-    except openai.OpenAIError as exc:
+    except openai_sdk.OpenAIError as exc:
         raise errors.map_error(
             exc,
             provider=provider,

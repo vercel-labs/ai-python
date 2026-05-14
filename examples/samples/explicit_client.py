@@ -5,23 +5,23 @@ import os
 
 import ai
 
-# Example for local OpenAI-compatible servers like LM Studio.
-provider = ai.get_provider(
-    "openai",
-    base_url=os.environ.get("LOCAL_OPENAI_BASE_URL", "http://localhost:1234/v1"),
-    api_key=os.environ.get("LOCAL_OPENAI_API_KEY", "some-key"),
-    headers={"X-Custom-Header": "example"},
-)
-
-model = ai.Model(
-    os.environ.get("LOCAL_OPENAI_MODEL", "local-model"),
-    provider=provider,
-)
-
 messages = [ai.user_message("Hello!")]
 
 
 async def main() -> None:
+    # Example for local OpenAI-compatible servers like LM Studio.
+    provider = ai.get_provider(
+        "openai",
+        base_url=os.environ.get("LOCAL_OPENAI_BASE_URL", "http://localhost:1234/v1"),
+        api_key=os.environ.get("LOCAL_OPENAI_API_KEY", "some-key"),
+        headers={"X-Custom-Header": "example"},
+    )
+
+    model = ai.Model(
+        os.environ.get("LOCAL_OPENAI_MODEL", "local-model"),
+        provider=provider,
+    )
+
     try:
         try:
             await ai.probe(model)

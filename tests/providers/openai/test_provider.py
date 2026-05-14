@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import importlib
+
 import httpx
 import openai
 import pytest
@@ -149,6 +151,50 @@ def test_provider_is_configured_requires_api_key(
 
     assert ai.get_provider("openai").is_configured() is False
     assert ai.get_provider("openai", api_key="sk-test").is_configured() is True
+
+
+def test_get_provider_raises_installation_error_when_openai_sdk_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real_import_module = importlib.import_module
+
+    def _missing_openai(name: str, package: str | None = None) -> object:
+        if name == "openai" or name.startswith("openai."):
+            raise ModuleNotFoundError(name="openai")
+        return real_import_module(name, package)
+
+    monkeypatch.setattr(importlib, "import_module", _missing_openai)
+
+    with pytest.raises(ai.InstallationError) as exc_info:
+        ai.get_provider("openai", api_key="sk-test")
+
+    assert "could not import `openai`" in str(exc_info.value)
+    assert "required to use the openai provider" in str(exc_info.value)
+    assert "ai[openai]" in str(exc_info.value)
+
+
+def test_installation_error_uses_modelsdev_provider_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real_import_module = importlib.import_module
+
+    def _missing_openai(name: str, package: str | None = None) -> object:
+        if name == "openai" or name.startswith("openai."):
+            raise ModuleNotFoundError(name="openai")
+        return real_import_module(name, package)
+
+    monkeypatch.setattr(importlib, "import_module", _missing_openai)
+
+    with pytest.raises(ai.InstallationError) as exc_info:
+        ai.get_provider(
+            "cloudflare-workers-ai",
+            env={
+                "CLOUDFLARE_ACCOUNT_ID": "account-123",
+                "CLOUDFLARE_API_KEY": "sk-test",
+            },
+        )
+
+    assert "required to use the cloudflare-workers-ai provider" in str(exc_info.value)
 
 
 def test_get_provider_accepts_base_url_and_api_key() -> None:

@@ -9,7 +9,8 @@ Usage::
     model = ai.Model("llama3", provider=provider)
     ids = await ai.get_provider("openai").list_models()
 
-The protocol module is loaded lazily by provider methods.
+The optional upstream OpenAI SDK is loaded lazily when the provider creates or
+uses an SDK client.
 """
 
 from . import tools

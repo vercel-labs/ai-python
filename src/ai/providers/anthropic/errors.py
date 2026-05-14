@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-import anthropic
 import httpx
 
 from ... import errors as ai_errors
+from . import _sdk
+
+if TYPE_CHECKING:
+    import anthropic
 
 
 def map_error(
@@ -17,7 +20,8 @@ def map_error(
     model_id: str | None = None,
 ) -> ai_errors.ProviderAPIError:
     """Map an Anthropic SDK exception to the public provider hierarchy."""
-    if isinstance(exc, anthropic.APITimeoutError):
+    anthropic_sdk = _sdk.import_sdk(provider=provider or "anthropic")
+    if isinstance(exc, anthropic_sdk.APITimeoutError):
         return _provider_error(
             ai_errors.ProviderTimeoutError,
             exc,
@@ -25,7 +29,7 @@ def map_error(
             model_id=model_id,
             is_retryable=True,
         )
-    if isinstance(exc, anthropic.APIConnectionError):
+    if isinstance(exc, anthropic_sdk.APIConnectionError):
         return _provider_error(
             ai_errors.ProviderConnectionError,
             exc,
@@ -33,16 +37,20 @@ def map_error(
             model_id=model_id,
             is_retryable=True,
         )
-    if isinstance(exc, anthropic.APIResponseValidationError):
+    if isinstance(exc, anthropic_sdk.APIResponseValidationError):
         return _provider_error(
             ai_errors.ProviderResponseError,
             exc,
             provider=provider,
             model_id=model_id,
         )
-    if isinstance(exc, anthropic.APIStatusError):
-        return _map_status_error(exc, provider=provider, model_id=model_id)
-    if isinstance(exc, anthropic.APIError):
+    if isinstance(exc, anthropic_sdk.APIStatusError):
+        return _map_status_error(
+            exc,
+            provider=provider,
+            model_id=model_id,
+        )
+    if isinstance(exc, anthropic_sdk.APIError):
         return _provider_error(
             ai_errors.ProviderAPIError,
             exc,

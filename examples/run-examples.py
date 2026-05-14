@@ -123,6 +123,8 @@ def _sample_cmd(sample: Sample) -> list[str]:
         "uv",
         "run",
         "--frozen",
+        "--group",
+        "dev",
         "--with-editable",
         str(REPO),
         "python",

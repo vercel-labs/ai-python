@@ -11,6 +11,10 @@ Use this skill when working with the Python `ai` SDK.
 uv add ai
 ```
 
+Direct OpenAI-compatible and Anthropic-compatible providers require optional
+extras: `uv add "ai[openai]"` or `uv add "ai[anthropic]"`. AI Gateway works
+with the base package.
+
 ```python
 import ai
 ```

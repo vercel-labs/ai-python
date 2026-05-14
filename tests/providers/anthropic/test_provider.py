@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import importlib
+
 import anthropic
 import httpx
 import pytest
@@ -142,6 +144,26 @@ def test_provider_is_configured_requires_api_key(
 
     assert ai.get_provider("anthropic").is_configured() is False
     assert ai.get_provider("anthropic", api_key="sk-test").is_configured() is True
+
+
+def test_get_provider_raises_installation_error_when_anthropic_sdk_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real_import_module = importlib.import_module
+
+    def _missing_anthropic(name: str, package: str | None = None) -> object:
+        if name == "anthropic" or name.startswith("anthropic."):
+            raise ModuleNotFoundError(name="anthropic")
+        return real_import_module(name, package)
+
+    monkeypatch.setattr(importlib, "import_module", _missing_anthropic)
+
+    with pytest.raises(ai.InstallationError) as exc_info:
+        ai.get_provider("anthropic", api_key="sk-test")
+
+    assert "could not import `anthropic`" in str(exc_info.value)
+    assert "required to use the anthropic provider" in str(exc_info.value)
+    assert "ai[anthropic]" in str(exc_info.value)
 
 
 def test_get_provider_accepts_base_url_and_api_key() -> None:

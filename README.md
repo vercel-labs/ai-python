@@ -8,6 +8,15 @@ A toolkit for building LLM-powered applications and agent loops.
 uv add ai
 ```
 
+AI Gateway usage works with the base package. Direct providers that use an
+OpenAI-compatible or Anthropic-compatible adapter load the corresponding
+official SDK lazily and require optional extras:
+
+```bash
+uv add "ai[openai]"      # OpenAI-compatible providers
+uv add "ai[anthropic]"   # Anthropic-compatible providers
+```
+
 ```python
 import ai
 ```
@@ -60,6 +69,11 @@ model = ai.get_model("gateway:openai/gpt-5.4")
 model = ai.get_model("openai:gpt-5.4")
 model = ai.get_model("anthropic:claude-sonnet-4-6")
 ```
+
+Provider IDs without a `provider:` prefix route through AI Gateway by default.
+Direct OpenAI-compatible providers, including `openai:` and compatible
+models.dev provider IDs, require `ai[openai]`. Direct Anthropic-compatible
+providers require `ai[anthropic]`.
 
 Structured output:
 
