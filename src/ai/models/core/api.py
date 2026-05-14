@@ -472,6 +472,6 @@ async def generate(
     return await executor._do_generate(request)
 
 
-async def check_connection(model: model_.Model) -> bool:
-    """Check whether the model's provider is reachable and the model exists."""
-    return await model.probe()
+async def probe(model: model_.Model) -> None:
+    """Raise unless the model's provider is reachable and the model exists."""
+    await model.provider.probe(model)

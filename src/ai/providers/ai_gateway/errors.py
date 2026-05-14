@@ -29,22 +29,29 @@ _KEY_URL = "https://vercel.com/d?to=%2F%5Bteam%5D%2F%7E%2Fai%2Fapi-keys"
 class GatewayError(Exception):
     """Base class for all Vercel AI Gateway errors."""
 
-    type: str = "gateway_error"
+    type: str | None = "gateway_error"
+    status_code: int
+    generation_id: str | None
+    is_retryable: bool
 
     def __init__(
         self,
         message: str = "",
         *,
         status_code: int = 500,
-        cause: BaseException | None = None,
         generation_id: str | None = None,
+        is_retryable: bool | None = None,
     ) -> None:
         display = f"{message} [{generation_id}]" if generation_id else message
         super().__init__(display)
+        self.message = display
         self.status_code = status_code
         self.generation_id = generation_id
-        if cause is not None:
-            self.__cause__ = cause
+        self.is_retryable = (
+            status_code in {408, 409, 429} or status_code >= 500
+            if is_retryable is None
+            else is_retryable
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -55,20 +62,18 @@ class GatewayError(Exception):
 class GatewayAuthenticationError(GatewayError):
     """Authentication failed (HTTP 401)."""
 
-    type = "authentication_error"
+    type: str | None = "authentication_error"
 
     def __init__(
         self,
         message: str = "Authentication failed",
         *,
         status_code: int = 401,
-        cause: BaseException | None = None,
         generation_id: str | None = None,
     ) -> None:
         super().__init__(
             message,
             status_code=status_code,
-            cause=cause,
             generation_id=generation_id,
         )
 
@@ -78,7 +83,6 @@ class GatewayAuthenticationError(GatewayError):
         *,
         api_key_provided: bool,
         status_code: int = 401,
-        cause: BaseException | None = None,
         generation_id: str | None = None,
     ) -> Self:
         """Build a helpful message based on which auth method was used."""
@@ -100,7 +104,6 @@ class GatewayAuthenticationError(GatewayError):
         return cls(
             msg,
             status_code=status_code,
-            cause=cause,
             generation_id=generation_id,
         )
 
@@ -108,37 +111,49 @@ class GatewayAuthenticationError(GatewayError):
 class GatewayInvalidRequestError(GatewayError):
     """Malformed or invalid request (HTTP 400)."""
 
-    type = "invalid_request_error"
+    type: str | None = "invalid_request_error"
 
     def __init__(
         self,
         message: str = "Invalid request",
         *,
         status_code: int = 400,
-        **kwargs: Any,
+        generation_id: str | None = None,
+        is_retryable: bool | None = None,
     ) -> None:
-        super().__init__(message, status_code=status_code, **kwargs)
+        super().__init__(
+            message,
+            status_code=status_code,
+            generation_id=generation_id,
+            is_retryable=is_retryable,
+        )
 
 
 class GatewayRateLimitError(GatewayError):
     """Rate limit exceeded (HTTP 429)."""
 
-    type = "rate_limit_exceeded"
+    type: str | None = "rate_limit_exceeded"
 
     def __init__(
         self,
         message: str = "Rate limit exceeded",
         *,
         status_code: int = 429,
-        **kwargs: Any,
+        generation_id: str | None = None,
+        is_retryable: bool | None = None,
     ) -> None:
-        super().__init__(message, status_code=status_code, **kwargs)
+        super().__init__(
+            message,
+            status_code=status_code,
+            generation_id=generation_id,
+            is_retryable=is_retryable,
+        )
 
 
 class GatewayModelNotFoundError(GatewayError):
     """Requested model was not found (HTTP 404)."""
 
-    type = "model_not_found"
+    type: str | None = "model_not_found"
 
     def __init__(
         self,
@@ -146,13 +161,11 @@ class GatewayModelNotFoundError(GatewayError):
         *,
         status_code: int = 404,
         model_id: str | None = None,
-        cause: BaseException | None = None,
         generation_id: str | None = None,
     ) -> None:
         super().__init__(
             message,
             status_code=status_code,
-            cause=cause,
             generation_id=generation_id,
         )
         self.model_id = model_id
@@ -161,56 +174,66 @@ class GatewayModelNotFoundError(GatewayError):
 class GatewayInternalServerError(GatewayError):
     """Internal error on the gateway server (HTTP 500)."""
 
-    type = "internal_server_error"
+    type: str | None = "internal_server_error"
 
     def __init__(
         self,
         message: str = "Internal server error",
         *,
         status_code: int = 500,
-        **kwargs: Any,
+        generation_id: str | None = None,
+        is_retryable: bool | None = None,
     ) -> None:
-        super().__init__(message, status_code=status_code, **kwargs)
+        super().__init__(
+            message,
+            status_code=status_code,
+            generation_id=generation_id,
+            is_retryable=is_retryable,
+        )
 
 
 class GatewayResponseError(GatewayError):
     """Malformed or unparseable response (HTTP 502)."""
 
-    type = "response_error"
+    type: str | None = "response_error"
 
     def __init__(
         self,
         message: str = "Invalid response",
         *,
         status_code: int = 502,
-        response: Any = None,
+        response_body: Any = None,
         validation_error: Any = None,
-        cause: BaseException | None = None,
         generation_id: str | None = None,
     ) -> None:
         super().__init__(
             message,
             status_code=status_code,
-            cause=cause,
             generation_id=generation_id,
         )
-        self.response = response
+        self.response_body = response_body
         self.validation_error = validation_error
 
 
 class GatewayTimeoutError(GatewayError):
     """Gateway request timed out (HTTP 408)."""
 
-    type = "timeout_error"
+    type: str | None = "timeout_error"
 
     def __init__(
         self,
         message: str = "Request timed out",
         *,
         status_code: int = 408,
-        **kwargs: Any,
+        generation_id: str | None = None,
+        is_retryable: bool | None = None,
     ) -> None:
-        super().__init__(message, status_code=status_code, **kwargs)
+        super().__init__(
+            message,
+            status_code=status_code,
+            generation_id=generation_id,
+            is_retryable=is_retryable,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -233,7 +256,6 @@ def create_gateway_error(
     response_body: Any,
     status_code: int,
     api_key_provided: bool = False,
-    cause: BaseException | None = None,
 ) -> GatewayError:
     """Create a typed error from a gateway JSON error response.
 
@@ -250,9 +272,8 @@ def create_gateway_error(
             return GatewayResponseError(
                 message=_MALFORMED,
                 status_code=status_code,
-                response=response_body,
+                response_body=response_body,
                 validation_error="Response body is not valid JSON",
-                cause=cause,
             )
 
     # Validate shape
@@ -266,9 +287,8 @@ def create_gateway_error(
         return GatewayResponseError(
             message=_MALFORMED,
             status_code=status_code,
-            response=body,
+            response_body=body,
             validation_error=reason,
-            cause=cause,
         )
 
     message: str = error_obj["message"]
@@ -280,7 +300,6 @@ def create_gateway_error(
             return GatewayAuthenticationError.create_contextual(
                 api_key_provided=api_key_provided,
                 status_code=status_code,
-                cause=cause,
                 generation_id=generation_id,
             )
 
@@ -291,7 +310,6 @@ def create_gateway_error(
                 message=message,
                 status_code=status_code,
                 model_id=model_id,
-                cause=cause,
                 generation_id=generation_id,
             )
 
@@ -300,6 +318,5 @@ def create_gateway_error(
             return cls(
                 message=message,
                 status_code=status_code,
-                cause=cause,
                 generation_id=generation_id,
             )

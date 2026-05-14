@@ -43,6 +43,59 @@ async def test_list_gets_models_with_provider_headers_and_sorts_ids() -> None:
     assert ids == ["claude-a", "claude-z"]
 
 
+async def test_list_maps_sdk_errors_to_provider_hierarchy() -> None:
+    def _handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            529,
+            json={"error": {"message": "overloaded", "type": "overloaded_error"}},
+            headers={"request-id": "req-anthropic"},
+        )
+
+    provider = ai.get_provider(
+        "anthropic",
+        base_url="https://anthropic.test",
+        api_key="sk-test",
+        client=httpx.AsyncClient(transport=httpx.MockTransport(_handler)),
+    )
+
+    try:
+        with pytest.raises(ai.ProviderOverloadedError) as exc_info:
+            await provider.list()
+    finally:
+        await provider.aclose()
+
+    exc = exc_info.value
+    assert isinstance(exc, ai.ProviderError)
+    assert isinstance(exc.__cause__, anthropic.APIStatusError)
+    assert exc.provider == "anthropic"
+    assert exc.http_context is not None
+    assert exc.http_context.status_code == 529
+    assert exc.http_context.request is not None
+    assert exc.http_context.response is not None
+    assert exc.request_id == "req-anthropic"
+    assert exc.type == "overloaded_error"
+
+
+async def test_list_404_stays_generic_not_found() -> None:
+    def _handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"error": {"message": "missing"}})
+
+    provider = ai.get_provider(
+        "anthropic",
+        base_url="https://anthropic.test",
+        api_key="sk-test",
+        client=httpx.AsyncClient(transport=httpx.MockTransport(_handler)),
+    )
+
+    try:
+        with pytest.raises(ai.ProviderNotFoundError) as exc_info:
+            await provider.list()
+    finally:
+        await provider.aclose()
+
+    assert not isinstance(exc_info.value, ai.ProviderModelNotFoundError)
+
+
 async def test_get_provider_accepts_anthropic_sdk_client() -> None:
     sdk_client = anthropic.AsyncAnthropic(api_key="sk-test")
     provider = ai.get_provider("anthropic", client=sdk_client)

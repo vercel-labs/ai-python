@@ -99,10 +99,17 @@ class GatewayClient:
         headers: dict[str, str] | None = None,
     ) -> httpx.Response:
         url = self.origin_url(path) if origin else self.url(path)
-        return await self._http.get(
-            url,
-            headers=headers or self.protocol_headers(),
-        )
+        try:
+            return await self._http.get(
+                url,
+                headers=headers or self.protocol_headers(),
+            )
+        except httpx.TimeoutException as exc:
+            raise errors.GatewayTimeoutError() from exc
+        except httpx.HTTPError as exc:
+            raise errors.GatewayResponseError(
+                message=f"Gateway request failed: {exc}",
+            ) from exc
 
     async def post_json(
         self,
@@ -113,21 +120,60 @@ class GatewayClient:
         model_type: ModelType,
         timeout: httpx.Timeout | float | None = None,
     ) -> httpx.Response:
-        if timeout is None:
-            response = await self._http.post(
-                self.url(path),
-                json=body,
-                headers=self.model_headers(model, model_type),
-            )
-        else:
-            response = await self._http.post(
-                self.url(path),
-                json=body,
-                headers=self.model_headers(model, model_type),
-                timeout=timeout,
-            )
+        try:
+            if timeout is None:
+                response = await self._http.post(
+                    self.url(path),
+                    json=body,
+                    headers=self.model_headers(model, model_type),
+                )
+            else:
+                response = await self._http.post(
+                    self.url(path),
+                    json=body,
+                    headers=self.model_headers(model, model_type),
+                    timeout=timeout,
+                )
+        except httpx.TimeoutException as exc:
+            raise errors.GatewayTimeoutError() from exc
+        except httpx.HTTPError as exc:
+            raise errors.GatewayResponseError(
+                message=f"Gateway request failed: {exc}",
+            ) from exc
         await self.raise_for_error(response)
         return response
+
+    async def list_model_ids(self) -> list[str]:
+        """List available model IDs from the Gateway config endpoint."""
+        response = await self.get("config")
+        await self.raise_for_error(response)
+        try:
+            data: dict[str, Any] = response.json()
+        except ValueError as exc:
+            raise errors.GatewayResponseError(
+                "Invalid Gateway config response",
+                status_code=response.status_code,
+                response_body=response.text,
+            ) from exc
+        return sorted(str(m["id"]) for m in data.get("models", []))
+
+    async def probe_model(self, model_id: str) -> None:
+        """Raise unless auth succeeds and ``model_id`` is available."""
+        auth_resp = await self.get("v1/credits", origin=True)
+        if auth_resp.status_code in {401, 403}:
+            raise errors.GatewayAuthenticationError.create_contextual(
+                api_key_provided=bool(self.api_key),
+                status_code=auth_resp.status_code,
+            )
+        if auth_resp.status_code != 200:
+            await self.raise_for_error(auth_resp)
+
+        remote_ids = set(await self.list_model_ids())
+        if model_id not in remote_ids:
+            raise errors.GatewayModelNotFoundError(
+                f"Model {model_id!r} not found",
+                model_id=model_id,
+            )
 
     @asynccontextmanager
     async def stream(
@@ -168,9 +214,16 @@ class GatewayClient:
             )
         )
 
-        async with stream as response:
-            await self.raise_for_error(response)
-            yield response
+        try:
+            async with stream as response:
+                await self.raise_for_error(response)
+                yield response
+        except httpx.TimeoutException as exc:
+            raise errors.GatewayTimeoutError() from exc
+        except httpx.HTTPError as exc:
+            raise errors.GatewayResponseError(
+                message=f"Gateway request failed: {exc}",
+            ) from exc
 
     async def raise_for_error(self, response: httpx.Response) -> None:
         if response.status_code < 400:

@@ -9,7 +9,9 @@ from typing import TYPE_CHECKING, ClassVar
 import httpx
 import openai
 
+from ... import errors as ai_errors
 from .. import base
+from . import errors
 
 if TYPE_CHECKING:
     import modelsdotdev
@@ -21,7 +23,6 @@ OpenAIClient = httpx.AsyncClient | openai.AsyncOpenAI
 _BASE_URL = "https://api.openai.com/v1"
 _BASE_URL_ENV = "OPENAI_BASE_URL"
 _API_KEY_ENV = "OPENAI_API_KEY"
-_FAIL_STATUSES = frozenset({401, 403, 404})
 
 
 class OpenAICompatibleProvider(base.Provider[openai.AsyncOpenAI]):
@@ -149,20 +150,27 @@ class OpenAICompatibleProvider(base.Provider[openai.AsyncOpenAI]):
 
     async def list(self) -> list[str]:
         """List available model IDs from the OpenAI-compatible API."""
-        sdk_models = await self.sdk_client.models.list()
+        try:
+            sdk_models = await self.sdk_client.models.list()
+        except openai.OpenAIError as exc:
+            raise errors.map_error(exc, provider=self.name) from exc
         return sorted(str(m.id) for m in sdk_models.data)
 
-    async def probe(self, model: model_.Model) -> bool:
-        """Return ``True`` when credentials are valid and the model exists."""
+    async def probe(self, model: model_.Model) -> None:
+        """Raise unless credentials are valid and the model exists."""
         if not self.is_configured():
-            return False
+            raise ai_errors.ProviderNotConfiguredError(
+                f"provider {self.name!r} is not configured",
+                provider=self.name,
+            )
         try:
             await self.sdk_client.models.retrieve(model.id)
-        except openai.APIStatusError as exc:
-            if exc.status_code in _FAIL_STATUSES:
-                return False
-            raise
-        return True
+        except openai.OpenAIError as exc:
+            raise errors.map_error(
+                exc,
+                provider=self.name,
+                model_id=model.id,
+            ) from exc
 
 
 __all__ = ["OpenAICompatibleProvider"]

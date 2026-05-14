@@ -7,6 +7,7 @@ import httpx
 import pytest
 
 import ai
+from ai.providers.ai_gateway import errors
 
 _MODEL_ID = "anthropic/claude-opus-4-6"
 
@@ -35,34 +36,44 @@ def _gateway_client(
     return ai.Model(_MODEL_ID, provider=provider)
 
 
-async def test_auth_ok_model_present() -> None:
+async def test_auth_ok_model_present_succeeds() -> None:
     config = {"models": [{"id": "anthropic/claude-opus-4-6"}]}
     model = _gateway_client(config_body=config)
-    assert await model.provider.probe(model) is True
+    await model.provider.probe(model)
 
 
 async def test_auth_ok_model_absent() -> None:
     config = {"models": [{"id": "openai/gpt-5.4"}]}
     model = _gateway_client(config_body=config)
-    assert await model.provider.probe(model) is False
+    with pytest.raises(ai.ProviderModelNotFoundError) as exc_info:
+        await model.provider.probe(model)
+
+    assert exc_info.value.model_id == model.id
+    assert isinstance(exc_info.value.__cause__, errors.GatewayModelNotFoundError)
 
 
 @pytest.mark.parametrize("status", [401, 403])
-async def test_credits_auth_error_returns_false(status: int) -> None:
+async def test_credits_auth_error_raises(status: int) -> None:
     model = _gateway_client(credits_status=status)
-    assert await model.provider.probe(model) is False
+    with pytest.raises(ai.ProviderAuthenticationError) as exc_info:
+        await model.provider.probe(model)
+
+    assert isinstance(exc_info.value.__cause__, errors.GatewayAuthenticationError)
 
 
-async def test_missing_configuration_returns_false(
+async def test_missing_configuration_raises_not_configured(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("AI_GATEWAY_API_KEY", raising=False)
 
     model = _gateway_client(api_key=None)
-    assert await model.provider.probe(model) is False
+    with pytest.raises(ai.ProviderNotConfiguredError):
+        await model.provider.probe(model)
 
 
 async def test_credits_500_raises() -> None:
     model = _gateway_client(credits_status=500)
-    with pytest.raises(httpx.HTTPStatusError):
+    with pytest.raises(ai.ProviderResponseError) as exc_info:
         await model.provider.probe(model)
+
+    assert isinstance(exc_info.value.__cause__, errors.GatewayResponseError)

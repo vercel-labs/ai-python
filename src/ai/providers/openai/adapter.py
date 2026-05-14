@@ -12,6 +12,7 @@ import pydantic
 
 from ... import types
 from ...models import core
+from . import errors
 from . import provider as provider_
 
 # ---------------------------------------------------------------------------
@@ -401,6 +402,12 @@ async def stream(
                         tc["started"] = False
 
         yield types.events.StreamEnd(usage=usage)
+    except openai.OpenAIError as exc:
+        raise errors.map_error(
+            exc,
+            provider=model.provider.name,
+            model_id=model.id,
+        ) from exc
     finally:
         if owns_client:
             await sdk_client.close()

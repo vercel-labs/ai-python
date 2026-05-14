@@ -11,6 +11,7 @@ import json
 from typing import Any
 
 import httpx
+import pytest
 
 import ai
 from ai.providers.anthropic import AnthropicCompatibleProvider
@@ -37,9 +38,17 @@ def _client_with_mock(
     return ai.Model("claude-opus-4-6", provider=provider)
 
 
-async def test_200_returns_true() -> None:
+async def test_200_succeeds() -> None:
     model = _client_with_mock(200, {"id": "claude-opus-4-6", "type": "model"})
-    assert await model.provider.probe(model) is True
+    await model.provider.probe(model)
+
+
+async def test_model_not_found_raises_model_not_found() -> None:
+    model = _client_with_mock(404)
+    with pytest.raises(ai.ProviderModelNotFoundError) as exc_info:
+        await model.provider.probe(model)
+
+    assert exc_info.value.model_id == model.id
 
 
 async def test_custom_anthropic_version_header() -> None:
@@ -62,5 +71,5 @@ async def test_custom_anthropic_version_header() -> None:
     )
 
     model = ai.Model("custom-model", provider=provider)
-    assert await provider.probe(model) is True
+    await provider.probe(model)
     assert captured_headers["anthropic-version"] == "2024-01-01"

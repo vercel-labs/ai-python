@@ -20,7 +20,7 @@ from ...providers.base import Provider as Provider
 if TYPE_CHECKING:
     from .model import Model
 
-__all__ = ["CheckConnFn", "GenerateFn", "Provider", "StreamFn"]
+__all__ = ["GenerateFn", "ProbeFn", "Provider", "StreamFn"]
 
 
 @runtime_checkable
@@ -60,22 +60,21 @@ class GenerateFn(Protocol):
 
 
 @runtime_checkable
-class CheckConnFn(Protocol):
-    """Protocol for connection-check functions.
+class ProbeFn(Protocol):
+    """Protocol for model probe functions.
 
-    A check function verifies that *model* can reach its provider and that it
-    is available there.  Returns ``True`` when the credentials are
-    valid **and** the model exists on the remote side.
+    A probe function verifies that *model* can reach its provider and that it
+    is available there. It returns successfully when credentials are valid
+    **and** the model exists on the remote side.
 
     The check must be **free** — it should only hit metadata / listing
     endpoints that don't consume tokens or credits.
 
-    Non-auth transport errors (network failures, 5xx) should be raised
-    rather than returning ``False`` so that callers can distinguish
-    "bad credentials" from "provider unreachable".
+    Failures should raise provider errors; catch ``ProviderModelNotFoundError``
+    to distinguish missing models from other failures.
     """
 
     async def __call__(
         self,
         model: Model,
-    ) -> bool: ...
+    ) -> None: ...

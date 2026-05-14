@@ -269,18 +269,16 @@ class _CheckProvider(MockProvider):
         super().__init__(adapter="mock-check")
         self.checked_model: models.Model | None = None
 
-    async def probe(self, model: models.Model) -> bool:
+    async def probe(self, model: models.Model) -> None:
         self.checked_model = model
-        return True
 
 
-async def test_check_connection_delegates_to_model_provider() -> None:
+async def test_probe_delegates_to_model_provider() -> None:
     provider = _CheckProvider()
     model = models.Model("mock-model", provider=provider)
 
-    result = await models.check_connection(model)
+    await models.probe(model)
 
-    assert result is True
     assert provider.checked_model is model
 
 

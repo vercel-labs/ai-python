@@ -22,8 +22,8 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 
+import ai
 from ai.models.core.params import VideoParams
-from ai.providers.ai_gateway import errors
 from ai.providers.ai_gateway.adapter import generate
 from ai.types import messages
 
@@ -282,7 +282,7 @@ class TestErrors:
         def handler(req: httpx.Request) -> httpx.Response:
             return httpx.Response(200, text=body)
 
-        with pytest.raises(errors.GatewayInvalidRequestError, match="Content policy"):
+        with pytest.raises(ai.ProviderBadRequestError, match="Content policy"):
             await generate(
                 mock_model(httpx.MockTransport(handler), model_id=_VIDEO_MODEL_ID),
                 [user_msg("test")],
@@ -301,7 +301,7 @@ class TestErrors:
                 },
             )
 
-        with pytest.raises(errors.GatewayAuthenticationError):
+        with pytest.raises(ai.ProviderAuthenticationError):
             await generate(
                 mock_model(httpx.MockTransport(handler), model_id=_VIDEO_MODEL_ID),
                 [user_msg("test")],
@@ -314,7 +314,7 @@ class TestErrors:
         def handler(req: httpx.Request) -> httpx.Response:
             return httpx.Response(200, text="")
 
-        with pytest.raises(errors.GatewayResponseError, match="SSE stream ended"):
+        with pytest.raises(ai.ProviderResponseError, match="SSE stream ended"):
             await generate(
                 mock_model(httpx.MockTransport(handler), model_id=_VIDEO_MODEL_ID),
                 [user_msg("test")],

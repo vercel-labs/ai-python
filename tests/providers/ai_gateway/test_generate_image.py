@@ -21,8 +21,8 @@ from typing import Any
 import httpx
 import pytest
 
+import ai
 from ai.models.core.params import ImageParams
-from ai.providers.ai_gateway import errors
 from ai.providers.ai_gateway.adapter import generate
 from ai.types import messages
 
@@ -203,7 +203,7 @@ class TestErrors:
                 },
             )
 
-        with pytest.raises(errors.GatewayAuthenticationError):
+        with pytest.raises(ai.ProviderAuthenticationError):
             await generate(
                 mock_model(httpx.MockTransport(handler), model_id=_IMAGE_MODEL_ID),
                 [user_msg("test")],
@@ -222,7 +222,7 @@ class TestErrors:
                 },
             )
 
-        with pytest.raises(errors.GatewayRateLimitError):
+        with pytest.raises(ai.ProviderRateLimitError):
             await generate(
                 mock_model(httpx.MockTransport(handler), model_id=_IMAGE_MODEL_ID),
                 [user_msg("test")],

@@ -16,7 +16,7 @@ from ...models import core
 from ..anthropic import tools as anthropic_tools
 from ..openai import tools as openai_tools
 from . import client as gateway_client
-from . import errors
+from . import errors, mapping
 from . import tools as gateway_tools
 
 # ---------------------------------------------------------------------------
@@ -504,15 +504,16 @@ async def stream(
                     data, streamed_tool_ids, provider_executed_ids
                 ):
                     yield event
-    except errors.GatewayError:
-        raise
+    except errors.GatewayError as exc:
+        raise mapping.map_error(exc) from exc
     except httpx.TimeoutException as exc:
-        raise errors.GatewayTimeoutError(cause=exc) from exc
+        timeout_error = errors.GatewayTimeoutError()
+        raise mapping.map_error(timeout_error) from exc
     except Exception as exc:
-        raise errors.GatewayResponseError(
+        response_error = errors.GatewayResponseError(
             message=f"Unexpected error during streaming: {exc}",
-            cause=exc,
-        ) from exc
+        )
+        raise mapping.map_error(response_error) from exc
 
 
 # ---------------------------------------------------------------------------
@@ -633,6 +634,9 @@ async def generate(
     params: core.GenerateParams,
 ) -> types.messages.Message:
     """Generate media through the AI Gateway."""
-    if isinstance(params, core.VideoParams):
-        return await _generate_video(model, messages, params)
-    return await _generate_image(model, messages, params)
+    try:
+        if isinstance(params, core.VideoParams):
+            return await _generate_video(model, messages, params)
+        return await _generate_image(model, messages, params)
+    except errors.GatewayError as exc:
+        raise mapping.map_error(exc) from exc

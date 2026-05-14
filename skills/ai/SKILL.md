@@ -39,7 +39,7 @@ async for msg in agent.run(model, messages):
 
 `ai.generate(model, messages, params)` — non-streaming generation. `params` is `ImageParams` or `VideoParams`.
 
-`ai.check_connection(model)` — verify credentials and model availability.
+`ai.probe(model)` — verify credentials and model availability.
 
 ## Messages
 

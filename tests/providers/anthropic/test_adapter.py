@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import anthropic
+import httpx
 import pytest
 
 import ai
@@ -15,6 +17,23 @@ from ai.providers.anthropic import adapter
 from ai.types import messages
 
 from .conftest import FakeAnthropicClient
+
+
+class _RaisingMessages:
+    def __init__(self, exc: anthropic.AnthropicError) -> None:
+        self._exc = exc
+
+    def stream(self, **kwargs: Any) -> Any:
+        raise self._exc
+
+
+class _RaisingAnthropicClient:
+    def __init__(self, exc: anthropic.AnthropicError) -> None:
+        self.messages = _RaisingMessages(exc)
+        self.closed = False
+
+    async def close(self) -> None:
+        self.closed = True
 
 
 def _patch_client(
@@ -169,3 +188,62 @@ async def test_builtin_tool_parts_round_trip(
             "content": [{"title": "Forecast", "url": "https://example.com"}],
         },
     ]
+
+
+async def test_sdk_errors_are_mapped_to_provider_hierarchy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    response = httpx.Response(
+        529,
+        request=httpx.Request("POST", "https://anthropic.test/v1/messages"),
+        headers={"request-id": "req-anthropic"},
+    )
+    sdk_error = anthropic.APIStatusError(
+        "overloaded",
+        response=response,
+        body={"error": {"type": "overloaded_error"}},
+    )
+    fake = _RaisingAnthropicClient(sdk_error)
+    monkeypatch.setattr(adapter, "_make_client", lambda model: fake)
+
+    with pytest.raises(ai.ProviderOverloadedError) as exc_info:
+        await _drain(adapter.stream(_MODEL, [ai.user_message("Hi")]))
+
+    exc = exc_info.value
+    assert exc.provider == "anthropic"
+    assert exc.http_context is not None
+    assert exc.http_context.status_code == 529
+    assert exc.http_context.request is response.request
+    assert exc.http_context.response is response
+    assert exc.request_id == "req-anthropic"
+    assert exc.type == "overloaded_error"
+    assert exc.__cause__ is sdk_error
+    assert fake.closed is True
+
+
+async def test_model_404_is_mapped_to_model_not_found(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    response = httpx.Response(
+        404,
+        request=httpx.Request("POST", "https://anthropic.test/v1/messages"),
+    )
+    sdk_error = anthropic.NotFoundError(
+        "model not found",
+        response=response,
+        body={"error": {"type": "not_found_error"}},
+    )
+    fake = _RaisingAnthropicClient(sdk_error)
+    monkeypatch.setattr(adapter, "_make_client", lambda model: fake)
+
+    with pytest.raises(ai.ProviderModelNotFoundError) as exc_info:
+        await _drain(adapter.stream(_MODEL, [ai.user_message("Hi")]))
+
+    exc = exc_info.value
+    assert isinstance(exc, ai.ProviderNotFoundError)
+    assert exc.model_id == _MODEL.id
+    assert exc.http_context is not None
+    assert exc.http_context.status_code == 404
+    assert exc.http_context.request is response.request
+    assert exc.http_context.response is response
+    assert exc.__cause__ is sdk_error

@@ -155,9 +155,9 @@ class Provider(Generic[ClientT]):
         """List available model IDs from the provider API."""
         raise NotImplementedError
 
-    async def probe(self, model: model_.Model) -> bool:
-        """Check whether a model is reachable and available on this provider."""
-        return False
+    async def probe(self, model: model_.Model) -> None:
+        """Raise unless a model is reachable and available on this provider."""
+        raise NotImplementedError
 
     def __repr__(self) -> str:
         return self.name

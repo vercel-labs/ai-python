@@ -41,17 +41,16 @@ from .core.api import (
     Stream,
     StreamExecutor,
     StreamRequest,
-    check_connection,
     generate,
+    probe,
     stream,
 )
 from .core.model import Model, get_model
 from .core.params import GenerateParams, ImageParams, VideoParams
-from .core.proto import CheckConnFn, GenerateFn, StreamFn
+from .core.proto import GenerateFn, ProbeFn, StreamFn
 
 __all__ = [
     # Core types
-    "CheckConnFn",
     "Executor",
     "GenerateExecutor",
     "GenerateFn",
@@ -59,6 +58,7 @@ __all__ = [
     "GenerateRequest",
     "ImageParams",
     "Model",
+    "ProbeFn",
     "Provider",
     "Stream",
     "StreamExecutor",
@@ -69,8 +69,8 @@ __all__ = [
     "register_generate",
     "register_stream",
     # Public API
-    "check_connection",
     "generate",
     "get_model",
+    "probe",
     "stream",
 ]

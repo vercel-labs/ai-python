@@ -6,12 +6,14 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from types import ModuleType
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
 import httpx
 
+from ... import errors as ai_errors
 from .. import base
 from . import client as gateway_client
+from . import errors, mapping
 
 if TYPE_CHECKING:
     import modelsdotdev
@@ -20,7 +22,6 @@ if TYPE_CHECKING:
 
 _BASE_URL = "https://ai-gateway.vercel.sh/v3/ai"
 _API_KEY_ENV = "AI_GATEWAY_API_KEY"
-_FAIL_STATUSES = frozenset({401, 403})
 
 
 class GatewayProvider(base.Provider[gateway_client.GatewayClient]):
@@ -95,30 +96,23 @@ class GatewayProvider(base.Provider[gateway_client.GatewayClient]):
 
     async def list(self) -> list[str]:
         """List available model IDs from the AI Gateway."""
-        response = await self.client.get("config")
-        response.raise_for_status()
-        data: dict[str, Any] = response.json()
-        return sorted(str(m["id"]) for m in data.get("models", []))
+        try:
+            return await self.client.list_model_ids()
+        except errors.GatewayError as exc:
+            raise mapping.map_error(exc) from exc
 
-    async def probe(self, model: model_.Model) -> bool:
-        """Return ``True`` when gateway credentials are valid and model exists."""
+    async def probe(self, model: model_.Model) -> None:
+        """Raise unless gateway credentials are valid and the model exists."""
         if not self.is_configured():
-            return False
+            raise ai_errors.ProviderNotConfiguredError(
+                f"provider {self.name!r} is not configured",
+                provider=self.name,
+            )
 
-        auth_resp = await self.client.get("v1/credits", origin=True)
-        if auth_resp.status_code in _FAIL_STATUSES:
-            return False
-        if auth_resp.status_code != 200:
-            auth_resp.raise_for_status()
-
-        config_resp = await self.client.get("config")
-        if config_resp.status_code != 200:
-            config_resp.raise_for_status()
-            return False  # pragma: no cover
-
-        data: dict[str, Any] = config_resp.json()
-        remote_ids: set[str] = {m["id"] for m in data.get("models", [])}
-        return model.id in remote_ids
+        try:
+            await self.client.probe_model(model.id)
+        except errors.GatewayError as exc:
+            raise mapping.map_error(exc) from exc
 
 
 __all__ = ["GatewayProvider"]

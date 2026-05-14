@@ -24,7 +24,7 @@ import pytest
 import ai
 from ai import models
 from ai.models.core import model as model_
-from ai.providers.ai_gateway import adapter, errors
+from ai.providers.ai_gateway import adapter
 from ai.types import events, messages
 
 from .conftest import mock_client, mock_model, sse, user_msg
@@ -527,7 +527,7 @@ class TestErrors:
                 },
             )
 
-        with pytest.raises(errors.GatewayAuthenticationError):
+        with pytest.raises(ai.ProviderAuthenticationError):
             await _collect(mock_client(httpx.MockTransport(handler)), [user_msg("Hi")])
 
     async def test_429_rate_limit_error(self) -> None:
@@ -542,7 +542,7 @@ class TestErrors:
                 },
             )
 
-        with pytest.raises(errors.GatewayRateLimitError):
+        with pytest.raises(ai.ProviderRateLimitError):
             await _collect(mock_client(httpx.MockTransport(handler)), [user_msg("Hi")])
 
     async def test_404_model_not_found(self) -> None:
@@ -558,7 +558,7 @@ class TestErrors:
                 },
             )
 
-        with pytest.raises(errors.GatewayModelNotFoundError) as exc_info:
+        with pytest.raises(ai.ProviderModelNotFoundError) as exc_info:
             await _collect(mock_client(httpx.MockTransport(handler)), [user_msg("Hi")])
         assert exc_info.value.model_id == "xyz"
 
@@ -566,5 +566,5 @@ class TestErrors:
         def handler(req: httpx.Request) -> httpx.Response:
             return httpx.Response(500, text="Not JSON")
 
-        with pytest.raises(errors.GatewayResponseError):
+        with pytest.raises(ai.ProviderResponseError):
             await _collect(mock_client(httpx.MockTransport(handler)), [user_msg("Hi")])

@@ -10,7 +10,8 @@ from __future__ import annotations
 
 import json
 
-from ai.providers.ai_gateway import errors
+import ai
+from ai.providers.ai_gateway import errors, mapping
 
 
 class TestGatewayErrorBase:
@@ -20,6 +21,41 @@ class TestGatewayErrorBase:
         err = errors.GatewayInternalServerError("boom", generation_id="gen-123")
         assert "[gen-123]" in str(err)
         assert err.generation_id == "gen-123"
+
+    def test_gateway_errors_are_independent(self) -> None:
+        assert isinstance(errors.GatewayAuthenticationError(), errors.GatewayError)
+        assert not isinstance(errors.GatewayAuthenticationError(), ai.ProviderError)
+        assert errors.GatewayAuthenticationError().status_code == 401
+
+    def test_gateway_errors_map_to_provider_hierarchy(self) -> None:
+        assert isinstance(
+            mapping.map_error(errors.GatewayAuthenticationError()),
+            ai.ProviderAuthenticationError,
+        )
+        assert isinstance(
+            mapping.map_error(errors.GatewayInvalidRequestError()),
+            ai.ProviderBadRequestError,
+        )
+        assert isinstance(
+            mapping.map_error(errors.GatewayRateLimitError()),
+            ai.ProviderRateLimitError,
+        )
+        assert isinstance(
+            mapping.map_error(errors.GatewayModelNotFoundError()),
+            ai.ProviderModelNotFoundError,
+        )
+        assert isinstance(
+            mapping.map_error(errors.GatewayInternalServerError()),
+            ai.ProviderInternalServerError,
+        )
+        assert isinstance(
+            mapping.map_error(errors.GatewayResponseError()),
+            ai.ProviderResponseError,
+        )
+        assert isinstance(
+            mapping.map_error(errors.GatewayTimeoutError()),
+            ai.ProviderTimeoutError,
+        )
 
 
 class TestCreateGatewayError:
@@ -127,3 +163,11 @@ class TestCreateGatewayError:
         }
         err = errors.create_gateway_error(response_body=body, status_code=429)
         assert err.generation_id == "gen-abc"
+
+    def test_response_error_mapping_preserves_response_body(self) -> None:
+        err = errors.GatewayResponseError("bad", response_body={"raw": True})
+        mapped = mapping.map_error(err)
+        assert isinstance(mapped, ai.ProviderResponseError)
+        assert mapped.body == {"raw": True}
+        assert mapped.http_context is not None
+        assert mapped.http_context.status_code == 502

@@ -9,7 +9,9 @@ from typing import TYPE_CHECKING, ClassVar
 import anthropic
 import httpx
 
+from ... import errors as ai_errors
 from .. import base
+from . import errors
 
 if TYPE_CHECKING:
     import modelsdotdev
@@ -22,7 +24,6 @@ _BASE_URL = "https://api.anthropic.com"
 _BASE_URL_ENV = "ANTHROPIC_BASE_URL"
 _API_KEY_ENV = "ANTHROPIC_API_KEY"
 _ANTHROPIC_VERSION = "2023-06-01"
-_FAIL_STATUSES = frozenset({401, 403, 404})
 
 
 class AnthropicCompatibleProvider(base.Provider[anthropic.AsyncAnthropic]):
@@ -147,20 +148,27 @@ class AnthropicCompatibleProvider(base.Provider[anthropic.AsyncAnthropic]):
 
     async def list(self) -> list[str]:
         """List available model IDs from the Anthropic API."""
-        sdk_models = await self.sdk_client.models.list()
+        try:
+            sdk_models = await self.sdk_client.models.list()
+        except anthropic.AnthropicError as exc:
+            raise errors.map_error(exc, provider=self.name) from exc
         return sorted(str(m.id) for m in sdk_models.data)
 
-    async def probe(self, model: model_.Model) -> bool:
-        """Return ``True`` when credentials are valid and the model exists."""
+    async def probe(self, model: model_.Model) -> None:
+        """Raise unless credentials are valid and the model exists."""
         if not self.is_configured():
-            return False
+            raise ai_errors.ProviderNotConfiguredError(
+                f"provider {self.name!r} is not configured",
+                provider=self.name,
+            )
         try:
             await self.sdk_client.models.retrieve(model.id)
-        except anthropic.APIStatusError as exc:
-            if exc.status_code in _FAIL_STATUSES:
-                return False
-            raise
-        return True
+        except anthropic.AnthropicError as exc:
+            raise errors.map_error(
+                exc,
+                provider=self.name,
+                model_id=model.id,
+            ) from exc
 
 
 __all__ = ["AnthropicCompatibleProvider"]

@@ -14,6 +14,7 @@ import pydantic
 from ... import types
 from ...models import core
 from ...types import events
+from . import errors
 from . import provider as provider_
 from . import tools as anthropic_tools
 
@@ -599,6 +600,12 @@ async def stream(
                 raw=sdk_usage.model_dump(exclude_none=True) or None,
             )
             yield events.StreamEnd(usage=usage)
+    except anthropic.AnthropicError as exc:
+        raise errors.map_error(
+            exc,
+            provider=model.provider.name,
+            model_id=model.id,
+        ) from exc
     finally:
         if owns_client:
             await sdk_client.close()

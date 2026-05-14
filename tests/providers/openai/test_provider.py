@@ -42,6 +42,67 @@ async def test_list_gets_models_with_auth_header_and_sorts_ids() -> None:
     assert ids == ["gpt-a", "gpt-z"]
 
 
+async def test_list_maps_sdk_errors_to_provider_hierarchy() -> None:
+    def _handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            429,
+            json={
+                "error": {
+                    "message": "slow down",
+                    "type": "rate_limit_error",
+                    "code": "rate_limit",
+                    "param": "model",
+                }
+            },
+            headers={"x-request-id": "req-openai"},
+        )
+
+    provider = ai.get_provider(
+        "openai",
+        base_url="https://openai.test/v1",
+        api_key="sk-test",
+        client=httpx.AsyncClient(transport=httpx.MockTransport(_handler)),
+    )
+
+    try:
+        with pytest.raises(ai.ProviderRateLimitError) as exc_info:
+            await provider.list()
+    finally:
+        await provider.aclose()
+
+    exc = exc_info.value
+    assert isinstance(exc, ai.ProviderError)
+    assert isinstance(exc.__cause__, openai.RateLimitError)
+    assert exc.provider == "openai"
+    assert exc.http_context is not None
+    assert exc.http_context.status_code == 429
+    assert exc.http_context.request is not None
+    assert exc.http_context.response is not None
+    assert exc.request_id == "req-openai"
+    assert exc.code == "rate_limit"
+    assert exc.param == "model"
+
+
+async def test_list_404_stays_generic_not_found() -> None:
+    def _handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"error": {"message": "missing"}})
+
+    provider = ai.get_provider(
+        "openai",
+        base_url="https://openai.test/v1",
+        api_key="sk-test",
+        client=httpx.AsyncClient(transport=httpx.MockTransport(_handler)),
+    )
+
+    try:
+        with pytest.raises(ai.ProviderNotFoundError) as exc_info:
+            await provider.list()
+    finally:
+        await provider.aclose()
+
+    assert not isinstance(exc_info.value, ai.ProviderModelNotFoundError)
+
+
 async def test_get_provider_accepts_openai_sdk_client() -> None:
     sdk_client = openai.AsyncOpenAI(api_key="sk-test")
     provider = ai.get_provider("openai", client=sdk_client)

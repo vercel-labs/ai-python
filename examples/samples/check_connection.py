@@ -26,11 +26,8 @@ async def _check(name: str, provider: ai.Provider, model_id: str) -> None:
         return
     model = ai.Model(model_id, provider=provider)
     try:
-        ok = await ai.check_connection(model)
-        if ok:
-            print(f"  [OK]    {name}/{model_id}")
-        else:
-            _fail(f"  [FAIL]  {name}/{model_id}")
+        await ai.probe(model)
+        print(f"  [OK]    {name}/{model_id}")
     except Exception as exc:
         _fail(f"  [ERR]   {name}/{model_id}: {exc}")
 
