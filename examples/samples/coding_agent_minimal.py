@@ -39,7 +39,7 @@ async def shell(cmd: str) -> str:
     return stdout.decode("utf-8", errors="replace")
 
 
-model = ai.ai_gateway("anthropic/claude-opus-4.6")
+model = ai.get_model("gateway:anthropic/claude-opus-4.6")
 agent = ai.agent(tools=[shell])
 
 
