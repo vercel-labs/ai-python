@@ -10,18 +10,15 @@ from .api import (
     Stream,
     StreamExecutor,
     StreamRequest,
-    check_connection,
     generate,
+    probe,
     stream,
 )
-from .client import Client
 from .model import Model, get_model
 from .params import GenerateParams, ImageParams, VideoParams
-from .proto import CheckConnFn, GenerateFn, StreamFn
+from .proto import GenerateFn, StreamFn
 
 __all__ = [
-    "CheckConnFn",
-    "Client",
     "Executor",
     "GenerateExecutor",
     "GenerateFn",
@@ -35,9 +32,9 @@ __all__ = [
     "StreamFn",
     "StreamRequest",
     "VideoParams",
-    "check_connection",
     "generate",
     "get_model",
+    "probe",
     "register_generate",
     "register_stream",
     "stream",

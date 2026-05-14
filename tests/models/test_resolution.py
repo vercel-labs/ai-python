@@ -2,7 +2,6 @@ import pytest
 
 import ai
 from ai import ConfigurationError, models
-from ai.providers import ai_gateway, anthropic, openai
 
 
 def test_get_resolves_provider_qualified_model_id() -> None:
@@ -10,7 +9,7 @@ def test_get_resolves_provider_qualified_model_id() -> None:
 
     assert model.id == "gpt-5"
     assert model.adapter == "openai"
-    assert model.provider is openai
+    assert model.provider.name == "openai"
 
 
 def test_get_resolves_provider_qualified_anthropic_model_id() -> None:
@@ -18,7 +17,7 @@ def test_get_resolves_provider_qualified_anthropic_model_id() -> None:
 
     assert model.id == "claude-sonnet-4-5"
     assert model.adapter == "anthropic"
-    assert model.provider is anthropic
+    assert model.provider.name == "anthropic"
 
 
 def test_get_defaults_to_gateway_when_provider_is_omitted() -> None:
@@ -26,7 +25,7 @@ def test_get_defaults_to_gateway_when_provider_is_omitted() -> None:
 
     assert model.id == "anthropic/claude-sonnet-4"
     assert model.adapter == "ai-gateway-v3"
-    assert model.provider is ai_gateway
+    assert model.provider.name == "ai-gateway"
 
 
 def test_get_uses_default_model_env_when_model_id_is_omitted(
@@ -38,7 +37,7 @@ def test_get_uses_default_model_env_when_model_id_is_omitted(
 
     assert model.id == "anthropic/claude-sonnet-4"
     assert model.adapter == "ai-gateway-v3"
-    assert model.provider is ai_gateway
+    assert model.provider.name == "ai-gateway"
 
 
 def test_get_rejects_missing_default_model_env(
@@ -60,7 +59,7 @@ def test_get_rejects_empty_default_model_env(
 
 
 def test_provider_from_id_resolves_openai_compatible_provider() -> None:
-    provider = models.Provider.from_id("deepseek")
+    provider = ai.get_provider("deepseek")
 
     assert provider.name == "deepseek"
     assert provider.adapter == "openai"
@@ -69,8 +68,13 @@ def test_provider_from_id_resolves_openai_compatible_provider() -> None:
     assert provider.config_envs == ()
 
 
+def test_provider_base_class_cannot_be_constructed_directly() -> None:
+    with pytest.raises(TypeError, match="base class"):
+        ai.Provider(name="custom", adapter="mock", base_url="https://example.com")
+
+
 def test_provider_from_id_uses_template_envs_for_base_url() -> None:
-    provider = models.Provider.from_id("cloudflare-workers-ai")
+    provider = ai.get_provider("cloudflare-workers-ai")
 
     assert provider.default_base_url == (
         "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/ai/v1"
@@ -80,7 +84,7 @@ def test_provider_from_id_uses_template_envs_for_base_url() -> None:
 
 
 def test_provider_from_id_detects_token_env_after_url_env() -> None:
-    provider = models.Provider.from_id("databricks")
+    provider = ai.get_provider("databricks")
 
     assert (
         provider.default_base_url == "https://${DATABRICKS_HOST}/ai-gateway/mlflow/v1"
@@ -90,12 +94,12 @@ def test_provider_from_id_detects_token_env_after_url_env() -> None:
 
 
 def test_provider_from_id_resolves_gateway_provider() -> None:
-    assert models.Provider.from_id("vercel") is ai_gateway
+    assert ai.get_provider("vercel").name == "ai-gateway"
 
 
 def test_provider_from_id_resolves_gateway_alias() -> None:
-    assert models.Provider.from_id("ai-gateway") is ai_gateway
-    assert models.Provider.from_id("gateway") is ai_gateway
+    assert ai.get_provider("ai-gateway").name == "ai-gateway"
+    assert ai.get_provider("gateway").name == "ai-gateway"
 
 
 def test_get_resolves_gateway_alias() -> None:
@@ -103,10 +107,12 @@ def test_get_resolves_gateway_alias() -> None:
 
     assert model.id == "alibaba/qwen-3-14b"
     assert model.adapter == "ai-gateway-v3"
-    assert model.provider is ai_gateway
+    assert model.provider.name == "ai-gateway"
 
     gateway_model = models.get_model("gateway:alibaba/qwen-3-14b")
-    assert gateway_model == model
+    assert gateway_model.id == model.id
+    assert gateway_model.adapter == model.adapter
+    assert gateway_model.provider.name == model.provider.name
 
 
 def test_get_uses_model_provider_config_for_anthropic_compatibility() -> None:
@@ -137,12 +143,12 @@ def test_get_uses_model_provider_config_for_openai_compatibility() -> None:
 
 def test_provider_from_id_rejects_unknown_provider() -> None:
     with pytest.raises(ValueError, match="unknown provider id"):
-        models.Provider.from_id("missing-provider")
+        ai.get_provider("missing-provider")
 
 
 def test_provider_from_id_rejects_unsupported_provider_package() -> None:
     with pytest.raises(ai.UnsupportedProviderError) as exc_info:
-        models.Provider.from_id("google")
+        ai.get_provider("google")
 
     assert exc_info.value.provider_id == "google"
 

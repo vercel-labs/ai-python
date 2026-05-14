@@ -2,15 +2,23 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from types import ModuleType
 from typing import TYPE_CHECKING, ClassVar
 
-from ...models import core
+import anthropic
+import httpx
+
+from ... import errors as ai_errors
 from .. import base
+from . import errors
 
 if TYPE_CHECKING:
     import modelsdotdev
+
+    from ...models.core import model as model_
+
+AnthropicClient = httpx.AsyncClient | anthropic.AsyncAnthropic
 
 _BASE_URL = "https://api.anthropic.com"
 _BASE_URL_ENV = "ANTHROPIC_BASE_URL"
@@ -18,7 +26,7 @@ _API_KEY_ENV = "ANTHROPIC_API_KEY"
 _ANTHROPIC_VERSION = "2023-06-01"
 
 
-class AnthropicCompatibleProvider(base.Provider):
+class AnthropicCompatibleProvider(base.Provider[anthropic.AsyncAnthropic]):
     """Callable provider for Anthropic-compatible APIs."""
 
     handles: ClassVar[tuple[str, ...]] = ("anthropic", "@ai-sdk/anthropic")
@@ -28,20 +36,77 @@ class AnthropicCompatibleProvider(base.Provider):
         *,
         name: str,
         default_base_url: str,
+        api_key: str | None = None,
         api_key_env: str | None = None,
         base_url_env: str | None = None,
         config_envs: Iterable[str] | None = None,
         anthropic_version: str = _ANTHROPIC_VERSION,
+        headers: Mapping[str, str] | None = None,
+        env: Mapping[str, str] | None = None,
+        client: AnthropicClient | None = None,
     ) -> None:
+        if isinstance(client, anthropic.AsyncAnthropic):
+            sdk_client = client
+            http_client = None
+            self._has_user_sdk_client = True
+        elif isinstance(client, httpx.AsyncClient) or client is None:
+            sdk_client = None
+            http_client = client
+            self._has_user_sdk_client = False
+        else:
+            raise TypeError(
+                "Anthropic providers require an httpx.AsyncClient or "
+                "anthropic.AsyncAnthropic"
+            )
+
         super().__init__(
             name=name,
             adapter="anthropic",
             base_url=default_base_url,
+            api_key=api_key,
             api_key_env=api_key_env,
             base_url_env=base_url_env,
             config_envs=config_envs,
+            headers=headers,
+            env=env,
         )
         self.anthropic_version = anthropic_version
+        self._close_client_on_aclose = sdk_client is None and http_client is None
+        if sdk_client is None:
+            sdk_client = self._make_sdk_client(http_client=http_client)
+        self._set_client(sdk_client)
+
+    def _make_sdk_client(
+        self,
+        *,
+        http_client: httpx.AsyncClient | None = None,
+    ) -> anthropic.AsyncAnthropic:
+        return anthropic.AsyncAnthropic(
+            base_url=self.base_url,
+            api_key=self.api_key or "",
+            http_client=http_client,
+            default_headers={
+                **self.headers,
+                "anthropic-version": self.anthropic_version,
+            },
+        )
+
+    @property
+    def sdk_client(self) -> anthropic.AsyncAnthropic:
+        """Provider SDK client used for Anthropic-compatible API requests."""
+        return self.client
+
+    def is_configured(self) -> bool:
+        if self._has_user_sdk_client:
+            return True
+        if not self.api_key:
+            return False
+        return super().is_configured()
+
+    async def aclose(self) -> None:
+        """Close the provider-owned SDK client, if any."""
+        if self._close_client_on_aclose:
+            await self.client.close()
 
     @classmethod
     def from_modelsdev_provider(
@@ -49,18 +114,33 @@ class AnthropicCompatibleProvider(base.Provider):
         provider: modelsdotdev.Provider,
         *,
         model_provider_config: modelsdotdev.ModelProviderConfig | None = None,
-    ) -> base.Provider:
-        if provider.id == "anthropic" and model_provider_config is None:
-            return anthropic
-        base_url = base.provider_base_url(provider, model_provider_config)
-        if base_url is None:
+        base_url: str | None = None,
+        api_key: str | None = None,
+        headers: Mapping[str, str] | None = None,
+        env: Mapping[str, str] | None = None,
+        client: AnthropicClient | None = None,
+    ) -> base.Provider[anthropic.AsyncAnthropic]:
+        resolved_base_url = base_url or base.provider_base_url(
+            provider,
+            model_provider_config,
+        )
+        if resolved_base_url is None and provider.id == "anthropic":
+            resolved_base_url = _BASE_URL
+        if resolved_base_url is None:
             raise ValueError(f"provider {provider.id!r} does not declare an API URL")
         api_key_env, config_envs = base.provider_config(provider, model_provider_config)
         return cls(
             name=provider.id,
-            default_base_url=base_url,
+            default_base_url=resolved_base_url,
+            api_key=api_key,
             api_key_env=api_key_env,
+            base_url_env=_BASE_URL_ENV
+            if provider.id == "anthropic" and base_url is None
+            else None,
             config_envs=config_envs,
+            headers=headers,
+            env=env,
+            client=client,
         )
 
     @property
@@ -73,52 +153,29 @@ class AnthropicCompatibleProvider(base.Provider):
 
         return tools_module
 
-    async def check(self, client: core.client.Client, model: core.model.Model) -> bool:
-        """Delegate to :func:`anthropic.check.check`."""
-        from . import check as check_
-
-        return await check_.check(client, model)
-
-    async def list(self, *, client: core.client.Client | None = None) -> list[str]:
+    async def list(self) -> list[str]:
         """List available model IDs from the Anthropic API."""
-        c = client or self.client()
-        headers = {
-            "x-api-key": c.api_key or "",
-            "anthropic-version": self.anthropic_version,
-        }
-        response = await c.http.get(
-            f"{c.base_url.rstrip('/')}/v1/models", headers=headers
-        )
-        response.raise_for_status()
-        data: list[dict[str, object]] = response.json().get("data", [])
-        return sorted(str(m["id"]) for m in data)
+        try:
+            sdk_models = await self.sdk_client.models.list()
+        except anthropic.AnthropicError as exc:
+            raise errors.map_error(exc, provider=self.name) from exc
+        return sorted(str(m.id) for m in sdk_models.data)
+
+    async def probe(self, model: model_.Model) -> None:
+        """Raise unless credentials are valid and the model exists."""
+        if not self.is_configured():
+            raise ai_errors.ProviderNotConfiguredError(
+                f"provider {self.name!r} is not configured",
+                provider=self.name,
+            )
+        try:
+            await self.sdk_client.models.retrieve(model.id)
+        except anthropic.AnthropicError as exc:
+            raise errors.map_error(
+                exc,
+                provider=self.name,
+                model_id=model.id,
+            ) from exc
 
 
-def anthropic_like(
-    *,
-    name: str,
-    base_url: str,
-    api_key_env: str | None = None,
-    base_url_env: str | None = None,
-    config_envs: Iterable[str] | None = None,
-    anthropic_version: str = _ANTHROPIC_VERSION,
-) -> AnthropicCompatibleProvider:
-    """Create a provider for an Anthropic-compatible API."""
-    return AnthropicCompatibleProvider(
-        name=name,
-        default_base_url=base_url,
-        api_key_env=api_key_env,
-        base_url_env=base_url_env,
-        config_envs=config_envs,
-        anthropic_version=anthropic_version,
-    )
-
-
-anthropic = anthropic_like(
-    name="anthropic",
-    base_url=_BASE_URL,
-    api_key_env=_API_KEY_ENV,
-    base_url_env=_BASE_URL_ENV,
-)
-
-__all__ = ["AnthropicCompatibleProvider", "anthropic", "anthropic_like"]
+__all__ = ["AnthropicCompatibleProvider"]

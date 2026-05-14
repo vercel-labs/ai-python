@@ -4,6 +4,8 @@ import asyncio
 import json
 
 import ai
+from ai.providers.ai_gateway import tools as gateway_tools
+from ai.providers.anthropic import tools as anthropic_tools
 
 messages = [
     ai.system_message("Be concise. Cite sources you use. The year is 2026"),
@@ -42,7 +44,7 @@ async def main() -> None:
     async with ai.stream(
         model,
         messages,
-        tools=[ai.anthropic.tools.web_search(max_uses=3)],
+        tools=[anthropic_tools.web_search(max_uses=3)],
     ) as s:
         async for event in s:
             match event:
@@ -61,7 +63,7 @@ async def main() -> None:
     async with ai.stream(
         model,
         messages,
-        tools=[ai.ai_gateway.tools.perplexity_search(max_results=5)],
+        tools=[gateway_tools.perplexity_search(max_results=5)],
     ) as s:
         async for event in s:
             match event:

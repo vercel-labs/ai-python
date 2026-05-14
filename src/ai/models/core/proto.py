@@ -18,10 +18,9 @@ from ... import types
 from ...providers.base import Provider as Provider
 
 if TYPE_CHECKING:
-    from .client import Client
     from .model import Model
 
-__all__ = ["CheckConnFn", "GenerateFn", "Provider", "StreamFn"]
+__all__ = ["GenerateFn", "Provider", "StreamFn"]
 
 
 @runtime_checkable
@@ -34,7 +33,6 @@ class StreamFn(Protocol):
 
     def __call__(
         self,
-        client: Client,
         model: Model,
         messages: list[types.messages.Message],
         *,
@@ -55,31 +53,7 @@ class GenerateFn(Protocol):
 
     async def __call__(
         self,
-        client: Client,
         model: Model,
         messages: list[types.messages.Message],
         params: Any,
     ) -> types.messages.Message: ...
-
-
-@runtime_checkable
-class CheckConnFn(Protocol):
-    """Protocol for connection-check functions.
-
-    A check function verifies that *client* can reach the provider and that
-    *model* is available there.  Returns ``True`` when the credentials are
-    valid **and** the model exists on the remote side.
-
-    The check must be **free** — it should only hit metadata / listing
-    endpoints that don't consume tokens or credits.
-
-    Non-auth transport errors (network failures, 5xx) should be raised
-    rather than returning ``False`` so that callers can distinguish
-    "bad credentials" from "provider unreachable".
-    """
-
-    async def __call__(
-        self,
-        client: Client,
-        model: Model,
-    ) -> bool: ...

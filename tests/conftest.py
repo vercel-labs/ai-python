@@ -17,8 +17,7 @@ from ai.types import usage as usage_
 class MockProvider(models.Provider):
     """Minimal provider for tests.
 
-    Carries just enough state so that ``Model`` objects can be constructed
-    and ``auto_client`` can resolve a client.
+    Carries just enough state so that ``Model`` objects can be constructed.
     """
 
     def __init__(
@@ -36,10 +35,7 @@ class MockProvider(models.Provider):
             api_key_env=api_key_env,
         )
 
-    async def check(self, client: models.Client, model: models.Model) -> bool:
-        return True
-
-    async def list(self, *, client: models.Client | None = None) -> list[str]:
+    async def list(self) -> list[str]:
         return []
 
 
@@ -120,7 +116,6 @@ class MockAdapter:
 
     async def stream(
         self,
-        client: models.Client,
         model: models.Model,
         messages: list[messages_.Message],
         *,
@@ -172,7 +167,6 @@ class MockGenerateAdapter:
 
     async def generate(
         self,
-        client: models.Client,
         model: models.Model,
         messages: list[messages_.Message],
         params: Any = None,

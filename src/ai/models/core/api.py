@@ -13,7 +13,6 @@ from typing_extensions import TypeVar  # noqa: UP035
 from ... import types
 from ...types import integrity
 from . import adapters
-from . import client as client_
 from . import model as model_
 from . import params as params_
 
@@ -61,13 +60,11 @@ class Executor:
         self,
         request: StreamRequest,
     ) -> AsyncGenerator[types.events.Event]:
-        c = client_.auto_client(request.model)
         fn = adapters.get_stream_adapter(request.model.adapter)
         kwargs: dict[str, Any] = {}
         if request.params is not None:
             kwargs["params"] = request.params
         async for ev in fn(
-            c,
             request.model,
             request.messages,
             tools=request.tools,
@@ -77,9 +74,8 @@ class Executor:
             yield ev
 
     async def _do_generate(self, request: GenerateRequest) -> types.messages.Message:
-        c = client_.auto_client(request.model)
         fn = adapters.get_generate_adapter(request.model.adapter)
-        return await fn(c, request.model, request.messages, params=request.params)
+        return await fn(request.model, request.messages, params=request.params)
 
 
 _default_executor = Executor()
@@ -476,7 +472,6 @@ async def generate(
     return await executor._do_generate(request)
 
 
-async def check_connection(model: model_.Model) -> bool:
-    """Check whether the model's provider is reachable and the model exists."""
-    c = client_.auto_client(model)
-    return await model.provider.check(c, model)
+async def probe(model: model_.Model) -> None:
+    """Raise unless the model's provider is reachable and the model exists."""
+    await model.provider.probe(model)

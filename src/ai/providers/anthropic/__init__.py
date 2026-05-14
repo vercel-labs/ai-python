@@ -2,18 +2,18 @@
 
 Usage::
 
-    from ai.providers import anthropic, anthropic_like
+    import ai
+    from ai.providers.anthropic import tools as anthropic_tools
 
-    model = anthropic("claude-sonnet-4-6")
-    model = anthropic_like(name="custom", base_url="https://anthropic.example.com")(
-        "claude-sonnet-4-6"
-    )
-    ids = await anthropic.list()
+    model = ai.get_model("anthropic:claude-sonnet-4-6")
+    provider = ai.get_provider("anthropic", base_url="https://anthropic.example.com")
+    model = ai.Model("claude-sonnet-4-6", provider=provider)
+    ids = await ai.get_provider("anthropic").list()
 
     # built-in tools
     async with ai.stream(
         model, msgs,
-        tools=[anthropic.tools.web_search(max_uses=5)],
+        tools=[anthropic_tools.web_search(max_uses=5)],
     ) as s:
         ...
 
@@ -22,9 +22,9 @@ SDK at import time.
 """
 
 from . import tools
-from .provider import AnthropicCompatibleProvider, anthropic, anthropic_like
+from .provider import AnthropicCompatibleProvider
 
-__all__ = ["AnthropicCompatibleProvider", "anthropic", "anthropic_like", "tools"]
+__all__ = ["AnthropicCompatibleProvider", "tools"]
 
 
 def __getattr__(name: str) -> object:

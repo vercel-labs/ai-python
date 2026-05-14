@@ -1,32 +1,42 @@
-"""Explicit client — bring your own auth and base URL."""
+"""Explicit provider — use a local OpenAI-compatible server."""
 
 import asyncio
 import os
 
 import ai
 
-# Explicit client — useful for custom auth, proxies, or self-hosted gateways.
-client = ai.Client(
-    base_url="https://ai-gateway.vercel.sh/v3/ai",
-    api_key=os.environ["AI_GATEWAY_API_KEY"],
+# Example for local OpenAI-compatible servers like LM Studio.
+provider = ai.get_provider(
+    "openai",
+    base_url=os.environ.get("LOCAL_OPENAI_BASE_URL", "http://localhost:1234/v1"),
+    api_key=os.environ.get("LOCAL_OPENAI_API_KEY", "some-key"),
     headers={"X-Custom-Header": "example"},
 )
 
-model = ai.get_model("gateway:anthropic/claude-sonnet-4", client=client)
+model = ai.Model(
+    os.environ.get("LOCAL_OPENAI_MODEL", "local-model"),
+    provider=provider,
+)
 
 messages = [ai.user_message("Hello!")]
 
 
 async def main() -> None:
     try:
+        try:
+            await ai.probe(model)
+        except ai.ProviderError as exc:
+            print(f"[SKIP] local OpenAI-compatible server is unavailable: {exc}")
+            return
+
         async with ai.stream(model, messages) as s:
             async for event in s:
                 if isinstance(event, ai.events.TextDelta):
                     print(event.chunk, end="", flush=True)
         print()
     finally:
-        # Explicit clients need explicit cleanup.
-        await client.aclose()
+        # Explicit providers need explicit cleanup.
+        await provider.aclose()
 
 
 if __name__ == "__main__":

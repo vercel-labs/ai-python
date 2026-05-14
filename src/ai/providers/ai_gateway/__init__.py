@@ -2,17 +2,19 @@
 
 Usage::
 
-    from ai.providers import ai_gateway, anthropic, openai
+    import ai
+    from ai.providers.ai_gateway import tools as gateway_tools
+    from ai.providers.anthropic import tools as anthropic_tools
 
-    model = ai_gateway("anthropic/claude-sonnet-4")
-    ids = await ai_gateway.list()
+    model = ai.get_model("gateway:anthropic/claude-sonnet-4")
+    ids = await ai.get_provider("vercel").list()
 
     # Provider-specific request options pass through as raw Gateway body fields.
     async with ai.stream(
         model,
         msgs,
         params={"providerOptions": {"anthropic": {"speed": "fast"}}},
-        tools=[anthropic.tools.web_search(max_uses=5)],
+        tools=[anthropic_tools.web_search(max_uses=5)],
     ) as s:
         ...
 
@@ -21,7 +23,7 @@ Usage::
     async with ai.stream(
         model,
         msgs,
-        tools=[ai_gateway.tools.perplexity_search(max_results=5)],
+        tools=[gateway_tools.perplexity_search(max_results=5)],
     ) as s:
         ...
 
@@ -31,10 +33,10 @@ for sandboxed runtimes (e.g. Temporal workflow workers).
 """
 
 from . import errors, tools
-from .provider import ai_gateway
+from .provider import GatewayProvider
 
 __all__ = [
-    "ai_gateway",
+    "GatewayProvider",
     "errors",
     "tools",
 ]

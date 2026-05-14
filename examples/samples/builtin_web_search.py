@@ -7,9 +7,12 @@ import json
 import sys
 
 import ai
+from ai.providers.anthropic import tools as anthropic_tools
 
-if ai.anthropic.client().api_key is None:
-    print(f"[SKIP] {ai.anthropic.api_key_env} not set")
+provider = ai.get_provider("anthropic")
+
+if not provider.is_configured():
+    print(f"[SKIP] {provider.name} provider is not configured")
     sys.exit(0)
 
 model = ai.get_model("anthropic:claude-sonnet-4-6")
@@ -21,7 +24,7 @@ messages = [
     ),
 ]
 
-tools = [ai.anthropic.tools.web_search(max_uses=3)]
+tools = [anthropic_tools.web_search(max_uses=3)]
 
 
 _ENCRYPTED_KEYS = frozenset({"encrypted_content", "encrypted_stdout"})

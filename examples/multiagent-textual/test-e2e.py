@@ -23,6 +23,8 @@ from http.client import HTTPResponse
 from pathlib import Path
 from typing import cast
 
+import ai
+
 HERE = Path(__file__).resolve().parent
 SESSION = f"multiagent-e2e-{os.getpid()}"
 SERVER_PORT = os.environ.get("SERVER_PORT", "8000")
@@ -84,8 +86,8 @@ def _extract_panel(pane: str, title: str) -> str:
 
 
 def main() -> int:
-    if not os.environ.get("AI_GATEWAY_API_KEY"):
-        print("AI_GATEWAY_API_KEY must be set", file=sys.stderr)
+    if not ai.get_provider("vercel").is_configured():
+        print("AI Gateway provider is not configured", file=sys.stderr)
         return 1
     if not shutil.which("tmux"):
         print("tmux not found in PATH", file=sys.stderr)

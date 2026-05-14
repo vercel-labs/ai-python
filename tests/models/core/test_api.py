@@ -11,7 +11,7 @@ from ai import models
 from ai.types import events as events_
 from ai.types import messages as messages_
 
-from ...conftest import MOCK_MODEL, MOCK_PROVIDER, MockProvider, mock_llm, text_msg
+from ...conftest import MOCK_MODEL, MockProvider, mock_llm, text_msg
 
 
 def _test_provider_metadata(marker: str) -> dict[str, Any]:
@@ -43,7 +43,6 @@ async def test_stream_aggregates_registered_adapter_events() -> None:
 
 async def test_stream_tool_end_includes_aggregated_tool_call() -> None:
     async def _tool_stream(
-        client: models.Client,
         model: models.Model,
         messages: list[messages_.Message],
         *,
@@ -159,38 +158,6 @@ async def test_stream_accumulates_provider_metadata_latest_wins() -> None:
     assert _provider_metadata_marker(file.provider_metadata) == "file"
 
 
-async def test_stream_uses_explicit_model_client() -> None:
-    received_clients: list[models.Client] = []
-
-    async def _spy_stream(
-        client: models.Client,
-        model: models.Model,
-        messages: list[messages_.Message],
-        *,
-        tools: Sequence[ai.tools.Tool] | None = None,
-        output_type: type[pydantic.BaseModel] | None = None,
-        **kwargs: Any,
-    ) -> AsyncGenerator[events_.Event]:
-        received_clients.append(client)
-        yield events_.StreamStart()
-        yield events_.StreamEnd()
-
-    models.register_stream("mock", _spy_stream)
-
-    explicit = models.Client(base_url="https://custom.test", api_key="sk-custom")
-    model = models.Model(
-        id="mock-model",
-        adapter="mock",
-        provider=MOCK_PROVIDER,
-        client=explicit,
-    )
-    async with models.stream(model, [ai.user_message("Hi")]) as stream:
-        async for _ in stream:
-            pass
-
-    assert received_clients == [explicit]
-
-
 async def test_stream_forwards_output_type_and_request_params() -> None:
     received_output_types: list[type[pydantic.BaseModel] | None] = []
     received_params: list[Any] = []
@@ -199,7 +166,6 @@ async def test_stream_forwards_output_type_and_request_params() -> None:
         value: str
 
     async def _spy_stream(
-        client: models.Client,
         model: models.Model,
         messages: list[messages_.Message],
         *,
@@ -278,7 +244,6 @@ async def test_generate_dispatches_to_registered_adapter() -> None:
     called = False
 
     async def _generate(
-        client: models.Client,
         model: models.Model,
         messages: list[messages_.Message],
         params: Any = None,
@@ -302,26 +267,19 @@ async def test_generate_dispatches_to_registered_adapter() -> None:
 class _CheckProvider(MockProvider):
     def __init__(self) -> None:
         super().__init__(adapter="mock-check")
-        self.received_client: models.Client | None = None
+        self.checked_model: models.Model | None = None
 
-    async def check(
-        self,
-        client: models.Client,
-        model: models.Model,
-    ) -> bool:
-        self.received_client = client
-        return False
+    async def probe(self, model: models.Model) -> None:
+        self.checked_model = model
 
 
-async def test_check_connection_delegates_to_model_provider() -> None:
+async def test_probe_delegates_to_model_provider() -> None:
     provider = _CheckProvider()
-    explicit = models.Client(base_url="https://check.test", api_key="sk-check")
-    model = provider("mock-model", client=explicit)
+    model = models.Model("mock-model", provider=provider)
 
-    result = await models.check_connection(model)
+    await models.probe(model)
 
-    assert result is False
-    assert provider.received_client is explicit
+    assert provider.checked_model is model
 
 
 async def test_stream_replays_marked_last_assistant_with_tool_calls() -> None:
@@ -329,7 +287,6 @@ async def test_stream_replays_marked_last_assistant_with_tool_calls() -> None:
     called = False
 
     async def _spy_stream(
-        client: models.Client,
         model: models.Model,
         messages: list[messages_.Message],
         *,
@@ -397,7 +354,6 @@ async def test_stream_does_not_replay_when_assistant_is_unmarked() -> None:
     called = False
 
     async def _spy_stream(
-        client: models.Client,
         model: models.Model,
         messages: list[messages_.Message],
         *,

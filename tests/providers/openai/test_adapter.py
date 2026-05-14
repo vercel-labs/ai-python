@@ -8,12 +8,13 @@ from __future__ import annotations
 
 from typing import Any
 
+import httpx
+import openai
 import pydantic
 import pytest
 
 import ai
-from ai import models
-from ai.providers.openai import adapter, openai
+from ai.providers.openai import adapter
 from ai.providers.openai import tools as openai_tools
 from ai.types import messages
 
@@ -53,14 +54,35 @@ class _FakeOpenAIClient:
         self.closed = True
 
 
-_TEST_CLIENT = models.Client(base_url="https://openai.test", api_key="sk-test")
-_MODEL = openai("gpt-5.4")
+class _RaisingCompletions:
+    def __init__(self, exc: openai.OpenAIError) -> None:
+        self._exc = exc
+
+    async def create(self, **kwargs: Any) -> _EmptyOpenAIStream:
+        raise self._exc
+
+
+class _RaisingChat:
+    def __init__(self, exc: openai.OpenAIError) -> None:
+        self.completions = _RaisingCompletions(exc)
+
+
+class _RaisingOpenAIClient:
+    def __init__(self, exc: openai.OpenAIError) -> None:
+        self.chat = _RaisingChat(exc)
+        self.closed = False
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+_MODEL = ai.Model("gpt-5.4", provider=ai.get_provider("openai"))
 
 
 def _patch(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     captured: dict[str, Any] = {}
     fake = _FakeOpenAIClient(captured)
-    monkeypatch.setattr(adapter, "_make_client", lambda client: fake)
+    monkeypatch.setattr(adapter, "_make_client", lambda model: fake)
     return captured
 
 
@@ -76,7 +98,6 @@ async def test_system_messages_use_openai_system_role(
 
     await _drain(
         adapter.stream(
-            _TEST_CLIENT,
             _MODEL,
             [ai.system_message("rules"), ai.user_message("Hi")],
         )
@@ -92,7 +113,6 @@ async def test_raw_params_pass_through_to_sdk_kwargs(
 
     await _drain(
         adapter.stream(
-            _TEST_CLIENT,
             _MODEL,
             [ai.user_message("Hi")],
             params={
@@ -121,7 +141,6 @@ async def test_strict_json_schema_flows_into_response_format(
 
     await _drain(
         adapter.stream(
-            _TEST_CLIENT,
             _MODEL,
             [ai.user_message("Hi")],
             output_type=_Answer,
@@ -137,7 +156,6 @@ async def test_non_dict_params_rejected_by_adapter(
     _patch(monkeypatch)
 
     stream = adapter.stream(
-        _TEST_CLIENT,
         _MODEL,
         [ai.user_message("Hi")],
         params=[{"reasoning_effort": "high"}],
@@ -154,7 +172,6 @@ async def test_builtin_tool_in_request_raises(
     _patch(monkeypatch)
 
     stream = adapter.stream(
-        _TEST_CLIENT,
         _MODEL,
         [ai.user_message("Hi")],
         tools=[openai_tools.web_search()],
@@ -184,4 +201,62 @@ async def test_builtin_part_in_messages_raises(
     ]
 
     with pytest.raises(NotImplementedError, match="BuiltinTool"):
-        await _drain(adapter.stream(_TEST_CLIENT, _MODEL, convo))
+        await _drain(adapter.stream(_MODEL, convo))
+
+
+async def test_sdk_errors_are_mapped_to_provider_hierarchy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    response = httpx.Response(
+        429,
+        request=httpx.Request("POST", "https://openai.test/v1/chat/completions"),
+        headers={"x-request-id": "req-openai"},
+    )
+    sdk_error = openai.RateLimitError(
+        "slow down",
+        response=response,
+        body={"type": "rate_limit_error", "code": "rate_limit"},
+    )
+    fake = _RaisingOpenAIClient(sdk_error)
+    monkeypatch.setattr(adapter, "_make_client", lambda model: fake)
+
+    with pytest.raises(ai.ProviderRateLimitError) as exc_info:
+        await _drain(adapter.stream(_MODEL, [ai.user_message("Hi")]))
+
+    exc = exc_info.value
+    assert exc.provider == "openai"
+    assert exc.http_context is not None
+    assert exc.http_context.status_code == 429
+    assert exc.http_context.request is response.request
+    assert exc.http_context.response is response
+    assert exc.request_id == "req-openai"
+    assert exc.__cause__ is sdk_error
+    assert fake.closed is True
+
+
+async def test_model_404_is_mapped_to_model_not_found(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    response = httpx.Response(
+        404,
+        request=httpx.Request("POST", "https://openai.test/v1/chat/completions"),
+    )
+    sdk_error = openai.NotFoundError(
+        "model not found",
+        response=response,
+        body={"code": "model_not_found", "param": "model"},
+    )
+    fake = _RaisingOpenAIClient(sdk_error)
+    monkeypatch.setattr(adapter, "_make_client", lambda model: fake)
+
+    with pytest.raises(ai.ProviderModelNotFoundError) as exc_info:
+        await _drain(adapter.stream(_MODEL, [ai.user_message("Hi")]))
+
+    exc = exc_info.value
+    assert isinstance(exc, ai.ProviderNotFoundError)
+    assert exc.model_id == _MODEL.id
+    assert exc.http_context is not None
+    assert exc.http_context.status_code == 404
+    assert exc.http_context.request is response.request
+    assert exc.http_context.response is response
+    assert exc.__cause__ is sdk_error

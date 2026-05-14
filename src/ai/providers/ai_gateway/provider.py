@@ -4,31 +4,70 @@ Defines the callable :data:`ai_gateway` provider."""
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from types import ModuleType
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
-from ...models import core
+import httpx
+
+from ... import errors as ai_errors
 from .. import base
+from . import client as gateway_client
+from . import errors
+from .client import errors as client_errors
 
 if TYPE_CHECKING:
     import modelsdotdev
+
+    from ...models.core import model as model_
 
 _BASE_URL = "https://ai-gateway.vercel.sh/v3/ai"
 _API_KEY_ENV = "AI_GATEWAY_API_KEY"
 
 
-class _AIGateway(base.Provider):
-    """Callable provider factory for the Vercel AI Gateway."""
+class GatewayProvider(base.Provider[gateway_client.GatewayClient]):
+    """Provider configuration for the Vercel AI Gateway."""
 
     handles: ClassVar[tuple[str, ...]] = ("vercel", "@ai-sdk/gateway")
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        api_key: str | None = None,
+        base_url: str = _BASE_URL,
+        headers: Mapping[str, str] | None = None,
+        env: Mapping[str, str] | None = None,
+        client: httpx.AsyncClient | None = None,
+    ) -> None:
         super().__init__(
             name="ai-gateway",
             adapter="ai-gateway-v3",
-            base_url=_BASE_URL,
+            base_url=base_url,
+            api_key=api_key,
             api_key_env=_API_KEY_ENV,
+            headers=headers,
+            env=env,
         )
+        self._set_client(
+            gateway_client.GatewayClient(
+                base_url=self.base_url,
+                api_key=self.api_key,
+                headers=self.headers,
+                client=client,
+            )
+        )
+
+    @property
+    def client(self) -> gateway_client.GatewayClient:
+        client = super().client
+        client.base_url = self.base_url
+        client.api_key = self.api_key
+        client.headers = self.headers
+        return client
+
+    async def aclose(self) -> None:
+        """Close the provider-owned Gateway client, if any."""
+        await self.client.aclose()
 
     @classmethod
     def from_modelsdev_provider(
@@ -36,8 +75,19 @@ class _AIGateway(base.Provider):
         provider: modelsdotdev.Provider,
         *,
         model_provider_config: modelsdotdev.ModelProviderConfig | None = None,
-    ) -> base.Provider:
-        return ai_gateway
+        base_url: str | None = None,
+        api_key: str | None = None,
+        headers: Mapping[str, str] | None = None,
+        env: Mapping[str, str] | None = None,
+        client: httpx.AsyncClient | None = None,
+    ) -> base.Provider[gateway_client.GatewayClient]:
+        return cls(
+            api_key=api_key,
+            base_url=base_url or _BASE_URL,
+            headers=headers,
+            env=env,
+            client=client,
+        )
 
     @property
     def tools(self) -> ModuleType:
@@ -51,24 +101,25 @@ class _AIGateway(base.Provider):
 
         return tools_module
 
-    async def check(self, client: core.client.Client, model: core.model.Model) -> bool:
-        """Delegate to :func:`ai_gateway.check.check`."""
-        from . import check as check_
-
-        return await check_.check(client, model)
-
-    async def list(self, *, client: core.client.Client | None = None) -> list[str]:
+    async def list(self) -> list[str]:
         """List available model IDs from the AI Gateway."""
-        from . import sdk
+        try:
+            return await self.client.list_model_ids()
+        except client_errors.GatewayError as exc:
+            raise errors.map_error(exc) from exc
 
-        c = client or self.client()
-        gateway = sdk.GatewayClient(c)
-        response = await gateway.get("config")
-        response.raise_for_status()
-        data: dict[str, Any] = response.json()
-        return sorted(str(m["id"]) for m in data.get("models", []))
+    async def probe(self, model: model_.Model) -> None:
+        """Raise unless gateway credentials are valid and the model exists."""
+        if not self.is_configured():
+            raise ai_errors.ProviderNotConfiguredError(
+                f"provider {self.name!r} is not configured",
+                provider=self.name,
+            )
+
+        try:
+            await self.client.probe_model(model.id)
+        except client_errors.GatewayError as exc:
+            raise errors.map_error(exc) from exc
 
 
-ai_gateway = _AIGateway()
-
-__all__ = ["ai_gateway"]
+__all__ = ["GatewayProvider"]

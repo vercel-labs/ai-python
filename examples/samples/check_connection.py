@@ -6,9 +6,9 @@ import sys
 import ai
 
 PROVIDERS: list[tuple[str, ai.Provider, str]] = [
-    ("ai_gateway", ai.ai_gateway, "anthropic/claude-sonnet-4"),
-    ("anthropic", ai.anthropic, "claude-sonnet-4-20250514"),
-    ("openai", ai.openai, "gpt-5.4-mini"),
+    ("ai_gateway", ai.get_provider("vercel"), "anthropic/claude-sonnet-4"),
+    ("anthropic", ai.get_provider("anthropic"), "claude-sonnet-4-20250514"),
+    ("openai", ai.get_provider("openai"), "gpt-5.4-mini"),
 ]
 
 _failed = False
@@ -21,22 +21,19 @@ def _fail(msg: str) -> None:
 
 
 async def _check(name: str, provider: ai.Provider, model_id: str) -> None:
-    if provider.client().api_key is None:
-        print(f"  [SKIP]  {provider.api_key_env} not set")
+    if not provider.is_configured():
+        print(f"  [SKIP]  {provider.name} provider is not configured")
         return
-    model = provider(model_id)
+    model = ai.Model(model_id, provider=provider)
     try:
-        ok = await ai.check_connection(model)
-        if ok:
-            print(f"  [OK]    {name}/{model_id}")
-        else:
-            _fail(f"  [FAIL]  {name}/{model_id}")
+        await ai.probe(model)
+        print(f"  [OK]    {name}/{model_id}")
     except Exception as exc:
         _fail(f"  [ERR]   {name}/{model_id}: {exc}")
 
 
 async def _list_models(name: str, provider: ai.Provider) -> None:
-    if provider.client().api_key is None:
+    if not provider.is_configured():
         return
     try:
         ids: list[str] = await provider.list()

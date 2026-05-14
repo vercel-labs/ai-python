@@ -1,17 +1,25 @@
 #!/usr/bin/env bash
 # Launch backend + frontend, run the e2e test, tear everything down.
 #
-# Requires AI_GATEWAY_API_KEY in the environment.
+# Requires a configured AI Gateway provider.
 
 set -euo pipefail
 
-if [[ -z "${AI_GATEWAY_API_KEY:-}" ]]; then
-    echo "AI_GATEWAY_API_KEY must be set" >&2
+HERE=$(cd "$(dirname "$0")" && pwd)
+ROOT=$(cd "$HERE/.." && pwd)
+
+if ! uv run --frozen --with-editable "$ROOT/../.." python - <<'PY'
+import sys
+
+import ai
+
+sys.exit(0 if ai.get_provider("vercel").is_configured() else 1)
+PY
+then
+    echo "AI Gateway provider is not configured" >&2
     exit 1
 fi
 
-HERE=$(cd "$(dirname "$0")" && pwd)
-ROOT=$(cd "$HERE/.." && pwd)
 LOGS=$(mktemp -d)
 echo "Logs: $LOGS"
 

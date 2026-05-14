@@ -2,20 +2,21 @@
 
 Usage::
 
-    from ai.providers import openai, openai_like
+    import ai
 
-    model = openai("gpt-5.4")
-    model = openai_like(name="local", base_url="http://localhost:11434/v1")("llama3")
-    ids = await openai.list()
+    model = ai.get_model("openai:gpt-5.4")
+    provider = ai.get_provider("openai", base_url="http://localhost:11434/v1")
+    model = ai.Model("llama3", provider=provider)
+    ids = await ai.get_provider("openai").list()
 
 The adapter module is loaded lazily to avoid pulling in the ``openai``
 SDK at import time.
 """
 
 from . import tools
-from .provider import OpenAICompatibleProvider, openai, openai_like
+from .provider import OpenAICompatibleProvider
 
-__all__ = ["OpenAICompatibleProvider", "openai", "openai_like", "tools"]
+__all__ = ["OpenAICompatibleProvider", "tools"]
 
 
 def __getattr__(name: str) -> object:

@@ -84,7 +84,6 @@ class _CapturingAdapter:
 
     async def stream(
         self,
-        client: models.Client,
         model: models.Model,
         messages: list[messages_.Message],
         *,

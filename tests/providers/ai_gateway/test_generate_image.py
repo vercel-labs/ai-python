@@ -1,10 +1,10 @@
 """Integration tests for the AI Gateway v3 image generation adapter.
 
-Every test exercises the real ``generate()`` function with a ``Client``
+Every test exercises the real ``generate()`` function with a provider
 wired to an ``httpx.MockTransport``, so the full production code path
 is covered:
 
-    generate(client, model, messages, ImageParams(...))
+    generate(model, messages, ImageParams(...))
       -> extract prompt/images from messages
       -> httpx POST (mock) to /image-model
       -> JSON response parsing
@@ -21,12 +21,12 @@ from typing import Any
 import httpx
 import pytest
 
+import ai
 from ai.models.core.params import ImageParams
-from ai.providers.ai_gateway import ai_gateway, errors
 from ai.providers.ai_gateway.adapter import generate
 from ai.types import messages
 
-from .conftest import mock_client, user_msg
+from .conftest import mock_model, user_msg
 
 # 1x1 transparent PNG (minimal valid PNG for magic-byte detection)
 _PNG_HEADER = bytes([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
@@ -36,7 +36,7 @@ _PNG_B64 = base64.b64encode(_PNG_HEADER).decode()
 _JPEG_HEADER = bytes([0xFF, 0xD8, 0xFF, 0xE0])
 _JPEG_B64 = base64.b64encode(_JPEG_HEADER).decode()
 
-_IMAGE_MODEL = ai_gateway("google/imagen-4.0-generate-001")
+_IMAGE_MODEL_ID = "google/imagen-4.0-generate-001"
 
 
 # ---------------------------------------------------------------------------
@@ -54,10 +54,8 @@ class TestGenerate:
                 json={"images": [_PNG_B64]},
             )
 
-        client = mock_client(httpx.MockTransport(handler))
-        msg = await generate(
-            client, _IMAGE_MODEL, [user_msg("A sunset over Tokyo")], ImageParams()
-        )
+        model = mock_model(httpx.MockTransport(handler), model_id=_IMAGE_MODEL_ID)
+        msg = await generate(model, [user_msg("A sunset over Tokyo")], ImageParams())
 
         assert msg.role == "assistant"
         assert len(msg.images) == 1
@@ -75,10 +73,8 @@ class TestGenerate:
                 json={"images": [_PNG_B64, _JPEG_B64, _PNG_B64]},
             )
 
-        client = mock_client(httpx.MockTransport(handler))
         msg = await generate(
-            client,
-            _IMAGE_MODEL,
+            mock_model(httpx.MockTransport(handler), model_id=_IMAGE_MODEL_ID),
             [user_msg("Three cats")],
             params=ImageParams(n=3),
         )
@@ -100,8 +96,11 @@ class TestGenerate:
                 },
             )
 
-        client = mock_client(httpx.MockTransport(handler))
-        msg = await generate(client, _IMAGE_MODEL, [user_msg("a dog")], ImageParams())
+        msg = await generate(
+            mock_model(httpx.MockTransport(handler), model_id=_IMAGE_MODEL_ID),
+            [user_msg("a dog")],
+            ImageParams(),
+        )
 
         assert msg.usage is not None
         assert msg.usage.input_tokens == 50
@@ -121,9 +120,12 @@ class TestRequest:
             captured.update(dict(req.headers))
             return httpx.Response(200, json={"images": [_PNG_B64]})
 
-        model = ai_gateway("openai/gpt-image-1")
-        client = mock_client(httpx.MockTransport(handler), api_key="sk-test")
-        await generate(client, model, [user_msg("Hi")], ImageParams())
+        model = mock_model(
+            httpx.MockTransport(handler),
+            api_key="sk-test",
+            model_id="openai/gpt-image-1",
+        )
+        await generate(model, [user_msg("Hi")], ImageParams())
 
         assert captured["authorization"] == "Bearer sk-test"
         assert captured["ai-image-model-specification-version"] == "3"
@@ -145,8 +147,7 @@ class TestRequest:
             ],
         )
         await generate(
-            mock_client(httpx.MockTransport(handler)),
-            _IMAGE_MODEL,
+            mock_model(httpx.MockTransport(handler), model_id=_IMAGE_MODEL_ID),
             [msg],
             params=ImageParams(
                 n=2,
@@ -175,8 +176,11 @@ class TestRequest:
             captured_url.append(str(req.url))
             return httpx.Response(200, json={"images": [_PNG_B64]})
 
-        client = mock_client(httpx.MockTransport(handler))
-        await generate(client, _IMAGE_MODEL, [user_msg("test")], ImageParams())
+        await generate(
+            mock_model(httpx.MockTransport(handler), model_id=_IMAGE_MODEL_ID),
+            [user_msg("test")],
+            ImageParams(),
+        )
 
         assert captured_url[0] == "https://gw.test/v3/ai/image-model"
 
@@ -199,10 +203,9 @@ class TestErrors:
                 },
             )
 
-        with pytest.raises(errors.GatewayAuthenticationError):
+        with pytest.raises(ai.ProviderAuthenticationError):
             await generate(
-                mock_client(httpx.MockTransport(handler)),
-                _IMAGE_MODEL,
+                mock_model(httpx.MockTransport(handler), model_id=_IMAGE_MODEL_ID),
                 [user_msg("test")],
                 ImageParams(),
             )
@@ -219,10 +222,9 @@ class TestErrors:
                 },
             )
 
-        with pytest.raises(errors.GatewayRateLimitError):
+        with pytest.raises(ai.ProviderRateLimitError):
             await generate(
-                mock_client(httpx.MockTransport(handler)),
-                _IMAGE_MODEL,
+                mock_model(httpx.MockTransport(handler), model_id=_IMAGE_MODEL_ID),
                 [user_msg("test")],
                 ImageParams(),
             )
@@ -234,8 +236,7 @@ class TestErrors:
             return httpx.Response(200, json={"images": []})
 
         msg = await generate(
-            mock_client(httpx.MockTransport(handler)),
-            _IMAGE_MODEL,
+            mock_model(httpx.MockTransport(handler), model_id=_IMAGE_MODEL_ID),
             [user_msg("test")],
             ImageParams(),
         )

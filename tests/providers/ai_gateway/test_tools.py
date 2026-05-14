@@ -15,13 +15,12 @@ import pydantic
 import pytest
 
 from ai import types
-from ai.providers import ai_gateway as ai_gateway_pkg
-from ai.providers import anthropic, openai
-from ai.providers.ai_gateway import adapter, ai_gateway
+from ai.providers.ai_gateway import adapter
+from ai.providers.ai_gateway import tools as gateway_tools
+from ai.providers.anthropic import tools as anthropic_tools
+from ai.providers.openai import tools as openai_tools
 
-from .conftest import mock_client, sse, user_msg
-
-_TEST_MODEL = ai_gateway("test-provider/test-model")
+from .conftest import mock_model, sse, user_msg
 
 
 def _capture_body_handler(captured: dict[str, Any]) -> Any:
@@ -38,13 +37,12 @@ def _capture_body_handler(captured: dict[str, Any]) -> Any:
 class TestGatewayBuiltins:
     async def test_anthropic_web_search_serializes(self) -> None:
         captured: dict[str, Any] = {}
-        client = mock_client(httpx.MockTransport(_capture_body_handler(captured)))
+        model = mock_model(httpx.MockTransport(_capture_body_handler(captured)))
 
         async for _ in adapter.stream(
-            client,
-            _TEST_MODEL,
+            model,
             [user_msg("hi")],
-            tools=[anthropic.tools.web_search(max_uses=3)],
+            tools=[anthropic_tools.web_search(max_uses=3)],
         ):
             pass
 
@@ -59,14 +57,13 @@ class TestGatewayBuiltins:
 
     async def test_openai_mcp_serializes(self) -> None:
         captured: dict[str, Any] = {}
-        client = mock_client(httpx.MockTransport(_capture_body_handler(captured)))
+        model = mock_model(httpx.MockTransport(_capture_body_handler(captured)))
 
         async for _ in adapter.stream(
-            client,
-            _TEST_MODEL,
+            model,
             [user_msg("hi")],
             tools=[
-                openai.tools.mcp(
+                openai_tools.mcp(
                     server_label="my-server",
                     server_url="https://mcp.example.com",
                 ),
@@ -88,14 +85,13 @@ class TestGatewayBuiltins:
 
     async def test_gateway_perplexity_search_serializes(self) -> None:
         captured: dict[str, Any] = {}
-        client = mock_client(httpx.MockTransport(_capture_body_handler(captured)))
+        model = mock_model(httpx.MockTransport(_capture_body_handler(captured)))
 
         async for _ in adapter.stream(
-            client,
-            _TEST_MODEL,
+            model,
             [user_msg("hi")],
             tools=[
-                ai_gateway_pkg.tools.perplexity_search(
+                gateway_tools.perplexity_search(
                     max_results=5,
                     search_domain_filter=["nature.com"],
                 ),
@@ -117,16 +113,15 @@ class TestGatewayBuiltins:
 
     async def test_gateway_parallel_search_serializes(self) -> None:
         captured: dict[str, Any] = {}
-        client = mock_client(httpx.MockTransport(_capture_body_handler(captured)))
+        model = mock_model(httpx.MockTransport(_capture_body_handler(captured)))
 
         async for _ in adapter.stream(
-            client,
-            _TEST_MODEL,
+            model,
             [user_msg("hi")],
             tools=[
-                ai_gateway_pkg.tools.parallel_search(
+                gateway_tools.parallel_search(
                     mode="agentic",
-                    source_policy=ai_gateway_pkg.tools.SourcePolicy(
+                    source_policy=gateway_tools.SourcePolicy(
                         include_domains=["wikipedia.org"],
                     ),
                 ),
@@ -155,10 +150,8 @@ class TestGatewayBuiltins:
         def handler(req: httpx.Request) -> httpx.Response:
             raise AssertionError("request should not be sent")
 
-        client = mock_client(httpx.MockTransport(handler))
         stream = adapter.stream(
-            client,
-            _TEST_MODEL,
+            mock_model(httpx.MockTransport(handler)),
             [user_msg("hi")],
             tools=[
                 types.tools.Tool(

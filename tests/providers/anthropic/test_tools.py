@@ -17,14 +17,12 @@ from typing import Any
 import pytest
 
 import ai
-from ai import models
-from ai.providers.anthropic import adapter, anthropic
+from ai.providers.anthropic import adapter
 from ai.providers.anthropic import tools as anthropic_tools
 
 from .conftest import FakeAnthropicClient
 
-_CLIENT = models.Client(base_url="https://anthropic.test", api_key="sk-test")
-_MODEL = anthropic("claude-sonnet-4-6")
+_MODEL = ai.Model("claude-sonnet-4-6", provider=ai.get_provider("anthropic"))
 
 
 async def _capture_tools(
@@ -35,10 +33,15 @@ async def _capture_tools(
 ) -> dict[str, Any]:
     captured: dict[str, Any] = {}
     monkeypatch.setattr(
-        adapter, "_make_client", lambda client: FakeAnthropicClient(captured)
+        adapter,
+        "_make_client",
+        lambda model: FakeAnthropicClient(captured),
     )
     stream = adapter.stream(
-        _CLIENT, _MODEL, [ai.user_message("Hi")], tools=tools, params=params
+        _MODEL,
+        [ai.user_message("Hi")],
+        tools=tools,
+        params=params,
     )
     async for _ in stream:
         pass

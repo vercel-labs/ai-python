@@ -1,7 +1,7 @@
 """OpenAI adapter — chat completions API.
 
 Message/tool conversion and streaming via the official ``openai`` SDK.
-The SDK client is constructed from :class:`Client` params on each call.
+OpenAI-compatible providers own the SDK client used by this adapter.
 """
 
 from collections.abc import AsyncGenerator, Mapping, Sequence
@@ -12,6 +12,8 @@ import pydantic
 
 from ... import types
 from ...models import core
+from . import errors
+from . import provider as provider_
 
 # ---------------------------------------------------------------------------
 # Message / tool conversion — internal types → OpenAI wire format
@@ -203,11 +205,22 @@ async def _messages_to_openai(
 # ---------------------------------------------------------------------------
 
 
-def _make_client(client: core.client.Client) -> openai.AsyncOpenAI:
-    """Construct an ``AsyncOpenAI`` from our generic ``Client``."""
+def _make_client(model: core.model.Model) -> openai.AsyncOpenAI:
+    """Return an ``AsyncOpenAI`` for the model's provider."""
+    provider = model.provider
+    if isinstance(provider, provider_.OpenAICompatibleProvider):
+        return provider.sdk_client
     return openai.AsyncOpenAI(
-        base_url=client.base_url,
-        api_key=client.api_key or "",
+        base_url=provider.base_url,
+        api_key=provider.api_key or "",
+    )
+
+
+def _owns_client(model: core.model.Model, client: openai.AsyncOpenAI) -> bool:
+    provider = model.provider
+    return not (
+        isinstance(provider, provider_.OpenAICompatibleProvider)
+        and provider.sdk_client is client
     )
 
 
@@ -225,7 +238,6 @@ def _coerce_params(value: Any) -> dict[str, Any]:
 
 
 async def stream(
-    client: core.client.Client,
     model: core.model.Model,
     messages: list[types.messages.Message],
     *,
@@ -250,7 +262,8 @@ async def stream(
             "adapter ships."
         )
 
-    sdk_client = _make_client(client)
+    sdk_client = _make_client(model)
+    owns_client = _owns_client(model, sdk_client)
     stream_params = _coerce_params(kwargs.get("params"))
     openai_messages = await _messages_to_openai(messages)
     openai_tools = _tools_to_openai(tools) if tools else None
@@ -389,5 +402,12 @@ async def stream(
                         tc["started"] = False
 
         yield types.events.StreamEnd(usage=usage)
+    except openai.OpenAIError as exc:
+        raise errors.map_error(
+            exc,
+            provider=model.provider.name,
+            model_id=model.id,
+        ) from exc
     finally:
-        await sdk_client.close()
+        if owns_client:
+            await sdk_client.close()

@@ -1,10 +1,10 @@
 """Integration tests for the AI Gateway v3 streaming adapter.
 
-Every test exercises the real ``stream()`` function with a ``Client``
+Every test exercises the real ``stream()`` function with a provider
 wired to an ``httpx.MockTransport``, so the full production code path
 is covered:
 
-    stream(client, model, messages)
+    stream(model, messages)
       -> _build_request_body()
       -> httpx POST (mock)
       -> SSE line parsing
@@ -24,39 +24,35 @@ import pytest
 import ai
 from ai import models
 from ai.models.core import model as model_
-from ai.providers.ai_gateway import adapter, ai_gateway, errors
+from ai.providers.ai_gateway import adapter
 from ai.types import events, messages
 
-from .conftest import mock_client, sse, user_msg
+from .conftest import mock_client, mock_model, sse, user_msg
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-_TEST_MODEL = ai_gateway("test-provider/test-model")
-
 
 async def _collect(
-    client: Any,
+    model: model_.Model,
     msgs: list[messages.Message],
-    model: model_.Model = _TEST_MODEL,
     **kwargs: Any,
 ) -> list[events.Event]:
     """Drain ``stream()`` and return all yielded events."""
     result: list[events.Event] = []
-    async for event in adapter.stream(client, model, msgs, **kwargs):
+    async for event in adapter.stream(model, msgs, **kwargs):
         result.append(event)
     return result
 
 
 async def _final(
-    client: Any,
+    model: model_.Model,
     msgs: list[messages.Message],
-    model: model_.Model = _TEST_MODEL,
     **kwargs: Any,
 ) -> messages.Message:
     """Drain the adapter's event stream and return the aggregated message."""
-    s = models.Stream(adapter.stream(client, model, msgs, **kwargs))
+    s = models.Stream(adapter.stream(model, msgs, **kwargs))
     async for _ in s:
         pass
     return s.message
@@ -259,7 +255,6 @@ class TestStreaming:
         events_seen: list[type] = []
         async for event in adapter.stream(
             mock_client(httpx.MockTransport(handler)),
-            _TEST_MODEL,
             [user_msg("hi")],
         ):
             events_seen.append(type(event))
@@ -288,9 +283,12 @@ class TestRequest:
                 text=sse({"type": "finish", "finishReason": "stop", "usage": {}}),
             )
 
-        model = ai_gateway("anthropic/claude-sonnet-4")
-        client = mock_client(httpx.MockTransport(handler), api_key="sk-test")
-        await _collect(client, [user_msg("Hi")], model=model)
+        model = mock_model(
+            httpx.MockTransport(handler),
+            api_key="sk-test",
+            model_id="anthropic/claude-sonnet-4",
+        )
+        await _collect(model, [user_msg("Hi")])
 
         assert captured["authorization"] == "Bearer sk-test"
         assert captured["ai-gateway-protocol-version"] == "0.0.1"
@@ -328,8 +326,10 @@ class TestRequest:
                 text=sse({"type": "finish", "finishReason": "stop", "usage": {}}),
             )
 
-        client = mock_client(httpx.MockTransport(handler))
-        model = ai_gateway("anthropic/claude-sonnet-4", client=client)
+        model = mock_model(
+            httpx.MockTransport(handler),
+            model_id="anthropic/claude-sonnet-4",
+        )
         request_params = {
             "providerOptions": {
                 "gateway": {
@@ -373,8 +373,10 @@ class TestRequest:
         def handler(req: httpx.Request) -> httpx.Response:
             raise AssertionError("request should not be sent")
 
-        client = mock_client(httpx.MockTransport(handler))
-        model = ai_gateway("openai/gpt-5.4", client=client)
+        model = mock_model(
+            httpx.MockTransport(handler),
+            model_id="openai/gpt-5.4",
+        )
         with pytest.raises(TypeError, match="dict"):
             async with models.stream(
                 model,
@@ -525,7 +527,7 @@ class TestErrors:
                 },
             )
 
-        with pytest.raises(errors.GatewayAuthenticationError):
+        with pytest.raises(ai.ProviderAuthenticationError):
             await _collect(mock_client(httpx.MockTransport(handler)), [user_msg("Hi")])
 
     async def test_429_rate_limit_error(self) -> None:
@@ -540,7 +542,7 @@ class TestErrors:
                 },
             )
 
-        with pytest.raises(errors.GatewayRateLimitError):
+        with pytest.raises(ai.ProviderRateLimitError):
             await _collect(mock_client(httpx.MockTransport(handler)), [user_msg("Hi")])
 
     async def test_404_model_not_found(self) -> None:
@@ -556,7 +558,7 @@ class TestErrors:
                 },
             )
 
-        with pytest.raises(errors.GatewayModelNotFoundError) as exc_info:
+        with pytest.raises(ai.ProviderModelNotFoundError) as exc_info:
             await _collect(mock_client(httpx.MockTransport(handler)), [user_msg("Hi")])
         assert exc_info.value.model_id == "xyz"
 
@@ -564,5 +566,5 @@ class TestErrors:
         def handler(req: httpx.Request) -> httpx.Response:
             return httpx.Response(500, text="Not JSON")
 
-        with pytest.raises(errors.GatewayResponseError):
+        with pytest.raises(ai.ProviderResponseError):
             await _collect(mock_client(httpx.MockTransport(handler)), [user_msg("Hi")])

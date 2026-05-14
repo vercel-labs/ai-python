@@ -13,7 +13,7 @@ import pytest
 
 import ai
 from ai import models
-from ai.providers.anthropic import adapter, anthropic
+from ai.providers.anthropic import adapter
 from ai.types import events, messages
 
 from .conftest import (
@@ -25,14 +25,13 @@ from .conftest import (
     snapshot_block,
 )
 
-_CLIENT = models.Client(base_url="https://anthropic.test", api_key="sk-test")
-_MODEL = anthropic("claude-sonnet-4-6")
+_MODEL = ai.Model("claude-sonnet-4-6", provider=ai.get_provider("anthropic"))
 
 
 async def _drain(stream: FakeStream, monkeypatch: pytest.MonkeyPatch) -> models.Stream:
     fake = FakeAnthropicClient(stream=stream)
-    monkeypatch.setattr(adapter, "_make_client", lambda client: fake)
-    s = models.Stream(adapter.stream(_CLIENT, _MODEL, [ai.user_message("Hi")]))
+    monkeypatch.setattr(adapter, "_make_client", lambda model: fake)
+    s = models.Stream(adapter.stream(_MODEL, [ai.user_message("Hi")]))
     async for _ in s:
         pass
     return s
@@ -121,10 +120,10 @@ async def test_event_kinds_in_order(monkeypatch: pytest.MonkeyPatch) -> None:
         block_stop(0),
     ]
     fake = FakeAnthropicClient(stream=FakeStream(sdk_events))
-    monkeypatch.setattr(adapter, "_make_client", lambda client: fake)
+    monkeypatch.setattr(adapter, "_make_client", lambda model: fake)
 
     seen: list[type] = []
-    async for event in adapter.stream(_CLIENT, _MODEL, [ai.user_message("Hi")]):
+    async for event in adapter.stream(_MODEL, [ai.user_message("Hi")]):
         seen.append(type(event))
 
     assert seen == [
@@ -146,10 +145,10 @@ async def test_builtin_tool_end_carries_call_part(
         block_stop(0),
     ]
     fake = FakeAnthropicClient(stream=FakeStream(sdk_events))
-    monkeypatch.setattr(adapter, "_make_client", lambda client: fake)
+    monkeypatch.setattr(adapter, "_make_client", lambda model: fake)
 
     end_event: events.BuiltinToolEnd | None = None
-    s = models.Stream(adapter.stream(_CLIENT, _MODEL, [ai.user_message("Hi")]))
+    s = models.Stream(adapter.stream(_MODEL, [ai.user_message("Hi")]))
     async for event in s:
         if isinstance(event, events.BuiltinToolEnd):
             end_event = event

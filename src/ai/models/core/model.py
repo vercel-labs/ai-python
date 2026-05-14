@@ -1,33 +1,52 @@
 """Model metadata types."""
 
-import dataclasses
 import os
 
 from ... import _modelsdev
 from ...errors import ConfigurationError
 from ...providers import base
-from .client import Client
 
 _DEFAULT_MODEL_ENV = "AI_SDK_DEFAULT_MODEL"
 
 
-@dataclasses.dataclass(frozen=True)
 class Model:
     """Lightweight reference to a model on a specific provider.
 
     * ``id`` — identifier sent to the provider (e.g. ``"claude-sonnet-4-6"``).
     * ``adapter`` — wire protocol key (e.g. ``"ai-gateway-v3"``, ``"anthropic"``).
     * ``provider`` — :class:`Provider` that owns this model.
-    * ``client`` — explicit :class:`Client` override (skips provider's default).
     """
 
-    id: str
-    adapter: str
-    provider: base.Provider
-    client: Client | None = dataclasses.field(default=None, repr=False)
+    def __init__(
+        self,
+        id: str,
+        *,
+        provider: base.Provider,
+        adapter: str | None = None,
+    ) -> None:
+        self.id = id
+        self.provider = provider
+        self.adapter = adapter or provider.adapter
+
+    def __eq__(self, other: object) -> bool:
+        return (
+            isinstance(other, Model)
+            and self.id == other.id
+            and self.adapter == other.adapter
+            and self.provider is other.provider
+        )
+
+    def __repr__(self) -> str:
+        return (
+            f"Model(id={self.id!r}, adapter={self.adapter!r}, "
+            f"provider={self.provider!r})"
+        )
+
+    def __hash__(self) -> int:
+        return hash((self.id, self.adapter, id(self.provider)))
 
 
-def get_model(model_id: str | None = None, *, client: Client | None = None) -> Model:
+def get_model(model_id: str | None = None) -> Model:
     """Resolve a model ID into a :class:`Model`.
 
     Args:
@@ -37,10 +56,6 @@ def get_model(model_id: str | None = None, *, client: Client | None = None) -> M
             Vercel AI Gateway. Examples: ``"openai:gpt-5"`` or
             ``"anthropic/claude-sonnet-4"``. When omitted, reads
             ``AI_SDK_DEFAULT_MODEL`` from the environment.
-        client:
-            Explicit client override. When omitted, the provider creates one
-            from its default base URL and environment variables.
-
     Raises:
         Raises :class:`ai.ConfigurationError` when ``model_id`` and
         ``AI_SDK_DEFAULT_MODEL`` is empty or malformed.
@@ -74,4 +89,4 @@ def get_model(model_id: str | None = None, *, client: Client | None = None) -> M
         model_provider_config=model_provider_config,
     )
 
-    return provider(provider_model_id, client=client)
+    return Model(provider_model_id, provider=provider)

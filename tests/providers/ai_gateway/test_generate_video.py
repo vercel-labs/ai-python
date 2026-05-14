@@ -1,10 +1,10 @@
 """Integration tests for the AI Gateway v3 video generation adapter.
 
-Every test exercises the real ``generate()`` function with a ``Client``
+Every test exercises the real ``generate()`` function with a provider
 wired to an ``httpx.MockTransport``, so the full production code path
 is covered:
 
-    generate(client, model, messages, VideoParams(...))
+    generate(model, messages, VideoParams(...))
       -> extract prompt/image from messages
       -> httpx POST (mock) to /video-model with SSE accept
       -> SSE event parsing
@@ -22,12 +22,12 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 
+import ai
 from ai.models.core.params import VideoParams
-from ai.providers.ai_gateway import ai_gateway, errors
 from ai.providers.ai_gateway.adapter import generate
 from ai.types import messages
 
-from .conftest import mock_client, sse, user_msg
+from .conftest import mock_model, sse, user_msg
 
 # MP4 magic bytes (ftyp box)
 _MP4_HEADER = bytes(
@@ -39,7 +39,7 @@ _MP4_B64 = base64.b64encode(_MP4_HEADER).decode()
 _WEBM_HEADER = bytes([0x1A, 0x45, 0xDF, 0xA3])
 _WEBM_B64 = base64.b64encode(_WEBM_HEADER).decode()
 
-_VIDEO_MODEL = ai_gateway("google/veo-3.0-generate-001")
+_VIDEO_MODEL_ID = "google/veo-3.0-generate-001"
 
 
 # ---------------------------------------------------------------------------
@@ -62,10 +62,8 @@ class TestGenerate:
         def handler(req: httpx.Request) -> httpx.Response:
             return httpx.Response(200, text=body)
 
-        client = mock_client(httpx.MockTransport(handler))
         msg = await generate(
-            client,
-            _VIDEO_MODEL,
+            mock_model(httpx.MockTransport(handler), model_id=_VIDEO_MODEL_ID),
             [user_msg("A cat walking on a beach")],
             params=VideoParams(),
         )
@@ -93,7 +91,7 @@ class TestGenerate:
         def handler(req: httpx.Request) -> httpx.Response:
             return httpx.Response(200, text=body)
 
-        client = mock_client(httpx.MockTransport(handler))
+        model = mock_model(httpx.MockTransport(handler), model_id=_VIDEO_MODEL_ID)
 
         with patch(
             "ai.models.core.helpers.files.download",
@@ -101,8 +99,7 @@ class TestGenerate:
             return_value=(_MP4_HEADER, "video/mp4"),
         ) as mock_dl:
             msg = await generate(
-                client,
-                _VIDEO_MODEL,
+                model,
                 [user_msg("A sunset timelapse")],
                 params=VideoParams(),
             )
@@ -127,8 +124,7 @@ class TestGenerate:
             return httpx.Response(200, text=body)
 
         msg = await generate(
-            mock_client(httpx.MockTransport(handler)),
-            _VIDEO_MODEL,
+            mock_model(httpx.MockTransport(handler), model_id=_VIDEO_MODEL_ID),
             [user_msg("Two versions")],
             params=VideoParams(n=2),
         )
@@ -164,10 +160,13 @@ class TestRequest:
                 ),
             )
 
-        client = mock_client(httpx.MockTransport(handler), api_key="sk-test")
+        model = mock_model(
+            httpx.MockTransport(handler),
+            api_key="sk-test",
+            model_id=_VIDEO_MODEL_ID,
+        )
         await generate(
-            client,
-            _VIDEO_MODEL,
+            model,
             [user_msg("test")],
             params=VideoParams(),
         )
@@ -208,8 +207,7 @@ class TestRequest:
             ],
         )
         await generate(
-            mock_client(httpx.MockTransport(handler)),
-            _VIDEO_MODEL,
+            mock_model(httpx.MockTransport(handler), model_id=_VIDEO_MODEL_ID),
             [msg],
             params=VideoParams(
                 n=2,
@@ -255,10 +253,8 @@ class TestRequest:
                 ),
             )
 
-        client = mock_client(httpx.MockTransport(handler))
         await generate(
-            client,
-            _VIDEO_MODEL,
+            mock_model(httpx.MockTransport(handler), model_id=_VIDEO_MODEL_ID),
             [user_msg("test")],
             params=VideoParams(),
         )
@@ -286,10 +282,9 @@ class TestErrors:
         def handler(req: httpx.Request) -> httpx.Response:
             return httpx.Response(200, text=body)
 
-        with pytest.raises(errors.GatewayInvalidRequestError, match="Content policy"):
+        with pytest.raises(ai.ProviderBadRequestError, match="Content policy"):
             await generate(
-                mock_client(httpx.MockTransport(handler)),
-                _VIDEO_MODEL,
+                mock_model(httpx.MockTransport(handler), model_id=_VIDEO_MODEL_ID),
                 [user_msg("test")],
                 params=VideoParams(),
             )
@@ -306,10 +301,9 @@ class TestErrors:
                 },
             )
 
-        with pytest.raises(errors.GatewayAuthenticationError):
+        with pytest.raises(ai.ProviderAuthenticationError):
             await generate(
-                mock_client(httpx.MockTransport(handler)),
-                _VIDEO_MODEL,
+                mock_model(httpx.MockTransport(handler), model_id=_VIDEO_MODEL_ID),
                 [user_msg("test")],
                 params=VideoParams(),
             )
@@ -320,10 +314,9 @@ class TestErrors:
         def handler(req: httpx.Request) -> httpx.Response:
             return httpx.Response(200, text="")
 
-        with pytest.raises(errors.GatewayResponseError, match="SSE stream ended"):
+        with pytest.raises(ai.ProviderResponseError, match="SSE stream ended"):
             await generate(
-                mock_client(httpx.MockTransport(handler)),
-                _VIDEO_MODEL,
+                mock_model(httpx.MockTransport(handler), model_id=_VIDEO_MODEL_ID),
                 [user_msg("test")],
                 params=VideoParams(),
             )

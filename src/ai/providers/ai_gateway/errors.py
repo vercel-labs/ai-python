@@ -1,305 +1,55 @@
-"""Vercel AI Gateway error hierarchy.
+"""Map AI Gateway client errors to public ai errors."""
 
-Maps HTTP error responses from the gateway server to typed Python exceptions.
-Each error class corresponds to a specific ``error.type`` value in the
-gateway's JSON error response format::
+from __future__ import annotations
 
-    {
-      "error": {
-        "message": "...",
-        "type": "authentication_error" | "invalid_request_error" | ...,
-        "param": ...,
-        "code": ...
-      },
-      "generationId": "..."
-    }
-"""
-
-import json
-from typing import Any, Self
-
-_KEY_URL = "https://vercel.com/d?to=%2F%5Bteam%5D%2F%7E%2Fai%2Fapi-keys"
+from ... import errors as ai_errors
+from .client import errors as client_errors
 
 
-# ---------------------------------------------------------------------------
-# Base class
-# ---------------------------------------------------------------------------
-
-
-class GatewayError(Exception):
-    """Base class for all Vercel AI Gateway errors."""
-
-    type: str = "gateway_error"
-
-    def __init__(
-        self,
-        message: str = "",
-        *,
-        status_code: int = 500,
-        cause: BaseException | None = None,
-        generation_id: str | None = None,
-    ) -> None:
-        display = f"{message} [{generation_id}]" if generation_id else message
-        super().__init__(display)
-        self.status_code = status_code
-        self.generation_id = generation_id
-        if cause is not None:
-            self.__cause__ = cause
-
-
-# ---------------------------------------------------------------------------
-# Concrete errors — thin subclasses that set type + default status_code
-# ---------------------------------------------------------------------------
-
-
-class GatewayAuthenticationError(GatewayError):
-    """Authentication failed (HTTP 401)."""
-
-    type = "authentication_error"
-
-    def __init__(
-        self,
-        message: str = "Authentication failed",
-        *,
-        status_code: int = 401,
-        cause: BaseException | None = None,
-        generation_id: str | None = None,
-    ) -> None:
-        super().__init__(
-            message,
-            status_code=status_code,
-            cause=cause,
-            generation_id=generation_id,
+def map_error(exc: client_errors.GatewayError) -> ai_errors.ProviderAPIError:
+    """Map a Gateway client error to the public provider hierarchy."""
+    if isinstance(exc, client_errors.GatewayAuthenticationError):
+        return _mapped(ai_errors.ProviderAuthenticationError, exc)
+    if isinstance(exc, client_errors.GatewayInvalidRequestError):
+        return _mapped(ai_errors.ProviderBadRequestError, exc)
+    if isinstance(exc, client_errors.GatewayRateLimitError):
+        return _mapped(ai_errors.ProviderRateLimitError, exc)
+    if isinstance(exc, client_errors.GatewayModelNotFoundError):
+        return ai_errors.ProviderModelNotFoundError(
+            str(exc),
+            model_id=exc.model_id,
+            provider="ai-gateway",
+            http_context=_http_context(exc),
+            error_type=exc.type,
+            is_retryable=exc.is_retryable,
         )
-
-    @classmethod
-    def create_contextual(
-        cls,
-        *,
-        api_key_provided: bool,
-        status_code: int = 401,
-        cause: BaseException | None = None,
-        generation_id: str | None = None,
-    ) -> Self:
-        """Build a helpful message based on which auth method was used."""
-        if api_key_provided:
-            msg = (
-                "AI Gateway authentication failed: Invalid API key.\n\n"
-                f"Create a new API key: {_KEY_URL}\n\n"
-                "Provide via 'api_key' option or "
-                "'AI_GATEWAY_API_KEY' environment variable."
-            )
-        else:
-            msg = (
-                "AI Gateway authentication failed: "
-                "No authentication provided.\n\n"
-                f"Create an API key: {_KEY_URL}\n"
-                "Provide via 'api_key' option or "
-                "'AI_GATEWAY_API_KEY' environment variable."
-            )
-        return cls(
-            msg,
-            status_code=status_code,
-            cause=cause,
-            generation_id=generation_id,
-        )
+    if isinstance(exc, client_errors.GatewayInternalServerError):
+        return _mapped(ai_errors.ProviderInternalServerError, exc)
+    if isinstance(exc, client_errors.GatewayResponseError):
+        return _mapped(ai_errors.ProviderResponseError, exc, body=exc.response_body)
+    if isinstance(exc, client_errors.GatewayTimeoutError):
+        return _mapped(ai_errors.ProviderTimeoutError, exc)
+    return _mapped(ai_errors.ProviderAPIError, exc)
 
 
-class GatewayInvalidRequestError(GatewayError):
-    """Malformed or invalid request (HTTP 400)."""
-
-    type = "invalid_request_error"
-
-    def __init__(
-        self,
-        message: str = "Invalid request",
-        *,
-        status_code: int = 400,
-        **kwargs: Any,
-    ) -> None:
-        super().__init__(message, status_code=status_code, **kwargs)
-
-
-class GatewayRateLimitError(GatewayError):
-    """Rate limit exceeded (HTTP 429)."""
-
-    type = "rate_limit_exceeded"
-
-    def __init__(
-        self,
-        message: str = "Rate limit exceeded",
-        *,
-        status_code: int = 429,
-        **kwargs: Any,
-    ) -> None:
-        super().__init__(message, status_code=status_code, **kwargs)
-
-
-class GatewayModelNotFoundError(GatewayError):
-    """Requested model was not found (HTTP 404)."""
-
-    type = "model_not_found"
-
-    def __init__(
-        self,
-        message: str = "Model not found",
-        *,
-        status_code: int = 404,
-        model_id: str | None = None,
-        cause: BaseException | None = None,
-        generation_id: str | None = None,
-    ) -> None:
-        super().__init__(
-            message,
-            status_code=status_code,
-            cause=cause,
-            generation_id=generation_id,
-        )
-        self.model_id = model_id
-
-
-class GatewayInternalServerError(GatewayError):
-    """Internal error on the gateway server (HTTP 500)."""
-
-    type = "internal_server_error"
-
-    def __init__(
-        self,
-        message: str = "Internal server error",
-        *,
-        status_code: int = 500,
-        **kwargs: Any,
-    ) -> None:
-        super().__init__(message, status_code=status_code, **kwargs)
-
-
-class GatewayResponseError(GatewayError):
-    """Malformed or unparseable response (HTTP 502)."""
-
-    type = "response_error"
-
-    def __init__(
-        self,
-        message: str = "Invalid response",
-        *,
-        status_code: int = 502,
-        response: Any = None,
-        validation_error: Any = None,
-        cause: BaseException | None = None,
-        generation_id: str | None = None,
-    ) -> None:
-        super().__init__(
-            message,
-            status_code=status_code,
-            cause=cause,
-            generation_id=generation_id,
-        )
-        self.response = response
-        self.validation_error = validation_error
-
-
-class GatewayTimeoutError(GatewayError):
-    """Gateway request timed out (HTTP 408)."""
-
-    type = "timeout_error"
-
-    def __init__(
-        self,
-        message: str = "Request timed out",
-        *,
-        status_code: int = 408,
-        **kwargs: Any,
-    ) -> None:
-        super().__init__(message, status_code=status_code, **kwargs)
-
-
-# ---------------------------------------------------------------------------
-# Error factory
-# ---------------------------------------------------------------------------
-
-_TYPE_MAP: dict[str, type[GatewayError]] = {
-    "authentication_error": GatewayAuthenticationError,
-    "invalid_request_error": GatewayInvalidRequestError,
-    "rate_limit_exceeded": GatewayRateLimitError,
-    "model_not_found": GatewayModelNotFoundError,
-    "internal_server_error": GatewayInternalServerError,
-}
-
-_MALFORMED = "Invalid error response format: Gateway request failed"
-
-
-def create_gateway_error(
+def _mapped(
+    cls: type[ai_errors.ProviderAPIError],
+    exc: client_errors.GatewayError,
     *,
-    response_body: Any,
-    status_code: int,
-    api_key_provided: bool = False,
-    cause: BaseException | None = None,
-) -> GatewayError:
-    """Create a typed error from a gateway JSON error response.
+    body: object | None = None,
+) -> ai_errors.ProviderAPIError:
+    return cls(
+        str(exc),
+        provider="ai-gateway",
+        http_context=_http_context(exc),
+        body=body,
+        error_type=exc.type,
+        is_retryable=exc.is_retryable,
+    )
 
-    Falls back to :class:`GatewayResponseError` when the body doesn't
-    match the expected ``{"error": {"message": ..., "type": ...}}``
-    shape.
-    """
-    # Parse the response body
-    body: Any = response_body
-    if isinstance(body, (str, bytes)):
-        try:
-            body = json.loads(body)
-        except (json.JSONDecodeError, ValueError):
-            return GatewayResponseError(
-                message=_MALFORMED,
-                status_code=status_code,
-                response=response_body,
-                validation_error="Response body is not valid JSON",
-                cause=cause,
-            )
 
-    # Validate shape
-    error_obj = body.get("error") if isinstance(body, dict) else None
-    if not isinstance(error_obj, dict) or "message" not in error_obj:
-        reason = (
-            "Missing 'error' field in response"
-            if not isinstance(error_obj, dict)
-            else "Missing 'message' field in error object"
-        )
-        return GatewayResponseError(
-            message=_MALFORMED,
-            status_code=status_code,
-            response=body,
-            validation_error=reason,
-            cause=cause,
-        )
+def _http_context(exc: client_errors.GatewayError) -> ai_errors.HTTPErrorContext:
+    return ai_errors.HTTPErrorContext(status_code=exc.status_code)
 
-    message: str = error_obj["message"]
-    error_type: str | None = error_obj.get("type")
-    generation_id: str | None = body.get("generationId")
 
-    match error_type:
-        case "authentication_error":
-            return GatewayAuthenticationError.create_contextual(
-                api_key_provided=api_key_provided,
-                status_code=status_code,
-                cause=cause,
-                generation_id=generation_id,
-            )
-
-        case "model_not_found":
-            param = error_obj.get("param")
-            model_id = param.get("modelId") if isinstance(param, dict) else None
-            return GatewayModelNotFoundError(
-                message=message,
-                status_code=status_code,
-                model_id=model_id,
-                cause=cause,
-                generation_id=generation_id,
-            )
-
-        case _:
-            cls = _TYPE_MAP.get(error_type or "", GatewayInternalServerError)
-            return cls(
-                message=message,
-                status_code=status_code,
-                cause=cause,
-                generation_id=generation_id,
-            )
+__all__ = ["map_error"]

@@ -15,8 +15,10 @@ from ... import types
 from ...models import core
 from ..anthropic import tools as anthropic_tools
 from ..openai import tools as openai_tools
-from . import errors, sdk
+from . import client as gateway_client
+from . import errors
 from . import tools as gateway_tools
+from .client import errors as client_errors
 
 # ---------------------------------------------------------------------------
 # Shared request helpers
@@ -468,7 +470,6 @@ def _parse_stream_part(
 
 
 async def stream(
-    client: core.client.Client,
     model: core.model.Model,
     messages: list[types.messages.Message],
     *,
@@ -484,12 +485,15 @@ async def stream(
         output_type=output_type,
         params=stream_params,
     )
-    gateway = sdk.GatewayClient(client, model)
+    if not isinstance(model.provider.client, gateway_client.GatewayClient):
+        raise TypeError("AI Gateway adapter requires a GatewayClient")
+    gateway = model.provider.client
 
     try:
         async with gateway.stream(
             "language-model",
             body,
+            model=model,
             model_type="language",
             streaming=True,
         ) as response:
@@ -501,15 +505,16 @@ async def stream(
                     data, streamed_tool_ids, provider_executed_ids
                 ):
                     yield event
-    except errors.GatewayError:
-        raise
+    except client_errors.GatewayError as exc:
+        raise errors.map_error(exc) from exc
     except httpx.TimeoutException as exc:
-        raise errors.GatewayTimeoutError(cause=exc) from exc
+        timeout_error = client_errors.GatewayTimeoutError()
+        raise errors.map_error(timeout_error) from exc
     except Exception as exc:
-        raise errors.GatewayResponseError(
+        response_error = client_errors.GatewayResponseError(
             message=f"Unexpected error during streaming: {exc}",
-            cause=exc,
-        ) from exc
+        )
+        raise errors.map_error(response_error) from exc
 
 
 # ---------------------------------------------------------------------------
@@ -518,7 +523,6 @@ async def stream(
 
 
 async def _generate_image(
-    client: core.client.Client,
     model: core.model.Model,
     messages: list[types.messages.Message],
     params: core.ImageParams,
@@ -534,8 +538,12 @@ async def _generate_image(
     if input_files:
         body["files"] = [_file_part_to_wire(f) for f in input_files]
 
-    gateway = sdk.GatewayClient(client, model)
-    response = await gateway.post_json("image-model", body, model_type="image")
+    if not isinstance(model.provider.client, gateway_client.GatewayClient):
+        raise TypeError("AI Gateway adapter requires a GatewayClient")
+    gateway = model.provider.client
+    response = await gateway.post_json(
+        "image-model", body, model=model, model_type="image"
+    )
 
     data = response.json()
     raw_images: list[str] = data.get("images", [])
@@ -556,7 +564,6 @@ async def _generate_image(
 
 
 async def _generate_video(
-    client: core.client.Client,
     model: core.model.Model,
     messages: list[types.messages.Message],
     params: core.VideoParams,
@@ -572,11 +579,14 @@ async def _generate_video(
     if input_files:
         body["image"] = _file_part_to_wire(input_files[0])
 
-    gateway = sdk.GatewayClient(client, model)
+    if not isinstance(model.provider.client, gateway_client.GatewayClient):
+        raise TypeError("AI Gateway adapter requires a GatewayClient")
+    gateway = model.provider.client
 
     async with gateway.stream(
         "video-model",
         body,
+        model=model,
         model_type="video",
         accept="text/event-stream",
         timeout=httpx.Timeout(timeout=600.0, connect=10.0),
@@ -587,12 +597,12 @@ async def _generate_video(
             break
 
     if not event_data:
-        raise errors.GatewayResponseError(
+        raise client_errors.GatewayResponseError(
             "SSE stream ended without any data events",
         )
 
     if event_data.get("type") == "error":
-        raise errors.GatewayInvalidRequestError(
+        raise client_errors.GatewayInvalidRequestError(
             message=event_data.get("message", "unknown error"),
             status_code=event_data.get("statusCode", 400),
         )
@@ -620,12 +630,14 @@ async def _generate_video(
 
 
 async def generate(
-    client: core.client.Client,
     model: core.model.Model,
     messages: list[types.messages.Message],
     params: core.GenerateParams,
 ) -> types.messages.Message:
     """Generate media through the AI Gateway."""
-    if isinstance(params, core.VideoParams):
-        return await _generate_video(client, model, messages, params)
-    return await _generate_image(client, model, messages, params)
+    try:
+        if isinstance(params, core.VideoParams):
+            return await _generate_video(model, messages, params)
+        return await _generate_image(model, messages, params)
+    except client_errors.GatewayError as exc:
+        raise errors.map_error(exc) from exc
