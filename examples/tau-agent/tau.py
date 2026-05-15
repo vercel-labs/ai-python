@@ -107,13 +107,22 @@ async def _run_turn(app: TauApp) -> None:
     # One assistant bubble per turn for streamed text; tool calls
     # get their own bubbles below.
     text_bubble: Bubble | None = None
+    thinking_bubble: Bubble | None = None
     tool_bubbles: dict[str, Bubble] = {}
     interrupted = False
     async with app.agent.run(app.model, app.messages, params=STREAM_PARAMS) as stream:
         try:
             async for event in stream:
                 following = app.transcript.at_bottom
-                if isinstance(event, ai.events.TextDelta):
+                if isinstance(event, ai.events.ReasoningDelta):
+                    if thinking_bubble is None:
+                        thinking_bubble = app.transcript.add_bubble(
+                            "thinking", auto_scroll=False
+                        )
+                    thinking_bubble.append(event.chunk)
+                elif isinstance(event, ai.events.ReasoningEnd):
+                    thinking_bubble = None
+                elif isinstance(event, ai.events.TextDelta):
                     if text_bubble is None:
                         text_bubble = app.transcript.add_bubble(
                             "assistant", auto_scroll=False
@@ -221,6 +230,10 @@ class Bubble(textual.widgets.Static):
     }
     Bubble.tool {
         color: $text-muted;
+    }
+    Bubble.thinking {
+        color: $text-muted;
+        text-style: dim italic;
     }
     """
 
