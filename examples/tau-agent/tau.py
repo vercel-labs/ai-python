@@ -42,9 +42,12 @@ import tools as tools_
 _raw_model = os.environ.get("TAU_MODEL", "gateway:anthropic/claude-opus-4.6")
 MODEL_ID = _raw_model if ":" in _raw_model else f"gateway:{_raw_model}"
 
-STREAM_PARAMS: dict[str, Any] = {
-    "providerOptions": {"gateway": {"caching": "auto"}},
-}
+# Only send gateway-specific options when routing through the gateway.
+STREAM_PARAMS: dict[str, Any] | None = (
+    {"providerOptions": {"gateway": {"caching": "auto"}}}
+    if MODEL_ID.startswith("gateway:")
+    else None
+)
 
 _ADVERTISE = os.environ.get("TAU_ADVERTISE", "") == "1"
 
