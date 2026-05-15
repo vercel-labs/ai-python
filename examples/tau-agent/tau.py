@@ -96,7 +96,7 @@ async def chat_loop(app: TauApp) -> None:
             app.transcript.add_bubble("system", "interrupted")
             raise
         except Exception as exc:  # noqa: BLE001 — surface in the UI
-            app.transcript.add_bubble("system", f"error: {exc}")
+            app.transcript.add_bubble("system", f"error: {_flatten_error(exc)}")
 
 
 async def _run_turn(app: TauApp) -> None:
@@ -151,6 +151,17 @@ async def _run_turn(app: TauApp) -> None:
         app._refresh_usage()
     if interrupted:
         raise asyncio.CancelledError
+
+
+def _flatten_error(exc: BaseException) -> str:
+    """Unwrap ExceptionGroups and chained exceptions into a readable string."""
+    if isinstance(exc, ExceptionGroup):
+        parts = [_flatten_error(e) for e in exc.exceptions]
+        return "; ".join(parts)
+    msg = str(exc)
+    if exc.__cause__ is not None:
+        msg += f" (caused by {_flatten_error(exc.__cause__)})"
+    return f"{type(exc).__name__}: {msg}" if msg else type(exc).__name__
 
 
 def _format_tool_call(name: str, raw_args: str) -> str:
