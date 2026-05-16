@@ -1,0 +1,23 @@
+[project]
+name = "tau-agent"
+version = "0.1.0"
+description = "Tau — a coding-agent chat bot demo built with the ai library and Textual"
+requires-python = ">=3.12"
+dependencies = [
+    "vercel-ai-sdk",
+    "textual>=3.0",
+]
+
+[tool.uv.sources]
+vercel-ai-sdk = { path = "../..", editable = true }
+
+[tool.ruff]
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.15.12",
+]
