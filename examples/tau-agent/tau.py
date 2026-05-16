@@ -146,14 +146,8 @@ async def _run_turn(app: TauApp) -> None:
                     text_bubble = None
                 elif isinstance(event, ai.events.ToolCallResult):
                     for part in event.results:
-                        tb: Bubble | None = tool_bubbles.get(part.tool_call_id)
-                        if tb is None:
-                            tb = app.transcript.add_bubble(
-                                "tool",
-                                f"→ {part.tool_name}(?)",
-                                auto_scroll=False,
-                            )
-                        tb.append(_format_tool_result(part.result, part.is_error))
+                        preview = _format_tool_result(part.result, part.is_error)
+                        app.transcript.add_bubble("tool", preview, auto_scroll=False)
                 elif isinstance(event, ai.events.HookEvent):
                     app.on_hook_event(event.hook)
                 if following:
@@ -191,7 +185,13 @@ def _format_tool_call(name: str, raw_args: str) -> str:
 
 
 def _short_value(v: Any) -> str:
-    s = json.dumps(v, ensure_ascii=False) if not isinstance(v, str) else repr(v)
+    if isinstance(v, str):
+        s = repr(v)
+    else:
+        try:
+            s = json.dumps(v, ensure_ascii=False)
+        except TypeError:
+            s = repr(v)
     if len(s) > 80:
         s = s[:77] + "…"
     return s
