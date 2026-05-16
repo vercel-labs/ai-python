@@ -44,7 +44,12 @@ MODEL_ID = _raw_model if ":" in _raw_model else f"gateway:{_raw_model}"
 
 # Only send gateway-specific options when routing through the gateway.
 STREAM_PARAMS: dict[str, Any] | None = (
-    {"providerOptions": {"gateway": {"caching": "auto"}}}
+    {
+        "providerOptions": {
+            "gateway": {"caching": "auto"},
+            "anthropic": {"thinking": {"type": "enabled", "budget_tokens": 10000}},
+        }
+    }
     if MODEL_ID.startswith("gateway:")
     else None
 )
