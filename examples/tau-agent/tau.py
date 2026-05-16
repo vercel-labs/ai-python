@@ -121,24 +121,19 @@ async def _run_turn(app: TauApp) -> None:
                 following = app.transcript.at_bottom
                 if isinstance(event, ai.events.ReasoningDelta):
                     if thinking_bubble is None:
-                        thinking_bubble = app.transcript.add_bubble(
-                            "thinking", auto_scroll=False
-                        )
+                        thinking_bubble = app.transcript.add_bubble("thinking")
                     thinking_bubble.append(event.chunk)
                 elif isinstance(event, ai.events.ReasoningEnd):
                     thinking_bubble = None
                 elif isinstance(event, ai.events.TextDelta):
                     if text_bubble is None:
-                        text_bubble = app.transcript.add_bubble(
-                            "assistant", auto_scroll=False
-                        )
+                        text_bubble = app.transcript.add_bubble("assistant")
                     text_bubble.append(event.chunk)
                 elif isinstance(event, ai.events.ToolEnd):
                     tc = event.tool_call
                     bubble = app.transcript.add_bubble(
                         "tool",
                         _format_tool_call(tc.tool_name, tc.tool_args),
-                        auto_scroll=False,
                     )
                     tool_bubbles[tc.tool_call_id] = bubble
                     # The next text chunk should start a fresh bubble
@@ -147,7 +142,7 @@ async def _run_turn(app: TauApp) -> None:
                 elif isinstance(event, ai.events.ToolCallResult):
                     for part in event.results:
                         preview = _format_tool_result(part.result, part.is_error)
-                        app.transcript.add_bubble("tool", preview, auto_scroll=False)
+                        app.transcript.add_bubble("tool", preview)
                 elif isinstance(event, ai.events.HookEvent):
                     app.on_hook_event(event.hook)
                 if following:
@@ -275,7 +270,7 @@ class Transcript(textual.containers.VerticalScroll):
     """
 
     def add_bubble(
-        self, role: str, text: str = "", *, auto_scroll: bool = True
+        self, role: str, text: str = "", *, auto_scroll: bool = False
     ) -> Bubble:
         bubble = Bubble(role, text)
         self.mount(bubble)
@@ -604,6 +599,7 @@ class TauApp(textual.app.App[None]):
             self._restore_session(self._resume_path)
         else:
             self._start_new_session()
+        self.transcript.scroll_end(animate=False)
         self.query_one("#composer", Composer).focus()
 
     # ------------------------------------------------------------------
@@ -709,7 +705,7 @@ class TauApp(textual.app.App[None]):
         if not text:
             return
 
-        self.transcript.add_bubble("user", text)
+        self.transcript.add_bubble("user", text, auto_scroll=True)
         # All submissions enter the queue; ``run_turn`` is the sole
         # consumer.  The user bubble shows up immediately so the message
         # feels sent even when it won't reach the model until the
