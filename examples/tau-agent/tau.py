@@ -205,6 +205,101 @@ def _format_tool_result(result: Any, is_error: bool) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Approval tracking
+# ---------------------------------------------------------------------------
+
+# Tools grouped by category for approval purposes.
+_READ_TOOLS = frozenset({"read", "grep", "find", "ls"})
+_WRITE_TOOLS = frozenset({"write", "edit"})
+_FILE_TOOLS = _READ_TOOLS | _WRITE_TOOLS
+
+
+def _tool_path(hook: ai.messages.HookPart[Any]) -> pathlib.Path | None:
+    """Extract and resolve the path argument from a file-tool hook."""
+    kwargs = hook.metadata.get("kwargs", {}) or {}
+    raw = kwargs.get("path")
+    if raw is None:
+        return None
+    return pathlib.Path(raw).expanduser().resolve()
+
+
+class ApprovalTracker:
+    """Session-scoped approval state for tool hooks.
+
+    Tracks "always approve" decisions so subsequent identical commands
+    (or all commands) can be auto-resolved without prompting.
+
+    File I/O tools are auto-approved when the target path is under the
+    working directory.  Paths outside cwd require a prompt; one of the
+    options is to permanently allow a directory for reads or writes.
+    """
+
+    def __init__(self) -> None:
+        self._cwd = pathlib.Path.cwd().resolve()
+        self._approve_all = False
+        self._approved_commands: set[str] = set()
+        # Extra directory trees approved per category.
+        self._approved_read_dirs: set[pathlib.Path] = set()
+        self._approved_write_dirs: set[pathlib.Path] = set()
+
+    def _path_ok(self, tool: str, path: pathlib.Path | None) -> bool:
+        """Check if *path* is in an approved directory for *tool*."""
+        if path is None:
+            # Tools like grep/find/ls default to cwd when path is None.
+            return True
+        # Always allow anything under cwd.
+        try:
+            path.relative_to(self._cwd)
+            return True
+        except ValueError:
+            pass
+        # Check extra approved dirs.
+        dirs = (
+            self._approved_read_dirs
+            if tool in _READ_TOOLS
+            else self._approved_write_dirs
+        )
+        return any(path == d or d in path.parents for d in dirs)
+
+    def check(self, hook: ai.messages.HookPart[Any]) -> bool | None:
+        """Return True to auto-approve, False to auto-deny, None to prompt."""
+        if self._approve_all:
+            return True
+        tool = hook.metadata.get("tool", "")
+        kwargs = hook.metadata.get("kwargs", {}) or {}
+        if tool in _FILE_TOOLS:
+            return True if self._path_ok(tool, _tool_path(hook)) else None
+        if tool == "bash":
+            cmd = kwargs.get("command", "")
+            if cmd in self._approved_commands:
+                return True
+        return None
+
+    def approve_command(self, hook: ai.messages.HookPart[Any]) -> None:
+        """Remember to always approve this exact bash command."""
+        kwargs = hook.metadata.get("kwargs", {}) or {}
+        cmd = kwargs.get("command", "")
+        if cmd:
+            self._approved_commands.add(cmd)
+
+    def approve_directory(self, hook: ai.messages.HookPart[Any]) -> None:
+        """Allow all future operations in this path's directory."""
+        tool = hook.metadata.get("tool", "")
+        path = _tool_path(hook)
+        if path is None:
+            return
+        directory = path if path.is_dir() else path.parent
+        if tool in _READ_TOOLS:
+            self._approved_read_dirs.add(directory)
+        elif tool in _WRITE_TOOLS:
+            self._approved_write_dirs.add(directory)
+
+    def approve_all(self) -> None:
+        """Auto-approve every future tool call this session."""
+        self._approve_all = True
+
+
+# ---------------------------------------------------------------------------
 # Widgets
 # ---------------------------------------------------------------------------
 
@@ -335,97 +430,6 @@ class Composer(textual.widgets.TextArea):
         # the rounded border (box-sizing is border-box by default).
         n = max(self.MIN_LINES, min(self.MAX_LINES, self.wrapped_document.height))
         self.styles.height = n + 2
-
-
-# Tools grouped by category for approval purposes.
-_READ_TOOLS = frozenset({"read", "grep", "find", "ls"})
-_WRITE_TOOLS = frozenset({"write", "edit"})
-_FILE_TOOLS = _READ_TOOLS | _WRITE_TOOLS
-
-
-def _tool_path(hook: ai.messages.HookPart[Any]) -> pathlib.Path | None:
-    """Extract and resolve the path argument from a file-tool hook."""
-    kwargs = hook.metadata.get("kwargs", {}) or {}
-    raw = kwargs.get("path")
-    if raw is None:
-        return None
-    return pathlib.Path(raw).expanduser().resolve()
-
-
-class ApprovalTracker:
-    """Session-scoped approval state for tool hooks.
-
-    Tracks "always approve" decisions so subsequent identical commands
-    (or all commands) can be auto-resolved without prompting.
-
-    File I/O tools are auto-approved when the target path is under the
-    working directory.  Paths outside cwd require a prompt; one of the
-    options is to permanently allow a directory for reads or writes.
-    """
-
-    def __init__(self) -> None:
-        self._cwd = pathlib.Path.cwd().resolve()
-        self._approve_all = False
-        self._approved_commands: set[str] = set()
-        # Extra directory trees approved per category.
-        self._approved_read_dirs: set[pathlib.Path] = set()
-        self._approved_write_dirs: set[pathlib.Path] = set()
-
-    def _path_ok(self, tool: str, path: pathlib.Path | None) -> bool:
-        """Check if *path* is in an approved directory for *tool*."""
-        if path is None:
-            # Tools like grep/find/ls default to cwd when path is None.
-            return True
-        # Always allow anything under cwd.
-        try:
-            path.relative_to(self._cwd)
-            return True
-        except ValueError:
-            pass
-        # Check extra approved dirs.
-        dirs = (
-            self._approved_read_dirs
-            if tool in _READ_TOOLS
-            else self._approved_write_dirs
-        )
-        return any(path == d or d in path.parents for d in dirs)
-
-    def check(self, hook: ai.messages.HookPart[Any]) -> bool | None:
-        """Return True to auto-approve, False to auto-deny, None to prompt."""
-        if self._approve_all:
-            return True
-        tool = hook.metadata.get("tool", "")
-        kwargs = hook.metadata.get("kwargs", {}) or {}
-        if tool in _FILE_TOOLS:
-            return True if self._path_ok(tool, _tool_path(hook)) else None
-        if tool == "bash":
-            cmd = kwargs.get("command", "")
-            if cmd in self._approved_commands:
-                return True
-        return None
-
-    def approve_command(self, hook: ai.messages.HookPart[Any]) -> None:
-        """Remember to always approve this exact bash command."""
-        kwargs = hook.metadata.get("kwargs", {}) or {}
-        cmd = kwargs.get("command", "")
-        if cmd:
-            self._approved_commands.add(cmd)
-
-    def approve_directory(self, hook: ai.messages.HookPart[Any]) -> None:
-        """Allow all future operations in this path's directory."""
-        tool = hook.metadata.get("tool", "")
-        path = _tool_path(hook)
-        if path is None:
-            return
-        directory = path if path.is_dir() else path.parent
-        if tool in _READ_TOOLS:
-            self._approved_read_dirs.add(directory)
-        elif tool in _WRITE_TOOLS:
-            self._approved_write_dirs.add(directory)
-
-    def approve_all(self) -> None:
-        """Auto-approve every future tool call this session."""
-        self._approve_all = True
 
 
 class HookPrompt(textual.widgets.Static):
