@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import contextlib
 import dataclasses
+import importlib
 from typing import Any
 
 import mcp.types
+import pytest
 
 import ai
 from ai.agents.mcp.client import _mcp_tool_to_native
@@ -73,6 +75,24 @@ def test_mcp_tool_to_native_schema_preserved() -> None:
 
     assert _function_args(native).params == mcp_tool.inputSchema
     assert _function_args(native).description == "Echo input"
+
+
+async def test_get_http_tools_raises_installation_error_without_mcp(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real_import_module = importlib.import_module
+
+    def fake_import_module(name: str, package: str | None = None) -> Any:
+        if name == "mcp.client.streamable_http":
+            raise ModuleNotFoundError("No module named 'mcp'", name="mcp")
+        return real_import_module(name, package)
+
+    monkeypatch.setattr(importlib, "import_module", fake_import_module)
+
+    with pytest.raises(ai.InstallationError) as exc_info:
+        await ai.mcp.get_http_tools("https://mcp.example.com/mcp")
+
+    assert "ai[mcp]" in str(exc_info.value)
 
 
 # -- End-to-end: MCP tool executes through Agent default loop ---------------

@@ -4,8 +4,9 @@ import asyncio
 import contextlib
 import contextvars
 import dataclasses
+import importlib
 import json
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Callable
@@ -13,7 +14,7 @@ if TYPE_CHECKING:
     import mcp.client.session
     import mcp.types
 
-from ... import types
+from ... import errors, types
 from ..agent import AgentTool, Tool
 
 __all__ = [
@@ -39,6 +40,21 @@ _pool: contextvars.ContextVar[dict[str, _Connection] | None] = (
 _pool_lock = asyncio.Lock()
 
 
+def _import_mcp_module(module_name: str) -> Any:
+    """Import an MCP module or raise the public optional dependency error."""
+    try:
+        return importlib.import_module(module_name)
+    except ModuleNotFoundError as exc:
+        root_module = module_name.partition(".")[0]
+        if exc.name not in {module_name, root_module}:
+            raise
+        raise errors.InstallationError(
+            "could not import `mcp`, which is required to use MCP tools, "
+            'you can install it with `pip install "ai[mcp]"` or '
+            '`uv add "ai[mcp]"`'
+        ) from exc
+
+
 @contextlib.asynccontextmanager
 async def ensure_connection_pool() -> AsyncIterator[dict[str, _Connection]]:
     pool = orig_pool = _pool.get()
@@ -60,7 +76,10 @@ async def _get_or_create_connection(
     ],
 ) -> mcp.client.session.ClientSession:
     """Get an existing connection or create a new one."""
-    import mcp.client.session as _mcp_session  # noqa: PLC0415
+    mcp_session = _import_mcp_module("mcp.client.session")
+    client_session = cast(
+        "type[mcp.client.session.ClientSession]", mcp_session.ClientSession
+    )
 
     pool = _pool.get()
 
@@ -80,7 +99,7 @@ async def _get_or_create_connection(
             streams = await exit_stack.enter_async_context(transport_factory())
             read_stream, write_stream = streams[0], streams[1]
 
-            client = _mcp_session.ClientSession(
+            client = client_session(
                 read_stream=read_stream,
                 write_stream=write_stream,
             )
@@ -105,7 +124,10 @@ def _make_tool_fn(
     """Create a tool function that manages its own connection."""
 
     async def call_tool(**kwargs: Any) -> Any:
-        import mcp.types as _mcp_types  # noqa: PLC0415
+        mcp_types = _import_mcp_module("mcp.types")
+        text_content = cast(
+            "type[mcp.types.TextContent]", mcp_types.TextContent
+        )
 
         client = await _get_or_create_connection(
             connection_key, transport_factory
@@ -124,7 +146,7 @@ def _make_tool_fn(
             error_text = " ".join(
                 part.text
                 for part in result.content
-                if isinstance(part, _mcp_types.TextContent)
+                if isinstance(part, text_content)
             )
             raise RuntimeError(
                 f"MCP tool error: {error_text or 'Unknown error'}"
@@ -134,7 +156,7 @@ def _make_tool_fn(
             return result.structuredContent
 
         for part in result.content:
-            if isinstance(part, _mcp_types.TextContent):
+            if isinstance(part, text_content):
                 text = part.text
                 if text.startswith(("{", "[")):
                     try:
@@ -177,18 +199,21 @@ async def get_stdio_tools(
         )
 
     """
-    import mcp.client.stdio as _mcp_stdio  # noqa: PLC0415
+    mcp_stdio = _import_mcp_module("mcp.client.stdio")
 
     connection_key = f"stdio:{command}:{':'.join(args)}"
 
     def transport_factory() -> contextlib.AbstractAsyncContextManager[Any]:
-        return _mcp_stdio.stdio_client(
-            _mcp_stdio.StdioServerParameters(
-                command=command,
-                args=list(args),
-                env=env,
-                cwd=cwd,
-            )
+        return cast(
+            "contextlib.AbstractAsyncContextManager[Any]",
+            mcp_stdio.stdio_client(
+                mcp_stdio.StdioServerParameters(
+                    command=command,
+                    args=list(args),
+                    env=env,
+                    cwd=cwd,
+                )
+            ),
         )
 
     client = await _get_or_create_connection(connection_key, transport_factory)
@@ -230,14 +255,16 @@ async def get_http_tools(
 
     """
     import httpx as _httpx  # noqa: PLC0415
-    import mcp.client.streamable_http as _mcp_http  # noqa: PLC0415
+
+    mcp_http = _import_mcp_module("mcp.client.streamable_http")
 
     connection_key = f"http:{url}"
 
     def transport_factory() -> contextlib.AbstractAsyncContextManager[Any]:
         http_client = _httpx.AsyncClient(headers=headers) if headers else None
-        return _mcp_http.streamable_http_client(
-            url=url, http_client=http_client
+        return cast(
+            "contextlib.AbstractAsyncContextManager[Any]",
+            mcp_http.streamable_http_client(url=url, http_client=http_client),
         )
 
     async with ensure_connection_pool():

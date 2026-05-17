@@ -29,7 +29,6 @@ classifiers = [
 requires-python = ">=3.12"
 dependencies = [
     "httpx>=0.28.1",
-    "mcp>=1.18.0",
     "modelsdotdev==0.*",
     "pydantic>=2.12.5",
     "typing-extensions>=4.15.0",
@@ -37,6 +36,7 @@ dependencies = [
 
 [project.optional-dependencies]
 anthropic = ["anthropic>=0.83.0"]
+mcp = ["mcp>=1.18.0"]
 openai = ["openai>=2.14.0"]
 
 [build-system]
@@ -54,6 +54,7 @@ bump = true
 [dependency-groups]
 dev = [
     "anthropic>=0.83.0",
+    "mcp>=1.18.0",
     "python-dotenv>=1.2.1",
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
