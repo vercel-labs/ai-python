@@ -54,6 +54,25 @@ usage = stream.usage
 Use `stream.message` when you need to append the assistant turn to your own
 history. Use `stream.text` when you only need the final text.
 
+## Enforce usage budgets
+
+After the stream finishes, `stream.usage` contains the latest normalized token
+usage reported by the provider. You can compare it with your own per-user,
+per-tenant, or per-workflow budget before allowing the next model call:
+
+```python
+MAX_TOKENS = 2_000
+
+async with ai.stream(model, messages) as stream:
+    async for event in stream:
+        if isinstance(event, ai.events.TextDelta):
+            print(event.chunk, end="", flush=True)
+
+usage = stream.usage
+if usage is not None and usage.total_tokens > MAX_TOKENS:
+    raise RuntimeError(f"Token budget exceeded: {usage.total_tokens}")
+```
+
 ## Use structured output
 
 Pass a Pydantic model as `output_type` when you want the final text parsed as

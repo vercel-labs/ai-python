@@ -84,6 +84,11 @@ if event.usage is not None:
     print(event.usage)
 ```
 
+Use the final `stream.usage` value for application-level spending controls,
+such as token budgets, tenant quotas, or workflow limits. Providers may omit
+usage, so treat a missing value as an explicit policy decision in your
+application.
+
 ## Replay streams
 
 When the last message has `replay=True`, `ai.stream` does not call the provider.
