@@ -28,7 +28,7 @@ uv sync
 ## Running
 
 ```bash
-uv run python tau.py
+uv run tau
 ```
 
 Type a message, hit enter.  `ctrl+c` to quit.

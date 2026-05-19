@@ -7,10 +7,10 @@ a new assistant bubble.
 Sessions are persisted to ``.tau/sessions/`` as JSONL files and can be
 resumed:
 
-    uv run python tau.py                # new session
-    uv run python tau.py --resume       # resume most recent session
-    uv run python tau.py --session ID   # resume a specific session
-    uv run python tau.py --list         # list saved sessions
+    python -m tau                       # new session
+    python -m tau --resume              # resume most recent session
+    python -m tau --session ID          # resume a specific session
+    python -m tau --list                # list saved sessions
 """
 
 from __future__ import annotations
@@ -36,8 +36,7 @@ import textual.message
 import textual.widgets
 import textual.worker
 
-import session as session_
-import tools as tools_
+from tau import session, tools
 
 _raw_model = os.environ.get("TAU_MODEL", "gateway:anthropic/claude-opus-4.6")
 MODEL_ID = _raw_model if ":" in _raw_model else f"gateway:{_raw_model}"
@@ -566,7 +565,7 @@ class TauApp(textual.app.App[None]):
     ) -> None:
         super().__init__()
         self.model = ai.get_model(MODEL_ID)
-        self.agent = ai.agent(tools=tools_.TOOLS)
+        self.agent = ai.agent(tools=tools.TOOLS)
         # The full conversation, including the system prompt.  We mutate
         # this in place so the agent always sees the entire history.
         self.messages: list[ai.messages.Message] = [ai.system_message(SYSTEM_PROMPT)]
@@ -611,10 +610,10 @@ class TauApp(textual.app.App[None]):
     # ------------------------------------------------------------------
 
     def _start_new_session(self) -> None:
-        self._session_id = session_.new_session_id()
-        self._session_path = session_.create_session(self._session_id, MODEL_ID)
+        self._session_id = session.new_session_id()
+        self._session_path = session.create_session(self._session_id, MODEL_ID)
         # Persist the system message.
-        self._saved_count = session_.append_messages(
+        self._saved_count = session.append_messages(
             self._session_path, self.messages, after=0
         )
         self.transcript.add_bubble(
@@ -623,7 +622,7 @@ class TauApp(textual.app.App[None]):
         )
 
     def _restore_session(self, path: pathlib.Path) -> None:
-        meta, messages = session_.load_messages(path)
+        meta, messages = session.load_messages(path)
         self._session_id = meta.get("session_id", path.stem)
         self._session_path = path
         if messages:
@@ -655,7 +654,7 @@ class TauApp(textual.app.App[None]):
         """Append any new messages to the session JSONL file."""
         if self._session_path is None:
             return
-        self._saved_count = session_.append_messages(
+        self._saved_count = session.append_messages(
             self._session_path, self.messages, after=self._saved_count
         )
 
@@ -861,7 +860,7 @@ def _parse_args() -> argparse.Namespace:
 
 
 def _print_sessions() -> None:
-    sessions = session_.list_sessions()
+    sessions = session.list_sessions()
     if not sessions:
         print("No saved sessions.")
         return
@@ -874,7 +873,7 @@ def _print_sessions() -> None:
         print(f"{sid:<20} {model:<35} {cwd}")
 
 
-if __name__ == "__main__":
+def main() -> None:
     args = _parse_args()
 
     if args.list:
@@ -884,14 +883,18 @@ if __name__ == "__main__":
     resume_path: pathlib.Path | None = None
 
     if args.resume:
-        resume_path = session_.resolve_session(None)
+        resume_path = session.resolve_session(None)
         if resume_path is None:
             print("No sessions to resume.", file=sys.stderr)
             sys.exit(1)
     elif args.session:
-        resume_path = session_.resolve_session(args.session)
+        resume_path = session.resolve_session(args.session)
         if resume_path is None:
             print(f"Session not found: {args.session}", file=sys.stderr)
             sys.exit(1)
 
     TauApp(resume_path=resume_path).run()
+
+
+if __name__ == "__main__":
+    main()
