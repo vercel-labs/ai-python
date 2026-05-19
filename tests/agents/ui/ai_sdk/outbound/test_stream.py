@@ -22,6 +22,27 @@ async def _collect(
     return [part async for part in to_stream(_gen(stream_events))]
 
 
+async def test_stream_start_uses_runtime_message_id() -> None:
+    assistant = messages_.Message(
+        id="assistant-runtime-id",
+        role="assistant",
+        parts=[messages_.TextPart(id="text-1", text="hello")],
+    )
+
+    out = await _collect(
+        [
+            events_.TextStart(block_id="text-1", message=assistant),
+            events_.TextDelta(
+                block_id="text-1", chunk="hello", message=assistant
+            ),
+            events_.TextEnd(block_id="text-1", message=assistant),
+        ]
+    )
+
+    start = next(part for part in out if isinstance(part, protocol.StartPart))
+    assert start.message_id == "assistant-runtime-id"
+
+
 async def test_event_driven_text_streaming() -> None:
     """Streaming text events lazily open a UI message."""
     text_id = "txt1"

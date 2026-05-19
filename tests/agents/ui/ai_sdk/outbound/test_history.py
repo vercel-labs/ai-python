@@ -1,11 +1,116 @@
 from __future__ import annotations
 
+from collections import Counter
+
+from ai.agents.ui import ai_sdk
 from ai.agents.ui.ai_sdk import to_ui_messages
 from ai.agents.ui.ai_sdk.ui_message import (
     UITextPart,
     UIToolPart,
 )
+from ai.types import integrity
 from ai.types import messages as messages_
+
+
+def _parallel_tool_turn(
+    *,
+    turn_id: str,
+    assistant_prefix: str | None = None,
+    tool_call_ids: tuple[str, str] = ("tc-bash", "tc-web"),
+) -> list[messages_.Message]:
+    prefix = assistant_prefix or turn_id
+    tc_bash, tc_web = tool_call_ids
+
+    return [
+        messages_.Message(
+            id=f"{prefix}:assistant:0",
+            turn_id=turn_id,
+            role="assistant",
+            parts=[
+                messages_.TextPart(
+                    id=f"{prefix}:text:0",
+                    text="I will run two tools.",
+                ),
+                messages_.ToolCallPart(
+                    id=f"{prefix}:call:bash",
+                    tool_call_id=tc_bash,
+                    tool_name="bash",
+                    tool_args='{"command":"date"}',
+                ),
+                messages_.ToolCallPart(
+                    id=f"{prefix}:call:web",
+                    tool_call_id=tc_web,
+                    tool_name="web_fetch",
+                    tool_args='{"url":"https://httpbin.org/get"}',
+                ),
+            ],
+        ),
+        messages_.Message(
+            id=f"{prefix}:tool:0",
+            turn_id=turn_id,
+            role="tool",
+            parts=[
+                messages_.ToolResultPart(
+                    id=f"{prefix}:result:bash",
+                    tool_call_id=tc_bash,
+                    tool_name="bash",
+                    result="Tue May 19 2026",
+                ),
+                messages_.ToolResultPart(
+                    id=f"{prefix}:result:web",
+                    tool_call_id=tc_web,
+                    tool_name="web_fetch",
+                    result={"status": 200},
+                ),
+            ],
+        ),
+        messages_.Message(
+            id=f"{prefix}:assistant:1",
+            turn_id=turn_id,
+            role="assistant",
+            parts=[
+                messages_.TextPart(
+                    id=f"{prefix}:text:1",
+                    text="Both tools finished.",
+                ),
+            ],
+        ),
+    ]
+
+
+def _tool_counts(
+    messages: list[messages_.Message],
+) -> Counter[tuple[str, str]]:
+    counts: Counter[tuple[str, str]] = Counter()
+    for message in messages:
+        for part in message.parts:
+            if isinstance(part, messages_.ToolCallPart):
+                counts["tool_call", part.tool_call_id] += 1
+            elif isinstance(part, messages_.ToolResultPart):
+                counts["tool_result", part.tool_call_id] += 1
+    return counts
+
+
+class IdUpsertStore:
+    """Small app-like store: persist full history by message id."""
+
+    def __init__(self) -> None:
+        self._rows: list[messages_.Message] = []
+
+    def save_full_history(self, messages: list[messages_.Message]) -> None:
+        for message in messages:
+            if message.role == "system":
+                continue
+
+            for index, existing in enumerate(self._rows):
+                if existing.id == message.id:
+                    self._rows[index] = message
+                    break
+            else:
+                self._rows.append(message)
+
+    def load(self) -> list[messages_.Message]:
+        return list(self._rows)
 
 
 def test_to_ui_messages_user_and_assistant() -> None:
@@ -128,3 +233,57 @@ def test_to_ui_messages_uses_first_assistant_id_as_bubble_id() -> None:
     result = to_ui_messages(msgs)
     assert len(result) == 1
     assert result[0].id == "a1"
+
+
+def test_common_id_upsert_persistence_is_idempotent_after_reload() -> None:
+    store = IdUpsertStore()
+
+    first_run = [
+        messages_.Message(
+            id="user-1",
+            role="user",
+            parts=[messages_.TextPart(id="user-1:text", text="run two tools")],
+        ),
+        *_parallel_tool_turn(turn_id="turn-1"),
+    ]
+    store.save_full_history(first_run)
+
+    reloaded_ui = ai_sdk.to_ui_messages(store.load())
+    request_history, _ = ai_sdk.to_messages(reloaded_ui)
+
+    second_run_result = [
+        *request_history,
+        messages_.Message(
+            id="user-2",
+            role="user",
+            parts=[messages_.TextPart(id="user-2:text", text="do nothing")],
+        ),
+        messages_.Message(
+            id="turn-2:assistant:0",
+            turn_id="turn-2",
+            role="assistant",
+            parts=[messages_.TextPart(id="turn-2:text:0", text="standing by")],
+        ),
+    ]
+    store.save_full_history(second_run_result)
+
+    loaded = store.load()
+    integrity.prepare_messages(loaded)
+
+    counts = _tool_counts(loaded)
+    assert counts["tool_call", "tc-bash"] == 1
+    assert counts["tool_result", "tc-bash"] == 1
+    assert counts["tool_call", "tc-web"] == 1
+    assert counts["tool_result", "tc-web"] == 1
+
+
+def test_duplicate_tool_copies_do_not_reach_model_integrity() -> None:
+    history = [
+        *_parallel_tool_turn(turn_id="turn-1", assistant_prefix="server"),
+        *_parallel_tool_turn(turn_id="turn-1", assistant_prefix="client"),
+    ]
+
+    reloaded_ui = ai_sdk.to_ui_messages(history)
+    next_request_history, _ = ai_sdk.to_messages(reloaded_ui)
+
+    integrity.prepare_messages(next_request_history)

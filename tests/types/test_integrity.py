@@ -57,6 +57,56 @@ def _tool_result(
     )
 
 
+def _parallel_tool_turn(
+    *,
+    turn_id: str,
+    assistant_prefix: str,
+    tool_call_ids: tuple[str, str] = ("tc-bash", "tc-web"),
+) -> list[messages.Message]:
+    tc_bash, tc_web = tool_call_ids
+
+    return [
+        messages.Message(
+            id=f"{assistant_prefix}:assistant:0",
+            turn_id=turn_id,
+            role="assistant",
+            parts=[
+                messages.ToolCallPart(
+                    id=f"{assistant_prefix}:call:bash",
+                    tool_call_id=tc_bash,
+                    tool_name="bash",
+                    tool_args='{"command":"date"}',
+                ),
+                messages.ToolCallPart(
+                    id=f"{assistant_prefix}:call:web",
+                    tool_call_id=tc_web,
+                    tool_name="web_fetch",
+                    tool_args='{"url":"https://httpbin.org/get"}',
+                ),
+            ],
+        ),
+        messages.Message(
+            id=f"{assistant_prefix}:tool:0",
+            turn_id=turn_id,
+            role="tool",
+            parts=[
+                messages.ToolResultPart(
+                    id=f"{assistant_prefix}:result:bash",
+                    tool_call_id=tc_bash,
+                    tool_name="bash",
+                    result="Tue May 19 2026",
+                ),
+                messages.ToolResultPart(
+                    id=f"{assistant_prefix}:result:web",
+                    tool_call_id=tc_web,
+                    tool_name="web_fetch",
+                    result={"status": 200},
+                ),
+            ],
+        ),
+    ]
+
+
 def _assert_raises_issue(
     msgs: list[messages.Message],
     issue: str,
@@ -476,6 +526,23 @@ def test_duplicate_tool_results_within_same_message_raises() -> None:
     with pytest.raises(IntegrityError) as exc_info:
         prepare_messages(msgs)
     assert "duplicate-tool-result" in exc_info.value.issues
+
+
+def test_integrity_error_includes_tool_ids_and_message_locations() -> None:
+    bad_history = [
+        *_parallel_tool_turn(turn_id="turn-1", assistant_prefix="server"),
+        *_parallel_tool_turn(turn_id="turn-1", assistant_prefix="client"),
+    ]
+
+    with pytest.raises(IntegrityError) as exc_info:
+        prepare_messages(bad_history)
+
+    error = exc_info.value
+    assert "duplicate-tool-call" in str(error)
+    assert "duplicate-tool-result" in str(error)
+    assert "tc-bash" in str(error)
+    assert "server:assistant:0" in str(error)
+    assert "client:assistant:0" in str(error)
 
 
 # ---------------------------------------------------------------------------
