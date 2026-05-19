@@ -76,6 +76,76 @@ When writing or suggesting commit messages, always include a trailer line:
 RESULT_PREVIEW_CHARS = 400
 
 
+# ---------------------------------------------------------------------------
+# Session manager
+# ---------------------------------------------------------------------------
+
+
+class SessionManager:
+    """Owns the message list, session file, and usage bookkeeping.
+
+    Pure data — no UI.  The app reads ``.messages``, ``.session_id``,
+    ``.total_usage``, and ``.last_usage`` to drive the display.
+    """
+
+    def __init__(self, system_prompt: str) -> None:
+        self.messages: list[ai.messages.Message] = [
+            ai.system_message(system_prompt)
+        ]
+        self.session_id: str = ""
+        self.total_usage: ai.types.usage.Usage = ai.types.usage.Usage()
+        self.last_usage: ai.types.usage.Usage | None = None
+        self._session_path: pathlib.Path | None = None
+        self._saved_count: int = 0  # messages already written to disk
+
+    # -- lifecycle ---------------------------------------------------------
+
+    def start(self, model_id: str) -> None:
+        """Create a new session file and persist the system message."""
+        self.session_id = session.new_session_id()
+        self._session_path = session.create_session(self.session_id, model_id)
+        self._saved_count = session.append_messages(
+            self._session_path, self.messages, after=0
+        )
+
+    def restore(self, path: pathlib.Path) -> dict[str, Any]:
+        """Load an existing session from *path*.
+
+        Returns the metadata dict.  Populates ``.messages`` and
+        ``.session_id``; call ``refresh_usage()`` afterwards.
+        """
+        meta, messages = session.load_messages(path)
+        self.session_id = meta.get("session_id", path.stem)
+        self._session_path = path
+        if messages:
+            self.messages = messages
+        self._saved_count = len(self.messages)  # already on disk
+        return meta
+
+    # -- persistence -------------------------------------------------------
+
+    def save(self) -> None:
+        """Append any new messages to the session JSONL file."""
+        if self._session_path is None:
+            return
+        self._saved_count = session.append_messages(
+            self._session_path, self.messages, after=self._saved_count
+        )
+
+    # -- usage -------------------------------------------------------------
+
+    def refresh_usage(self) -> None:
+        """Re-derive cumulative usage from all messages."""
+        total = ai.types.usage.Usage()
+        last: ai.types.usage.Usage | None = None
+        for msg in self.messages:
+            if msg.usage is not None:
+                total = total + msg.usage
+                last = msg.usage
+        self.total_usage = total
+        self.last_usage = last
+
+
 # ===========================================================================
 # Agent loop — the only place that touches the `ai` library.
 #
@@ -88,15 +158,15 @@ RESULT_PREVIEW_CHARS = 400
 async def chat_loop(app: TauApp) -> None:
     """Drain the pending queue, running one agent turn per queued message.
 
-    Reads from ``app.pending`` and ``app.messages``; writes streamed
-    text into a fresh assistant bubble on ``app.transcript``.  All
-    interaction with the ``ai`` library lives here.
+    Reads from ``app.pending`` and ``app.session.messages``; writes
+    streamed text into a fresh assistant bubble on ``app.transcript``.
+    All interaction with the ``ai`` library lives here.
     """
     while app.pending:
         # Pop one queued message into history per turn so the model sees
         # a clean user → assistant → user → … sequence.
-        app.messages.append(ai.user_message(app.pending.pop(0)))
-        app._save_messages()
+        app.session.messages.append(ai.user_message(app.pending.pop(0)))
+        app.session.save()
         try:
             await _run_turn(app)
         except asyncio.CancelledError:
@@ -114,7 +184,7 @@ async def _run_turn(app: TauApp) -> None:
     thinking_bubble: Bubble | None = None
     tool_bubbles: dict[str, Bubble] = {}
     interrupted = False
-    async with app.agent.run(app.model, app.messages, params=STREAM_PARAMS) as stream:
+    async with app.agent.run(app.model, app.session.messages, params=STREAM_PARAMS) as stream:
         try:
             async for event in stream:
                 following = app.transcript.at_bottom
@@ -151,9 +221,10 @@ async def _run_turn(app: TauApp) -> None:
         # Persist whatever the agent added (assistant + tool turns)
         # so the next turn sees the full history.  On interruption we
         # still save the partial state so context isn't lost.
-        app.messages = list(stream.messages)
-        app._save_messages()
-        app._refresh_usage()
+        app.session.messages = list(stream.messages)
+        app.session.save()
+        app.session.refresh_usage()
+        app._update_usage_display()
     if interrupted:
         raise asyncio.CancelledError
 
@@ -555,7 +626,7 @@ class TauApp(textual.app.App[None]):
     # function is meant to be readable next to the app.
     model: ai.Model
     agent: ai.Agent
-    messages: list[ai.messages.Message]
+    session: SessionManager
     pending: list[str]
 
     def __init__(
@@ -566,9 +637,7 @@ class TauApp(textual.app.App[None]):
         super().__init__()
         self.model = ai.get_model(MODEL_ID)
         self.agent = ai.agent(tools=tools.TOOLS)
-        # The full conversation, including the system prompt.  We mutate
-        # this in place so the agent always sees the entire history.
-        self.messages: list[ai.messages.Message] = [ai.system_message(SYSTEM_PROMPT)]
+        self.session = SessionManager(SYSTEM_PROMPT)
         # User messages typed while a turn is streaming.  Drained one at
         # a time at the end of each turn so user/assistant alternation
         # stays clean.
@@ -581,14 +650,7 @@ class TauApp(textual.app.App[None]):
         self._active_hook: ai.messages.HookPart[Any] | None = None
         self._approval = ApprovalTracker()
         self._turn_worker: textual.worker.Worker[None] | None = None
-
-        # Session history — every message is persisted to a JSONL file.
         self._resume_path = resume_path
-        self._session_id: str = ""
-        self._session_path: pathlib.Path | None = None
-        self._saved_count: int = 0  # messages already written to disk
-        self._total_usage: ai.types.usage.Usage = ai.types.usage.Usage()
-        self._last_usage: ai.types.usage.Usage | None = None
 
     def compose(self) -> textual.app.ComposeResult:
         yield Transcript(id="transcript")
@@ -610,26 +672,16 @@ class TauApp(textual.app.App[None]):
     # ------------------------------------------------------------------
 
     def _start_new_session(self) -> None:
-        self._session_id = session.new_session_id()
-        self._session_path = session.create_session(self._session_id, MODEL_ID)
-        # Persist the system message.
-        self._saved_count = session.append_messages(
-            self._session_path, self.messages, after=0
-        )
+        self.session.start(MODEL_ID)
         self.transcript.add_bubble(
             "system",
-            f"connected — model: {MODEL_ID}  session: {self._session_id}",
+            f"connected — model: {MODEL_ID}  session: {self.session.session_id}",
         )
 
     def _restore_session(self, path: pathlib.Path) -> None:
-        meta, messages = session.load_messages(path)
-        self._session_id = meta.get("session_id", path.stem)
-        self._session_path = path
-        if messages:
-            self.messages = messages
-        self._saved_count = len(self.messages)  # already on disk
+        self.session.restore(path)
         # Replay conversation into transcript bubbles.
-        for msg in self.messages:
+        for msg in self.session.messages:
             if msg.role == "system":
                 continue  # don't clutter the UI with the system prompt
             if msg.role == "user":
@@ -645,40 +697,21 @@ class TauApp(textual.app.App[None]):
                         self.transcript.add_bubble("tool", preview)
         self.transcript.add_bubble(
             "system",
-            f"resumed session {self._session_id} "
-            f"({len(self.messages) - 1} messages) — model: {MODEL_ID}",
+            f"resumed session {self.session.session_id} "
+            f"({len(self.session.messages) - 1} messages) — model: {MODEL_ID}",
         )
-        self._refresh_usage()
-
-    def _save_messages(self) -> None:
-        """Append any new messages to the session JSONL file."""
-        if self._session_path is None:
-            return
-        self._saved_count = session.append_messages(
-            self._session_path, self.messages, after=self._saved_count
-        )
-
-    def _refresh_usage(self) -> None:
-        """Re-derive cumulative usage from all messages."""
-        total = ai.types.usage.Usage()
-        last_usage: ai.types.usage.Usage | None = None
-        for msg in self.messages:
-            if msg.usage is not None:
-                total = total + msg.usage
-                last_usage = msg.usage
-        self._total_usage = total
-        self._last_usage = last_usage
+        self.session.refresh_usage()
         self._update_usage_display()
 
     def _update_usage_display(self) -> None:
         """Show cumulative token usage in the footer bar."""
-        u = self._total_usage
+        u = self.session.total_usage
         if u.total_tokens == 0:
             return
         parts: list[str] = []
         # Approximate current context size: last turn's in + out.
-        if self._last_usage is not None:
-            ctx = self._last_usage.input_tokens + self._last_usage.output_tokens
+        if self.session.last_usage is not None:
+            ctx = self.session.last_usage.input_tokens + self.session.last_usage.output_tokens
             parts.append(f"ctx: ~{ctx:,}")
         # input_tokens includes cache-read; subtract to show uncached.
         uncached_in = u.input_tokens - (u.cache_read_tokens or 0)
