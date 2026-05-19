@@ -1,7 +1,3 @@
-<<<<<<< HEAD
-.tau/
-||||||| parent of 9884d0a ([tau] Add session history with persist/resume support)
-=======
 # Python
 __pycache__/
 *.py[cod]
@@ -15,4 +11,3 @@ dist/
 
 # Tau session history
 .tau/
->>>>>>> 9884d0a ([tau] Add session history with persist/resume support)
