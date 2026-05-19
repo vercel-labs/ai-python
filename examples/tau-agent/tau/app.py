@@ -146,13 +146,9 @@ class SessionManager:
         self.last_usage = last
 
 
-# ===========================================================================
-# Agent loop — the only place that touches the `ai` library.
-#
-# Everything below this function is plain Textual widgets and app plumbing.
-# Read this function to understand what tau does; read the rest to
-# understand how the TUI renders it.
-# ===========================================================================
+# ---------------------------------------------------------------------------
+# Agent loop
+# ---------------------------------------------------------------------------
 
 
 async def chat_loop(app: TauApp) -> None:
