@@ -1,7 +1,7 @@
 """Model metadata types."""
 
 import os
-from typing import Any
+from typing import Any, Self
 
 from ... import _modelsdev
 from ...errors import ConfigurationError
@@ -42,6 +42,13 @@ class Model:
 
     def __hash__(self) -> int:
         return hash((self.id, id(self.provider), id(self.protocol)))
+
+    def with_protocol(self, protocol: base.ProviderProtocol[Any]) -> Self:
+        return self.__class__(
+            id=self.id,
+            provider=self.provider,
+            protocol=protocol,
+        )
 
 
 def get_model(

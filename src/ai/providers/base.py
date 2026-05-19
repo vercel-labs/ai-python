@@ -213,10 +213,9 @@ class Provider(Generic[ClientT]):
         tools: Sequence[tools_.Tool] | None = None,
         output_type: type[pydantic.BaseModel] | None = None,
         params: Any = None,
-        protocol: ProviderProtocol[Any] | None = None,
     ) -> AsyncGenerator[events.Event]:
         """Stream a language-model response from this provider."""
-        selected_protocol = protocol or model.protocol or self.protocol
+        selected_protocol = model.protocol or self.protocol
         return selected_protocol.stream(
             self.client,
             model,
@@ -232,11 +231,9 @@ class Provider(Generic[ClientT]):
         model: model_.Model,
         messages: list[messages_.Message],
         params: params_.GenerateParams,
-        *,
-        protocol: ProviderProtocol[Any] | None = None,
     ) -> messages_.Message:
         """Generate a non-streaming response from this provider."""
-        selected_protocol = protocol or model.protocol or self.protocol
+        selected_protocol = model.protocol or self.protocol
         return await selected_protocol.generate(
             self.client,
             model,

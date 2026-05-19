@@ -46,10 +46,9 @@ class MockProvider(models.Provider):
         tools: Sequence[ai.tools.Tool] | None = None,
         output_type: type[pydantic.BaseModel] | None = None,
         params: Any = None,
-        protocol: models.ProviderProtocol[Any] | None = None,
     ) -> AsyncGenerator[events_.Event]:
-        if protocol is not None:
-            return protocol.stream(
+        if model.protocol is not None:
+            return model.protocol.stream(
                 None,
                 model,
                 messages,
@@ -78,11 +77,9 @@ class MockProvider(models.Provider):
         model: models.Model,
         messages: list[messages_.Message],
         params: Any,
-        *,
-        protocol: models.ProviderProtocol[Any] | None = None,
     ) -> messages_.Message:
-        if protocol is not None:
-            return await protocol.generate(
+        if model.protocol is not None:
+            return await model.protocol.generate(
                 None,
                 model,
                 messages,

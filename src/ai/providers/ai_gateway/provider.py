@@ -85,7 +85,6 @@ class GatewayProvider(base.Provider[gateway_client.GatewayClient]):
         tools: Sequence[tools_.Tool] | None = None,
         output_type: type[pydantic.BaseModel] | None = None,
         params: Any = None,
-        protocol: base.ProviderProtocol[Any] | None = None,
     ) -> AsyncGenerator[events.Event]:
         """Stream via the AI Gateway v3 protocol."""
         return super().stream(
@@ -94,7 +93,6 @@ class GatewayProvider(base.Provider[gateway_client.GatewayClient]):
             tools=tools,
             output_type=output_type,
             params=params,
-            protocol=protocol,
         )
 
     async def generate(
@@ -102,13 +100,9 @@ class GatewayProvider(base.Provider[gateway_client.GatewayClient]):
         model: model_.Model,
         messages: list[messages_.Message],
         params: params_.GenerateParams,
-        *,
-        protocol: base.ProviderProtocol[Any] | None = None,
     ) -> messages_.Message:
         """Generate media via the AI Gateway v3 protocol."""
-        return await super().generate(
-            model, messages, params, protocol=protocol
-        )
+        return await super().generate(model, messages, params)
 
     @classmethod
     def from_modelsdev_provider(

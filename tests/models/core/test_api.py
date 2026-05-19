@@ -247,7 +247,7 @@ async def test_stream_requires_model_messages_or_context() -> None:
             pass
 
 
-async def test_stream_accepts_protocol_kwarg() -> None:
+async def test_stream_uses_model_protocol() -> None:
     class OverrideProtocol(models.ProviderProtocol[Any]):
         def stream(
             self,
@@ -272,9 +272,8 @@ async def test_stream_accepts_protocol_kwarg() -> None:
             return _stream()
 
     async with models.stream(
-        MOCK_MODEL,
+        MOCK_MODEL.with_protocol(OverrideProtocol()),
         [ai.user_message("Hi")],
-        protocol=OverrideProtocol(),
     ) as stream:
         async for _ in stream:
             pass
@@ -315,7 +314,7 @@ async def test_generate_dispatches_to_provider() -> None:
     assert result is sentinel
 
 
-async def test_generate_accepts_protocol_kwarg() -> None:
+async def test_generate_uses_model_protocol() -> None:
     sentinel = messages_.Message(
         role="assistant",
         parts=[messages_.FilePart(data=b"\x89PNG", media_type="image/png")],
@@ -335,10 +334,9 @@ async def test_generate_accepts_protocol_kwarg() -> None:
             return sentinel
 
     result = await models.generate(
-        MOCK_MODEL,
+        MOCK_MODEL.with_protocol(OverrideProtocol()),
         [ai.user_message("A cat")],
         models.ImageParams(n=1),
-        protocol=OverrideProtocol(),
     )
 
     assert result is sentinel

@@ -135,7 +135,6 @@ class OpenAICompatibleProvider(base.Provider[OpenAISDKClient]):
         tools: Sequence[tools_.Tool] | None = None,
         output_type: type[pydantic.BaseModel] | None = None,
         params: Any = None,
-        protocol: base.ProviderProtocol[Any] | None = None,
     ) -> AsyncGenerator[events.Event]:
         """Stream via this provider's configured OpenAI-compatible protocol."""
         return super().stream(
@@ -144,7 +143,6 @@ class OpenAICompatibleProvider(base.Provider[OpenAISDKClient]):
             tools=tools,
             output_type=output_type,
             params=params,
-            protocol=protocol,
         )
 
     @classmethod
