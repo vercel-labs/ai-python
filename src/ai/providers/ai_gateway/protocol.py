@@ -6,25 +6,51 @@ responses back to public event/message types.
 
 import base64
 import json
-from collections.abc import AsyncGenerator, Mapping, Sequence
-from typing import Any
+from collections.abc import AsyncGenerator, Iterable, Mapping, Sequence
+from typing import Any, TypeVar
 
 import httpx
 import pydantic
 
 from ... import types
 from ...models import core
+from ...models.core import params as params_
 from .. import base
 from ..anthropic import tools as anthropic_tools
 from ..openai import tools as openai_tools
 from . import client as gateway_client
 from . import errors
+from . import params as gateway_params
 from . import tools as gateway_tools
 from .client import errors as client_errors
 
 # ---------------------------------------------------------------------------
 # Shared request helpers
 # ---------------------------------------------------------------------------
+
+
+_ProviderParamsT = TypeVar("_ProviderParamsT")
+
+
+def _provider_params_value(
+    value: Mapping[type[Any], Any] | None,
+    params_type: type[_ProviderParamsT],
+    *,
+    provider: str,
+) -> _ProviderParamsT | None:
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise TypeError(f"{provider} provider_params must be a mapping")
+    provider_params = value.get(params_type)
+    if provider_params is None:
+        return None
+    if not isinstance(provider_params, params_type):
+        raise TypeError(
+            f"{provider} provider_params[{params_type.__name__}] "
+            f"must be {params_type.__name__}"
+        )
+    return provider_params
 
 
 def _extract_prompt(messages: list[types.messages.Message]) -> str:
@@ -248,11 +274,10 @@ async def _build_request_body(
     messages: list[types.messages.Message],
     tools: Sequence[types.tools.Tool] | None = None,
     output_type: type[Any] | None = None,
-    params: Any = None,
+    params: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the ``LanguageModelV3CallOptions`` request body."""
-    stream_params = _coerce_params(params)
-    body: dict[str, Any] = dict(stream_params)
+    body: dict[str, Any] = dict(params or {})
     body["prompt"] = await _messages_to_prompt(messages)
     if tools:
         body["tools"] = [_tool_to_v3(tool) for tool in tools]
@@ -265,12 +290,423 @@ async def _build_request_body(
     return body
 
 
-def _coerce_params(value: Any) -> dict[str, Any]:
+def _is_default(value: object) -> bool:
+    return isinstance(value, params_.ModelProviderDefault)
+
+
+def _not_default(value: object) -> bool:
+    return not _is_default(value)
+
+
+def _seed_value(seed: object) -> int | None:
+    if seed is None or seed == -1 or isinstance(seed, params_.RandomSeed):
+        return None
+    if isinstance(seed, int):
+        return seed
+    if isinstance(seed, params_.ModelProviderDefault):
+        return None
+    raise TypeError("seed must be an int, RANDOM, DEFAULT, or None")
+
+
+def _filter_extra_headers(
+    headers: Mapping[str, str | params_.Unset] | None,
+) -> dict[str, str] | None:
+    if headers is None:
+        return None
+    return {
+        key: value
+        for key, value in headers.items()
+        if not isinstance(value, params_.Unset)
+    }
+
+
+def _provider_from_model_id(model_id: str) -> str | None:
+    provider, sep, _ = model_id.partition("/")
+    return provider if sep else None
+
+
+def _body_provider_options(
+    body: dict[str, Any], provider: str
+) -> dict[str, Any]:
+    provider_options = body.setdefault("providerOptions", {})
+    if not isinstance(provider_options, dict):
+        raise TypeError("providerOptions must be a dict")
+    options = provider_options.setdefault(provider, {})
+    if not isinstance(options, dict):
+        raise TypeError(f"providerOptions.{provider} must be a dict")
+    return options
+
+
+def _sequence(value: Iterable[str] | None) -> list[str] | None:
     if value is None:
-        return {}
-    if isinstance(value, Mapping):
-        return dict(value)
-    raise TypeError("ai-gateway stream params must be a dict")
+        return None
+    return list(value)
+
+
+def _target_to_inference_region(
+    target: params_.RoutingTarget,
+) -> dict[str, str]:
+    if target is params_.GLOBAL:
+        return {"scope": "global"}
+    if isinstance(target, params_.GeoRegion):
+        return {"geoRegion": str(target)}
+    return {"providerRegion": str(target)}
+
+
+def _apply_provider_target(
+    body: dict[str, Any],
+    *,
+    provider: str | None,
+    target: params_.RoutingTarget,
+) -> None:
+    target_provider = provider or "gateway"
+    options = _body_provider_options(body, target_provider)
+    target_value = "global" if target is params_.GLOBAL else str(target)
+    if target_provider == "anthropic" and isinstance(target, params_.GeoRegion):
+        options["inferenceGeo"] = target_value
+    else:
+        options["region"] = target_value
+
+
+def _routing_to_gateway_options(
+    routing: params_.RoutingParams,
+) -> dict[str, Any]:
+    options: dict[str, Any] = {}
+    for key, value in {
+        "only": sorted(routing.provider_allowlist)
+        if routing.provider_allowlist is not None
+        else None,
+        "order": _sequence(routing.provider_order),
+        "sort": routing.provider_ranking,
+        "models": _sequence(routing.fallback_models),
+    }.items():
+        if value is not None:
+            options[key] = value
+
+    if routing.routing_target is not None:
+        target = routing.routing_target
+        gateway_target = (
+            target.gateway
+            if isinstance(target, params_.RoutingTargetChain)
+            else target
+        )
+        options["inferenceRegion"] = _target_to_inference_region(gateway_target)
+
+    return options
+
+
+def _apply_gateway_routing(
+    body: dict[str, Any],
+    routing: params_.RoutingParams | None,
+    *,
+    provider: str | None,
+) -> None:
+    if routing is None:
+        return
+    _body_provider_options(body, "gateway").update(
+        _routing_to_gateway_options(routing)
+    )
+    if isinstance(routing.routing_target, params_.RoutingTargetChain):
+        _apply_provider_target(
+            body,
+            provider=provider,
+            target=routing.routing_target.provider,
+        )
+
+
+def _apply_gateway_params(
+    body: dict[str, Any], value: gateway_params.GatewayParams | None
+) -> None:
+    if value is None:
+        return
+    options = _body_provider_options(body, "gateway")
+    for key, option in {
+        "quotaEntityId": value.quota_entity_id,
+        "zeroDataRetention": value.zero_data_retention,
+        "hipaaCompliant": value.hipaa_compliant,
+        "disallowPromptTraining": value.disallow_prompt_training,
+    }.items():
+        if option is not None:
+            options[key] = option
+
+    if value.byok is not None:
+        options["byok"] = {
+            provider: [dict(credential) for credential in credentials]
+            for provider, credentials in value.byok.items()
+        }
+
+    if value.provider_timeouts is not None:
+        provider_timeouts: dict[str, Any] = {}
+        if value.provider_timeouts.byok is not None:
+            provider_timeouts["byok"] = dict(value.provider_timeouts.byok)
+        if provider_timeouts:
+            options["providerTimeouts"] = provider_timeouts
+
+
+def _merge_extra_body(
+    body: dict[str, Any], extra_body: Mapping[str, Any]
+) -> None:
+    extra = dict(extra_body)
+    provider_options = extra.pop("providerOptions", None)
+    body.update(extra)
+    if provider_options is None:
+        return
+    if not isinstance(provider_options, Mapping):
+        raise TypeError("extra_body.providerOptions must be a mapping")
+    existing = body.setdefault("providerOptions", {})
+    if not isinstance(existing, dict):
+        raise TypeError("providerOptions must be a dict")
+    for provider, options in provider_options.items():
+        if not isinstance(provider, str):
+            raise TypeError("providerOptions keys must be strings")
+        if not isinstance(options, Mapping):
+            raise TypeError(f"providerOptions.{provider} must be a mapping")
+        current = existing.setdefault(provider, {})
+        if not isinstance(current, dict):
+            raise TypeError(f"providerOptions.{provider} must be a dict")
+        current.update(options)
+
+
+def _gateway_tool_choice(
+    tool_choice: params_.ToolChoiceMode
+    | params_.ToolRef
+    | params_.ToolSelection,
+    body: dict[str, Any],
+) -> str | dict[str, str]:
+    if isinstance(tool_choice, params_.ToolChoiceMode):
+        return tool_choice.value
+    if isinstance(tool_choice, params_.ToolRef):
+        return {"type": "tool", "toolName": str(tool_choice)}
+    body["activeTools"] = sorted(str(tool) for tool in tool_choice.tools)
+    return tool_choice.mode.value
+
+
+def _apply_gateway_reasoning(
+    body: dict[str, Any],
+    request_params: params_.InferenceRequestParams,
+    *,
+    provider: str | None,
+) -> None:
+    reasoning = request_params.reasoning
+    output = request_params.output
+    effort: str | params_.ModelProviderDefault | None = params_.DEFAULT
+    if not isinstance(reasoning, params_.ModelProviderDefault):
+        effort = reasoning.effort
+    summary = params_.DEFAULT if output is None else output.reasoning_summary
+    if _is_default(effort) and _is_default(summary):
+        return
+    if provider == "openai":
+        options = _body_provider_options(body, "openai")
+        if _not_default(effort):
+            options["reasoningEffort"] = effort
+        if _not_default(summary):
+            options["reasoningSummary"] = summary
+        return
+    if provider == "anthropic":
+        options = _body_provider_options(body, "anthropic")
+        if _not_default(effort):
+            if effort is None:
+                options["thinking"] = {"type": "disabled"}
+            else:
+                options["effort"] = effort
+        if _not_default(summary):
+            if summary is None:
+                options["thinking"] = {"type": "disabled"}
+            else:
+                thinking = dict(options.get("thinking") or {})
+                thinking.setdefault("type", "adaptive")
+                thinking["display"] = summary
+                options["thinking"] = thinking
+        return
+    body["reasoning"] = {
+        key: value
+        for key, value in {
+            "effort": effort,
+            "summary": summary,
+        }.items()
+        if _not_default(value)
+    }
+
+
+def _apply_gateway_context_management(
+    body: dict[str, Any],
+    request_params: params_.InferenceRequestParams,
+    *,
+    provider: str | None,
+) -> None:
+    context_management = request_params.context_management
+    if context_management is None or context_management.compaction is None:
+        return
+    threshold = context_management.compaction.value
+    if provider == "openai":
+        _body_provider_options(body, "openai")["contextManagement"] = [
+            {"type": "compaction", "compactThreshold": threshold}
+        ]
+        return
+    if provider == "anthropic":
+        _body_provider_options(body, "anthropic")["contextManagement"] = {
+            "edits": [
+                {
+                    "type": "compact_20260112",
+                    "trigger": {"type": "input_tokens", "value": threshold},
+                }
+            ]
+        }
+        return
+    raise ValueError(
+        "AI Gateway context management requires an OpenAI or Anthropic model"
+    )
+
+
+def _apply_gateway_sampling(
+    body: dict[str, Any],
+    request_params: params_.InferenceRequestParams,
+) -> None:
+    sampling = request_params.sampling
+    if isinstance(sampling, params_.ModelProviderDefault):
+        return
+    for sampler in sampling.values():
+        match sampler:
+            case params_.TemperatureSamplerParams(temperature=temperature):
+                if _not_default(temperature):
+                    body["temperature"] = temperature
+            case params_.TopPSamplerParams(top_p=top_p):
+                if _not_default(top_p):
+                    body["topP"] = top_p
+            case params_.SeedSamplerParams(seed=seed):
+                if _not_default(seed):
+                    value = _seed_value(seed)
+                    if value is not None:
+                        body["seed"] = value
+            case params_.TopKSamplerParams(top_k=top_k):
+                if _not_default(top_k):
+                    body["topK"] = top_k
+            case params_.MinPSamplerParams(min_p=min_p):
+                if _not_default(min_p) and min_p is not None:
+                    raise ValueError("AI Gateway does not support min_p")
+            case params_.RepetitionPenaltyParams() as repetition:
+                if _not_default(repetition.frequency_penalty):
+                    body["frequencyPenalty"] = repetition.frequency_penalty
+                if _not_default(repetition.presence_penalty):
+                    body["presencePenalty"] = repetition.presence_penalty
+                if (
+                    _not_default(repetition.repetition_penalty)
+                    and repetition.repetition_penalty is not None
+                ):
+                    raise ValueError(
+                        "AI Gateway does not support repetition_penalty"
+                    )
+                if (
+                    _not_default(repetition.consideration_window)
+                    and repetition.consideration_window is not None
+                ):
+                    raise ValueError(
+                        "AI Gateway does not support consideration_window"
+                    )
+
+
+def _gateway_request_options(
+    value: params_.InferenceRequestParams | None,
+    *,
+    model_id: str,
+) -> tuple[dict[str, Any], dict[str, str] | None, dict[str, Any] | None]:
+    if value is None:
+        return {}, None, None
+    if not isinstance(value, params_.InferenceRequestParams):
+        raise TypeError(
+            "ai-gateway stream params must be InferenceRequestParams"
+        )
+
+    body: dict[str, Any] = {}
+    provider = _provider_from_model_id(model_id)
+    _apply_gateway_routing(body, value.routing, provider=provider)
+    _apply_gateway_params(
+        body,
+        _provider_params_value(
+            value.provider_params,
+            gateway_params.GatewayParams,
+            provider="ai-gateway",
+        ),
+    )
+    _apply_gateway_sampling(body, value)
+    _apply_gateway_reasoning(body, value, provider=provider)
+    _apply_gateway_context_management(body, value, provider=provider)
+
+    if value.tool_calling is not None:
+        tool_calling = value.tool_calling
+        if _not_default(tool_calling.max_tool_calls):
+            body["maxToolCalls"] = tool_calling.max_tool_calls
+        if _not_default(tool_calling.parallel_tool_calls):
+            body["parallelToolCalls"] = tool_calling.parallel_tool_calls
+        body["toolChoice"] = _gateway_tool_choice(
+            tool_calling.tool_choice,
+            body,
+        )
+
+    if value.provider_service is not None:
+        service = value.provider_service
+        target_provider = provider or "gateway"
+        options = _body_provider_options(body, target_provider)
+        if _not_default(service.service_tier):
+            options["serviceTier"] = service.service_tier
+
+    if value.safety_identifier is not None:
+        _body_provider_options(body, "gateway")["user"] = (
+            value.safety_identifier
+        )
+
+    if value.metadata is not None:
+        body["metadata"] = dict(value.metadata)
+        if provider in {"openai", "anthropic"}:
+            _body_provider_options(body, provider)["metadata"] = dict(
+                value.metadata
+            )
+
+    if value.tags is not None:
+        _body_provider_options(body, "gateway")["tags"] = sorted(value.tags)
+
+    if value.output is not None:
+        output = value.output
+        if output.max_tokens is not None:
+            body["maxOutputTokens"] = output.max_tokens
+        if output.include is not None:
+            if provider == "openai":
+                _body_provider_options(body, "openai")["include"] = sorted(
+                    output.include
+                )
+            else:
+                body["include"] = sorted(output.include)
+        if (
+            _not_default(output.text_verbosity)
+            and output.text_verbosity is not None
+        ):
+            raise ValueError("AI Gateway does not support text verbosity")
+
+    if value.cache is not None:
+        cache = value.cache
+        if _not_default(cache.mode):
+            _body_provider_options(body, "gateway")["caching"] = cache.mode
+        if provider == "openai":
+            options = _body_provider_options(body, "openai")
+            if cache.key is not None:
+                options["promptCacheKey"] = cache.key
+            if _not_default(cache.retention):
+                options["promptCacheRetention"] = cache.retention
+        elif _not_default(cache.retention) or cache.key is not None:
+            options = _body_provider_options(body, "gateway")
+            if cache.key is not None:
+                options["cacheKey"] = cache.key
+            if _not_default(cache.retention):
+                options["cacheRetention"] = cache.retention
+
+    if value.extra_body is not None:
+        _merge_extra_body(body, value.extra_body)
+
+    return (
+        body,
+        _filter_extra_headers(value.extra_headers),
+        dict(value.extra_query) if value.extra_query is not None else None,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -506,10 +942,13 @@ async def stream(
     *,
     tools: Sequence[types.tools.Tool] | None = None,
     output_type: type[pydantic.BaseModel] | None = None,
-    params: Any = None,
+    params: params_.InferenceRequestParams | None = None,
 ) -> AsyncGenerator[types.events.Event]:
     """Stream an LLM response through the AI Gateway v3 protocol."""
-    stream_params = _coerce_params(params)
+    stream_params, extra_headers, extra_query = _gateway_request_options(
+        params,
+        model_id=model.id,
+    )
     body = await _build_request_body(
         messages,
         tools=tools,
@@ -524,6 +963,8 @@ async def stream(
             model=model,
             model_type="language",
             streaming=True,
+            headers=extra_headers,
+            query=extra_query,
         ) as response:
             yield types.events.StreamStart()
             streamed_tool_ids: set[str] = set()
@@ -684,7 +1125,7 @@ class GatewayV3Protocol(base.ProviderProtocol[gateway_client.GatewayClient]):
         *,
         tools: Sequence[types.tools.Tool] | None = None,
         output_type: type[pydantic.BaseModel] | None = None,
-        params: Any = None,
+        params: params_.InferenceRequestParams | None = None,
         provider: str,
     ) -> AsyncGenerator[types.events.Event]:
         _ = provider

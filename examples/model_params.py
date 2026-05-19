@@ -13,12 +13,12 @@ messages = [
 
 
 async def main() -> None:
-    params = {
-        "providerOptions": {
-            "gateway": {"sort": "cost"},
-            "anthropic": {"speed": "fast"},
-        }
-    }
+    params = ai.InferenceRequestParams(
+        routing=ai.RoutingParams(
+            provider_ranking=ai.ProviderRankingStrategy.COST
+        ),
+        extra_body={"providerOptions": {"anthropic": {"speed": "fast"}}},
+    )
     async with ai.stream(model, messages, params=params) as stream:
         async for event in stream:
             if isinstance(event, ai.events.TextDelta):

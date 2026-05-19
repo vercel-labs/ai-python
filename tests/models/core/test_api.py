@@ -33,6 +33,30 @@ def _provider_metadata_marker(
     return marker
 
 
+def test_inference_request_params_with_provider_params() -> None:
+    class GatewayParams:
+        pass
+
+    class OpenAIParams:
+        pass
+
+    original_gateway = GatewayParams()
+    replacement_gateway = GatewayParams()
+    openai = OpenAIParams()
+
+    base = ai.InferenceRequestParams(
+        provider_params={GatewayParams: original_gateway}
+    )
+    updated = base.with_provider_params(replacement_gateway, openai)
+
+    assert base.provider_params == {GatewayParams: original_gateway}
+    assert updated is not base
+    assert updated.provider_params == {
+        GatewayParams: replacement_gateway,
+        OpenAIParams: openai,
+    }
+
+
 async def test_stream_aggregates_registered_adapter_events() -> None:
     mock = mock_llm([[text_msg("Hello world")]])
 
@@ -193,7 +217,7 @@ async def test_stream_forwards_output_type_and_request_params() -> None:
 
     MOCK_PROVIDER._stream_impl = _spy_stream
 
-    params = {"raw": "ok"}
+    params = models.InferenceRequestParams(extra_body={"raw": "ok"})
     async with models.stream(
         MOCK_MODEL,
         [ai.user_message("Hi")],
@@ -257,7 +281,7 @@ async def test_stream_uses_model_protocol() -> None:
             *,
             tools: Sequence[ai.tools.Tool] | None = None,
             output_type: type[pydantic.BaseModel] | None = None,
-            params: Any = None,
+            params: models.InferenceRequestParams | None = None,
             provider: str,
         ) -> AsyncGenerator[events_.Event]:
             _ = client, model, messages, tools, output_type, params, provider
@@ -296,7 +320,7 @@ async def test_generate_dispatches_to_provider() -> None:
     async def _generate(
         model: models.Model,
         messages: list[messages_.Message],
-        params: Any = None,
+        params: models.GenerateParams,
     ) -> messages_.Message:
         nonlocal called
         called = True

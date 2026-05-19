@@ -630,7 +630,7 @@ async def test_generate_sanitizes_internal_messages() -> None:
     async def _spy_gen(
         model: models.Model,
         messages: list[messages.Message],
-        params: Any,
+        params: models.GenerateParams,
     ) -> messages.Message:
         received.append(list(messages))
         return sentinel

@@ -8,18 +8,20 @@ from __future__ import annotations
 
 import base64
 import json
-from collections.abc import AsyncGenerator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, cast
 
 import pydantic
 
 from ... import types
+from ...models.core import params as params_
 from ...types import events
 from .. import base
 from . import _sdk, errors
 from . import tools as anthropic_tools
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator, Mapping, Sequence
+
     import anthropic
 
     from ...models import core
@@ -342,12 +344,246 @@ def _to_content_list(content: Any) -> list[dict[str, Any]]:
     return [{"type": "text", "text": content}]
 
 
-def _coerce_params(value: Any) -> dict[str, Any]:
+def _is_default(value: object) -> bool:
+    return isinstance(value, params_.ModelProviderDefault)
+
+
+def _not_default(value: object) -> bool:
+    return not _is_default(value)
+
+
+def _seed_value(seed: object) -> int | None:
+    if seed is None or seed == -1 or isinstance(seed, params_.RandomSeed):
+        return None
+    if isinstance(seed, int):
+        return seed
+    if isinstance(seed, params_.ModelProviderDefault):
+        return None
+    raise TypeError("seed must be an int, RANDOM, DEFAULT, or None")
+
+
+def _filter_extra_headers(
+    headers: Mapping[str, str | params_.Unset] | None,
+) -> dict[str, str] | None:
+    if headers is None:
+        return None
+    return {
+        key: value
+        for key, value in headers.items()
+        if not isinstance(value, params_.Unset)
+    }
+
+
+def _extra_body(api_kwargs: dict[str, Any]) -> dict[str, Any]:
+    extra_body = api_kwargs.get("extra_body")
+    if not isinstance(extra_body, dict):
+        extra_body = {}
+        api_kwargs["extra_body"] = extra_body
+    return extra_body
+
+
+def _apply_output_config(
+    api_kwargs: dict[str, Any],
+    values: Mapping[str, Any],
+) -> None:
+    output_config = dict(api_kwargs.get("output_config") or {})
+    output_config.update(values)
+    api_kwargs["output_config"] = output_config
+
+
+def _anthropic_tool_choice(
+    tool_choice: params_.ToolChoiceMode
+    | params_.ToolRef
+    | params_.ToolSelection,
+) -> dict[str, Any]:
+    if isinstance(tool_choice, params_.ToolChoiceMode):
+        match tool_choice:
+            case params_.ToolChoiceMode.AUTO:
+                return {"type": "auto"}
+            case params_.ToolChoiceMode.REQUIRED:
+                return {"type": "any"}
+            case params_.ToolChoiceMode.NONE:
+                return {"type": "none"}
+    if isinstance(tool_choice, params_.ToolRef):
+        return {"type": "tool", "name": str(tool_choice)}
+    if len(tool_choice.tools) == 1 and tool_choice.mode in {
+        params_.ToolChoiceMode.AUTO,
+        params_.ToolChoiceMode.REQUIRED,
+    }:
+        return {"type": "tool", "name": str(next(iter(tool_choice.tools)))}
+    raise ValueError("Anthropic does not support allowed tool subsets")
+
+
+def _apply_sampling(
+    api_kwargs: dict[str, Any],
+    request_params: params_.InferenceRequestParams,
+) -> None:
+    sampling = request_params.sampling
+    if isinstance(sampling, params_.ModelProviderDefault):
+        return
+    for sampler in sampling.values():
+        match sampler:
+            case params_.TemperatureSamplerParams(temperature=temperature):
+                if _not_default(temperature):
+                    api_kwargs["temperature"] = temperature
+            case params_.TopPSamplerParams(top_p=top_p):
+                if _not_default(top_p):
+                    api_kwargs["top_p"] = top_p
+            case params_.TopKSamplerParams(top_k=top_k):
+                if _not_default(top_k):
+                    if top_k is None:
+                        raise ValueError("Anthropic top_k cannot be None")
+                    api_kwargs["top_k"] = top_k
+            case params_.SeedSamplerParams(seed=seed):
+                if _not_default(seed) and _seed_value(seed) is not None:
+                    raise ValueError("Anthropic does not support seed")
+            case params_.MinPSamplerParams(min_p=min_p):
+                if _not_default(min_p) and min_p is not None:
+                    raise ValueError("Anthropic does not support min_p")
+            case params_.RepetitionPenaltyParams() as repetition:
+                unsupported = {
+                    "repetition_penalty": repetition.repetition_penalty,
+                    "frequency_penalty": repetition.frequency_penalty,
+                    "presence_penalty": repetition.presence_penalty,
+                    "consideration_window": repetition.consideration_window,
+                }
+                for key, value in unsupported.items():
+                    if _not_default(value) and value is not None:
+                        raise ValueError(f"Anthropic does not support {key}")
+
+
+def _apply_anthropic_params(
+    api_kwargs: dict[str, Any],
+    request_params: params_.InferenceRequestParams,
+    *,
+    provider: str,
+) -> None:
+    _ = provider
+    disable_parallel_tool_use = None
+    _apply_sampling(api_kwargs, request_params)
+
+    reasoning = request_params.reasoning
+    output = request_params.output
+    summary = params_.DEFAULT if output is None else output.reasoning_summary
+    if not isinstance(reasoning, params_.ModelProviderDefault) and _not_default(
+        reasoning.effort
+    ):
+        if reasoning.effort is None:
+            api_kwargs["thinking"] = {"type": "disabled"}
+        else:
+            _apply_output_config(api_kwargs, {"effort": reasoning.effort})
+    if _not_default(summary):
+        if summary is None:
+            api_kwargs["thinking"] = {"type": "disabled"}
+        else:
+            thinking = dict(api_kwargs.get("thinking") or {})
+            thinking.setdefault("type", "adaptive")
+            thinking["display"] = summary
+            api_kwargs["thinking"] = thinking
+
+    if request_params.tool_calling is not None:
+        tool_calling = request_params.tool_calling
+        if (
+            _not_default(tool_calling.max_tool_calls)
+            and tool_calling.max_tool_calls is not None
+        ):
+            raise ValueError("Anthropic does not support max_tool_calls")
+        tool_choice = _anthropic_tool_choice(tool_calling.tool_choice)
+        if _not_default(tool_calling.parallel_tool_calls):
+            disable_parallel_tool_use = not tool_calling.parallel_tool_calls
+        if disable_parallel_tool_use is not None:
+            if tool_choice["type"] == "none":
+                raise ValueError(
+                    "Anthropic cannot set parallel tool calls with tool none"
+                )
+            tool_choice["disable_parallel_tool_use"] = disable_parallel_tool_use
+        api_kwargs["tool_choice"] = tool_choice
+    elif disable_parallel_tool_use is not None:
+        api_kwargs["tool_choice"] = {
+            "type": "auto",
+            "disable_parallel_tool_use": disable_parallel_tool_use,
+        }
+
+    if request_params.provider_service is not None:
+        service = request_params.provider_service
+        if _not_default(service.service_tier):
+            api_kwargs["service_tier"] = service.service_tier
+
+    metadata: dict[str, str] = {}
+    if request_params.metadata is not None:
+        metadata.update(request_params.metadata)
+    if request_params.safety_identifier is not None:
+        metadata["user_id"] = request_params.safety_identifier
+    if metadata:
+        api_kwargs["metadata"] = metadata
+
+    if request_params.context_management is not None:
+        context_management = request_params.context_management
+        if context_management.compaction is not None:
+            _extra_body(api_kwargs)["context_management"] = {
+                "edits": [
+                    {
+                        "type": "compact_20260112",
+                        "trigger": {
+                            "type": "input_tokens",
+                            "value": context_management.compaction.value,
+                        },
+                    }
+                ]
+            }
+
+    if request_params.output is not None:
+        output = request_params.output
+        if output.max_tokens is not None:
+            api_kwargs["max_tokens"] = output.max_tokens
+        if output.include is not None:
+            raise ValueError("Anthropic does not support output include")
+        if (
+            _not_default(output.text_verbosity)
+            and output.text_verbosity is not None
+        ):
+            raise ValueError("Anthropic does not support text verbosity")
+
+    if request_params.cache is not None:
+        cache = request_params.cache
+        if cache.key is not None:
+            raise ValueError("Anthropic does not support cache keys")
+        cache_control: dict[str, Any] = {"type": "ephemeral"}
+        if _not_default(cache.retention):
+            cache_control["ttl"] = cache.retention
+        api_kwargs["cache_control"] = cache_control
+
+    extra_headers = _filter_extra_headers(request_params.extra_headers)
+    if extra_headers is not None:
+        api_kwargs["extra_headers"] = extra_headers
+    if (
+        request_params.context_management is not None
+        and request_params.context_management.compaction is not None
+    ):
+        _add_builtin_beta_headers(
+            api_kwargs,
+            {"compact-2026-01-12", "context-management-2025-06-27"},
+        )
+    if request_params.extra_query is not None:
+        api_kwargs["extra_query"] = dict(request_params.extra_query)
+    if request_params.extra_body is not None:
+        _extra_body(api_kwargs).update(request_params.extra_body)
+
+
+def _coerce_params(
+    value: params_.InferenceRequestParams | None,
+) -> dict[str, Any]:
     if value is None:
         return {}
-    if isinstance(value, Mapping):
-        return dict(value)
-    raise TypeError("anthropic stream params must be a dict")
+    if isinstance(value, params_.InferenceRequestParams):
+        api_kwargs: dict[str, Any] = {}
+        _apply_anthropic_params(
+            api_kwargs,
+            value,
+            provider=PROVIDER_NAME,
+        )
+        return api_kwargs
+    raise TypeError("anthropic stream params must be InferenceRequestParams")
 
 
 def _add_builtin_beta_headers(
@@ -393,7 +629,7 @@ async def stream(
     *,
     tools: Sequence[types.tools.Tool] | None = None,
     output_type: type[pydantic.BaseModel] | None = None,
-    params: Any = None,
+    params: params_.InferenceRequestParams | None = None,
     provider: str,
 ) -> AsyncGenerator[events.Event]:
     """Stream through the Anthropic messages protocol using *sdk_client*.
@@ -407,6 +643,9 @@ async def stream(
     """
     anthropic_sdk = _sdk.import_sdk(provider=provider)
     stream_params = _coerce_params(params)
+    if params is not None:
+        stream_params = {}
+        _apply_anthropic_params(stream_params, params, provider=provider)
     system_prompt, anthropic_messages = await _messages_to_anthropic(messages)
 
     custom_tools, builtin_tools = _split_tools(tools or ())
@@ -621,7 +860,7 @@ class AnthropicMessagesProtocol(base.ProviderProtocol[Any]):
         *,
         tools: Sequence[types.tools.Tool] | None = None,
         output_type: type[pydantic.BaseModel] | None = None,
-        params: Any = None,
+        params: params_.InferenceRequestParams | None = None,
         provider: str,
     ) -> AsyncGenerator[events.Event]:
         return stream(

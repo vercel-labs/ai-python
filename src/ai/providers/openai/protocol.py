@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, cast
 from ... import errors as ai_errors
 from ... import types
 from ...models import core
+from ...models.core import params as params_
 from .. import base
 from . import _sdk, errors
 from . import tools as openai_tools
@@ -208,12 +209,288 @@ async def _messages_to_openai(
 
 
 # ---------------------------------------------------------------------------
-def _coerce_params(value: Any) -> dict[str, Any]:
+def _is_default(value: object) -> bool:
+    return isinstance(value, params_.ModelProviderDefault)
+
+
+def _not_default(value: object) -> bool:
+    return not _is_default(value)
+
+
+def _seed_value(seed: object) -> int | None:
+    if seed is None or seed == -1 or isinstance(seed, params_.RandomSeed):
+        return None
+    if isinstance(seed, int):
+        return seed
+    if isinstance(seed, params_.ModelProviderDefault):
+        return None
+    raise TypeError("seed must be an int, RANDOM, DEFAULT, or None")
+
+
+def _filter_extra_headers(
+    headers: Mapping[str, str | params_.Unset] | None,
+) -> dict[str, str] | None:
+    if headers is None:
+        return None
+    return {
+        key: value
+        for key, value in headers.items()
+        if not isinstance(value, params_.Unset)
+    }
+
+
+def _tool_ref_name(tool_ref: params_.ToolRef | str) -> str:
+    return str(tool_ref)
+
+
+def _tools_for_openai_allowed(
+    tools: frozenset[params_.ToolRef],
+    *,
+    responses: bool,
+) -> list[dict[str, Any]]:
+    if responses:
+        return [
+            {"type": "function", "name": _tool_ref_name(tool)}
+            for tool in sorted(tools)
+        ]
+    return [
+        {"type": "function", "function": {"name": _tool_ref_name(tool)}}
+        for tool in sorted(tools)
+    ]
+
+
+def _openai_tool_choice(
+    tool_choice: params_.ToolChoiceMode
+    | params_.ToolRef
+    | params_.ToolSelection,
+    *,
+    responses: bool,
+) -> Any:
+    if isinstance(tool_choice, params_.ToolChoiceMode):
+        return tool_choice.value
+    if isinstance(tool_choice, params_.ToolRef):
+        if responses:
+            return {"type": "function", "name": _tool_ref_name(tool_choice)}
+        return {
+            "type": "function",
+            "function": {"name": _tool_ref_name(tool_choice)},
+        }
+    if tool_choice.mode == params_.ToolChoiceMode.NONE:
+        raise ValueError("OpenAI allowed tool selection does not support none")
+    if responses:
+        return {
+            "type": "allowed_tools",
+            "mode": tool_choice.mode.value,
+            "tools": _tools_for_openai_allowed(
+                tool_choice.tools,
+                responses=True,
+            ),
+        }
+    return {
+        "type": "allowed_tools",
+        "allowed_tools": {
+            "mode": tool_choice.mode.value,
+            "tools": _tools_for_openai_allowed(
+                tool_choice.tools,
+                responses=False,
+            ),
+        },
+    }
+
+
+def _apply_sampling(
+    api_kwargs: dict[str, Any],
+    request_params: params_.InferenceRequestParams,
+    *,
+    chat: bool,
+) -> None:
+    sampling = request_params.sampling
+    if isinstance(sampling, params_.ModelProviderDefault):
+        return
+    for sampler in sampling.values():
+        match sampler:
+            case params_.TemperatureSamplerParams(temperature=temperature):
+                if _not_default(temperature):
+                    api_kwargs["temperature"] = temperature
+            case params_.TopPSamplerParams(top_p=top_p):
+                if _not_default(top_p):
+                    api_kwargs["top_p"] = top_p
+            case params_.SeedSamplerParams(seed=seed):
+                if _not_default(seed):
+                    value = _seed_value(seed)
+                    if value is not None:
+                        if chat:
+                            api_kwargs["seed"] = value
+                        else:
+                            raise ValueError(
+                                "OpenAI responses does not support seed"
+                            )
+            case params_.TopKSamplerParams(top_k=top_k):
+                if _not_default(top_k) and top_k is not None:
+                    raise ValueError("OpenAI does not support top_k")
+            case params_.MinPSamplerParams(min_p=min_p):
+                if _not_default(min_p) and min_p is not None:
+                    raise ValueError("OpenAI does not support min_p")
+            case params_.RepetitionPenaltyParams() as repetition:
+                if _not_default(repetition.frequency_penalty):
+                    api_kwargs["frequency_penalty"] = (
+                        repetition.frequency_penalty
+                    )
+                if _not_default(repetition.presence_penalty):
+                    api_kwargs["presence_penalty"] = repetition.presence_penalty
+                if (
+                    _not_default(repetition.repetition_penalty)
+                    and repetition.repetition_penalty is not None
+                ):
+                    raise ValueError(
+                        "OpenAI does not support repetition_penalty"
+                    )
+                if (
+                    _not_default(repetition.consideration_window)
+                    and repetition.consideration_window is not None
+                ):
+                    raise ValueError(
+                        "OpenAI does not support consideration_window"
+                    )
+    _ = chat
+
+
+def _apply_common_openai_params(
+    api_kwargs: dict[str, Any],
+    request_params: params_.InferenceRequestParams,
+    *,
+    provider: str,
+    responses: bool,
+) -> None:
+    _ = provider
+    _apply_sampling(api_kwargs, request_params, chat=not responses)
+
+    reasoning = request_params.reasoning
+    output = request_params.output
+    effort: str | params_.ModelProviderDefault | None = params_.DEFAULT
+    if not isinstance(reasoning, params_.ModelProviderDefault):
+        effort = reasoning.effort
+    summary = params_.DEFAULT if output is None else output.reasoning_summary
+    if _not_default(effort) or _not_default(summary):
+        if responses:
+            reasoning_kwargs: dict[str, Any] = dict(
+                api_kwargs.get("reasoning") or {}
+            )
+            if _not_default(effort):
+                reasoning_kwargs["effort"] = (
+                    "none" if effort is None else effort
+                )
+            if _not_default(summary):
+                reasoning_kwargs["summary"] = summary
+            api_kwargs["reasoning"] = reasoning_kwargs
+        else:
+            if _not_default(effort):
+                api_kwargs["reasoning_effort"] = (
+                    "none" if effort is None else effort
+                )
+            if _not_default(summary) and summary is not None:
+                raise ValueError(
+                    "OpenAI chat completions does not support reasoning summary"
+                )
+
+    if request_params.tool_calling is not None:
+        tool_calling = request_params.tool_calling
+        if _not_default(tool_calling.max_tool_calls):
+            if responses:
+                api_kwargs["max_tool_calls"] = tool_calling.max_tool_calls
+            elif tool_calling.max_tool_calls is not None:
+                raise ValueError(
+                    "OpenAI chat completions does not support max_tool_calls"
+                )
+        if _not_default(tool_calling.parallel_tool_calls):
+            api_kwargs["parallel_tool_calls"] = tool_calling.parallel_tool_calls
+        api_kwargs["tool_choice"] = _openai_tool_choice(
+            tool_calling.tool_choice,
+            responses=responses,
+        )
+
+    if request_params.provider_service is not None:
+        service = request_params.provider_service
+        if _not_default(service.service_tier):
+            api_kwargs["service_tier"] = service.service_tier
+
+    if request_params.safety_identifier is not None:
+        api_kwargs["safety_identifier"] = request_params.safety_identifier
+    if request_params.metadata is not None:
+        api_kwargs["metadata"] = dict(request_params.metadata)
+
+    if request_params.context_management is not None:
+        context_management = request_params.context_management
+        if context_management.compaction is not None:
+            if responses:
+                api_kwargs["context_management"] = [
+                    {
+                        "type": "compaction",
+                        "compact_threshold": (
+                            context_management.compaction.value
+                        ),
+                    }
+                ]
+            else:
+                raise ValueError(
+                    "OpenAI chat completions does not support "
+                    "context management"
+                )
+
+    if request_params.output is not None:
+        output = request_params.output
+        if output.max_tokens is not None:
+            api_kwargs[
+                "max_output_tokens" if responses else "max_completion_tokens"
+            ] = output.max_tokens
+        if output.include is not None:
+            if responses:
+                api_kwargs["include"] = sorted(output.include)
+            else:
+                raise ValueError(
+                    "OpenAI chat completions does not support output include"
+                )
+        if _not_default(output.text_verbosity):
+            if responses:
+                text_config = dict(api_kwargs.get("text") or {})
+                text_config["verbosity"] = output.text_verbosity
+                api_kwargs["text"] = text_config
+            elif output.text_verbosity is not None:
+                raise ValueError(
+                    "OpenAI chat completions does not support text verbosity"
+                )
+
+    if request_params.cache is not None:
+        cache = request_params.cache
+        if cache.key is not None:
+            api_kwargs["prompt_cache_key"] = cache.key
+        if _not_default(cache.retention):
+            api_kwargs["prompt_cache_retention"] = cache.retention
+
+    extra_headers = _filter_extra_headers(request_params.extra_headers)
+    if extra_headers is not None:
+        api_kwargs["extra_headers"] = extra_headers
+    if request_params.extra_query is not None:
+        api_kwargs["extra_query"] = dict(request_params.extra_query)
+    if request_params.extra_body is not None:
+        api_kwargs["extra_body"] = dict(request_params.extra_body)
+
+
+def _coerce_params(
+    value: params_.InferenceRequestParams | None,
+) -> dict[str, Any]:
     if value is None:
         return {}
-    if isinstance(value, Mapping):
-        return dict(value)
-    raise TypeError("openai stream params must be a dict")
+    if isinstance(value, params_.InferenceRequestParams):
+        api_kwargs: dict[str, Any] = {}
+        _apply_common_openai_params(
+            api_kwargs,
+            value,
+            provider="openai",
+            responses=False,
+        )
+        return api_kwargs
+    raise TypeError("openai stream params must be InferenceRequestParams")
 
 
 async def stream(
@@ -223,7 +500,7 @@ async def stream(
     *,
     tools: Sequence[types.tools.Tool] | None = None,
     output_type: type[pydantic.BaseModel] | None = None,
-    params: Any = None,
+    params: params_.InferenceRequestParams | None = None,
     provider: str,
 ) -> AsyncGenerator[types.events.Event]:
     """Stream through the OpenAI chat completions protocol."""
@@ -237,6 +514,14 @@ async def stream(
         )
 
     stream_params = _coerce_params(params)
+    if params is not None:
+        stream_params = {}
+        _apply_common_openai_params(
+            stream_params,
+            params,
+            provider=provider,
+            responses=False,
+        )
     openai_messages = await _messages_to_openai(messages)
     openai_tools = _tools_to_openai(tools) if tools else None
 
@@ -396,7 +681,7 @@ class OpenAIChatCompletionsProtocol(base.ProviderProtocol[Any]):
         *,
         tools: Sequence[types.tools.Tool] | None = None,
         output_type: type[pydantic.BaseModel] | None = None,
-        params: Any = None,
+        params: params_.InferenceRequestParams | None = None,
         provider: str,
     ) -> AsyncGenerator[types.events.Event]:
         return stream(
@@ -431,12 +716,25 @@ _BUILTIN_OUTPUT_TYPES = frozenset(
 )
 
 
-def _coerce_responses_params(value: Any) -> dict[str, Any]:
+def _coerce_responses_params(
+    value: params_.InferenceRequestParams | None,
+    *,
+    provider: str,
+) -> dict[str, Any]:
     if value is None:
         return {}
-    if isinstance(value, Mapping):
-        return dict(value)
-    raise TypeError("openai responses stream params must be a dict")
+    if isinstance(value, params_.InferenceRequestParams):
+        api_kwargs: dict[str, Any] = {}
+        _apply_common_openai_params(
+            api_kwargs,
+            value,
+            provider=provider,
+            responses=True,
+        )
+        return api_kwargs
+    raise TypeError(
+        "openai responses stream params must be InferenceRequestParams"
+    )
 
 
 def _json_dumps(value: Any) -> str:
@@ -940,11 +1238,11 @@ async def _stream_responses(
     *,
     tools: Sequence[types.tools.Tool] | None = None,
     output_type: type[pydantic.BaseModel] | None = None,
-    params: Any = None,
+    params: params_.InferenceRequestParams | None = None,
     provider: str,
 ) -> AsyncGenerator[types.events.Event]:
     openai_sdk = _sdk.import_sdk(provider=provider)
-    stream_params = _coerce_responses_params(params)
+    stream_params = _coerce_responses_params(params, provider=provider)
     protected = sorted(_RESPONSES_PROTECTED_PARAMS & stream_params.keys())
     if protected:
         raise ValueError(
@@ -1452,7 +1750,7 @@ class OpenAIResponsesProtocol(base.ProviderProtocol[Any]):
         *,
         tools: Sequence[types.tools.Tool] | None = None,
         output_type: type[pydantic.BaseModel] | None = None,
-        params: Any = None,
+        params: params_.InferenceRequestParams | None = None,
         provider: str,
     ) -> AsyncGenerator[types.events.Event]:
         return _stream_responses(

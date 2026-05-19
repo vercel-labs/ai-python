@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     import pydantic
 
     from ...models.core import model as model_
+    from ...models.core import params as params_
     from ...types import events
     from ...types import messages as messages_
     from ...types import tools as tools_
@@ -136,7 +137,7 @@ class AnthropicCompatibleProvider(base.Provider[AnthropicSDKClient]):
         *,
         tools: Sequence[tools_.Tool] | None = None,
         output_type: type[pydantic.BaseModel] | None = None,
-        params: Any = None,
+        params: params_.InferenceRequestParams | None = None,
     ) -> AsyncGenerator[events.Event]:
         """Stream via the Anthropic messages protocol."""
         return super().stream(

@@ -53,7 +53,7 @@ async def _drain(stream: Any) -> None:
         pass
 
 
-async def test_raw_params_pass_through_to_sdk_kwargs(
+async def test_params_translate_to_sdk_kwargs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fake, captured = _patch_client(monkeypatch)
@@ -63,41 +63,54 @@ async def test_raw_params_pass_through_to_sdk_kwargs(
             fake,
             _MODEL,
             [ai.user_message("Hi")],
-            params={
-                "max_tokens": 123,
-                "speed": "fast",
-                "thinking": {"type": "disabled"},
-                "output_config": {
-                    "effort": "high",
-                    "task_budget": {"type": "tokens", "total": 20000},
+            params=ai.InferenceRequestParams(
+                output=ai.OutputParams(max_tokens=123, reasoning_summary=None),
+                reasoning=ai.ReasoningParams(effort="high"),
+                context_management=ai.ContextManagementParams(
+                    compaction=ai.TokenThreshold(120_000)
+                ),
+                tool_calling=ai.ToolCallingParams(
+                    tool_choice=ai.ToolChoiceMode.AUTO,
+                    parallel_tool_calls=False,
+                ),
+                extra_body={
+                    "speed": "fast",
+                    "future_option": {"enabled": True},
                 },
-                "tool_choice": {
-                    "type": "auto",
-                    "disable_parallel_tool_use": True,
-                },
-                "extra_body": {"future_option": {"enabled": True}},
-                "extra_headers": {"x-anthropic-feature": "enabled"},
-            },
+                extra_headers={"x-anthropic-feature": "enabled"},
+            ),
             provider="anthropic",
         )
     )
 
     assert captured["max_tokens"] == 123
-    assert captured["speed"] == "fast"
     assert captured["thinking"] == {"type": "disabled"}
     assert captured["output_config"] == {
         "effort": "high",
-        "task_budget": {"type": "tokens", "total": 20000},
     }
     assert captured["tool_choice"] == {
         "type": "auto",
         "disable_parallel_tool_use": True,
     }
-    assert captured["extra_body"] == {"future_option": {"enabled": True}}
-    assert captured["extra_headers"] == {"x-anthropic-feature": "enabled"}
+    assert captured["extra_body"] == {
+        "context_management": {
+            "edits": [
+                {
+                    "type": "compact_20260112",
+                    "trigger": {"type": "input_tokens", "value": 120_000},
+                }
+            ]
+        },
+        "speed": "fast",
+        "future_option": {"enabled": True},
+    }
+    assert captured["extra_headers"] == {
+        "anthropic-beta": "compact-2026-01-12,context-management-2025-06-27",
+        "x-anthropic-feature": "enabled",
+    }
 
 
-async def test_non_dict_params_rejected_by_adapter(
+async def test_non_inference_params_rejected_by_adapter(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fake, _ = _patch_client(monkeypatch)
@@ -106,12 +119,51 @@ async def test_non_dict_params_rejected_by_adapter(
         fake,
         _MODEL,
         [ai.user_message("Hi")],
-        params=[{"speed": "fast"}],
+        params=cast(Any, [{"speed": "fast"}]),
         provider="anthropic",
     )
 
-    with pytest.raises(TypeError, match="dict"):
+    with pytest.raises(TypeError, match="InferenceRequestParams"):
         await _drain(stream)
+
+
+async def test_seed_rejected_by_adapter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake, _ = _patch_client(monkeypatch)
+
+    stream = protocol.stream(
+        fake,
+        _MODEL,
+        [ai.user_message("Hi")],
+        params=ai.InferenceRequestParams(
+            sampling={ai.SeedSamplerParams: ai.SeedSamplerParams(seed=123)}
+        ),
+        provider="anthropic",
+    )
+
+    with pytest.raises(ValueError, match="seed"):
+        await _drain(stream)
+
+
+async def test_random_seed_omitted_by_adapter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake, captured = _patch_client(monkeypatch)
+
+    await _drain(
+        protocol.stream(
+            fake,
+            _MODEL,
+            [ai.user_message("Hi")],
+            params=ai.InferenceRequestParams(
+                sampling={ai.SeedSamplerParams: ai.SeedSamplerParams(seed=-1)}
+            ),
+            provider="anthropic",
+        )
+    )
+
+    assert "seed" not in captured
 
 
 async def test_reasoning_signature_round_trips_from_provider_metadata(

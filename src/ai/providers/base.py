@@ -38,7 +38,7 @@ class ProviderProtocol(Generic[ClientT]):
         *,
         tools: Sequence[tools_.Tool] | None = None,
         output_type: type[pydantic.BaseModel] | None = None,
-        params: Any = None,
+        params: params_.InferenceRequestParams | None = None,
         provider: str,
     ) -> AsyncGenerator[events.Event]:
         """Stream a language-model response using *client*."""
@@ -212,7 +212,7 @@ class Provider(Generic[ClientT]):
         *,
         tools: Sequence[tools_.Tool] | None = None,
         output_type: type[pydantic.BaseModel] | None = None,
-        params: Any = None,
+        params: params_.InferenceRequestParams | None = None,
     ) -> AsyncGenerator[events.Event]:
         """Stream a language-model response from this provider."""
         selected_protocol = model.protocol or self.protocol

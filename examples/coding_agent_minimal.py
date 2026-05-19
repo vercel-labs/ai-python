@@ -3,7 +3,6 @@
 import asyncio
 import json
 import sys
-import typing
 
 import ai
 
@@ -16,9 +15,7 @@ files, `cat` with a heredoc to write new files, and `sed -i
 with sed, make sure to double check the result.
 """
 
-STREAM_PARAMS: dict[str, typing.Any] = {
-    "providerOptions": {"gateway": {"caching": "auto"}},
-}
+STREAM_PARAMS = ai.InferenceRequestParams(cache=ai.CacheParams(mode="auto"))
 
 
 @ai.tool
