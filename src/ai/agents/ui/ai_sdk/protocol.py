@@ -34,7 +34,9 @@ class TextStartPart:
     """Indicates the beginning of a text block."""
 
     id: str
-    type: Literal["text-start"] = dataclasses.field(default="text-start", init=False)
+    type: Literal["text-start"] = dataclasses.field(
+        default="text-start", init=False
+    )
     provider_metadata: dict[str, Any] | None = None
 
 
@@ -44,7 +46,9 @@ class TextDeltaPart:
 
     id: str
     delta: str
-    type: Literal["text-delta"] = dataclasses.field(default="text-delta", init=False)
+    type: Literal["text-delta"] = dataclasses.field(
+        default="text-delta", init=False
+    )
     provider_metadata: dict[str, Any] | None = None
 
 
@@ -53,7 +57,9 @@ class TextEndPart:
     """Indicates the completion of a text block."""
 
     id: str
-    type: Literal["text-end"] = dataclasses.field(default="text-end", init=False)
+    type: Literal["text-end"] = dataclasses.field(
+        default="text-end", init=False
+    )
     provider_metadata: dict[str, Any] | None = None
 
 
@@ -97,7 +103,9 @@ class SourceUrlPart:
 
     source_id: str
     url: str
-    type: Literal["source-url"] = dataclasses.field(default="source-url", init=False)
+    type: Literal["source-url"] = dataclasses.field(
+        default="source-url", init=False
+    )
     title: str | None = None
     provider_metadata: dict[str, Any] | None = None
 
@@ -128,9 +136,9 @@ class FilePart:
 
 @dataclasses.dataclass
 class DataPart:
-    """
-    Custom data parts allow streaming of arbitrary structured data with type-specific
-    handling.
+    """Custom data part for arbitrary structured data.
+
+    Data parts support type-specific handling.
 
     The wire type is ``data-{data_type}`` (e.g. ``data-custom``), exposed
     via the ``type`` property so that ``DataPart`` is uniform with every
@@ -258,14 +266,18 @@ class ToolApprovalRequestPart:
 class StartStepPart:
     """A part indicating the start of a step."""
 
-    type: Literal["start-step"] = dataclasses.field(default="start-step", init=False)
+    type: Literal["start-step"] = dataclasses.field(
+        default="start-step", init=False
+    )
 
 
 @dataclasses.dataclass
 class FinishStepPart:
     """A part indicating that a step has been completed."""
 
-    type: Literal["finish-step"] = dataclasses.field(default="finish-step", init=False)
+    type: Literal["finish-step"] = dataclasses.field(
+        default="finish-step", init=False
+    )
 
 
 @dataclasses.dataclass

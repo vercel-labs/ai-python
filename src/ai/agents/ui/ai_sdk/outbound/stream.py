@@ -1,12 +1,16 @@
-"""Convert an internal ``ai.events.Event`` stream into AI SDK UI protocol parts."""
+"""Convert internal event streams into AI SDK UI protocol parts."""
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator, AsyncIterable
+from typing import TYPE_CHECKING
 
 from .....types import events as events_
-from .. import protocol
 from ._state import _StreamState
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator, AsyncIterable
+
+    from .. import protocol
 
 
 async def to_stream(

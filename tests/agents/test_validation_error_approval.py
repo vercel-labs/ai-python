@@ -19,8 +19,8 @@ from ..conftest import MOCK_MODEL, mock_llm, text_msg
 
 
 class TextEdit(pydantic.BaseModel):
-    oldText: str
-    newText: str
+    old_text: str = pydantic.Field(alias="oldText")
+    new_text: str = pydantic.Field(alias="newText")
 
 
 @ai.tool(require_approval=True)
@@ -55,9 +55,14 @@ async def test_invalid_args_with_approval_returns_error_result() -> None:
 
     hook_events: list[events_.HookEvent] = []
 
-    async with my_agent.run(MOCK_MODEL, [ai.user_message("edit something")]) as stream:
+    async with my_agent.run(
+        MOCK_MODEL, [ai.user_message("edit something")]
+    ) as stream:
         async for event in stream:
-            if isinstance(event, events_.HookEvent) and event.hook.status == "pending":
+            if (
+                isinstance(event, events_.HookEvent)
+                and event.hook.status == "pending"
+            ):
                 hook_events.append(event)
                 ai.resolve_hook(
                     event.hook.hook_id,
@@ -102,9 +107,14 @@ async def test_invalid_args_skips_approval_hook() -> None:
 
     hook_fired = False
 
-    async with my_agent.run(MOCK_MODEL, [ai.user_message("edit something")]) as stream:
+    async with my_agent.run(
+        MOCK_MODEL, [ai.user_message("edit something")]
+    ) as stream:
         async for event in stream:
-            if isinstance(event, events_.HookEvent) and event.hook.status == "pending":
+            if (
+                isinstance(event, events_.HookEvent)
+                and event.hook.status == "pending"
+            ):
                 hook_fired = True
                 ai.resolve_hook(
                     event.hook.hook_id,
@@ -138,9 +148,14 @@ async def test_completely_invalid_json_with_approval() -> None:
     final = text_msg("Let me try again.", id="msg-2")
     llm = mock_llm([[bad_call], [final]])
 
-    async with my_agent.run(MOCK_MODEL, [ai.user_message("edit something")]) as stream:
+    async with my_agent.run(
+        MOCK_MODEL, [ai.user_message("edit something")]
+    ) as stream:
         async for event in stream:
-            if isinstance(event, events_.HookEvent) and event.hook.status == "pending":
+            if (
+                isinstance(event, events_.HookEvent)
+                and event.hook.status == "pending"
+            ):
                 ai.resolve_hook(
                     event.hook.hook_id,
                     ai.tools.ToolApproval(granted=True, reason="auto"),

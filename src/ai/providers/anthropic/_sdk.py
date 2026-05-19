@@ -22,7 +22,7 @@ class AnthropicSDK(Protocol):
 
 def import_sdk(*, provider: str = "anthropic") -> AnthropicSDK:
     return cast(
-        AnthropicSDK,
+        "AnthropicSDK",
         _optional.import_optional_sdk(
             "anthropic",
             provider=provider,

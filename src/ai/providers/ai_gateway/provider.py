@@ -1,14 +1,11 @@
 """AI Gateway provider.
 
-Defines the callable :data:`ai_gateway` provider."""
+Defines the callable :data:`ai_gateway` provider.
+"""
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator, Mapping, Sequence
-from types import ModuleType
 from typing import TYPE_CHECKING, Any, ClassVar
-
-import httpx
 
 from ... import errors as ai_errors
 from .. import base
@@ -18,6 +15,10 @@ from . import protocol as protocol_module
 from .client import errors as client_errors
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator, Mapping, Sequence
+    from types import ModuleType
+
+    import httpx
     import modelsdotdev
     import pydantic
 
@@ -105,7 +106,9 @@ class GatewayProvider(base.Provider[gateway_client.GatewayClient]):
         protocol: base.ProviderProtocol[Any] | None = None,
     ) -> messages_.Message:
         """Generate media via the AI Gateway v3 protocol."""
-        return await super().generate(model, messages, params, protocol=protocol)
+        return await super().generate(
+            model, messages, params, protocol=protocol
+        )
 
     @classmethod
     def from_modelsdev_provider(
@@ -137,7 +140,7 @@ class GatewayProvider(base.Provider[gateway_client.GatewayClient]):
         These tools are executed server-side by the gateway and work
         with any gateway-routed model.
         """
-        from . import tools as tools_module
+        from . import tools as tools_module  # noqa: PLC0415
 
         return tools_module
 

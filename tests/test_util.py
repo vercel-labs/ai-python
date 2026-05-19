@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextvars
 from collections.abc import AsyncIterable, AsyncIterator
-from typing import Any
+from typing import Any, cast
 
 import async_solipsism  # type: ignore[import-untyped]
 import pytest
@@ -22,7 +22,6 @@ async def _from_list(items: list[Any], delay: float = 0) -> AsyncIterable[Any]:
     for item in items:
         if delay:
             await asyncio.sleep(delay)
-        print(asyncio.get_event_loop().time(), item)
         yield item
 
 
@@ -93,7 +92,7 @@ async def test_simulated_clock_advances() -> None:
         )
     )
     elapsed = loop.time() - t0
-    assert elapsed == 20.0
+    assert elapsed == pytest.approx(20.0)
 
 
 async def test_ordering_shorter_delay_first() -> None:
@@ -123,7 +122,7 @@ async def test_error_cancels_other_iterables() -> None:
     async def bad() -> AsyncIterable[str]:
         await asyncio.sleep(1)
         raise RuntimeError("boom")
-        yield "unreachable"  # noqa: B027
+        yield "unreachable"
 
     with pytest.raises(ExceptionGroup) as exc_info:
         await _collect(util.merge(good(), bad()))
@@ -185,7 +184,7 @@ async def test_cleanup_with_non_generator_iterable() -> None:
 
     async def failing() -> AsyncIterable[int]:
         raise RuntimeError("boom")
-        yield 0  # noqa: B027
+        yield 0
 
     with pytest.raises(ExceptionGroup) as exc_info:
         await _collect(util.merge(SimpleIter(), failing()))
@@ -197,7 +196,7 @@ async def test_cleanup_with_non_generator_iterable() -> None:
 
 
 async def test_unwrap_generator_exit_pure_generator_exit() -> None:
-    """A BaseExceptionGroup containing only GeneratorExit unwraps to GeneratorExit."""
+    """A group containing only GeneratorExit unwraps to GeneratorExit."""
     with pytest.raises(GeneratorExit):
         async with util.unwrap_generator_exit():
             raise BaseExceptionGroup("group", [GeneratorExit()])
@@ -217,7 +216,9 @@ async def test_unwrap_generator_exit_mixed_propagates() -> None:
     """A group with non-GeneratorExit exceptions propagates as-is."""
     with pytest.raises(BaseExceptionGroup) as exc_info:
         async with util.unwrap_generator_exit():
-            raise BaseExceptionGroup("group", [GeneratorExit(), ValueError("x")])
+            raise BaseExceptionGroup(
+                "group", [GeneratorExit(), ValueError("x")]
+            )
     assert exc_info.group_contains(ValueError, match="x")
 
 
@@ -292,7 +293,9 @@ async def test_maybe_aclosing_runs_aclose_on_exception() -> None:
 
 async def test_decouple_yields_all_items() -> None:
     """Basic: every item from the source is yielded in order."""
-    result = await _collect(util.decouple(_from_list([1, 2, 3]), task_group=None))
+    result = await _collect(
+        util.decouple(_from_list([1, 2, 3]), task_group=None)
+    )
     assert result == [1, 2, 3]
 
 
@@ -301,7 +304,9 @@ async def test_decouple_with_task_group() -> None:
 
     async def consume() -> list[int]:
         async with asyncio.TaskGroup() as tg:
-            return await _collect(util.decouple(_from_list([1, 2, 3]), task_group=tg))
+            return await _collect(
+                util.decouple(_from_list([1, 2, 3]), task_group=tg)
+            )
 
     assert await consume() == [1, 2, 3]
 
@@ -321,7 +326,7 @@ async def test_decouple_forwards_exception_to_consumer() -> None:
 
 
 async def test_decouple_contextvar_stable_across_yields() -> None:
-    """ContextVars set inside the source persist across yields under decouple."""
+    """ContextVars set in the source persist across decouple yields."""
     var: contextvars.ContextVar[str] = contextvars.ContextVar("test")
 
     async def src() -> AsyncIterator[str]:
@@ -389,7 +394,7 @@ async def test_merge_aclose_returns_cleanly_after_break() -> None:
             break
 
     # Should complete without raising BaseExceptionGroup.
-    await m.aclose()  # type: ignore[attr-defined]
+    await cast(Any, m).aclose()
 
 
 async def test_merge_preserves_contextvar_across_yields() -> None:
@@ -418,7 +423,7 @@ async def test_merge_preserves_contextvar_across_yields() -> None:
 
 
 class _Restartable:
-    """An iterable whose ``__aiter__`` returns a fresh async generator each call.
+    """An iterable returning a fresh async generator each call.
 
     Items can be queued via ``push``; each iteration drains the queue and stops.
     Tracks how many times ``__aiter__`` has been called.
@@ -539,7 +544,7 @@ async def test_merge_restart_with_multiple_restartables() -> None:
 
 
 async def test_merge_restart_only_after_other_iterable_yields() -> None:
-    """Restart is triggered by another iterable yielding, not by self-completion."""
+    """Restart is triggered by another iterable, not self-completion."""
     src = _Restartable()
     src.push("r1")
 
@@ -614,7 +619,7 @@ async def test_merge_restart_when_yield_and_stop_collide() -> None:
 
 
 def test_merge_cleanup_on_asyncio_shutdown() -> None:
-    """A leaked partially-consumed merge gen is cleaned up correctly on shutdown.
+    """A partially consumed merge gen is cleaned up on shutdown.
 
     The consumer breaks out of ``async for x in merge(src())`` without
     explicitly aclose'ing the merge gen, so cleanup is left to asyncio.run's

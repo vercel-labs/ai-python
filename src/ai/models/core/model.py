@@ -61,11 +61,13 @@ def get_model(
         protocol:
             Optional wire-protocol override for this model. When omitted,
             the provider chooses its default protocol.
+
     Raises:
         Raises :class:`ai.ConfigurationError` when ``model_id`` and
         ``AI_SDK_DEFAULT_MODEL`` is empty or malformed.
         Raises a :class:`ai.UnsupportedProviderError` when the provider is
         unrecognized or otherwise unsupported.
+
     """
     if model_id is None:
         model_id = os.environ.get(_DEFAULT_MODEL_ENV)
@@ -86,8 +88,12 @@ def get_model(
     provider_id = ref.provider_id
     provider_model_id = ref.model_id
 
-    model_info = _modelsdev.get_model_by_id(f"{provider_id}:{provider_model_id}")
-    model_provider_config = None if model_info is None else model_info.provider_config
+    model_info = _modelsdev.get_model_by_id(
+        f"{provider_id}:{provider_model_id}"
+    )
+    model_provider_config = (
+        None if model_info is None else model_info.provider_config
+    )
 
     provider = base.Provider.from_id(
         provider_id,

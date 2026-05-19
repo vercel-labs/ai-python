@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import httpx
 
@@ -72,9 +72,13 @@ def _map_status_error(
     model_id: str | None,
 ) -> ai_errors.ProviderAPIError:
     if exc.status_code == 404 and model_id is not None:
-        cls: type[ai_errors.ProviderAPIError] = ai_errors.ProviderModelNotFoundError
+        cls: type[ai_errors.ProviderAPIError] = (
+            ai_errors.ProviderModelNotFoundError
+        )
     else:
-        cls = ai_errors.http_status_to_provider_status_error_class(exc.status_code)
+        cls = ai_errors.http_status_to_provider_status_error_class(
+            exc.status_code
+        )
     return _provider_error(cls, exc, provider=provider, model_id=model_id)
 
 
@@ -89,7 +93,9 @@ def _provider_error(
     body = getattr(exc, "body", None)
     if issubclass(cls, ai_errors.ProviderModelNotFoundError):
         if model_id is None:  # pragma: no cover - guarded by _map_status_error
-            raise RuntimeError("model_id is required for ProviderModelNotFoundError")
+            raise RuntimeError(
+                "model_id is required for ProviderModelNotFoundError"
+            )
         return cls(
             _message(exc),
             model_id=model_id,
@@ -115,7 +121,9 @@ def _provider_error(
     )
 
 
-def _http_context(exc: anthropic.AnthropicError) -> ai_errors.HTTPErrorContext | None:
+def _http_context(
+    exc: anthropic.AnthropicError,
+) -> ai_errors.HTTPErrorContext | None:
     status_code = getattr(exc, "status_code", None)
     if not isinstance(status_code, int):
         return None
@@ -131,9 +139,10 @@ def _http_context(exc: anthropic.AnthropicError) -> ai_errors.HTTPErrorContext |
 def _body_value(body: object | None, key: str) -> str | None:
     if not isinstance(body, dict):
         return None
-    value = body.get(key)
+    body_map = cast("dict[str, Any]", body)
+    value = body_map.get(key)
     if value is None:
-        error = body.get("error")
+        error = body_map.get("error")
         if isinstance(error, dict):
             value = error.get(key)
     if isinstance(value, str):

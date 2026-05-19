@@ -11,7 +11,13 @@ import mcp.types
 import ai
 from ai.agents.mcp.client import _mcp_tool_to_native
 
-from ...conftest import MOCK_MODEL, collect_messages, mock_llm, text_msg, tool_call_msg
+from ...conftest import (
+    MOCK_MODEL,
+    collect_messages,
+    mock_llm,
+    text_msg,
+    tool_call_msg,
+)
 
 
 def _fake_mcp_tool(
@@ -40,7 +46,9 @@ def _noop_transport_factory() -> contextlib.AbstractAsyncContextManager[Any]:
 def test_mcp_tool_to_native_basic() -> None:
     """Converting an MCP tool to native produces a Tool with correct schema."""
     mcp_tool = _fake_mcp_tool(name="mcp_basic_test")
-    native = _mcp_tool_to_native(mcp_tool, "test:key", _noop_transport_factory, None)
+    native = _mcp_tool_to_native(
+        mcp_tool, "test:key", _noop_transport_factory, None
+    )
 
     assert native.name == "mcp_basic_test"
     assert _function_args(native).description == "Echo input"
@@ -49,7 +57,9 @@ def test_mcp_tool_to_native_basic() -> None:
 def test_mcp_tool_to_native_with_prefix() -> None:
     """Tool prefix is prepended to the name."""
     mcp_tool = _fake_mcp_tool(name="echo")
-    native = _mcp_tool_to_native(mcp_tool, "test:key", _noop_transport_factory, "ctx7")
+    native = _mcp_tool_to_native(
+        mcp_tool, "test:key", _noop_transport_factory, "ctx7"
+    )
 
     assert native.name == "ctx7_echo"
 
@@ -57,7 +67,9 @@ def test_mcp_tool_to_native_with_prefix() -> None:
 def test_mcp_tool_to_native_schema_preserved() -> None:
     """The inputSchema from the MCP tool is passed through as params."""
     mcp_tool = _fake_mcp_tool()
-    native = _mcp_tool_to_native(mcp_tool, "test:key", _noop_transport_factory, None)
+    native = _mcp_tool_to_native(
+        mcp_tool, "test:key", _noop_transport_factory, None
+    )
 
     assert _function_args(native).params == mcp_tool.inputSchema
     assert _function_args(native).description == "Echo input"
@@ -77,19 +89,25 @@ async def test_mcp_tool_executes_through_agent() -> None:
     # Build a tool the same way the MCP client does,
     # but with a fake fn so we don't need a real MCP server.
     mcp_tool = _fake_mcp_tool(name="mcp_e2e_echo")
-    native = _mcp_tool_to_native(mcp_tool, "test:key", _noop_transport_factory, None)
+    native = _mcp_tool_to_native(
+        mcp_tool, "test:key", _noop_transport_factory, None
+    )
     # Replace the executor (which would try to connect) with our fake.
     native = dataclasses.replace(native, fn=fake_fn)
 
     my_agent = ai.agent(tools=[native])
 
     call1 = [
-        tool_call_msg(tc_id="tc-mcp-1", name="mcp_e2e_echo", args='{"text": "hello"}')
+        tool_call_msg(
+            tc_id="tc-mcp-1", name="mcp_e2e_echo", args='{"text": "hello"}'
+        )
     ]
     call2 = [text_msg("Done.", id="msg-2")]
     llm = mock_llm([call1, call2])
 
-    async with my_agent.run(MOCK_MODEL, [ai.user_message("echo hello")]) as stream:
+    async with my_agent.run(
+        MOCK_MODEL, [ai.user_message("echo hello")]
+    ) as stream:
         msgs = await collect_messages(stream)
 
     # Tool was called with the right args.

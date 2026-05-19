@@ -18,6 +18,7 @@ class.
 
 import asyncio
 from collections.abc import AsyncGenerator
+from typing import ClassVar
 
 import pydantic
 
@@ -36,9 +37,11 @@ async def contact_mothership(query: str) -> str:
 
 
 class ApprovalAgent(ai.Agent):
-    TOOLS = [contact_mothership]
+    TOOLS: ClassVar[list[ai.AgentTool]] = [contact_mothership]
 
-    async def loop(self, context: ai.Context) -> AsyncGenerator[ai.events.AgentEvent]:
+    async def loop(
+        self, context: ai.Context
+    ) -> AsyncGenerator[ai.events.AgentEvent]:
         while context.keep_running():
             async with (
                 ai.stream(context=context) as s,

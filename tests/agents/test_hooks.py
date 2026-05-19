@@ -28,7 +28,9 @@ async def test_resolve_live_future() -> None:
     resolved_value: Confirmation | None = None
 
     class MyAgent(ai.Agent):
-        async def loop(self, context: ai.Context) -> AsyncGenerator[ai.events.Event]:
+        async def loop(
+            self, context: ai.Context
+        ) -> AsyncGenerator[ai.events.Event]:
             nonlocal resolved_value
             async with ai.models.stream(context=context) as stream:
                 async for event in stream:
@@ -46,7 +48,9 @@ async def test_resolve_live_future() -> None:
                 continue
             # When we see the pending hook, resolve it.
             if event.hook.status == "pending":
-                ai.resolve_hook("confirm_1", {"approved": True, "reason": "looks good"})
+                ai.resolve_hook(
+                    "confirm_1", {"approved": True, "reason": "looks good"}
+                )
 
     assert resolved_value is not None
     assert resolved_value.approved is True
@@ -61,7 +65,9 @@ async def test_cancel_live_hook() -> None:
     was_cancelled = False
 
     class MyAgent(ai.Agent):
-        async def loop(self, context: ai.Context) -> AsyncGenerator[ai.events.Event]:
+        async def loop(
+            self, context: ai.Context
+        ) -> AsyncGenerator[ai.events.Event]:
             nonlocal was_cancelled
             async with ai.models.stream(context=context) as stream:
                 async for event in stream:
@@ -101,7 +107,9 @@ async def test_pre_registered_resolution_consumed() -> None:
     resolved_value: Confirmation | None = None
 
     class MyAgent(ai.Agent):
-        async def loop(self, context: ai.Context) -> AsyncGenerator[ai.events.Event]:
+        async def loop(
+            self, context: ai.Context
+        ) -> AsyncGenerator[ai.events.Event]:
             nonlocal resolved_value
             async with ai.models.stream(context=context) as stream:
                 async for event in stream:
@@ -143,7 +151,9 @@ async def test_resolved_hook_emits_message() -> None:
     """After resolution, a 'resolved' HookPart message is emitted."""
 
     class MyAgent(ai.Agent):
-        async def loop(self, context: ai.Context) -> AsyncGenerator[ai.events.Event]:
+        async def loop(
+            self, context: ai.Context
+        ) -> AsyncGenerator[ai.events.Event]:
             async with ai.models.stream(context=context) as stream:
                 async for event in stream:
                     yield event
@@ -172,7 +182,9 @@ async def test_resolved_hook_emits_message() -> None:
 
 async def test_hook_metadata_in_pending() -> None:
     class MyAgent(ai.Agent):
-        async def loop(self, context: ai.Context) -> AsyncGenerator[ai.events.Event]:
+        async def loop(
+            self, context: ai.Context
+        ) -> AsyncGenerator[ai.events.Event]:
             async with ai.models.stream(context=context) as stream:
                 async for event in stream:
                     yield event

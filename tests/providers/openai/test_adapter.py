@@ -71,7 +71,9 @@ class _FakeOpenAIClient:
 
 
 class _FakeResponses:
-    def __init__(self, captured: dict[str, Any], items: list[dict[str, Any]]) -> None:
+    def __init__(
+        self, captured: dict[str, Any], items: list[dict[str, Any]]
+    ) -> None:
         self._captured = captured
         self._items = items
 
@@ -81,7 +83,9 @@ class _FakeResponses:
 
 
 class _FakeResponsesClient:
-    def __init__(self, captured: dict[str, Any], items: list[dict[str, Any]]) -> None:
+    def __init__(
+        self, captured: dict[str, Any], items: list[dict[str, Any]]
+    ) -> None:
         self.responses = _FakeResponses(captured, items)
 
 
@@ -116,7 +120,7 @@ def _patch(
     _ = monkeypatch
     captured: dict[str, Any] = {}
     fake = _FakeOpenAIClient(captured)
-    return cast(openai.AsyncOpenAI, fake), captured
+    return cast("openai.AsyncOpenAI", fake), captured
 
 
 def _patch_responses(
@@ -124,7 +128,7 @@ def _patch_responses(
 ) -> tuple[openai.AsyncOpenAI, dict[str, Any]]:
     captured: dict[str, Any] = {}
     fake = _FakeResponsesClient(captured, items or [])
-    return cast(openai.AsyncOpenAI, fake), captured
+    return cast("openai.AsyncOpenAI", fake), captured
 
 
 async def _drain(stream: Any) -> None:
@@ -239,7 +243,11 @@ async def test_responses_streams_text_and_usage() -> None:
                 "output_index": 0,
                 "item": {"id": "msg_1", "type": "message", "role": "assistant"},
             },
-            {"type": "response.output_text.delta", "item_id": "msg_1", "delta": "Hi"},
+            {
+                "type": "response.output_text.delta",
+                "item_id": "msg_1",
+                "delta": "Hi",
+            },
             {
                 "type": "response.output_item.done",
                 "output_index": 0,
@@ -440,7 +448,10 @@ async def test_raw_params_pass_through_to_sdk_kwargs(
     assert captured["max_completion_tokens"] == 128
     assert captured["extra_body"] == {"future_option": True}
     assert captured["extra_headers"] == {"x-openai-feature": "enabled"}
-    assert captured["stream_options"] == {"include_usage": False, "custom": True}
+    assert captured["stream_options"] == {
+        "include_usage": False,
+        "custom": True,
+    }
 
 
 async def test_strict_json_schema_flows_into_response_format(
@@ -481,7 +492,7 @@ async def test_non_dict_params_rejected_by_adapter(
 async def test_builtin_tool_in_request_raises(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Chat-completions adapter rejects OpenAI built-in tools at the boundary."""
+    """Chat-completions rejects OpenAI built-in tools at the boundary."""
     fake, _ = _patch(monkeypatch)
 
     stream = protocol.stream(
@@ -525,7 +536,9 @@ async def test_sdk_errors_are_mapped_to_provider_hierarchy(
     _ = monkeypatch
     response = httpx.Response(
         429,
-        request=httpx.Request("POST", "https://openai.test/v1/chat/completions"),
+        request=httpx.Request(
+            "POST", "https://openai.test/v1/chat/completions"
+        ),
         headers={"x-request-id": "req-openai"},
     )
     sdk_error = openai.RateLimitError(
@@ -538,7 +551,7 @@ async def test_sdk_errors_are_mapped_to_provider_hierarchy(
     with pytest.raises(ai.ProviderRateLimitError) as exc_info:
         await _drain(
             protocol.stream(
-                cast(openai.AsyncOpenAI, fake),
+                cast("openai.AsyncOpenAI", fake),
                 _MODEL,
                 [ai.user_message("Hi")],
                 provider="openai",
@@ -561,7 +574,9 @@ async def test_model_404_is_mapped_to_model_not_found(
     _ = monkeypatch
     response = httpx.Response(
         404,
-        request=httpx.Request("POST", "https://openai.test/v1/chat/completions"),
+        request=httpx.Request(
+            "POST", "https://openai.test/v1/chat/completions"
+        ),
     )
     sdk_error = openai.NotFoundError(
         "model not found",
@@ -573,7 +588,7 @@ async def test_model_404_is_mapped_to_model_not_found(
     with pytest.raises(ai.ProviderModelNotFoundError) as exc_info:
         await _drain(
             protocol.stream(
-                cast(openai.AsyncOpenAI, fake),
+                cast("openai.AsyncOpenAI", fake),
                 _MODEL,
                 [ai.user_message("Hi")],
                 provider="openai",

@@ -8,7 +8,7 @@ emits wire-protocol deltas directly from event streams.
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, cast
 
 from ....types import messages as messages_
 from . import _approvals, ui_message
@@ -34,7 +34,9 @@ def to_ui_parts(parts: list[messages_.Part]) -> list[ui_message.UIMessagePart]:
         if isinstance(part, messages_.TextPart) and part.text:
             result.append(ui_message.UITextPart(type="text", text=part.text))
         elif isinstance(part, messages_.ReasoningPart) and part.text:
-            result.append(ui_message.UIReasoningPart(type="reasoning", text=part.text))
+            result.append(
+                ui_message.UIReasoningPart(type="reasoning", text=part.text)
+            )
         elif isinstance(part, messages_.ToolCallPart):
             result.append(
                 ui_message.UIToolPart.model_validate(
@@ -125,7 +127,10 @@ def merge_approval_signals(
             updates["state"] = "approval-requested"
             updates["approval"] = ui_message.UIToolApproval(id=part.hook_id)
         elif part.status == "resolved":
-            resolution = part.resolution or {}
+            resolution = cast(
+                "dict[str, Any]",
+                part.resolution if isinstance(part.resolution, dict) else {},
+            )
             updates["approval"] = ui_message.UIToolApproval(
                 id=part.hook_id,
                 approved=resolution.get("granted"),

@@ -138,7 +138,7 @@ class BuiltinToolResult(BaseEvent):
 
 
 class FileEvent(BaseEvent):
-    """A complete generated file from the LLM (e.g. inline image from Gemini/GPT)."""
+    """A complete generated file from the LLM."""
 
     block_id: str = ""
     media_type: str
@@ -186,7 +186,7 @@ DiscriminatedEvent = Annotated[
 async def replay_message_events(
     msg: messages.Message,
 ) -> AsyncGenerator[Event]:
-    """Synthesize the events ``ai.models.stream`` would have emitted for ``msg``.
+    """Synthesize stream events for ``msg``.
 
     Use when you have a complete ``Message`` from a non-streaming source —
     e.g., the result of a Temporal activity, a cached LLM response, or an
@@ -302,8 +302,8 @@ class PartialToolCallResult(pydantic.BaseModel):
     def key(self) -> object:
         return (self.tool_call_id, self.label)
 
-    aggregator_factory: Callable[[], Aggregator[Any, Any, Any]] | None = pydantic.Field(
-        default=None, exclude=True, repr=False
+    aggregator_factory: Callable[[], Aggregator[Any, Any, Any]] | None = (
+        pydantic.Field(default=None, exclude=True, repr=False)
     )
 
     kind: Literal["partial_tool_call_result"] = "partial_tool_call_result"

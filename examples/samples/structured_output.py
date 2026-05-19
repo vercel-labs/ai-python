@@ -20,7 +20,7 @@ messages = [ai.user_message("Give me a simple pancake recipe.")]
 
 
 async def main() -> None:
-    # Stream with structured output — watch JSON arrive, get validated at the end.
+    # Stream structured output: watch JSON arrive, validate at the end.
     async with ai.stream(model, messages, output_type=Recipe) as s:
         async for event in s:
             if isinstance(event, ai.events.TextDelta):

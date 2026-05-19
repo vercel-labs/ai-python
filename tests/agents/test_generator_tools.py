@@ -42,7 +42,11 @@ async def test_generator_tool_streams_and_returns_result() -> None:
 
     # Turn 1: LLM calls progress_tool
     # Turn 2: LLM produces final text after seeing the tool result
-    call = [tool_call_msg(tc_id="tc-1", name="progress_tool", args='{"query": "test"}')]
+    call = [
+        tool_call_msg(
+            tc_id="tc-1", name="progress_tool", args='{"query": "test"}'
+        )
+    ]
     reply = [text_msg("Done!", id="msg-2")]
     llm = mock_llm([call, reply])
 
@@ -56,7 +60,9 @@ async def test_generator_tool_streams_and_returns_result() -> None:
     # Intermediate progress events were forwarded to consumer, wrapped
     # in PartialToolCallResult and attributed to the originating tool call.
     progress_wrappers = [
-        e for e in all_events if isinstance(e, agent_events_.PartialToolCallResult)
+        e
+        for e in all_events
+        if isinstance(e, agent_events_.PartialToolCallResult)
     ]
     assert len(progress_wrappers) == 2
     assert progress_wrappers[0].value == "Working..."
@@ -138,7 +144,9 @@ async def test_yield_from_nested_agent() -> None:
 
     # Outer agent turn 1: calls research_tool
     outer_call = [
-        tool_call_msg(tc_id="otc-1", name="research_tool", args='{"topic": "mars"}')
+        tool_call_msg(
+            tc_id="otc-1", name="research_tool", args='{"topic": "mars"}'
+        )
     ]
     # Outer agent turn 2: final answer (after seeing tool result)
     outer_reply = [text_msg("Summary: Mars has two moons.", id="outer-msg-2")]
@@ -147,7 +155,9 @@ async def test_yield_from_nested_agent() -> None:
     MOCK_PROVIDER._stream_impl = adapter.stream
 
     all_events: list[agent_events_.AgentEvent] = []
-    async with outer.run(MOCK_MODEL, [ai.user_message("Tell me about Mars")]) as stream:
+    async with outer.run(
+        MOCK_MODEL, [ai.user_message("Tell me about Mars")]
+    ) as stream:
         async for event in stream:
             all_events.append(event)
 

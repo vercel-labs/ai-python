@@ -31,14 +31,16 @@ import datetime
 import json
 import sys
 import uuid
-from collections.abc import AsyncGenerator
-from typing import Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import temporalio.activity
 import temporalio.client
 import temporalio.common
 import temporalio.worker
 import temporalio.workflow
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
 
 with temporalio.workflow.unsafe.imports_passed_through():
     import ai
@@ -131,9 +133,11 @@ async def llm_call_activity(params: LLMParams) -> LLMResult:
 
 
 class WeatherAgent(ai.Agent):
-    TOOLS = [get_weather, get_population]
+    TOOLS: ClassVar[list[ai.AgentTool]] = [get_weather, get_population]
 
-    async def loop(self, context: ai.Context) -> AsyncGenerator[ai.events.AgentEvent]:
+    async def loop(
+        self, context: ai.Context
+    ) -> AsyncGenerator[ai.events.AgentEvent]:
         tool_schemas = [
             {"name": t.name, "args": t.args.model_dump(mode="json")}
             for t in context.tools

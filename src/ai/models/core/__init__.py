@@ -30,7 +30,7 @@ __all__ = [
     "VideoParams",
     "generate",
     "get_model",
+    "helpers",
     "probe",
     "stream",
-    "helpers",
 ]

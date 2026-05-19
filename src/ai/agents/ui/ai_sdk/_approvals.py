@@ -24,7 +24,7 @@ def tool_call_id_for(hook_part: messages_.HookPart[Any]) -> str | None:
 
 
 def is_tool_approval_message(msg: messages_.Message) -> bool:
-    """True if every part of ``msg`` is a ToolApproval HookPart."""
+    """Return whether every part of ``msg`` is a ToolApproval HookPart."""
     if not msg.parts:
         return False
     return all(

@@ -5,7 +5,13 @@ from __future__ import annotations
 import ai
 from ai.types import messages
 
-from ..conftest import MOCK_MODEL, collect_messages, mock_llm, text_msg, tool_call_msg
+from ..conftest import (
+    MOCK_MODEL,
+    collect_messages,
+    mock_llm,
+    text_msg,
+    tool_call_msg,
+)
 
 # -- Tool definitions for tests --------------------------------------------
 
@@ -47,7 +53,9 @@ async def test_agent_tool_then_text() -> None:
     call2 = [text_msg("The answer is 10.")]
     llm = mock_llm([call1, call2])
 
-    async with my_agent.run(MOCK_MODEL, [ai.user_message("Double 5")]) as stream:
+    async with my_agent.run(
+        MOCK_MODEL, [ai.user_message("Double 5")]
+    ) as stream:
         msgs = await collect_messages(stream)
     assert llm.call_count == 2
     tool_results = [m for m in msgs if m.role == "tool" and m.tool_results]
@@ -81,7 +89,9 @@ async def test_agent_parallel_tools() -> None:
     call2 = [text_msg("6 and 14", id="msg-2")]
     llm = mock_llm([[two_tools], call2])
 
-    async with my_agent.run(MOCK_MODEL, [ai.user_message("Double 3 and 7")]) as stream:
+    async with my_agent.run(
+        MOCK_MODEL, [ai.user_message("Double 3 and 7")]
+    ) as stream:
         msgs = await collect_messages(stream)
     assert llm.call_count == 2
     tool_result_msgs = [m for m in msgs if m.role == "tool" and m.tool_results]
@@ -96,9 +106,13 @@ async def test_agent_multi_turn() -> None:
     my_agent = ai.agent(tools=[double, concat])
 
     turn1 = [
-        tool_call_msg(tc_id="tc-1", name="concat", args='{"a": "hello", "b": " world"}')
+        tool_call_msg(
+            tc_id="tc-1", name="concat", args='{"a": "hello", "b": " world"}'
+        )
     ]
-    turn2 = [tool_call_msg(tc_id="tc-2", name="double", args='{"x": 3}', id="msg-2")]
+    turn2 = [
+        tool_call_msg(tc_id="tc-2", name="double", args='{"x": 3}', id="msg-2")
+    ]
     turn3 = [text_msg("Done: hello world, 6", id="msg-3")]
     llm = mock_llm([turn1, turn2, turn3])
 

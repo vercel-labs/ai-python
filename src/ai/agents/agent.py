@@ -33,7 +33,7 @@ import pydantic
 
 # ``typing.TypeVar`` lacks the ``default=`` kwarg on Python <3.13.
 # Use the typing_extensions backport so this works on 3.12 too.
-from typing_extensions import TypeVar  # noqa: UP035
+from typing_extensions import TypeVar
 
 from .. import models, types, util
 from ..types import builders
@@ -82,8 +82,9 @@ def _error_tool_result(
 
 
 def _process_interrupted_hooks(messages: list[types.messages.Message]) -> None:
-    """Detect a bailed-out-on-hook tail and mangle ``messages`` in place
-    so the next agent run resumes correctly.
+    """Detect an interrupted hook tail and mangle ``messages`` in place.
+
+    This prepares the next agent run to resume correctly.
 
     Two shapes are recognised:
 
@@ -124,7 +125,9 @@ def _process_interrupted_hooks(messages: list[types.messages.Message]) -> None:
             return
 
         completed_by_id = {
-            r.tool_call_id: r for r in last.tool_results if not r.is_hook_pending
+            r.tool_call_id: r
+            for r in last.tool_results
+            if not r.is_hook_pending
         }
 
         new_parts: list[types.messages.Part] = []
@@ -138,7 +141,9 @@ def _process_interrupted_hooks(messages: list[types.messages.Message]) -> None:
                 )
             new_parts.append(part)
 
-        messages[-2] = prev.model_copy(update={"parts": new_parts, "replay": True})
+        messages[-2] = prev.model_copy(
+            update={"parts": new_parts, "replay": True}
+        )
         messages.pop()
 
 
@@ -218,7 +223,9 @@ class MessageBundle(pydantic.BaseModel):
     messages: tuple[types.messages.Message, ...]
 
 
-class MessageAggregator(events_.Aggregator[events_.AgentEvent, MessageBundle, str]):
+class MessageAggregator(
+    events_.Aggregator[events_.AgentEvent, MessageBundle, str]
+):
     def __init__(self) -> None:
         self._messages: list[types.messages.Message] = []
 
@@ -247,7 +254,7 @@ class MessageAggregator(events_.Aggregator[events_.AgentEvent, MessageBundle, st
 
 
 class Aggregate:
-    """Marker for declaring an aggregator on a tool's return type.
+    r"""Marker for declaring an aggregator on a tool's return type.
 
     Place inside ``Annotated`` metadata to attach an aggregator factory
     to an async-generator tool::
@@ -282,10 +289,15 @@ class Aggregate:
     def __repr__(self) -> str:
         kw = ", ".join(f"{k}={v!r}" for k, v in self._kwargs.items())
         sep = ", " if kw else ""
-        return f"Aggregate({self._factory.__name__}{sep}{kw})"
+        name = getattr(
+            self._factory, "__name__", self._factory.__class__.__name__
+        )
+        return f"Aggregate({name}{sep}{kw})"
 
 
-type StreamingStatusTool[T] = Annotated[AsyncGenerator[T], Aggregate(LastAggregator)]
+type StreamingStatusTool[T] = Annotated[
+    AsyncGenerator[T], Aggregate(LastAggregator)
+]
 """Async-generator tool whose final yielded value becomes the tool result.
 
 Intermediate yields stream to the consumer as ``PartialToolCallResult``
@@ -316,7 +328,9 @@ becomes the tool result the parent model sees::
 """
 
 
-type StreamingTextTool = Annotated[AsyncGenerator[str], Aggregate(ConcatAggregator)]
+type StreamingTextTool = Annotated[
+    AsyncGenerator[str], Aggregate(ConcatAggregator)
+]
 """Async-generator tool whose yielded chunks concatenate into the result.
 
 Each yield streams to the consumer as a ``PartialToolCallResult``;
@@ -359,8 +373,9 @@ def _aggregate_from_return_type(fn: Callable[..., Any]) -> Aggregate | None:
     metadata = getattr(ret, "__metadata__", ())
     matches = [m for m in metadata if isinstance(m, Aggregate)]
     if len(matches) > 1:
+        name = getattr(fn, "__name__", fn.__class__.__name__)
         raise TypeError(
-            f"Tool {fn.__name__!r} has multiple Aggregate markers in its "
+            f"Tool {name!r} has multiple Aggregate markers in its "
             "return-type annotation; expected at most one"
         )
     return matches[0] if matches else None
@@ -414,29 +429,33 @@ def tool[**P, T](fn: Callable[P, AsyncGenerator[T]], /) -> AgentTool: ...
 
 
 @overload
-def tool[**P](*, require_approval: bool) -> Callable[[Callable[P, Any]], AgentTool]: ...
+def tool[**P](
+    *, require_approval: bool
+) -> Callable[[Callable[P, Any]], AgentTool]: ...
 
 
 @overload
-def tool[**P, T, R](
+def tool[**P](
     *,
-    aggregator: Callable[[], events_.Aggregator[T, Any, R]],
+    aggregator: Callable[[], events_.Aggregator[Any, Any, Any]],
     require_approval: bool = False,
-) -> Callable[[Callable[P, AsyncGenerator[T]]], AgentTool]: ...
+) -> Callable[[Callable[P, AsyncGenerator[Any]]], AgentTool]: ...
 
 
 def tool[**P, T, R](
-    fn: Callable[P, Awaitable[R]] | Callable[P, AsyncGenerator[T]] | None = None,
+    fn: Callable[P, Awaitable[R]]
+    | Callable[P, AsyncGenerator[T]]
+    | None = None,
     /,
     *,
-    aggregator: Callable[[], events_.Aggregator[T, Any, R]] | None = None,
+    aggregator: Callable[[], events_.Aggregator[Any, Any, Any]] | None = None,
     require_approval: bool = False,
 ) -> (
-    Callable[[Callable[P, AsyncGenerator[T]]], AgentTool]
+    Callable[[Callable[P, AsyncGenerator[Any]]], AgentTool]
     | Callable[[Callable[P, Awaitable[R]]], AgentTool]
     | AgentTool
 ):
-    """Decorator: turn an async function into a :class:`Tool`.
+    """Turn an async function into a :class:`Tool`.
 
     For async-generator tools, declare the aggregator either via the
     ``aggregator=`` keyword argument or by annotating the return type
@@ -522,7 +541,9 @@ class BoundToolCall:
     @property
     def kwargs(self) -> dict[str, Any]:
         if self._kwargs is None:
-            kwargs = json.loads(self._part.tool_args) if self._part.tool_args else {}
+            kwargs = (
+                json.loads(self._part.tool_args) if self._part.tool_args else {}
+            )
             self._kwargs = _validate_kwargs(self._tool, kwargs)
         return dict(self._kwargs)
 
@@ -548,7 +569,9 @@ class BoundToolCall:
         if overrides:
             # Overrides come from user code, not the model — validate
             # eagerly so programming errors surface immediately.
-            base_kwargs = _validate_kwargs(self._tool, {**base_kwargs, **overrides})
+            base_kwargs = _validate_kwargs(
+                self._tool, {**base_kwargs, **overrides}
+            )
 
         call = middleware_.ToolContext(
             tool_call_id=self._part.tool_call_id,
@@ -558,7 +581,9 @@ class BoundToolCall:
 
         tool = self._tool
 
-        async def _real(call: middleware_.ToolContext) -> events_.ToolCallResult:
+        async def _real(
+            call: middleware_.ToolContext,
+        ) -> events_.ToolCallResult:
             result: Any
             model_input: Any
             try:
@@ -645,7 +670,9 @@ class GatedToolCall:
                 metadata={"tool": tc.name, "kwargs": hook_kwargs},
             )
         except hooks_.HookPendingError as e:
-            return pending_tool_result(e.hook, tool_call_id=tc.id, tool_name=tc.name)
+            return pending_tool_result(
+                e.hook, tool_call_id=tc.id, tool_name=tc.name
+            )
         if approval.granted:
             return await tc()
         return tool_result(
@@ -741,7 +768,9 @@ class ToolRunner:
 
     def get_tool_message(self) -> types.messages.Message | None:
         if self._tool_results:
-            return builders.tool_message(*[t.message for t in self._tool_results])
+            return builders.tool_message(
+                *[t.message for t in self._tool_results]
+            )
         return None
 
     async def _iterate(self) -> AsyncGenerator[events_.ToolCallResult]:
@@ -759,7 +788,9 @@ class ToolRunner:
                     self._new_results = []
                     for n in new:
                         yield n
-                    self._sched_waiter = asyncio.get_running_loop().create_future()
+                    self._sched_waiter = (
+                        asyncio.get_running_loop().create_future()
+                    )
                 else:
                     try:
                         res = t.result()
@@ -804,7 +835,10 @@ class Context(pydantic.BaseModel):
         # those are resolved and we get called again.
         if any(r.is_hook_pending for r in last_message.tool_results):
             return False
-        return last_message.replay or last_message.role not in ("assistant", "internal")
+        return last_message.replay or last_message.role not in (
+            "assistant",
+            "internal",
+        )
 
     @overload
     def resolve(self, tool_part: types.messages.ToolCallPart) -> ToolCall: ...
@@ -815,14 +849,16 @@ class Context(pydantic.BaseModel):
 
     def resolve(
         self,
-        tool_part: types.messages.ToolCallPart | Sequence[types.messages.ToolCallPart],
+        tool_part: types.messages.ToolCallPart
+        | Sequence[types.messages.ToolCallPart],
     ) -> ToolCall | list[ToolCall]:
         """Resolve ToolCallPart(s) into callable ToolCall object(s)."""
         if isinstance(tool_part, types.messages.ToolCallPart):
             tool = self._agent_tools_by_name.get(tool_part.tool_name)
             if tool is None:
                 raise KeyError(
-                    f"No agent executor registered for tool {tool_part.tool_name!r}"
+                    "No agent executor registered for tool "
+                    f"{tool_part.tool_name!r}"
                 )
             tc = BoundToolCall(part=tool_part, tool=tool)
             if tool.require_approval:
@@ -831,7 +867,10 @@ class Context(pydantic.BaseModel):
         return [self.resolve(tp) for tp in tool_part]
 
     def add(
-        self, message: types.messages.Message | Sequence[types.messages.Message] | None
+        self,
+        message: types.messages.Message
+        | Sequence[types.messages.Message]
+        | None,
     ) -> None:
         """Append message(s) to the context, skipping any flagged ``replay``.
 
@@ -844,7 +883,9 @@ class Context(pydantic.BaseModel):
         if message is None:
             return
         msgs = (
-            [message] if isinstance(message, types.messages.Message) else list(message)
+            [message]
+            if isinstance(message, types.messages.Message)
+            else list(message)
         )
         for msg in msgs:
             if msg.replay:
@@ -908,7 +949,7 @@ class AgentStream(Generic[AgentOutputT]):
 
     @property
     def output(self) -> AgentOutputT:
-        """Return the run's output, parsed as the ``output_type`` given to ``run``.
+        """Return the run's output.
 
         Defaults to the final assistant message's concatenated text.
         When an ``output_type`` was passed, the assistant message's text
@@ -916,7 +957,7 @@ class AgentStream(Generic[AgentOutputT]):
         is returned.
         """
         last = self._context.messages[-1]
-        return cast(AgentOutputT, last.get_output(self._context.output_type))
+        return cast("AgentOutputT", last.get_output(self._context.output_type))
 
 
 def tool_result(
@@ -1106,7 +1147,9 @@ class Agent:
         """The agent's registered tools (read-only copy)."""
         return list(self._tools)
 
-    async def loop(self, context: Context) -> AsyncGenerator[events_.AgentEvent]:
+    async def loop(
+        self, context: Context
+    ) -> AsyncGenerator[events_.AgentEvent]:
         """Stream, execute tools, repeat.
 
         Override in a subclass to customise the agent's control flow.
@@ -1177,6 +1220,7 @@ class Agent:
         To attribute a sub-agent's events to a branch, wrap the run in
         ``yield_from(..., label=...)`` — the label flows via
         ``PartialToolCallResult`` rather than on individual messages.
+
         """
         return self._run(
             model,

@@ -15,7 +15,9 @@ from ai.types import messages as messages_
 
 
 def _ui(role: str, *parts: dict[str, Any], id: str = "m1") -> UIMessage:
-    return UIMessage.model_validate({"id": id, "role": role, "parts": list(parts)})
+    return UIMessage.model_validate(
+        {"id": id, "role": role, "parts": list(parts)}
+    )
 
 
 def _text(text: str) -> dict[str, Any]:
@@ -88,7 +90,7 @@ def test_to_messages_keeps_pending_approval_tombstone() -> None:
 
 
 def test_to_messages_drops_resolved_approval_tombstone() -> None:
-    """Resolved approvals come back via the side-channel; the tombstone is dead."""
+    """Resolved approvals come back via the side-channel."""
     messages, approvals = to_messages(
         [
             _ui(
@@ -120,7 +122,11 @@ def test_to_messages_keeps_trailing_assistant_when_approved() -> None:
                     "delete",
                     "tc1",
                     "approval-responded",
-                    approval={"id": "approve_tc1", "approved": True, "reason": None},
+                    approval={
+                        "id": "approve_tc1",
+                        "approved": True,
+                        "reason": None,
+                    },
                 ),
                 id="a1",
             ),
@@ -181,7 +187,7 @@ def test_to_messages_decodes_subagent_tool_output() -> None:
     populating it requires the tool registry, which lives in
     :meth:`Agent.run`.
     """
-    # Wire shape: a tool-_research_tool part with output = UIMessage{parts=[text]}.
+    # Wire shape: tool-_research_tool with output = UIMessage{parts=[text]}.
     ui = [
         _ui("user", _text("research mars"), id="u1"),
         _ui(
@@ -216,7 +222,13 @@ def test_to_messages_passthrough_keeps_wire_shape() -> None:
         _ui("user", _text("hi"), id="u1"),
         _ui(
             "assistant",
-            _tool("ping", "tc1", "output-available", input={}, output={"pong": True}),
+            _tool(
+                "ping",
+                "tc1",
+                "output-available",
+                input={},
+                output={"pong": True},
+            ),
             id="a1",
         ),
     ]

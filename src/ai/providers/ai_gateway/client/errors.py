@@ -265,7 +265,7 @@ def create_gateway_error(
     """
     # Parse the response body
     body: Any = response_body
-    if isinstance(body, (str, bytes)):
+    if isinstance(body, str | bytes):
         try:
             body = json.loads(body)
         except (json.JSONDecodeError, ValueError):

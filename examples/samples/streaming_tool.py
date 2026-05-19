@@ -6,7 +6,8 @@ The tool's aggregator decides how the yielded values are combined into
 the final tool result that goes back to the model.
 
 Here the aggregator is declared via the :data:`ai.StreamingStatusTool`
-return-type alias — equivalent to ``@ai.tool(aggregator=ai.agents.LastAggregator)``.
+return-type alias. This is equivalent to declaring the aggregator in
+``@ai.tool(...)``.
 """
 
 import asyncio
@@ -17,7 +18,11 @@ import ai
 @ai.tool
 async def talk_to_mothership(question: str) -> ai.StreamingStatusTool[str]:
     """Ask the mothership a question. Streams progress back to the caller."""
-    for step in ["Connecting...", "Transmitting...", f"Asking: {question!r}..."]:
+    for step in [
+        "Connecting...",
+        "Transmitting...",
+        f"Asking: {question!r}...",
+    ]:
         yield step
         await asyncio.sleep(0.3)
 
@@ -31,7 +36,9 @@ async def main() -> None:
     my_agent = ai.agent(tools=[talk_to_mothership])
 
     messages = [
-        ai.system_message("Use the mothership tool when asked about the future."),
+        ai.system_message(
+            "Use the mothership tool when asked about the future."
+        ),
         ai.user_message("When will the robots take over?"),
     ]
 

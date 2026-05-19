@@ -31,12 +31,14 @@ from .conftest import (
 _MODEL = ai.Model("claude-sonnet-4-6", provider=ai.get_provider("anthropic"))
 
 
-async def _drain(stream: FakeStream, monkeypatch: pytest.MonkeyPatch) -> models.Stream:
+async def _drain(
+    stream: FakeStream, monkeypatch: pytest.MonkeyPatch
+) -> models.Stream:
     fake = FakeAnthropicClient(stream=stream)
     _ = monkeypatch
     s = models.Stream(
         protocol.stream(
-            cast(anthropic.AsyncAnthropic, fake),
+            cast("anthropic.AsyncAnthropic", fake),
             _MODEL,
             [ai.user_message("Hi")],
             provider="anthropic",
@@ -89,7 +91,9 @@ async def test_tool_result_block_emits_builtin_result(
         block_start(1, "web_search_tool_result"),
         block_stop(1),
     ]
-    s = await _drain(FakeStream(sdk_events, snapshot_content=snapshot), monkeypatch)
+    s = await _drain(
+        FakeStream(sdk_events, snapshot_content=snapshot), monkeypatch
+    )
 
     returns = s.message.builtin_tool_returns
     assert len(returns) == 1
@@ -134,7 +138,7 @@ async def test_event_kinds_in_order(monkeypatch: pytest.MonkeyPatch) -> None:
 
     seen: list[type] = []
     async for event in protocol.stream(
-        cast(anthropic.AsyncAnthropic, fake),
+        cast("anthropic.AsyncAnthropic", fake),
         _MODEL,
         [ai.user_message("Hi")],
         provider="anthropic",
@@ -165,7 +169,7 @@ async def test_builtin_tool_end_carries_call_part(
     end_event: events.BuiltinToolEnd | None = None
     s = models.Stream(
         protocol.stream(
-            cast(anthropic.AsyncAnthropic, fake),
+            cast("anthropic.AsyncAnthropic", fake),
             _MODEL,
             [ai.user_message("Hi")],
             provider="anthropic",

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import dataclasses
+from typing import TYPE_CHECKING
 
-import httpx
+if TYPE_CHECKING:
+    import httpx
 
 
 @dataclasses.dataclass(frozen=True)
@@ -54,6 +56,7 @@ class ProviderError(AIError):
             message: Human-readable error message.
             provider: Provider name or id associated with the failure, when
                 known.
+
         """
         super().__init__(message)
         self.message = message
@@ -129,6 +132,7 @@ class ProviderAPIError(ProviderError):
                 succeed. When omitted, this defaults from
                 ``http_context.status_code`` when a status is present; provider
                 mappers may override it for transport-level failures.
+
         """
         super().__init__(message, provider=provider)
         self.request_id = request_id
@@ -138,7 +142,9 @@ class ProviderAPIError(ProviderError):
         self.param = param
         self.type = error_type
         self.is_retryable = (
-            _is_retryable_status(http_context.status_code if http_context else None)
+            _is_retryable_status(
+                http_context.status_code if http_context else None
+            )
             if is_retryable is None
             else is_retryable
         )
@@ -215,6 +221,7 @@ class ProviderModelNotFoundError(ProviderNotFoundError):
             is_retryable: Whether retrying the same request may reasonably
                 succeed. When omitted, this defaults from the HTTP status when
                 present.
+
         """
         super().__init__(
             message,
@@ -321,8 +328,8 @@ __all__ = [
     "ProviderError",
     "ProviderInternalServerError",
     "ProviderModelNotFoundError",
-    "ProviderNotFoundError",
     "ProviderNotConfiguredError",
+    "ProviderNotFoundError",
     "ProviderOverloadedError",
     "ProviderPermissionDeniedError",
     "ProviderRateLimitError",

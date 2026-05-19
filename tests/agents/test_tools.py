@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import Any, cast
 
 import pydantic
 import pytest
@@ -95,7 +95,7 @@ async def test_tool_call_returns_tool_message() -> None:
     tc = ai.agents.BoundToolCall(part=part, tool=double)
     result = await tc()
 
-    assert tc.fn.__name__ == "double"
+    assert cast(Any, tc.fn).__name__ == "double"
     assert tc.kwargs == {"x": 5}
     assert result.message.role == "tool"
     assert len(result.results) == 1
@@ -256,14 +256,17 @@ async def test_tool_call_with_nested_pydantic_model() -> None:
     part = ai.messages.ToolCallPart(
         tool_call_id="tc-nested",
         tool_name="store",
-        tool_args='{"items": [{"key": "a", "value": "1"}, {"key": "b", "value": "2"}]}',
+        tool_args=(
+            '{"items": [{"key": "a", "value": "1"}, '
+            '{"key": "b", "value": "2"}]}'
+        ),
     )
     result = await ai.agents.BoundToolCall(part=part, tool=store)()
 
     assert not result.results[0].is_error
     assert len(received) == 2
-    assert all(isinstance(item, _NestedItem) for item in received), (
-        f"expected _NestedItem instances, got {[type(i) for i in received]}"
-    )
+    assert all(
+        isinstance(item, _NestedItem) for item in received
+    ), f"expected _NestedItem instances, got {[type(i) for i in received]}"
     assert received[0].key == "a"
     assert received[1].value == "2"

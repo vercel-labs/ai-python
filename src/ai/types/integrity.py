@@ -43,8 +43,7 @@ _LLM_PART_TYPES = (
 def _clean_messages(
     messages: list[messages_.Message], mode: Mode
 ) -> tuple[list[messages_.Message], list[IssueKind]]:
-    """Strip internal messages, fix broken tool args"""
-
+    """Strip internal messages, fix broken tool args."""
     issues: list[IssueKind] = []
     result: list[messages_.Message] = []
 
@@ -100,7 +99,6 @@ def _clean_messages(
 
 def _validate_tool_ids(messages: list[messages_.Message]) -> list[IssueKind]:
     """Check for fatal issues: duplicate tool ids, orphaned tool results."""
-
     issues: list[IssueKind] = []
     seen_call_ids: set[str] = set()
     seen_result_ids: set[str] = set()

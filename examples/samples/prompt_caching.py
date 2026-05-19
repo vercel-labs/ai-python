@@ -160,7 +160,8 @@ def _show(label: str, usage: ai.types.usage.Usage | None) -> None:
         return
     print(
         f"  {label}: input={usage.input_tokens} output={usage.output_tokens}  "
-        f"cache_write={usage.cache_write_tokens} cache_read={usage.cache_read_tokens}"
+        f"cache_write={usage.cache_write_tokens} "
+        f"cache_read={usage.cache_read_tokens}"
     )
 
 

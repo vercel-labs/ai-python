@@ -59,9 +59,11 @@ class MockProvider(models.Provider):
                 provider=self.name,
             )
         if self._stream_impl is None:
-            raise RuntimeError("MockProvider: no stream implementation configured")
+            raise RuntimeError(
+                "MockProvider: no stream implementation configured"
+            )
         return cast(
-            AsyncGenerator[events_.Event],
+            "AsyncGenerator[events_.Event]",
             self._stream_impl(
                 model,
                 messages,
@@ -88,9 +90,12 @@ class MockProvider(models.Provider):
                 provider=self.name,
             )
         if self._generate_impl is None:
-            raise RuntimeError("MockProvider: no generate implementation configured")
+            raise RuntimeError(
+                "MockProvider: no generate implementation configured"
+            )
         return cast(
-            messages_.Message, await self._generate_impl(model, messages, params)
+            "messages_.Message",
+            await self._generate_impl(model, messages, params),
         )
 
 
@@ -145,7 +150,9 @@ async def emit_events_for_messages(
                         tool_call_id=part.tool_call_id,
                         chunk=part.tool_args,
                     )
-                yield events_.ToolEnd(tool_call_id=part.tool_call_id, tool_call=part)
+                yield events_.ToolEnd(
+                    tool_call_id=part.tool_call_id, tool_call=part
+                )
 
             elif isinstance(part, messages_.FilePart):
                 yield events_.FileEvent(
@@ -226,7 +233,9 @@ class MockGenerateAdapter:
         params: Any = None,
     ) -> messages_.Message:
         if self._call_index >= len(self._responses):
-            raise RuntimeError("MockGenerateAdapter: no more responses configured")
+            raise RuntimeError(
+                "MockGenerateAdapter: no more responses configured"
+            )
         self.call_count += 1
         msg = self._responses[self._call_index]
         self._call_index += 1

@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 import os
-from collections.abc import AsyncGenerator, Iterable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, ClassVar, Generic
 
-from typing_extensions import TypeVar  # noqa: UP035 - default= is needed on 3.12
+from typing_extensions import (
+    TypeVar,
+)
 
 from .. import _modelsdev
 from ..errors import UnsupportedProviderError
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator, Iterable, Mapping, Sequence
+
     import modelsdotdev
     import pydantic
 
@@ -91,7 +94,9 @@ class Provider(Generic[ClientT]):
         client: ClientT | None = None,
     ) -> None:
         if type(self) is Provider:
-            raise TypeError("Provider is a base class; implement a subclass instead")
+            raise TypeError(
+                "Provider is a base class; implement a subclass instead"
+            )
         self._name = name
         self._base_url = base_url
         self._protocol = protocol
@@ -145,7 +150,9 @@ class Provider(Generic[ClientT]):
             return self._api_key
         if self.api_key_env is None:
             return None
-        return self._env.get(self.api_key_env) or os.environ.get(self.api_key_env)
+        return self._env.get(self.api_key_env) or os.environ.get(
+            self.api_key_env
+        )
 
     def is_configured(self) -> bool:
         """Return ``True`` when all required provider config is available."""
@@ -189,7 +196,9 @@ class Provider(Generic[ClientT]):
     def protocol(self) -> ProviderProtocol[ClientT]:
         """Default wire protocol used by this provider."""
         if self._protocol is None:
-            raise RuntimeError(f"provider {self.name!r} does not have a protocol")
+            raise RuntimeError(
+                f"provider {self.name!r} does not have a protocol"
+            )
         return self._protocol
 
     async def list_models(self) -> list[str]:
@@ -239,15 +248,16 @@ class Provider(Generic[ClientT]):
     async def probe(self, model: model_.Model) -> None:
         """Probe if provider is online and can serve given model.
 
-        A probe function verifies that *model* can reach its provider and that it
-        is available there. It returns successfully when credentials are valid
-        **and** the model exists on the remote side.
+        A probe function verifies that *model* can reach its provider and
+        that it is available there. It returns successfully when credentials
+        are valid **and** the model exists on the remote side.
 
         The check must be **free** — it should only hit metadata / listing
         endpoints that don't consume tokens or credits.
 
-        Failures should raise provider errors; catch ``ProviderModelNotFoundError``
-        to distinguish missing models from other failures.
+        Failures should raise provider errors; catch
+        ``ProviderModelNotFoundError`` to distinguish missing models from
+        other failures.
         """
         raise NotImplementedError
 
@@ -337,7 +347,7 @@ def provider_config(
     provider: modelsdotdev.Provider,
     model_provider_config: modelsdotdev.ModelProviderConfig | None = None,
 ) -> tuple[str | None, tuple[str, ...]]:
-    """Return ``api_key_env`` and non-secret config envs from models.dev data."""
+    """Return API key and config envs from models.dev data."""
     return _modelsdev.provider_config(provider, model_provider_config)
 
 

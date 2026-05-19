@@ -43,7 +43,9 @@ class ToolResultPart(pydantic.BaseModel):
     # registry) rather than carried across serialization.  ``default_factory``
     # preserves singleton identity so the unset sentinel survives pydantic's
     # default-copying.
-    _model_input: Any = pydantic.PrivateAttr(default_factory=lambda: _MODEL_INPUT_UNSET)
+    _model_input: Any = pydantic.PrivateAttr(
+        default_factory=lambda: _MODEL_INPUT_UNSET
+    )
 
     kind: Literal["tool_result"] = "tool_result"
     model_config = pydantic.ConfigDict(frozen=True)
@@ -148,7 +150,8 @@ class FilePart(pydantic.BaseModel):
 
     ``data`` accepts:
 
-    * **str** -- a URL (``http(s)://...`` or ``data:...``) *or* raw base-64 text.
+    * **str** -- a URL (``http(s)://...`` or ``data:...``) *or* raw
+      base-64 text.
     * **bytes** -- raw binary data (will be base-64 encoded when serialized
       to JSON for providers that need it).
     """
@@ -195,7 +198,8 @@ class FilePart(pydantic.BaseModel):
             ) or media.detect_audio_media_type(data)
         if media_type is None:
             raise ValueError(
-                "Cannot detect media_type from bytes. Provide media_type explicitly."
+                "Cannot detect media_type from bytes. "
+                "Provide media_type explicitly."
             )
         return cls(data=data, media_type=media_type, filename=filename)
 
@@ -237,7 +241,9 @@ class Message(pydantic.BaseModel):
     @property
     def reasoning(self) -> str:
         """Concatenated reasoning parts."""
-        return "".join(p.text for p in self.parts if isinstance(p, ReasoningPart))
+        return "".join(
+            p.text for p in self.parts if isinstance(p, ReasoningPart)
+        )
 
     @property
     def tool_calls(self) -> list[ToolCallPart]:
@@ -271,7 +277,9 @@ class Message(pydantic.BaseModel):
     def get_output(self, output_type: None = None) -> str: ...
     @overload
     def get_output[T: pydantic.BaseModel](self, output_type: type[T]) -> T: ...
-    def get_output(self, output_type: type[pydantic.BaseModel] | None = None) -> Any:
+    def get_output(
+        self, output_type: type[pydantic.BaseModel] | None = None
+    ) -> Any:
         """Return the final output of this assistant turn.
 
         With no ``output_type``, returns the concatenated text content.
@@ -285,7 +293,8 @@ class Message(pydantic.BaseModel):
             raise ValueError(
                 "get_output() requires a final assistant message "
                 "(role='assistant' with no tool calls); "
-                f"got role={self.role!r} with {len(self.tool_calls)} tool call(s)"
+                f"got role={self.role!r} with "
+                f"{len(self.tool_calls)} tool call(s)"
             )
         if output_type is None:
             return self.text

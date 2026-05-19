@@ -34,6 +34,8 @@ class Tool(pydantic.BaseModel):
 
             case "provider":
                 if isinstance(self.args, FunctionToolArgs):
-                    raise ValueError("provider tools cannot use FunctionToolArgs")
+                    raise ValueError(
+                        "provider tools cannot use FunctionToolArgs"
+                    )
 
         return self

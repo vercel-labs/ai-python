@@ -1,5 +1,4 @@
-"""
-Pluggable storage for checkpoints and session data.
+"""Pluggable storage for checkpoints and session data.
 
 Provides a minimal Storage protocol and a FileStorage implementation
 that persists data as JSON files on disk. Swap in any backend that
@@ -25,8 +24,7 @@ class Storage(Protocol):
 
 
 class FileStorage:
-    """
-    JSON-file-per-key storage backend.
+    """JSON-file-per-key storage backend.
 
     Each key is stored as ``{directory}/{key}.json``. Good enough for
     local development; replace with a real database for production.

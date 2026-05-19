@@ -12,7 +12,9 @@ async def main() -> None:
     # Example for local OpenAI-compatible servers like LM Studio.
     provider = ai.get_provider(
         "openai",
-        base_url=os.environ.get("LOCAL_OPENAI_BASE_URL", "http://localhost:1234/v1"),
+        base_url=os.environ.get(
+            "LOCAL_OPENAI_BASE_URL", "http://localhost:1234/v1"
+        ),
         api_key=os.environ.get("LOCAL_OPENAI_API_KEY", "some-key"),
         headers={"X-Custom-Header": "example"},
     )
@@ -26,7 +28,9 @@ async def main() -> None:
         try:
             await ai.probe(model)
         except ai.ProviderError as exc:
-            print(f"[SKIP] local OpenAI-compatible server is unavailable: {exc}")
+            print(
+                f"[SKIP] local OpenAI-compatible server is unavailable: {exc}"
+            )
             return
 
         async with ai.stream(model, messages) as s:

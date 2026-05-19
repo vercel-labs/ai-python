@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import contextlib
 import dataclasses
-from collections.abc import AsyncGenerator, AsyncIterator, Sequence
 from contextlib import AbstractAsyncContextManager
 from typing import (
     TYPE_CHECKING,
@@ -19,15 +18,17 @@ import pydantic
 
 # ``typing.TypeVar`` lacks the ``default=`` kwarg on Python <3.13.
 # Use the typing_extensions backport so this works on 3.12 too.
-from typing_extensions import TypeVar  # noqa: UP035
+from typing_extensions import TypeVar
 
 from ... import types
 from ...types import integrity
-from . import model as model_
-from . import params as params_
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator, AsyncIterator, Sequence
+
     from ...providers import base as provider_base
+    from . import model as model_
+    from . import params as params_
 
 # Stream output type.  Defaults to ``str``: when the stream was opened
 # without an ``output_type``, ``Stream.output`` returns the concatenated
@@ -85,7 +86,9 @@ class Executor:
         ):
             yield ev
 
-    async def _do_generate(self, request: GenerateRequest) -> types.messages.Message:
+    async def _do_generate(
+        self, request: GenerateRequest
+    ) -> types.messages.Message:
         return await request.model.provider.generate(
             request.model,
             request.messages,
@@ -122,14 +125,14 @@ class Stream(Generic[StreamOutputT]):
         the concatenated text content unchanged.
         """
         self._gen = gen
-        self._message: types.messages.Message = seed_message or types.messages.Message(
-            role="assistant", parts=[]
+        self._message: types.messages.Message = (
+            seed_message or types.messages.Message(role="assistant", parts=[])
         )
         self._parts: dict[str, types.messages.Part] = {}
         # ``output_type`` is typed against the public ``StreamOutputT`` type
         # param for ergonomics; internally we know it's a Pydantic model
         # subclass (or None for the text-default case).
-        self._output_type = cast(type[pydantic.BaseModel] | None, output_type)
+        self._output_type = cast("type[pydantic.BaseModel] | None", output_type)
 
     async def aclose(self) -> None:
         await self._gen.aclose()
@@ -183,7 +186,9 @@ class Stream(Generic[StreamOutputT]):
         model subclass was passed, validates the streamed JSON against
         it and returns the parsed instance.
         """
-        return cast(StreamOutputT, self._message.get_output(self._output_type))
+        return cast(
+            "StreamOutputT", self._message.get_output(self._output_type)
+        )
 
     def _aggregate_event(self, event: types.events.Event) -> dict[str, Any]:
         updates: dict[str, Any] = {}
@@ -199,10 +204,14 @@ class Stream(Generic[StreamOutputT]):
 
         match event:
             case types.events.TextStart(block_id=bid, provider_metadata=pm):
-                tp = types.messages.TextPart(id=bid, text="", provider_metadata=pm)
+                tp = types.messages.TextPart(
+                    id=bid, text="", provider_metadata=pm
+                )
                 self._message.parts.append(tp)
                 self._parts[bid] = tp
-            case types.events.TextDelta(block_id=bid, chunk=c, provider_metadata=pm):
+            case types.events.TextDelta(
+                block_id=bid, chunk=c, provider_metadata=pm
+            ):
                 existing_text = self._parts.get(bid)
                 if isinstance(existing_text, types.messages.TextPart):
                     existing_text.text += c
@@ -215,8 +224,12 @@ class Stream(Generic[StreamOutputT]):
                     and pm is not None
                 ):
                     existing_text.provider_metadata = pm
-            case types.events.ReasoningStart(block_id=bid, provider_metadata=pm):
-                rp = types.messages.ReasoningPart(id=bid, text="", provider_metadata=pm)
+            case types.events.ReasoningStart(
+                block_id=bid, provider_metadata=pm
+            ):
+                rp = types.messages.ReasoningPart(
+                    id=bid, text="", provider_metadata=pm
+                )
                 self._message.parts.append(rp)
                 self._parts[bid] = rp
             case types.events.ReasoningDelta(
@@ -283,13 +296,17 @@ class Stream(Generic[StreamOutputT]):
                     existing_btc.tool_args += c
                     if pm is not None:
                         existing_btc.provider_metadata = pm
-            case types.events.BuiltinToolEnd(tool_call_id=tcid, provider_metadata=pm):
+            case types.events.BuiltinToolEnd(
+                tool_call_id=tcid, provider_metadata=pm
+            ):
                 existing_btc = self._parts.get(tcid)
                 if isinstance(existing_btc, types.messages.BuiltinToolCallPart):
                     updates["tool_call"] = existing_btc
                     if pm is not None:
                         existing_btc.provider_metadata = pm
-            case types.events.BuiltinToolResult(result=res, provider_metadata=pm):
+            case types.events.BuiltinToolResult(
+                result=res, provider_metadata=pm
+            ):
                 if pm is not None:
                     res = res.model_copy(update={"provider_metadata": pm})
                 self._message.parts.append(res)
@@ -425,7 +442,8 @@ def stream(
     if context is not None:
         if model is not None or messages is not None or tools is not None:
             raise TypeError(
-                "stream() takes either model/messages/tools or context=, not both"
+                "stream() takes either model/messages/tools or context=, "
+                "not both"
             )
         model = context.model
         messages = context.messages
@@ -435,7 +453,9 @@ def stream(
         if params is None:
             params = context.params
     elif model is None or messages is None:
-        raise TypeError("stream() requires either model and messages or context=")
+        raise TypeError(
+            "stream() requires either model and messages or context="
+        )
 
     return _stream(
         model=model,
@@ -461,15 +481,20 @@ async def _stream(
 ) -> AsyncIterator[Stream[Any]]:
     if messages and messages[-1].replay:
         last = messages[-1]
-        s = Stream(
+        s: Stream[Any] = Stream(
             _replay_tool_calls(last),
             seed_message=last.model_copy(deep=True),
-            output_type=output_type,
+            output_type=cast("type[Any] | None", output_type),
         )
     else:
         prepared = integrity.prepare_messages(messages)
-        request = StreamRequest(model, prepared, tools, output_type, params, protocol)
-        s = Stream(executor._do_stream(request), output_type=output_type)
+        request = StreamRequest(
+            model, prepared, tools, output_type, params, protocol
+        )
+        s = Stream(
+            executor._do_stream(request),
+            output_type=cast("type[Any] | None", output_type),
+        )
     try:
         yield s
     finally:

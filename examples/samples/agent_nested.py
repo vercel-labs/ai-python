@@ -1,4 +1,4 @@
-"""Nested agents: a research tool that is itself an agent streaming through the sink."""
+"""Nested agents with a research tool that streams through the sink."""
 
 import asyncio
 
@@ -11,7 +11,10 @@ model = ai.get_model("gateway:anthropic/claude-sonnet-4.6")
 async def get_facts(topic: str) -> str:
     """Look up facts about a topic."""
     facts = {
-        "mars": "Mars has two moons: Phobos and Deimos. A day on Mars is 24.6 hours.",
+        "mars": (
+            "Mars has two moons: Phobos and Deimos. "
+            "A day on Mars is 24.6 hours."
+        ),
         "venus": "Venus rotates backwards. Its surface temperature is 450C.",
     }
     return facts.get(topic.lower(), f"No facts found for {topic}.")

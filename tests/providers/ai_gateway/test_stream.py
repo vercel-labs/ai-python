@@ -103,7 +103,9 @@ class TestStreaming:
         def handler(req: httpx.Request) -> httpx.Response:
             return httpx.Response(200, text=body)
 
-        final = await _final(mock_client(httpx.MockTransport(handler)), [user_msg("?")])
+        final = await _final(
+            mock_client(httpx.MockTransport(handler)), [user_msg("?")]
+        )
         assert final.reasoning == "think"
         assert final.text == "42"
 
@@ -140,7 +142,11 @@ class TestStreaming:
         alongside text in the language model stream."""
         body = sse(
             {"type": "text-start", "id": "t1"},
-            {"type": "text-delta", "id": "t1", "textDelta": "Here is an image:"},
+            {
+                "type": "text-delta",
+                "id": "t1",
+                "textDelta": "Here is an image:",
+            },
             {"type": "text-end", "id": "t1"},
             {
                 "type": "file",
@@ -192,7 +198,7 @@ class TestStreaming:
         assert json.loads(final.tool_calls[0].tool_args) == {"city": "SF"}
 
     async def test_provider_executed_tool_call_streaming(self) -> None:
-        """``providerExecuted: true`` routes ``tool-input-*`` to BuiltinTool* events.
+        """Route ``tool-input-*`` to BuiltinTool* events.
 
         ``tool-result`` with ``providerExecuted: true`` aggregates into
         ``Message.builtin_tool_returns``.
@@ -205,7 +211,11 @@ class TestStreaming:
                 "toolName": "web_search",
                 "providerExecuted": True,
             },
-            {"type": "tool-input-delta", "id": "tc-1", "delta": '{"q":"weather"}'},
+            {
+                "type": "tool-input-delta",
+                "id": "tc-1",
+                "delta": '{"q":"weather"}',
+            },
             {"type": "tool-input-end", "id": "tc-1"},
             {
                 "type": "tool-result",
@@ -236,7 +246,7 @@ class TestStreaming:
         assert ret.result == result_payload
 
     async def test_provider_executed_one_shot_tool_call(self) -> None:
-        """One-shot ``tool-call`` with ``providerExecuted`` expands to BuiltinTool*."""
+        """Expand provider-executed one-shot calls to BuiltinTool*."""
         body = sse(
             {
                 "type": "tool-call",
@@ -277,7 +287,9 @@ class TestRequest:
             captured.update(dict(req.headers))
             return httpx.Response(
                 200,
-                text=sse({"type": "finish", "finishReason": "stop", "usage": {}}),
+                text=sse(
+                    {"type": "finish", "finishReason": "stop", "usage": {}}
+                ),
             )
 
         model = mock_model(
@@ -301,10 +313,14 @@ class TestRequest:
             captured_body.update(json.loads(req.content))
             return httpx.Response(
                 200,
-                text=sse({"type": "finish", "finishReason": "stop", "usage": {}}),
+                text=sse(
+                    {"type": "finish", "finishReason": "stop", "usage": {}}
+                ),
             )
 
-        await _collect(mock_client(httpx.MockTransport(handler)), [user_msg("Hello")])
+        await _collect(
+            mock_client(httpx.MockTransport(handler)), [user_msg("Hello")]
+        )
 
         assert captured_body["prompt"] == [
             {
@@ -320,7 +336,9 @@ class TestRequest:
             captured_body.update(json.loads(req.content))
             return httpx.Response(
                 200,
-                text=sse({"type": "finish", "finishReason": "stop", "usage": {}}),
+                text=sse(
+                    {"type": "finish", "finishReason": "stop", "usage": {}}
+                ),
             )
 
         model = mock_model(
@@ -378,7 +396,9 @@ class TestRequest:
             async with models.stream(
                 model,
                 [user_msg("Hi")],
-                params=[{"providerOptions": {"openai": {"serviceTier": "auto"}}}],
+                params=[
+                    {"providerOptions": {"openai": {"serviceTier": "auto"}}}
+                ],
             ) as stream:
                 async for _ in stream:
                     pass
@@ -398,7 +418,9 @@ class TestRequest:
             captured_body.update(json.loads(req.content))
             return httpx.Response(
                 200,
-                text=sse({"type": "finish", "finishReason": "stop", "usage": {}}),
+                text=sse(
+                    {"type": "finish", "finishReason": "stop", "usage": {}}
+                ),
             )
 
         await _collect(
@@ -422,7 +444,9 @@ class TestRequest:
             captured_body.update(json.loads(req.content))
             return httpx.Response(
                 200,
-                text=sse({"type": "finish", "finishReason": "stop", "usage": {}}),
+                text=sse(
+                    {"type": "finish", "finishReason": "stop", "usage": {}}
+                ),
             )
 
         tool_call = messages.ToolCallPart(
@@ -456,14 +480,17 @@ class TestRequest:
 
     async def test_multi_turn_round_trip_builtin_parts(self) -> None:
         """``BuiltinToolCallPart``/``BuiltinToolReturnPart`` serialize as v3
-        ``tool-call``/``tool-result`` blocks tagged ``providerExecuted: true``."""
+        ``tool-call``/``tool-result`` blocks.
+        """
         captured_body: dict[str, Any] = {}
 
         def handler(req: httpx.Request) -> httpx.Response:
             captured_body.update(json.loads(req.content))
             return httpx.Response(
                 200,
-                text=sse({"type": "finish", "finishReason": "stop", "usage": {}}),
+                text=sse(
+                    {"type": "finish", "finishReason": "stop", "usage": {}}
+                ),
             )
 
         call = messages.BuiltinToolCallPart(
@@ -484,7 +511,9 @@ class TestRequest:
 
         await _collect(mock_client(httpx.MockTransport(handler)), convo)
 
-        assistant = next(m for m in captured_body["prompt"] if m["role"] == "assistant")
+        assistant = next(
+            m for m in captured_body["prompt"] if m["role"] == "assistant"
+        )
         assert assistant["content"] == [
             {
                 "type": "tool-call",
@@ -525,7 +554,9 @@ class TestErrors:
             )
 
         with pytest.raises(ai.ProviderAuthenticationError):
-            await _collect(mock_client(httpx.MockTransport(handler)), [user_msg("Hi")])
+            await _collect(
+                mock_client(httpx.MockTransport(handler)), [user_msg("Hi")]
+            )
 
     async def test_429_rate_limit_error(self) -> None:
         def handler(req: httpx.Request) -> httpx.Response:
@@ -540,7 +571,9 @@ class TestErrors:
             )
 
         with pytest.raises(ai.ProviderRateLimitError):
-            await _collect(mock_client(httpx.MockTransport(handler)), [user_msg("Hi")])
+            await _collect(
+                mock_client(httpx.MockTransport(handler)), [user_msg("Hi")]
+            )
 
     async def test_404_model_not_found(self) -> None:
         def handler(req: httpx.Request) -> httpx.Response:
@@ -556,7 +589,9 @@ class TestErrors:
             )
 
         with pytest.raises(ai.ProviderModelNotFoundError) as exc_info:
-            await _collect(mock_client(httpx.MockTransport(handler)), [user_msg("Hi")])
+            await _collect(
+                mock_client(httpx.MockTransport(handler)), [user_msg("Hi")]
+            )
         assert exc_info.value.model_id == "xyz"
 
     async def test_500_malformed_response(self) -> None:
@@ -564,4 +599,6 @@ class TestErrors:
             return httpx.Response(500, text="Not JSON")
 
         with pytest.raises(ai.ProviderResponseError):
-            await _collect(mock_client(httpx.MockTransport(handler)), [user_msg("Hi")])
+            await _collect(
+                mock_client(httpx.MockTransport(handler)), [user_msg("Hi")]
+            )

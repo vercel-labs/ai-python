@@ -58,31 +58,105 @@ dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
     "rich>=14.2.0",
-    "mypy>=1.11",
+    "mypy~=2.1.0",
     "openai>=2.14.0",
-    "ruff>=0.8",
-    "pyright>=1.1.408",
+    "ruff~=0.8.0",
     "async-solipsism>=0.9",
+    "ty~=0.0.37",
 ]
+examples = [
+    "fastapi>=0.136.1",
+    "temporalio>=1.27.2",
+    "textual>=8.2.6",
+    "websockets>=16.0",
+]
+
+[tool.uv]
+default-groups = ["dev", "examples"]
 
 [tool.mypy]
 python_version = "3.12"
 strict = true
 plugins = ["pydantic.mypy"]
+files = ["src", "tests", "examples"]
+exclude = ["examples/fastapi-vite/backend/main.py"]
 
-[tool.pyright]
-pythonVersion = "3.12"
-typeCheckingMode = "standard"
-reportMissingTypeStubs = false
-reportUnusedCallResult = false
+[tool.ty.environment]
+python-version = "3.12"
+root = ["./src", "./"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 
 [tool.ruff]
+line-length = 80
+indent-width = 4
 target-version = "py312"
 src = ["src"]
+exclude = [
+    ".github",
+    ".git",
+    "build",
+    "dist",
+    ".eggs",
+]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B", "SIM"]
+preview = true
+extend-select = [
+    "B",    # flake8-bugbear
+    "C4",   # flake8-comprehensions
+    "D",    # pydocstyle
+    "E",    # error
+    "ERA",  # flake8-eradicate
+    "F",    # pyflakes
+    "FBT",  # flake8-boolean-trap
+    "G",    # flake8-logging-format
+    "I",    # isort
+    "N",    # pep8-naming
+    "PGH",  # pygrep-hooks
+    "PIE",  # flake8-pie
+    "PLE",  # pylint-error
+    "PLW",  # pylint-warning
+    "PLC",  # pylint-convention
+    "RUF",  # ruff specific
+    "SIM",  # flake8-simplify
+    "T20",  # flake8-print
+    "TC",   # flake8-type-checking
+    "UP",   # pyupgrade
+    "W",    # warning
+]
+
+extend-ignore = [
+    "D100",    # public API docs are not yet enforced everywhere
+    "D101",    # public API docs are not yet enforced everywhere
+    "D102",    # public API docs are not yet enforced everywhere
+    "D103",    # public API docs are not yet enforced everywhere
+    "D104",    # public API docs are not yet enforced everywhere
+    "D105",    # public API docs are not yet enforced everywhere
+    "D107",    # public API docs are not yet enforced everywhere
+    "D417",    # public API docs are not yet enforced everywhere
+    "D203",    # incorrect-blank-line-before-class
+    "D213",    # multi-line-summary-second-line
+    "F541",    # f-string-missing-placeholders
+    "PLW1514", # unspecified-encoding (UTF-8 is Python 3 default)
+    "PLW2901", # redefined-loop-name (intentional pattern for line processing)
+    "RUF029",  # async generators/protocol hooks may not need an await
+]
+
+[tool.ruff.lint.per-file-ignores]
+"examples/**/*.py" = [
+    "D",       # examples are executable samples, not public API
+    "PLW1510", # example subprocess helpers intentionally handle failures manually
+    "RUF029",  # example async tools often demonstrate async entry points
+    "T201",    # examples are command-line scripts and demos
+]
+"tests/**/*.py" = [
+    "D",       # docstrings not required in tests
+    "FBT",     # tests intentionally cover boolean-typed tool parameters
+    "PLC0415", # local imports keep test-only dependencies scoped
+    "PLC2701", # allow private imports in tests
+    "RUF029",  # async stubs/generators exercise async code paths
+    "TC",      # test annotations often double as runtime documentation
+]

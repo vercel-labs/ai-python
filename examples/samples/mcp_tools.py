@@ -19,7 +19,8 @@ async def main() -> None:
 
     messages = [
         ai.system_message(
-            "You are a helpful assistant. Use context7 to look up documentation."
+            "You are a helpful assistant. "
+            "Use context7 to look up documentation."
         ),
         ai.user_message("How do I create middleware in Next.js?"),
     ]

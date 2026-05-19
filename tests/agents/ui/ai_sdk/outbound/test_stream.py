@@ -146,14 +146,16 @@ async def test_approval_request_hook_emits_approval_part() -> None:
             ),
         ]
     )
-    approval_parts = [p for p in out if isinstance(p, protocol.ToolApprovalRequestPart)]
+    approval_parts = [
+        p for p in out if isinstance(p, protocol.ToolApprovalRequestPart)
+    ]
     assert len(approval_parts) == 1
     assert approval_parts[0].tool_call_id == "tc1"
     assert approval_parts[0].approval_id == "approve_tc1"
 
 
 async def test_partial_tool_results_emit_preliminary_outputs() -> None:
-    """Each PartialToolCallResult feeds the aggregator and yields a preliminary part."""
+    """Each partial result yields a preliminary part."""
     out = await _collect(
         [
             agent_events_.PartialToolCallResult(
@@ -191,7 +193,7 @@ async def test_partial_tool_results_emit_preliminary_outputs() -> None:
 
 
 async def test_partial_message_bundle_becomes_ui_message() -> None:
-    """MessageAggregator's MessageBundle snapshot collapses to a single UIMessage."""
+    """MessageAggregator's snapshot collapses to one UIMessage."""
     from ai.agents.ui.ai_sdk.ui_message import UIMessage
 
     inner_msg = messages_.Message(
@@ -204,7 +206,9 @@ async def test_partial_message_bundle_becomes_ui_message() -> None:
             agent_events_.PartialToolCallResult(
                 tool_call_id="tc1",
                 tool_name="research",
-                value=agent_events_.ToolCallResult(message=inner_msg, results=[]),
+                value=agent_events_.ToolCallResult(
+                    message=inner_msg, results=[]
+                ),
                 aggregator_factory=ai.agents.MessageAggregator,
             ),
         ]

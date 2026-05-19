@@ -7,7 +7,9 @@ import ai
 from ai.providers.ai_gateway.client import errors
 
 
-async def test_list_models_gets_config_with_gateway_headers_and_sorts_ids() -> None:
+async def test_list_models_gets_config_with_gateway_headers_and_sorts_ids() -> (
+    None
+):
     captured_urls: list[str] = []
     captured_headers: dict[str, str] = {}
 
@@ -48,7 +50,9 @@ async def test_list_models_remaps_gateway_errors() -> None:
     def _handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             401,
-            json={"error": {"message": "bad key", "type": "authentication_error"}},
+            json={
+                "error": {"message": "bad key", "type": "authentication_error"}
+            },
         )
 
     provider = ai.get_provider(
@@ -64,4 +68,6 @@ async def test_list_models_remaps_gateway_errors() -> None:
     finally:
         await provider.aclose()
 
-    assert isinstance(exc_info.value.__cause__, errors.GatewayAuthenticationError)
+    assert isinstance(
+        exc_info.value.__cause__, errors.GatewayAuthenticationError
+    )

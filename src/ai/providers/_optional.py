@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import importlib
-from types import ModuleType
+from typing import TYPE_CHECKING
 
 from .. import errors as ai_errors
 
+if TYPE_CHECKING:
+    from types import ModuleType
 
-def import_optional_sdk(module_name: str, *, provider: str, extra: str) -> ModuleType:
+
+def import_optional_sdk(
+    module_name: str, *, provider: str, extra: str
+) -> ModuleType:
     """Import an optional upstream SDK or raise a helpful installation error."""
     root_module = module_name.partition(".")[0]
     try:

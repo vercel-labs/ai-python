@@ -64,7 +64,9 @@ class _StreamState:
         # Per-tool-call aggregators for streaming generator tools.  Each
         # PartialToolCallResult feeds its value into the aggregator and
         # the snapshot goes out as a preliminary tool output.
-        self.partial_aggregators: dict[str, events_.Aggregator[Any, Any, Any]] = {}
+        self.partial_aggregators: dict[
+            str, events_.Aggregator[Any, Any, Any]
+        ] = {}
 
     # -- boundary helpers ----------------------------------------------------
 
@@ -109,7 +111,9 @@ class _StreamState:
 
     # -- phase: streaming events --------------------------------------------
 
-    def on_event(self, event: events_.Event) -> list[protocol.UIMessageStreamPart]:
+    def on_event(
+        self, event: events_.Event
+    ) -> list[protocol.UIMessageStreamPart]:
         out: list[protocol.UIMessageStreamPart] = []
 
         # Lazily open the UI message on the first streaming event.
@@ -254,7 +258,7 @@ class _StreamState:
     def on_partial_tool_result(
         self, event: events_.PartialToolCallResult
     ) -> list[protocol.UIMessageStreamPart]:
-        """Feed the value into the tool's aggregator and emit a preliminary output.
+        """Feed the value and emit a preliminary output.
 
         Each PartialToolCallResult carries one yielded value plus the
         aggregator factory the tool was declared with.  We instantiate
@@ -295,7 +299,9 @@ class _StreamState:
 
     # -- phase: hooks -------------------------------------------------------
 
-    def on_hook(self, event: events_.HookEvent) -> list[protocol.UIMessageStreamPart]:
+    def on_hook(
+        self, event: events_.HookEvent
+    ) -> list[protocol.UIMessageStreamPart]:
         """Handle a ``HookEvent`` — emit approval parts."""
         hook_part = event.hook
         out: list[protocol.UIMessageStreamPart] = []
@@ -319,7 +325,7 @@ class _StreamState:
             )
         elif hook_part.status == "resolved":
             resolution: dict[str, Any] = hook_part.resolution or {}
-            if not resolution.get("granted", False):
+            if not resolution.get("granted"):
                 out.append(protocol.ToolOutputDeniedPart(tool_call_id=tc_id))
         elif hook_part.status == "cancelled":
             out.append(

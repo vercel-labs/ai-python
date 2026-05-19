@@ -9,12 +9,11 @@ from __future__ import annotations
 import base64
 import json
 from collections.abc import AsyncGenerator, Mapping, Sequence
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import pydantic
 
 from ... import types
-from ...models import core
 from ...types import events
 from .. import base
 from . import _sdk, errors
@@ -22,6 +21,8 @@ from . import tools as anthropic_tools
 
 if TYPE_CHECKING:
     import anthropic
+
+    from ...models import core
 
 PROVIDER_NAME = "anthropic"
 
@@ -64,7 +65,7 @@ def _split_tools(
 def _custom_tools_to_anthropic(
     tools: Sequence[types.tools.Tool],
 ) -> list[dict[str, Any]]:
-    """Convert custom (host-executed) Tool objects to Anthropic tool schema format."""
+    """Convert host-executed tools to Anthropic tool schema format."""
     result: list[dict[str, Any]] = []
     for tool in tools:
         args = tool.args
@@ -194,7 +195,9 @@ async def _messages_to_anthropic(
         match msg.role:
             case "system":
                 system_prompt = "".join(
-                    p.text for p in msg.parts if isinstance(p, types.messages.TextPart)
+                    p.text
+                    for p in msg.parts
+                    if isinstance(p, types.messages.TextPart)
                 )
             case "assistant":
                 content: list[dict[str, Any]] = []
@@ -204,7 +207,9 @@ async def _messages_to_anthropic(
                             text=text,
                             provider_metadata=provider_metadata,
                         ):
-                            signature = (provider_metadata or {}).get("signature")
+                            signature = (provider_metadata or {}).get(
+                                "signature"
+                            )
                             if signature:
                                 content.append(
                                     {
@@ -217,7 +222,9 @@ async def _messages_to_anthropic(
                             content.append({"type": "text", "text": text})
                         case types.messages.ToolCallPart():
                             tool_input = (
-                                json.loads(part.tool_args) if part.tool_args else {}
+                                json.loads(part.tool_args)
+                                if part.tool_args
+                                else {}
                             )
                             content.append(
                                 {
@@ -229,7 +236,9 @@ async def _messages_to_anthropic(
                             )
                         case types.messages.BuiltinToolCallPart():
                             btc_input = (
-                                json.loads(part.tool_args) if part.tool_args else {}
+                                json.loads(part.tool_args)
+                                if part.tool_args
+                                else {}
                             )
                             content.append(
                                 {
@@ -292,7 +301,9 @@ async def _messages_to_anthropic(
                     for p in msg.parts:
                         match p:
                             case types.messages.TextPart(text=text):
-                                user_content.append({"type": "text", "text": text})
+                                user_content.append(
+                                    {"type": "text", "text": text}
+                                )
                             case types.messages.FilePart():
                                 user_content.append(_file_part_to_anthropic(p))
                     result.append({"role": "user", "content": user_content})
@@ -327,7 +338,7 @@ def _merge_consecutive_roles(
 def _to_content_list(content: Any) -> list[dict[str, Any]]:
     """Normalize Anthropic message content to list-of-blocks."""
     if isinstance(content, list):
-        return list(content)
+        return cast("list[dict[str, Any]]", list(content))
     return [{"type": "text", "text": content}]
 
 
@@ -399,7 +410,9 @@ async def stream(
     system_prompt, anthropic_messages = await _messages_to_anthropic(messages)
 
     custom_tools, builtin_tools = _split_tools(tools or ())
-    wire_tools = _custom_tools_to_anthropic(custom_tools) if custom_tools else []
+    wire_tools = (
+        _custom_tools_to_anthropic(custom_tools) if custom_tools else []
+    )
     builtin_betas: set[str] = set()
     if builtin_tools:
         builtin_wire, builtin_betas = _builtin_tools_to_anthropic(builtin_tools)
@@ -436,6 +449,7 @@ async def stream(
             async for event in sdk_stream:
                 match event.type:
                     case "content_block_start":
+                        event = cast("Any", event)
                         block = event.content_block
                         idx = event.index
                         block_types[idx] = block.type
@@ -464,6 +478,7 @@ async def stream(
                             # complete; we emit on stop so we have full content.
 
                     case "content_block_delta":
+                        event = cast("Any", event)
                         delta = event.delta
                         idx = event.index
 
@@ -480,7 +495,8 @@ async def stream(
                                 )
                             case "signature_delta":
                                 signature_buffer[idx] = (
-                                    signature_buffer.get(idx, "") + delta.signature
+                                    signature_buffer.get(idx, "")
+                                    + delta.signature
                                 )
                             case "input_json_delta":
                                 tool_id = tool_ids.get(idx)
@@ -498,6 +514,7 @@ async def stream(
                                     )
 
                     case "content_block_stop":
+                        event = cast("Any", event)
                         idx = event.index
                         block_type = block_types.get(idx)
                         if block_type == "text":
@@ -536,20 +553,25 @@ async def stream(
                             # the canonical tool name.
                             snap = sdk_stream.current_message_snapshot
                             result_block = (
-                                snap.content[idx] if idx < len(snap.content) else None
+                                snap.content[idx]
+                                if idx < len(snap.content)
+                                else None
                             )
                             if result_block is None:
                                 continue
                             tool_use_id = (
                                 getattr(result_block, "tool_use_id", None) or ""
                             )
-                            content_payload = _result_block_content(result_block)
+                            content_payload = _result_block_content(
+                                result_block
+                            )
                             # Look up the corresponding server_tool_use
                             # block to recover the tool name.
                             tool_name = ""
                             for cb in snap.content:
                                 if (
-                                    getattr(cb, "type", None) == "server_tool_use"
+                                    getattr(cb, "type", None)
+                                    == "server_tool_use"
                                     and getattr(cb, "id", None) == tool_use_id
                                 ):
                                     tool_name = getattr(cb, "name", "") or ""
@@ -571,7 +593,9 @@ async def stream(
             usage = types.usage.Usage(
                 input_tokens=sdk_usage.input_tokens or 0,
                 output_tokens=sdk_usage.output_tokens or 0,
-                cache_read_tokens=getattr(sdk_usage, "cache_read_input_tokens", None),
+                cache_read_tokens=getattr(
+                    sdk_usage, "cache_read_input_tokens", None
+                ),
                 cache_write_tokens=getattr(
                     sdk_usage, "cache_creation_input_tokens", None
                 ),

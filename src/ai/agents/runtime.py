@@ -4,14 +4,16 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
-from collections.abc import AsyncGenerator, AsyncIterable, Awaitable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .. import util
 from ..types import events as events_
 from ..types import messages as messages_
 from . import hooks as hooks_
 from .mcp import client as mcp_client
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator, AsyncIterable, Awaitable
 
 
 class Runtime:
@@ -66,7 +68,7 @@ async def _stop_when_done(runtime: Runtime, task: Awaitable[None]) -> None:
 async def run(
     source: AsyncIterable[events_.AgentEvent],
 ) -> AsyncGenerator[events_.AgentEvent]:
-    """Run *source* and yield every event that gets put into the Runtime queue."""
+    """Run *source* and yield events put into the Runtime queue."""
     rt = Runtime()
 
     async def _drain() -> None:

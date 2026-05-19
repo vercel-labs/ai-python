@@ -26,7 +26,9 @@ def map_error(exc: client_errors.GatewayError) -> ai_errors.ProviderAPIError:
     if isinstance(exc, client_errors.GatewayInternalServerError):
         return _mapped(ai_errors.ProviderInternalServerError, exc)
     if isinstance(exc, client_errors.GatewayResponseError):
-        return _mapped(ai_errors.ProviderResponseError, exc, body=exc.response_body)
+        return _mapped(
+            ai_errors.ProviderResponseError, exc, body=exc.response_body
+        )
     if isinstance(exc, client_errors.GatewayTimeoutError):
         return _mapped(ai_errors.ProviderTimeoutError, exc)
     return _mapped(ai_errors.ProviderAPIError, exc)
@@ -48,7 +50,9 @@ def _mapped(
     )
 
 
-def _http_context(exc: client_errors.GatewayError) -> ai_errors.HTTPErrorContext:
+def _http_context(
+    exc: client_errors.GatewayError,
+) -> ai_errors.HTTPErrorContext:
     return ai_errors.HTTPErrorContext(status_code=exc.status_code)
 
 

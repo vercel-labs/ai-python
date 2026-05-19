@@ -14,13 +14,15 @@ import asyncio
 import contextlib
 import json
 import warnings
-from collections.abc import AsyncGenerator
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import fastapi
 import pydantic
 
 import ai
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
 
 # ToolResultPart.result is typed as dict but tools can return plain strings.
 warnings.filterwarnings("ignore", category=UserWarning, module="pydantic")
@@ -149,7 +151,9 @@ data_centers_agent = _gated_agent(
 class Orchestrator(ai.Agent):
     """Run two gated agents in parallel, then summarise their results."""
 
-    async def loop(self, context: ai.Context) -> AsyncGenerator[ai.events.AgentEvent]:
+    async def loop(
+        self, context: ai.Context
+    ) -> AsyncGenerator[ai.events.AgentEvent]:
         query = context.messages[-1].text
 
         # Fan out: both branches stream concurrently via yield_from.
@@ -219,9 +223,11 @@ orchestrator = Orchestrator()
 
 
 def _normalise_message(data: dict[str, Any]) -> dict[str, Any]:
-    """Ensure ToolResultPart.result is always a dict for safe deserialisation."""
+    """Ensure ToolResultPart.result is always safe to deserialize."""
     for part in data.get("parts", []):
-        if part.get("kind") == "tool_result" and isinstance(part.get("result"), str):
+        if part.get("kind") == "tool_result" and isinstance(
+            part.get("result"), str
+        ):
             part["result"] = {"value": part["result"]}
     return data
 

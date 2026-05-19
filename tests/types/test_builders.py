@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+from typing import Any, cast
+
 import pytest
 
 from ai.types import builders, messages
 
 
 def test_user_message_mixed_content() -> None:
-    fp = messages.FilePart(data="https://example.com/img.png", media_type="image/png")
+    fp = messages.FilePart(
+        data="https://example.com/img.png", media_type="image/png"
+    )
     msg = builders.user_message("Describe this:", fp, "Thanks")
     assert len(msg.parts) == 3
     assert isinstance(msg.parts[0], messages.TextPart)
@@ -48,7 +52,10 @@ def test_tool_message_merges_tool_messages() -> None:
     merged = builders.tool_message(m1, m2)
 
     assert merged.role == "tool"
-    assert [part.tool_call_id for part in merged.tool_results] == ["tc-1", "tc-2"]
+    assert [part.tool_call_id for part in merged.tool_results] == [
+        "tc-1",
+        "tc-2",
+    ]
 
 
 def test_tool_message_rejects_non_tool_message() -> None:
@@ -57,11 +64,13 @@ def test_tool_message_rejects_non_tool_message() -> None:
 
 
 def test_tool_message_rejects_non_result_parts() -> None:
-    invalid = messages.Message(role="tool", parts=[messages.TextPart(text="bad")])
+    invalid = messages.Message(
+        role="tool", parts=[messages.TextPart(text="bad")]
+    )
     with pytest.raises(TypeError, match="ToolResultPart"):
         builders.tool_message(invalid)
 
 
 def test_invalid_type_raises() -> None:
     with pytest.raises(TypeError):
-        builders.user_message(42)  # type: ignore[arg-type]
+        builders.user_message(cast(Any, 42))

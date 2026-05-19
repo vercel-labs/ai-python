@@ -13,7 +13,7 @@ from ai.providers.anthropic import (
 )
 
 
-async def test_list_models_gets_models_with_provider_headers_and_sorts_ids() -> None:
+async def test_list_models_gets_provider_headers_and_sorts_ids() -> None:
     captured_urls: list[str] = []
     captured_headers: dict[str, str] = {}
 
@@ -54,7 +54,9 @@ async def test_list_models_maps_sdk_errors_to_provider_hierarchy() -> None:
     def _handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             529,
-            json={"error": {"message": "overloaded", "type": "overloaded_error"}},
+            json={
+                "error": {"message": "overloaded", "type": "overloaded_error"}
+            },
             headers={"request-id": "req-anthropic"},
         )
 
@@ -146,7 +148,9 @@ def test_provider_is_configured_requires_api_key(
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
     assert ai.get_provider("anthropic").is_configured() is False
-    assert ai.get_provider("anthropic", api_key="sk-test").is_configured() is True
+    assert (
+        ai.get_provider("anthropic", api_key="sk-test").is_configured() is True
+    )
 
 
 def test_get_provider_raises_installation_error_when_anthropic_sdk_missing(

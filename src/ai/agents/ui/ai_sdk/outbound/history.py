@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
-from .....types import messages as messages_
+from typing import TYPE_CHECKING
+
 from .. import _parts, ui_message
+
+if TYPE_CHECKING:
+    from .....types import messages as messages_
 
 
 def to_ui_messages(

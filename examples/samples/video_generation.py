@@ -29,7 +29,11 @@ async def main() -> None:
     for i, vid in enumerate(result.videos):
         ext = "mp4" if "mp4" in vid.media_type else "webm"
         filename = f"generated_{i}.{ext}"
-        data = vid.data if isinstance(vid.data, bytes) else base64.b64decode(vid.data)
+        data = (
+            vid.data
+            if isinstance(vid.data, bytes)
+            else base64.b64decode(vid.data)
+        )
         pathlib.Path(filename).write_bytes(data)
         print(f"  {filename}: {vid.media_type}, {len(data)} bytes")
 

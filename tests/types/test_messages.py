@@ -77,7 +77,9 @@ def test_from_url_infers_from_data_url() -> None:
 
 
 def test_from_url_explicit_media_type_overrides() -> None:
-    fp = messages.FilePart.from_url("https://example.com/img", media_type="image/webp")
+    fp = messages.FilePart.from_url(
+        "https://example.com/img", media_type="image/webp"
+    )
     assert fp.media_type == "image/webp"
 
 

@@ -10,23 +10,32 @@ Usage (from repo root):
     uv run examples/run-with-patched-model.py --protocol=responses <file.py>
 
 Example:
-
     uv run examples/run-with-patched-model.py \\
         gateway:openai/gpt-5.4-mini \\
         examples/samples/stream.py
+
 """
 
 import argparse
 import runpy
 import sys
 from collections.abc import Callable
-from typing import Any
+from typing import Any, cast
 
 import ai
 from ai import models
 from ai.models import core
 from ai.models.core import api as _api
 from ai.models.core import model as _model
+from ai.providers.anthropic import (
+    AnthropicCompatibleProvider,
+    AnthropicMessagesProtocol,
+)
+from ai.providers.openai import (
+    OpenAIChatCompletionsProtocol,
+    OpenAICompatibleProvider,
+    OpenAIResponsesProtocol,
+)
 
 PROTOCOLS = ("chat", "messages", "responses")
 
@@ -38,16 +47,10 @@ def _protocol_factory(
         return None
 
     if name == "chat":
-        from ai.providers.openai import OpenAIChatCompletionsProtocol
-
         return OpenAIChatCompletionsProtocol
     if name == "messages":
-        from ai.providers.anthropic import AnthropicMessagesProtocol
-
         return AnthropicMessagesProtocol
     if name == "responses":
-        from ai.providers.openai import OpenAIResponsesProtocol
-
         return OpenAIResponsesProtocol
 
     raise ValueError(f"unsupported protocol: {name}")
@@ -81,7 +84,6 @@ def main() -> None:
     original_get_model = _model.get_model
     original_stream = _api.stream
     original_generate = _api.generate
-    original_model = _model.Model
 
     def selected_protocol() -> ai.ProviderProtocol[Any] | None:
         if protocol_factory is None:
@@ -93,32 +95,36 @@ def main() -> None:
     ) -> ai.ProviderProtocol[Any] | None:
         if args.protocol is None:
             return None
-        if args.protocol in ("chat", "responses"):
-            from ai.providers.openai import OpenAICompatibleProvider
-
-            if isinstance(provider, OpenAICompatibleProvider):
-                return selected_protocol()
-        if args.protocol == "messages":
-            from ai.providers.anthropic import AnthropicCompatibleProvider
-
-            if isinstance(provider, AnthropicCompatibleProvider):
-                return selected_protocol()
+        if args.protocol in ("chat", "responses") and isinstance(
+            provider, OpenAICompatibleProvider
+        ):
+            return selected_protocol()
+        if args.protocol == "messages" and isinstance(
+            provider, AnthropicCompatibleProvider
+        ):
+            return selected_protocol()
         return None
 
-    def selected_protocol_for_model(model: Any) -> ai.ProviderProtocol[Any] | None:
+    def selected_protocol_for_model(
+        model: Any,
+    ) -> ai.ProviderProtocol[Any] | None:
         provider = getattr(model, "provider", None)
         if provider is None:
             return None
         return selected_protocol_for_provider(provider)
 
     def patched_get_model(*_args: Any, **_kwargs: Any) -> ai.Model:
-        model_id = args.model or (_args[0] if _args else _kwargs.get("model_id"))
+        model_id = args.model or (
+            _args[0] if _args else _kwargs.get("model_id")
+        )
         model = original_get_model(model_id)
         model.protocol = selected_protocol_for_model(model)
         return model
 
     def patched_stream(*args: Any, **kwargs: Any) -> Any:
-        model = args[0] if args else getattr(kwargs.get("context"), "model", None)
+        model = (
+            args[0] if args else getattr(kwargs.get("context"), "model", None)
+        )
         protocol = selected_protocol_for_model(model)
         if protocol is not None:
             kwargs["protocol"] = protocol
@@ -131,7 +137,7 @@ def main() -> None:
             kwargs["protocol"] = protocol
         return await original_generate(*args, **kwargs)
 
-    class PatchedModel(original_model):
+    class PatchedModel(_model.Model):
         def __init__(
             self,
             id: str,
@@ -145,26 +151,26 @@ def main() -> None:
                 protocol=selected_protocol_for_provider(provider) or protocol,
             )
 
-    ai.get_model = patched_get_model
-    models.get_model = patched_get_model
-    core.get_model = patched_get_model
-    _model.get_model = patched_get_model
+    cast("Any", ai).get_model = patched_get_model
+    cast("Any", models).get_model = patched_get_model
+    cast("Any", core).get_model = patched_get_model
+    cast("Any", _model).get_model = patched_get_model
 
     if args.protocol is not None:
-        ai.Model = PatchedModel
-        models.Model = PatchedModel
-        core.Model = PatchedModel
-        _model.Model = PatchedModel
+        cast("Any", ai).Model = PatchedModel
+        cast("Any", models).Model = PatchedModel
+        cast("Any", core).Model = PatchedModel
+        cast("Any", _model).Model = PatchedModel
 
-        ai.stream = patched_stream
-        models.stream = patched_stream
-        core.stream = patched_stream
-        _api.stream = patched_stream
+        cast("Any", ai).stream = patched_stream
+        cast("Any", models).stream = patched_stream
+        cast("Any", core).stream = patched_stream
+        cast("Any", _api).stream = patched_stream
 
-        ai.generate = patched_generate
-        models.generate = patched_generate
-        core.generate = patched_generate
-        _api.generate = patched_generate
+        cast("Any", ai).generate = patched_generate
+        cast("Any", models).generate = patched_generate
+        cast("Any", core).generate = patched_generate
+        cast("Any", _api).generate = patched_generate
 
     sys.argv = [args.file]
     runpy.run_path(args.file, run_name="__main__")

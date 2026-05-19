@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator, Sequence
-from typing import Any
+from typing import Any, cast
 
 import pydantic
 import pytest
@@ -11,7 +11,13 @@ from ai import models
 from ai.types import events as events_
 from ai.types import messages as messages_
 
-from ...conftest import MOCK_MODEL, MOCK_PROVIDER, MockProvider, mock_llm, text_msg
+from ...conftest import (
+    MOCK_MODEL,
+    MOCK_PROVIDER,
+    MockProvider,
+    mock_llm,
+    text_msg,
+)
 
 
 def _test_provider_metadata(marker: str) -> dict[str, Any]:
@@ -63,7 +69,9 @@ async def test_stream_tool_end_includes_aggregated_tool_call() -> None:
     MOCK_PROVIDER._stream_impl = _tool_stream
 
     tool_end: events_.ToolEnd | None = None
-    async with models.stream(MOCK_MODEL, [ai.user_message("Check weather")]) as stream:
+    async with models.stream(
+        MOCK_MODEL, [ai.user_message("Check weather")]
+    ) as stream:
         async for event in stream:
             if isinstance(event, events_.ToolEnd):
                 tool_end = event
@@ -135,7 +143,9 @@ async def test_stream_accumulates_provider_metadata_latest_wins() -> None:
     async for _ in stream:
         pass
 
-    assert _provider_metadata_marker(stream.message.provider_metadata) == "message"
+    assert (
+        _provider_metadata_marker(stream.message.provider_metadata) == "message"
+    )
 
     text = stream.message.parts[0]
     assert isinstance(text, messages_.TextPart)
@@ -145,7 +155,10 @@ async def test_stream_accumulates_provider_metadata_latest_wins() -> None:
     reasoning = stream.message.parts[1]
     assert isinstance(reasoning, messages_.ReasoningPart)
     assert reasoning.text == "thinking"
-    assert _provider_metadata_marker(reasoning.provider_metadata) == "reasoning-end"
+    assert (
+        _provider_metadata_marker(reasoning.provider_metadata)
+        == "reasoning-end"
+    )
 
     tool_call = stream.message.parts[2]
     assert isinstance(tool_call, messages_.ToolCallPart)
@@ -210,14 +223,16 @@ async def test_stream_accepts_context() -> None:
 
 
 async def test_stream_rejects_context_with_positional_args() -> None:
-    """Passing both positional model/messages and ``context=`` is a TypeError."""
+    """Passing positional args with ``context=`` is a TypeError."""
     ctx = ai.Context(
         model=MOCK_MODEL,
         messages=[ai.user_message("Hi")],
         tools=[],
     )
-    with pytest.raises(TypeError, match="either model/messages/tools or context="):
-        async with models.stream(  # type: ignore[call-overload]
+    with pytest.raises(
+        TypeError, match="either model/messages/tools or context="
+    ):
+        async with cast(Any, models.stream)(
             MOCK_MODEL, [ai.user_message("Hi")], context=ctx
         ):
             pass
@@ -225,8 +240,10 @@ async def test_stream_rejects_context_with_positional_args() -> None:
 
 async def test_stream_requires_model_messages_or_context() -> None:
     """Passing nothing is a TypeError."""
-    with pytest.raises(TypeError, match="either model and messages or context="):
-        async with models.stream():  # type: ignore[call-overload]
+    with pytest.raises(
+        TypeError, match="either model and messages or context="
+    ):
+        async with cast(Any, models.stream)():
             pass
 
 
@@ -378,7 +395,10 @@ async def test_stream_replays_marked_last_assistant_with_tool_calls() -> None:
 
     async with models.stream(
         MOCK_MODEL,
-        [ai.user_message("Hi"), assistant_msg.model_copy(update={"replay": True})],
+        [
+            ai.user_message("Hi"),
+            assistant_msg.model_copy(update={"replay": True}),
+        ],
     ) as stream:
         events: list[events_.Event] = [event async for event in stream]
 

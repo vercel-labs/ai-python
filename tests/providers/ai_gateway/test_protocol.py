@@ -144,7 +144,8 @@ class TestMessagesToPrompt:
                 parts=[
                     messages.TextPart(text="Look at this"),
                     messages.FilePart(
-                        data="https://example.com/cat.jpg", media_type="image/jpeg"
+                        data="https://example.com/cat.jpg",
+                        media_type="image/jpeg",
                     ),
                 ],
             )
@@ -168,7 +169,9 @@ class TestMessagesToPrompt:
                 role="user",
                 parts=[
                     messages.FilePart(
-                        data=b"\x89PNG", media_type="image/png", filename="pic.png"
+                        data=b"\x89PNG",
+                        media_type="image/png",
+                        filename="pic.png",
                     ),
                 ],
             )
@@ -200,11 +203,6 @@ class TestMessagesToPrompt:
         assert result[0]["role"] == "assistant"
 
 
-# ---------------------------------------------------------------------------
-# _build_request_body -- output_type (not tested in test_stream.py)
-# ---------------------------------------------------------------------------
-
-
 class TestBuildRequestBody:
     async def test_with_output_type(self) -> None:
         class WeatherResult(pydantic.BaseModel):
@@ -217,7 +215,9 @@ class TestBuildRequestBody:
                 parts=[messages.TextPart(text="Weather?")],
             )
         ]
-        body = await protocol._build_request_body(msgs, output_type=WeatherResult)
+        body = await protocol._build_request_body(
+            msgs, output_type=WeatherResult
+        )
 
         assert "responseFormat" in body
         rf = body["responseFormat"]
@@ -228,7 +228,7 @@ class TestBuildRequestBody:
 
 
 class TestParseStreamPartComplex:
-    def test_text_delta_uses_textDelta_key(self) -> None:
+    def test_text_delta_uses_text_delta_key(self) -> None:
         """The gateway sends ``textDelta`` (camelCase), not ``delta``."""
         events = protocol._parse_stream_part(
             {"type": "text-delta", "id": "t1", "textDelta": "Hello"}, set()
@@ -259,7 +259,11 @@ class TestParseStreamPartComplex:
         """A ``tool-call`` that duplicates a streamed tool is dropped."""
         seen: set[str] = set()
         protocol._parse_stream_part(
-            {"type": "tool-input-start", "id": "tc-1", "toolName": "get_weather"},
+            {
+                "type": "tool-input-start",
+                "id": "tc-1",
+                "toolName": "get_weather",
+            },
             seen,
         )
         events = protocol._parse_stream_part(
@@ -358,7 +362,9 @@ class TestParseStreamPartComplex:
 
 class TestParseUsage:
     def test_flat_format(self) -> None:
-        usage = protocol._parse_usage({"prompt_tokens": 10, "completion_tokens": 20})
+        usage = protocol._parse_usage(
+            {"prompt_tokens": 10, "completion_tokens": 20}
+        )
         assert usage.input_tokens == 10
         assert usage.output_tokens == 20
 

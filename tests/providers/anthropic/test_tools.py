@@ -34,7 +34,7 @@ async def _capture_tools(
 ) -> dict[str, Any]:
     _ = monkeypatch
     captured: dict[str, Any] = {}
-    fake = cast(anthropic.AsyncAnthropic, FakeAnthropicClient(captured))
+    fake = cast("anthropic.AsyncAnthropic", FakeAnthropicClient(captured))
     stream = protocol.stream(
         fake,
         _MODEL,
@@ -132,7 +132,9 @@ async def test_text_editor_name_differs_from_class(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """``TextEditor`` ships under the ``str_replace_based_edit_tool`` name."""
-    captured = await _capture_tools(monkeypatch, [anthropic_tools.text_editor()])
+    captured = await _capture_tools(
+        monkeypatch, [anthropic_tools.text_editor()]
+    )
 
     assert captured["tools"] == [
         {"type": "text_editor_20250728", "name": "str_replace_based_edit_tool"}

@@ -19,11 +19,13 @@ import sys
 import tempfile
 import time
 import urllib.request
-from http.client import HTTPResponse
 from pathlib import Path
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import ai
+
+if TYPE_CHECKING:
+    from http.client import HTTPResponse
 
 HERE = Path(__file__).resolve().parent
 SESSION = f"multiagent-e2e-{os.getpid()}"
@@ -34,7 +36,7 @@ SERVER_URL = f"http://127.0.0.1:{SERVER_PORT}"
 def _check_health() -> bool:
     try:
         with urllib.request.urlopen(f"{SERVER_URL}/api/health", timeout=1) as r:
-            return cast(HTTPResponse, r).status == 200
+            return cast("HTTPResponse", r).status == 200
     except Exception:
         return False
 

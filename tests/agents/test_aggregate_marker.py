@@ -28,9 +28,11 @@ def test_aggregate_marker_extracted_from_direct_annotated() -> None:
     """Bare ``Annotated[..., Aggregate(...)]`` on the return type."""
 
     @ai.tool
-    async def t() -> Annotated[
-        AsyncGenerator[str], ai.agents.Aggregate(ai.agents.LastAggregator)
-    ]:
+    async def t() -> (
+        Annotated[
+            AsyncGenerator[str], ai.agents.Aggregate(ai.agents.LastAggregator)
+        ]
+    ):
         yield "x"
 
     assert isinstance(_factory(t), ai.agents.LastAggregator)
@@ -75,9 +77,12 @@ def test_aggregate_kwarg_passed_to_factory() -> None:
     """Extra kwargs on Aggregate flow through to the factory."""
 
     @ai.tool
-    async def t() -> Annotated[
-        AsyncGenerator[str], ai.agents.Aggregate(ai.agents.ConcatAggregator, delim="|")
-    ]:
+    async def t() -> (
+        Annotated[
+            AsyncGenerator[str],
+            ai.agents.Aggregate(ai.agents.ConcatAggregator, delim="|"),
+        ]
+    ):
         yield "a"
         yield "b"
 
@@ -102,11 +107,13 @@ def test_multiple_aggregate_markers_raise() -> None:
     with pytest.raises(TypeError, match="multiple Aggregate markers"):
 
         @ai.tool
-        async def t() -> Annotated[
-            AsyncGenerator[str],
-            ai.agents.Aggregate(ai.agents.LastAggregator),
-            ai.agents.Aggregate(ai.agents.ConcatAggregator),
-        ]:
+        async def t() -> (
+            Annotated[
+                AsyncGenerator[str],
+                ai.agents.Aggregate(ai.agents.LastAggregator),
+                ai.agents.Aggregate(ai.agents.ConcatAggregator),
+            ]
+        ):
             yield "x"
 
 
@@ -118,7 +125,7 @@ async def alias_progress_tool(query: str) -> ai.StreamingStatusTool[str]:
 
 
 async def test_alias_declared_tool_runs_end_to_end() -> None:
-    """An alias-declared streaming tool behaves identically to the kwarg form."""
+    """An alias-declared streaming tool behaves like the kwarg form."""
     my_agent = ai.agent(tools=[alias_progress_tool])
 
     call = [
@@ -137,7 +144,9 @@ async def test_alias_declared_tool_runs_end_to_end() -> None:
     assert llm.call_count == 2
 
     progress = [
-        e for e in all_events if isinstance(e, agent_events_.PartialToolCallResult)
+        e
+        for e in all_events
+        if isinstance(e, agent_events_.PartialToolCallResult)
     ]
     assert [p.value for p in progress] == ["Working...", "Answer for test"]
 

@@ -83,11 +83,15 @@ def _map_status_error(
     model_id: str | None,
 ) -> ai_errors.ProviderAPIError:
     if exc.status_code == 404 and model_id is not None:
-        cls: type[ai_errors.ProviderAPIError] = ai_errors.ProviderModelNotFoundError
+        cls: type[ai_errors.ProviderAPIError] = (
+            ai_errors.ProviderModelNotFoundError
+        )
     else:
         cls = _STATUS_ERROR_MAP.get(
             type(exc).__name__
-        ) or ai_errors.http_status_to_provider_status_error_class(exc.status_code)
+        ) or ai_errors.http_status_to_provider_status_error_class(
+            exc.status_code
+        )
     return _provider_error(cls, exc, provider=provider, model_id=model_id)
 
 
@@ -102,7 +106,9 @@ def _provider_error(
     body = getattr(exc, "body", None)
     if issubclass(cls, ai_errors.ProviderModelNotFoundError):
         if model_id is None:  # pragma: no cover - guarded by _map_status_error
-            raise RuntimeError("model_id is required for ProviderModelNotFoundError")
+            raise RuntimeError(
+                "model_id is required for ProviderModelNotFoundError"
+            )
         return cls(
             _message(exc),
             model_id=model_id,

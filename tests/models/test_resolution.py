@@ -4,7 +4,10 @@ import ai
 from ai import ConfigurationError, models
 from ai.providers.ai_gateway import GatewayV3Protocol
 from ai.providers.anthropic import AnthropicMessagesProtocol
-from ai.providers.openai import OpenAIChatCompletionsProtocol, OpenAIResponsesProtocol
+from ai.providers.openai import (
+    OpenAIChatCompletionsProtocol,
+    OpenAIResponsesProtocol,
+)
 
 
 def test_get_resolves_provider_qualified_model_id() -> None:
@@ -90,7 +93,8 @@ def test_provider_from_id_detects_token_env_after_url_env() -> None:
     provider = ai.get_provider("databricks")
 
     assert (
-        provider.default_base_url == "https://${DATABRICKS_HOST}/ai-gateway/mlflow/v1"
+        provider.default_base_url
+        == "https://${DATABRICKS_HOST}/ai-gateway/mlflow/v1"
     )
     assert provider.api_key_env == "DATABRICKS_TOKEN"
     assert provider.config_envs == ("DATABRICKS_HOST",)

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator, Iterable, Mapping, Sequence
-from types import ModuleType
 from typing import TYPE_CHECKING, Any, ClassVar
 
 import httpx
@@ -15,6 +13,9 @@ from . import protocol as protocol_module
 from . import tools as tools_module
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator, Iterable, Mapping, Sequence
+    from types import ModuleType
+
     import modelsdotdev
     import openai
     import pydantic
@@ -62,7 +63,9 @@ class OpenAICompatibleProvider(base.Provider[OpenAISDKClient]):
         if client is not None and not isinstance(client, httpx.AsyncClient):
             openai_sdk = _sdk.import_sdk(provider=name)
 
-        if openai_sdk is not None and isinstance(client, openai_sdk.AsyncOpenAI):
+        if openai_sdk is not None and isinstance(
+            client, openai_sdk.AsyncOpenAI
+        ):
             sdk_client = client
             http_client = None
             self._has_user_sdk_client = True
@@ -72,7 +75,8 @@ class OpenAICompatibleProvider(base.Provider[OpenAISDKClient]):
             self._has_user_sdk_client = False
         else:
             raise TypeError(
-                "OpenAI providers require an httpx.AsyncClient or openai.AsyncOpenAI"
+                "OpenAI providers require an httpx.AsyncClient or "
+                "openai.AsyncOpenAI"
             )
 
         super().__init__(
@@ -86,7 +90,9 @@ class OpenAICompatibleProvider(base.Provider[OpenAISDKClient]):
             headers=headers,
             env=env,
         )
-        self._close_client_on_aclose = sdk_client is None and http_client is None
+        self._close_client_on_aclose = (
+            sdk_client is None and http_client is None
+        )
         if sdk_client is None:
             sdk_client = self._make_sdk_client(http_client=http_client)
         self._set_client(sdk_client)
@@ -161,8 +167,12 @@ class OpenAICompatibleProvider(base.Provider[OpenAISDKClient]):
         if resolved_base_url is None and provider.id == "openai":
             resolved_base_url = _BASE_URL
         if resolved_base_url is None:
-            raise ValueError(f"provider {provider.id!r} does not declare an API URL")
-        api_key_env, config_envs = base.provider_config(provider, model_provider_config)
+            raise ValueError(
+                f"provider {provider.id!r} does not declare an API URL"
+            )
+        api_key_env, config_envs = base.provider_config(
+            provider, model_provider_config
+        )
         return cls(
             name=provider.id,
             default_base_url=resolved_base_url,

@@ -6,8 +6,8 @@
 2. after making changes run format, lint, and typecheck like ci:
     - uv run ruff format --check src tests examples
     - uv run ruff check src tests examples
-    - uv run mypy src tests
-    - uv run pyright src tests
+    - uv run mypy
+    - uv run ty check
 3. imports:
    - import by module, using the shortest unambiguous relative path. `from ..core import helpers`, `from . import streaming`
    - UNLESS it's `typing` — then `from typing import Foo` (there are too many of them).
@@ -37,4 +37,3 @@ ensure state is easy to serialize and deserialize, modify, and compose at any le
 move normalization and translation complexity inside the framework and keep the public data model minimal.
 
 - *example*: public data model consists of a single unified `Message` type. the framework does not expose events and other intermediate steps unless the user is writing a custom adapter.
-

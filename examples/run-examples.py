@@ -161,7 +161,9 @@ def _sample_path(name: str) -> Path:
     return SAMPLES / path
 
 
-def _select_sample(name: str, known_samples: dict[str, Sample]) -> Sample | None:
+def _select_sample(
+    name: str, known_samples: dict[str, Sample]
+) -> Sample | None:
     sample = known_samples.get(name)
     if sample is not None:
         return sample
@@ -178,7 +180,9 @@ def _select_sample(name: str, known_samples: dict[str, Sample]) -> Sample | None
     return None
 
 
-def _sample_cmd(sample: Sample, model: str | None, protocol: str | None) -> list[str]:
+def _sample_cmd(
+    sample: Sample, model: str | None, protocol: str | None
+) -> list[str]:
     if sample.cmd is not None:
         return sample.cmd
     base = [
@@ -258,11 +262,21 @@ def run_sample_quiet(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run example samples.")
-    parser.add_argument("--text", action="store_true", help="include text samples")
-    parser.add_argument("--image", action="store_true", help="include image samples")
-    parser.add_argument("--video", action="store_true", help="include video samples")
-    parser.add_argument("--broken", action="store_true", help="include broken samples")
-    parser.add_argument("--e2e", action="store_true", help="include e2e test scripts")
+    parser.add_argument(
+        "--text", action="store_true", help="include text samples"
+    )
+    parser.add_argument(
+        "--image", action="store_true", help="include image samples"
+    )
+    parser.add_argument(
+        "--video", action="store_true", help="include video samples"
+    )
+    parser.add_argument(
+        "--broken", action="store_true", help="include broken samples"
+    )
+    parser.add_argument(
+        "--e2e", action="store_true", help="include e2e test scripts"
+    )
     parser.add_argument("--all", action="store_true", help="run all samples")
     parser.add_argument(
         "--parallel", action="store_true", help="run samples in parallel"
@@ -287,11 +301,16 @@ def main() -> None:
         "examples",
         nargs="*",
         metavar="example",
-        help="example file(s) to run, e.g. stream.py or examples/samples/stream.py",
+        help=(
+            "example file(s) to run, e.g. stream.py or "
+            "examples/samples/stream.py"
+        ),
     )
     args = parser.parse_args()
 
-    has_category = args.text or args.image or args.video or args.broken or args.e2e
+    has_category = (
+        args.text or args.image or args.video or args.broken or args.e2e
+    )
 
     samples: list[Sample] = []
     if args.examples:

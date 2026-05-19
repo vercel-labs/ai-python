@@ -1,12 +1,14 @@
-"""Utility functions"""
+"""Utility functions."""
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
 import dataclasses
-from collections.abc import AsyncIterable, AsyncIterator
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterable, AsyncIterator
 
 _EMPTY: Any = object()
 
@@ -48,7 +50,7 @@ class AsyncIterableQueue[T](asyncio.Queue[_Stop | T]):
 
 @contextlib.asynccontextmanager
 async def unwrap_generator_exit() -> AsyncIterator[None]:
-    """Convert a ``BaseExceptionGroup`` of only ``GeneratorExit``s into a single one.
+    """Unwrap ``BaseExceptionGroup`` containing only ``GeneratorExit``.
 
     ``asyncio.TaskGroup``'s ``__aexit__`` wraps any body exception (including
     ``GeneratorExit``) into a ``BaseExceptionGroup``. Inside an async
@@ -68,7 +70,9 @@ async def unwrap_generator_exit() -> AsyncIterator[None]:
 
 
 @contextlib.asynccontextmanager
-async def maybe_aclosing[T: AsyncIterable[Any]](iter: T) -> AsyncIterator[T]:
+async def maybe_aclosing(
+    iter: AsyncIterable[Any],
+) -> AsyncIterator[AsyncIterable[Any]]:
     """Like ``contextlib.aclosing`` but a no-op if ``iter`` has no ``aclose``.
 
     Useful when consuming an arbitrary ``AsyncIterable[T]`` whose concrete
@@ -139,7 +143,7 @@ async def decouple[T](
 async def merge[T](
     *aiterables: AsyncIterable[T], restart: bool = True
 ) -> AsyncIterator[T]:
-    """Produce a stream that yields elements from async iterables as they arrive.
+    """Yield elements from async iterables as they arrive.
 
     Additionally, if `restart` is True (the default), attempt to *restart*
     finished iterables when other iterables produce elements.
@@ -152,7 +156,6 @@ async def merge[T](
     iterators (importantly, this means that async generators are not
     restarted).
     """
-
     # We use unwrap_generator_exit() to keep a GeneratorExit that gets
     # packaged in an ExceptionGroup from causing grief. But maybe we
     # ought to not use a TaskGroup?
@@ -197,7 +200,9 @@ async def merge[T](
                 # they've had a chance to trigger things, and we do it
                 # after *all* tasks have been handled, so that if a
                 # task *just* finished, we still restart it.
-                for idx, (ok, otask) in enumerate(zip(restartable, tasks, strict=True)):
+                for idx, (ok, otask) in enumerate(
+                    zip(restartable, tasks, strict=True)
+                ):
                     if ok and otask is None and idx not in fired:
                         niter = decouple(aiterables[idx], task_group=tg)
                         aiters[idx] = niter

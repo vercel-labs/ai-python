@@ -251,7 +251,9 @@ def image_generation(
 
 
 def local_shell() -> types.tools.Tool:
-    return types.tools.Tool(kind="provider", name="local_shell", args=LocalShellArgs())
+    return types.tools.Tool(
+        kind="provider", name="local_shell", args=LocalShellArgs()
+    )
 
 
 def shell(*, environment: str | None = None) -> types.tools.Tool:

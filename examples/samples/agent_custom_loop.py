@@ -2,6 +2,7 @@
 
 import asyncio
 from collections.abc import AsyncGenerator
+from typing import ClassVar
 
 import ai
 
@@ -10,20 +11,26 @@ import ai
 async def get_weather(city: str) -> str:
     """Get current weather for a city."""
     await asyncio.sleep(2)
-    return f"Sunny, 72F in {city}" if city == "Tokyo" else f"Cloudy, 55F in {city}"
+    return (
+        f"Sunny, 72F in {city}" if city == "Tokyo" else f"Cloudy, 55F in {city}"
+    )
 
 
 @ai.tool
 async def get_population(city: str) -> int:
     """Get population of a city."""
     await asyncio.sleep(1)
-    return {"new york": 8_336_817, "tokyo": 13_960_000}.get(city.lower(), 1_000_000)
+    return {"new york": 8_336_817, "tokyo": 13_960_000}.get(
+        city.lower(), 1_000_000
+    )
 
 
 class CustomAgent(ai.Agent):
-    TOOLS = [get_weather, get_population]
+    TOOLS: ClassVar[list[ai.AgentTool]] = [get_weather, get_population]
 
-    async def loop(self, context: ai.Context) -> AsyncGenerator[ai.events.AgentEvent]:
+    async def loop(
+        self, context: ai.Context
+    ) -> AsyncGenerator[ai.events.AgentEvent]:
         """Stream, execute tools with logging, repeat."""
         while context.keep_running():
             async with (
@@ -35,7 +42,9 @@ class CustomAgent(ai.Agent):
 
                     if isinstance(event, ai.events.ToolEnd):
                         call = event.tool_call
-                        print(f"Launching tool {call.tool_name}({call.tool_args})")
+                        print(
+                            f"Launching tool {call.tool_name}({call.tool_args})"
+                        )
                         tool = context.resolve(call)
                         tr.schedule(tool)
 
@@ -53,7 +62,11 @@ async def main() -> None:
 
     async with my_agent.run(
         model,
-        [ai.user_message("Compare the weather and population of New York and Tokyo.")],
+        [
+            ai.user_message(
+                "Compare the weather and population of New York and Tokyo."
+            )
+        ],
     ) as stream:
         async for event in stream:
             if (

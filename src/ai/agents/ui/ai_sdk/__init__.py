@@ -1,4 +1,4 @@
-"""AI SDK UI adapter — ``ai.Messages`` in, ``ai.Messages`` out, SSE on the wire."""
+"""AI SDK UI adapter for messages and SSE streams."""
 
 from .inbound import (
     ApprovalResponse,
@@ -11,9 +11,9 @@ from .protocol import UI_MESSAGE_STREAM_HEADERS
 from .ui_message import UIMessage
 
 __all__ = [
+    "UI_MESSAGE_STREAM_HEADERS",
     "ApprovalResponse",
     "UIMessage",
-    "UI_MESSAGE_STREAM_HEADERS",
     "apply_approvals",
     "extract_approvals",
     "to_messages",

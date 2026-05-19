@@ -20,8 +20,8 @@ jobs:
 
       - run: uv run ruff format --check src tests examples
       - run: uv run ruff check src tests examples
-      - run: uv run mypy src tests
-      - run: uv run pyright src tests
+      - run: uv run mypy
+      - run: uv run ty check
 
       - run: uv run pytest
 

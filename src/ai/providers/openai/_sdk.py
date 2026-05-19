@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from .. import _optional
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     import openai
 
 
@@ -27,14 +28,16 @@ class OpenAIPydantic(Protocol):
 
 def import_sdk(*, provider: str = "openai") -> OpenAISDK:
     return cast(
-        OpenAISDK,
-        _optional.import_optional_sdk("openai", provider=provider, extra="openai"),
+        "OpenAISDK",
+        _optional.import_optional_sdk(
+            "openai", provider=provider, extra="openai"
+        ),
     )
 
 
 def import_pydantic(*, provider: str = "openai") -> OpenAIPydantic:
     return cast(
-        OpenAIPydantic,
+        "OpenAIPydantic",
         _optional.import_optional_sdk(
             "openai.lib._pydantic",
             provider=provider,

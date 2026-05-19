@@ -25,7 +25,11 @@ async def main() -> None:
     print(f"Generated {len(result.images)} image(s)")
     for i, img in enumerate(result.images):
         filename = f"generated_{i}.png"
-        data = img.data if isinstance(img.data, bytes) else base64.b64decode(img.data)
+        data = (
+            img.data
+            if isinstance(img.data, bytes)
+            else base64.b64decode(img.data)
+        )
         pathlib.Path(filename).write_bytes(data)
         print(f"  {filename}: {img.media_type}, {len(data)} bytes")
 

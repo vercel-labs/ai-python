@@ -103,7 +103,9 @@ class FakeAnthropicClient:
         captured: dict[str, Any] | None = None,
         stream: FakeStream | None = None,
     ) -> None:
-        self.messages = FakeMessages(captured if captured is not None else {}, stream)
+        self.messages = FakeMessages(
+            captured if captured is not None else {}, stream
+        )
         self.closed = False
 
     async def close(self) -> None:
@@ -118,7 +120,9 @@ class FakeAnthropicClient:
 def block_start(index: int, block_type: str, **fields: Any) -> SimpleNamespace:
     """Build an SDK ``content_block_start`` event."""
     block = SimpleNamespace(type=block_type, **fields)
-    return SimpleNamespace(type="content_block_start", index=index, content_block=block)
+    return SimpleNamespace(
+        type="content_block_start", index=index, content_block=block
+    )
 
 
 def block_stop(index: int) -> SimpleNamespace:

@@ -36,7 +36,6 @@ def split_data_url(url: str) -> tuple[str | None, str | None]:
         return None, None
     try:
         header, b64_content = url.split(",", 1)
-        # header = "data:image/png;base64"
         mt = header.split(";")[0].split(":", 1)[1]
         return (mt or None), (b64_content or None)
     except (ValueError, IndexError):
@@ -95,7 +94,8 @@ def infer_media_type(url: str) -> str:
         if guessed:
             return guessed
     raise ValueError(
-        f"Cannot infer media_type from URL: {url!r}. Provide media_type explicitly."
+        f"Cannot infer media_type from URL: {url!r}. "
+        "Provide media_type explicitly."
     )
 
 
@@ -115,18 +115,57 @@ IMAGE_SIGNATURES: list[_Signature] = [
     ("image/jpeg", (0xFF, 0xD8)),
     (
         "image/webp",
-        (0x52, 0x49, 0x46, 0x46, None, None, None, None, 0x57, 0x45, 0x42, 0x50),
+        (
+            0x52,
+            0x49,
+            0x46,
+            0x46,
+            None,
+            None,
+            None,
+            None,
+            0x57,
+            0x45,
+            0x42,
+            0x50,
+        ),
     ),
     ("image/bmp", (0x42, 0x4D)),
     ("image/tiff", (0x49, 0x49, 0x2A, 0x00)),  # little-endian
     ("image/tiff", (0x4D, 0x4D, 0x00, 0x2A)),  # big-endian
     (
         "image/avif",
-        (0x00, 0x00, 0x00, 0x20, 0x66, 0x74, 0x79, 0x70, 0x61, 0x76, 0x69, 0x66),
+        (
+            0x00,
+            0x00,
+            0x00,
+            0x20,
+            0x66,
+            0x74,
+            0x79,
+            0x70,
+            0x61,
+            0x76,
+            0x69,
+            0x66,
+        ),
     ),
     (
         "image/heic",
-        (0x00, 0x00, 0x00, 0x20, 0x66, 0x74, 0x79, 0x70, 0x68, 0x65, 0x69, 0x63),
+        (
+            0x00,
+            0x00,
+            0x00,
+            0x20,
+            0x66,
+            0x74,
+            0x79,
+            0x70,
+            0x68,
+            0x65,
+            0x69,
+            0x63,
+        ),
     ),
 ]
 
@@ -139,7 +178,20 @@ AUDIO_SIGNATURES: list[_Signature] = [
     ("audio/mpeg", (0xFF, 0xE2)),
     (
         "audio/wav",
-        (0x52, 0x49, 0x46, 0x46, None, None, None, None, 0x57, 0x41, 0x56, 0x45),
+        (
+            0x52,
+            0x49,
+            0x46,
+            0x46,
+            None,
+            None,
+            None,
+            None,
+            0x57,
+            0x41,
+            0x56,
+            0x45,
+        ),
     ),
     ("audio/ogg", (0x4F, 0x67, 0x67, 0x53)),
     ("audio/flac", (0x66, 0x4C, 0x61, 0x43)),
@@ -245,6 +297,7 @@ def detect_media_type(
 
     Returns:
         The matched IANA media type, or ``None`` if no signature matches.
+
     """
     # Strip ID3 tags for audio detection
     if signatures is AUDIO_SIGNATURES:
@@ -261,7 +314,8 @@ def detect_media_type(
         if len(raw) < len(prefix):
             continue
         if all(
-            expected is None or raw[i] == expected for i, expected in enumerate(prefix)
+            expected is None or raw[i] == expected
+            for i, expected in enumerate(prefix)
         ):
             return media_type
 

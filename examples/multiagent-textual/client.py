@@ -12,12 +12,13 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from typing import Any
+from typing import Any, ClassVar
 
 import pydantic
 import rich.text
 import textual
 import textual.app
+import textual.binding
 import textual.containers
 import textual.widgets
 import textual.worker
@@ -107,11 +108,15 @@ class MultiAgentApp(textual.app.App[None]):
     }
     """
 
-    BINDINGS = [("q", "quit", "quit")]
+    BINDINGS: ClassVar[
+        list[textual.binding.Binding | tuple[str, str] | tuple[str, str, str]]
+    ] = [("q", "quit", "quit")]
 
     def __init__(self) -> None:
         super().__init__()
-        self._hook_queue: asyncio.Queue[ai.messages.HookPart[Any]] = asyncio.Queue()
+        self._hook_queue: asyncio.Queue[ai.messages.HookPart[Any]] = (
+            asyncio.Queue()
+        )
         self._current_hook: ai.messages.HookPart[Any] | None = None
         self._ws: websockets.ClientConnection | None = None
         self._event_adapter: pydantic.TypeAdapter[ai.events.AgentEvent] = (
@@ -186,9 +191,13 @@ class MultiAgentApp(textual.app.App[None]):
             if panel is not None:
                 for part in event.message.parts:
                     match part:
-                        case ai.messages.ToolCallPart(tool_name=name, tool_args=args):
+                        case ai.messages.ToolCallPart(
+                            tool_name=name, tool_args=args
+                        ):
                             panel.append_line(f"> {name}({args})")
-                        case ai.messages.ToolResultPart(tool_name=name, result=result):
+                        case ai.messages.ToolResultPart(
+                            tool_name=name, result=result
+                        ):
                             panel.append_line(f"< {name} = {result}")
             return
 
@@ -221,7 +230,9 @@ class MultiAgentApp(textual.app.App[None]):
 
         panel = self._get_panel(branch)
         if panel:
-            panel.append_line(f"!! approval required: {tool}", style="dim yellow")
+            panel.append_line(
+                f"!! approval required: {tool}", style="dim yellow"
+            )
             panel.status = "awaiting approval"
 
         self._hook_queue.put_nowait(hook_part)
@@ -270,7 +281,9 @@ class MultiAgentApp(textual.app.App[None]):
         inp.placeholder = f"approve {branch}/{tool}? [y/n]"
         inp.focus()
 
-    async def on_input_submitted(self, event: textual.widgets.Input.Submitted) -> None:
+    async def on_input_submitted(
+        self, event: textual.widgets.Input.Submitted
+    ) -> None:
         if self._current_hook is None:
             event.input.clear()
             return

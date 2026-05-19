@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncGenerator, AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import urlparse
@@ -13,6 +12,8 @@ import httpx
 from . import errors
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator, AsyncIterator, Mapping
+
     from ....models.core import model as model_
 
 _PROTOCOL_VERSION = "0.0.1"

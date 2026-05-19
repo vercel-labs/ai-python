@@ -2,7 +2,9 @@
 
 Usage inside an agent loop::
 
-    result = await hook("approve_delete", payload=ToolApproval, metadata={"tool": "rm"})
+    result = await hook(
+        "approve_delete", payload=ToolApproval, metadata={"tool": "rm"}
+    )
     if result.granted:
         ...
 
@@ -19,7 +21,7 @@ Cancellation::
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import Any, cast
 
 import pydantic
 
@@ -55,7 +57,7 @@ _pending_resolutions: dict[str, dict[str, Any] | BaseException] = {}
 
 
 class HookPendingError(Exception):
-    """Exception for aborting due to a hook"""
+    """Exception for aborting due to a hook."""
 
     type: str = "gateway_error"
 
@@ -89,6 +91,7 @@ async def hook[T: pydantic.BaseModel](
         metadata: Arbitrary metadata surfaced in the pending signal message
             and checkpoint.  Useful for UI rendering (e.g. which tool needs
             approval, what arguments it received).
+
     """
     call = middleware_.HookContext(
         label=label,
@@ -98,7 +101,7 @@ async def hook[T: pydantic.BaseModel](
 
     chain = middleware_._build_hook_chain(_hook_impl)
     result = await chain(call)
-    return result  # type: ignore[return-value]
+    return cast("T", result)
 
 
 async def _hook_impl(call: middleware_.HookContext) -> pydantic.BaseModel:
@@ -181,6 +184,7 @@ def resolve_hook(
             exception to raise in the awaiter.
         payload: Optional pydantic model class for validation.  Ignored
             when *data* is an exception.
+
     """
     resolution: dict[str, Any] | BaseException
     if isinstance(data, BaseException):
@@ -195,7 +199,9 @@ def resolve_hook(
         else:
             resolution = data
     else:
-        raise TypeError(f"Expected dict or pydantic model, got {type(data).__name__}")
+        raise TypeError(
+            f"Expected dict or pydantic model, got {type(data).__name__}"
+        )
 
     # Path 1: live hook — resolve the future directly.
     if label in _live_hooks:
@@ -211,8 +217,9 @@ def resolve_hook(
 
 
 def abort_pending_hook(hook_part: messages_.HookPart[Any]) -> None:
-    """Abort the hook identified by ``hook_part.hook_id`` with a
-    :class:`HookPendingError` carrying *hook_part*.
+    """Abort the hook identified by ``hook_part.hook_id``.
+
+    The abort carries a :class:`HookPendingError` wrapping *hook_part*.
 
     Convenience wrapper around :func:`resolve_hook` for the serverless
     pattern where a caller has a :class:`~ai.messages.HookPart` (e.g.

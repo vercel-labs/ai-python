@@ -4,6 +4,8 @@ Pure media utilities (detection, encoding, inference) live in
 :mod:`ai.types.media`.
 """
 
+from urllib.parse import urlparse
+
 import httpx
 
 DEFAULT_MAX_BYTES = 100 * 1024 * 1024  # 100 MiB (matches TS SDK)
@@ -35,8 +37,6 @@ class DownloadError(Exception):
 
 def _validate_url(url: str) -> None:
     """Reject non-HTTP(S) URLs (SSRF prevention)."""
-    from urllib.parse import urlparse
-
     parsed = urlparse(url)
     if parsed.scheme not in _ALLOWED_SCHEMES:
         raise DownloadError(
@@ -60,6 +60,7 @@ async def download(
 
     Raises:
         DownloadError: On any failure (network, HTTP status, size, etc.).
+
     """
     _validate_url(url)
 

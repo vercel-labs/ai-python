@@ -10,7 +10,9 @@ from ai.types import messages as messages_
 
 def test_to_ui_messages_user_and_assistant() -> None:
     msgs = [
-        messages_.Message(id="u1", role="user", parts=[messages_.TextPart(text="hi")]),
+        messages_.Message(
+            id="u1", role="user", parts=[messages_.TextPart(text="hi")]
+        ),
         messages_.Message(
             id="a1",
             role="assistant",
@@ -102,7 +104,9 @@ def test_to_ui_messages_internal_role_merges_approval() -> None:
 
 def test_to_ui_messages_user_message_uses_own_id() -> None:
     msgs = [
-        messages_.Message(id="u1", role="user", parts=[messages_.TextPart(text="a")])
+        messages_.Message(
+            id="u1", role="user", parts=[messages_.TextPart(text="a")]
+        )
     ]
     result = to_ui_messages(msgs)
     assert result[0].id == "u1"

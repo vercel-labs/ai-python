@@ -16,9 +16,12 @@ model = ai.get_model("gateway:google/gemini-3-pro-image")
 
 messages = [
     ai.system_message(
-        "You are an art assistant. When asked to draw or create an image, generate it."
+        "You are an art assistant. When asked to draw or create an image, "
+        "generate it."
     ),
-    ai.user_message("Draw a cat sitting in a field of cherry blossoms at sunset."),
+    ai.user_message(
+        "Draw a cat sitting in a field of cherry blossoms at sunset."
+    ),
 ]
 
 
@@ -37,7 +40,9 @@ async def main() -> None:
         for i, img in enumerate(s.message.images):
             filename = f"inline_{i}.png"
             data = (
-                img.data if isinstance(img.data, bytes) else base64.b64decode(img.data)
+                img.data
+                if isinstance(img.data, bytes)
+                else base64.b64decode(img.data)
             )
             pathlib.Path(filename).write_bytes(data)
             print(f"Saved {filename} ({img.media_type}, {len(data)} bytes)")

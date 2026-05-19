@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import dataclasses
 import json
-from collections.abc import AsyncGenerator, AsyncIterable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pydantic
 
-from .....types import events as events_
 from .. import protocol
 from .stream import to_stream
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator, AsyncIterable
+
+    from .....types import events as events_
 
 
 def _to_camel_case(snake_str: str) -> str:
@@ -28,7 +31,9 @@ def _json_default(obj: Any) -> Any:
     """
     if isinstance(obj, pydantic.BaseModel):
         return obj.model_dump(mode="json", by_alias=True)
-    raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
+    raise TypeError(
+        f"Object of type {type(obj).__name__} is not JSON serializable"
+    )
 
 
 def serialize_part(part: protocol.UIMessageStreamPart) -> str:

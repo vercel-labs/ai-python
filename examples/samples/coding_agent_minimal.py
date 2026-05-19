@@ -43,7 +43,9 @@ model = ai.get_model("gateway:anthropic/claude-opus-4.6")
 agent = ai.agent(tools=[shell])
 
 
-async def step(messages: list[ai.messages.Message]) -> list[ai.messages.Message]:
+async def step(
+    messages: list[ai.messages.Message],
+) -> list[ai.messages.Message]:
     async with agent.run(model, messages, params=STREAM_PARAMS) as stream:
         async for event in stream:
             if isinstance(event, ai.events.TextDelta):

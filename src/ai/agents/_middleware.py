@@ -20,10 +20,7 @@ import dataclasses
 from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
 from typing import TYPE_CHECKING, Any
 
-import pydantic
-
 from ..types import messages as messages_
-from ..types.tools import Tool
 
 # Compat shim: ``StreamResultLike`` was removed from ``ai.types.proto`` when
 # the model layer was reworked.  Middleware is dead code under the new
@@ -43,8 +40,11 @@ type StreamResultLike = Any
 # ---------------------------------------------------------------------------
 
 if TYPE_CHECKING:
+    import pydantic
+
     from ..models.core.model import Model
     from ..types import events as events_
+    from ..types.tools import Tool
     from .agent import Context
 
 
@@ -218,7 +218,7 @@ Token = contextvars.Token[list[_Middleware]]
 
 
 def activate(mw: list[_Middleware]) -> Token:
-    """Set the middleware stack for the current run.  Returns a token for reset."""
+    """Set the middleware stack and return a reset token."""
     return _active.set(mw)
 
 
@@ -272,7 +272,8 @@ def _build_generate_chain(
     for m in reversed(mw):
 
         def _make(
-            m: _Middleware, nxt: Callable[[GenerateContext], Awaitable[_Message]]
+            m: _Middleware,
+            nxt: Callable[[GenerateContext], Awaitable[_Message]],
         ) -> Callable[[GenerateContext], Awaitable[_Message]]:
             async def _wrapped(call: GenerateContext) -> _Message:
                 return await m.wrap_generate(call, nxt)

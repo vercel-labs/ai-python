@@ -7,7 +7,10 @@ import openai
 import pytest
 
 import ai
-from ai.providers.openai import OpenAICompatibleProvider, OpenAIResponsesProtocol
+from ai.providers.openai import (
+    OpenAICompatibleProvider,
+    OpenAIResponsesProtocol,
+)
 
 
 async def test_list_models_gets_models_with_auth_header_and_sorts_ids() -> None:
@@ -194,7 +197,9 @@ def test_installation_error_uses_modelsdev_provider_id(
             },
         )
 
-    assert "required to use the cloudflare-workers-ai provider" in str(exc_info.value)
+    assert "required to use the cloudflare-workers-ai provider" in str(
+        exc_info.value
+    )
 
 
 def test_get_provider_accepts_base_url_and_api_key() -> None:

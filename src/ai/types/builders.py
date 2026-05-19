@@ -101,7 +101,9 @@ def thinking(
     return ReasoningPart(text=text, provider_metadata=provider_metadata)
 
 
-def _tool_results_from_messages(messages: list[Message]) -> list[ToolResultPart]:
+def _tool_results_from_messages(
+    messages: list[Message],
+) -> list[ToolResultPart]:
     parts: list[ToolResultPart] = []
     for message in messages:
         if message.role != "tool":
@@ -153,7 +155,9 @@ def tool_message(
         )
 
     if not items:
-        raise TypeError("tool_message() requires at least one tool message or result")
+        raise TypeError(
+            "tool_message() requires at least one tool message or result"
+        )
 
     flattened_messages: list[Message] = []
     result_parts: list[ToolResultPart] = []

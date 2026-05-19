@@ -26,7 +26,9 @@ def _strip_encrypted(value: object) -> object:
     """Some fields are encrypted, strip them for clarity"""
     if isinstance(value, dict):
         return {
-            k: _strip_encrypted(v) for k, v in value.items() if k not in _ENCRYPTED_KEYS
+            k: _strip_encrypted(v)
+            for k, v in value.items()
+            if k not in _ENCRYPTED_KEYS
         }
     if isinstance(value, list):
         return [_strip_encrypted(v) for v in value]

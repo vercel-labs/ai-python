@@ -9,9 +9,7 @@ from __future__ import annotations
 import base64
 import json
 from collections.abc import AsyncGenerator, Mapping, Sequence
-from typing import TYPE_CHECKING, Any
-
-import pydantic
+from typing import TYPE_CHECKING, Any, cast
 
 from ... import errors as ai_errors
 from ... import types
@@ -22,6 +20,7 @@ from . import tools as openai_tools
 
 if TYPE_CHECKING:
     import openai
+    import pydantic
 
 # ---------------------------------------------------------------------------
 # Message / tool conversion — internal types → OpenAI wire format
@@ -179,7 +178,9 @@ async def _messages_to_openai(
 
             case "system":
                 content_text = "".join(
-                    p.text for p in msg.parts if isinstance(p, types.messages.TextPart)
+                    p.text
+                    for p in msg.parts
+                    if isinstance(p, types.messages.TextPart)
                 )
                 result.append({"role": "system", "content": content_text})
 
@@ -225,7 +226,7 @@ async def stream(
     params: Any = None,
     provider: str,
 ) -> AsyncGenerator[types.events.Event]:
-    """Stream through the OpenAI chat completions protocol using *sdk_client*."""
+    """Stream through the OpenAI chat completions protocol."""
     openai_sdk = _sdk.import_sdk(provider=provider)
     if tools and any(t.kind == "provider" for t in tools):
         raise NotImplementedError(
@@ -325,7 +326,9 @@ async def stream(
                 if not text_started:
                     text_started = True
                     yield types.events.TextStart(block_id="text")
-                yield types.events.TextDelta(chunk=delta.content, block_id="text")
+                yield types.events.TextDelta(
+                    chunk=delta.content, block_id="text"
+                )
 
             if delta.tool_calls:
                 for tc in delta.tool_calls:
@@ -472,12 +475,16 @@ def _provider_metadata_for_item(
     return {_OPENAI_METADATA_KEY: data}
 
 
-def _provider_metadata_for_response(response: Mapping[str, Any]) -> dict[str, Any]:
+def _provider_metadata_for_response(
+    response: Mapping[str, Any],
+) -> dict[str, Any]:
     response_id = response.get("id")
     model = response.get("model")
     status = response.get("status")
     data = {
-        **({"response_id": response_id} if isinstance(response_id, str) else {}),
+        **(
+            {"response_id": response_id} if isinstance(response_id, str) else {}
+        ),
         **({"model": model} if isinstance(model, str) else {}),
         **({"status": status} if isinstance(status, str) else {}),
     }
@@ -515,7 +522,9 @@ def _stringify_tool_result(result: Any) -> str:
 async def _file_part_to_responses(
     part: types.messages.FilePart,
 ) -> dict[str, Any]:
-    media_type = "image/jpeg" if part.media_type == "image/*" else part.media_type
+    media_type = (
+        "image/jpeg" if part.media_type == "image/*" else part.media_type
+    )
     data = part.data
 
     if media_type.startswith("image/"):
@@ -542,7 +551,9 @@ async def _file_part_to_responses(
             text_content = base64.b64decode(data).decode("utf-8")
         return {"type": "input_text", "text": text_content}
 
-    raise ValueError(f"Unsupported media type for OpenAI Responses: {media_type}")
+    raise ValueError(
+        f"Unsupported media type for OpenAI Responses: {media_type}"
+    )
 
 
 async def _messages_to_responses(
@@ -556,7 +567,9 @@ async def _messages_to_responses(
         match msg.role:
             case "system":
                 text = "".join(
-                    p.text for p in msg.parts if isinstance(p, types.messages.TextPart)
+                    p.text
+                    for p in msg.parts
+                    if isinstance(p, types.messages.TextPart)
                 )
                 if text:
                     result.append({"role": "system", "content": text})
@@ -604,7 +617,10 @@ async def _messages_to_responses(
                                     {
                                         "type": "reasoning",
                                         "summary": [
-                                            {"type": "summary_text", "text": text}
+                                            {
+                                                "type": "summary_text",
+                                                "text": text,
+                                            }
                                         ],
                                         "encrypted_content": encrypted_content,
                                     }
@@ -679,13 +695,17 @@ def _tools_to_responses(
         args = tool.args
         tool_id = getattr(type(args), "openai_id", None)
         if not isinstance(args, openai_tools.OpenAIProviderArgs):
-            raise TypeError(f"provider tool {tool.name!r} is not an OpenAI tool")
+            raise TypeError(
+                f"provider tool {tool.name!r} is not an OpenAI tool"
+            )
 
         match tool_id:
             case "openai.web_search":
                 result.append({"type": "web_search", **_model_dump(args)})
             case "openai.web_search_preview":
-                result.append({"type": "web_search_preview", **_model_dump(args)})
+                result.append(
+                    {"type": "web_search_preview", **_model_dump(args)}
+                )
             case "openai.file_search":
                 data = _model_dump(args)
                 ranking = data.pop("ranking", None)
@@ -710,7 +730,9 @@ def _tools_to_responses(
             case "openai.tool_search":
                 result.append({"type": "tool_search", **_model_dump(args)})
             case _:
-                raise NotImplementedError(f"unsupported OpenAI provider tool {tool_id}")
+                raise NotImplementedError(
+                    f"unsupported OpenAI provider tool {tool_id}"
+                )
 
     return result
 
@@ -727,11 +749,14 @@ def _event_to_dict(event: Any) -> dict[str, Any]:
     return {
         key: value
         for key in dir(event)
-        if not key.startswith("_") and not callable(value := getattr(event, key, None))
+        if not key.startswith("_")
+        and not callable(value := getattr(event, key, None))
     }
 
 
-def _usage_from_response(response: Mapping[str, Any]) -> types.usage.Usage | None:
+def _usage_from_response(
+    response: Mapping[str, Any],
+) -> types.usage.Usage | None:
     usage = response.get("usage")
     if not isinstance(usage, Mapping):
         return None
@@ -814,20 +839,33 @@ def _builtin_tool_args(item: Mapping[str, Any]) -> str:
     match item_type:
         case "code_interpreter_call":
             return _json_dumps(
-                {"code": item.get("code"), "container_id": item.get("container_id")}
+                {
+                    "code": item.get("code"),
+                    "container_id": item.get("container_id"),
+                }
             )
         case "mcp_call" | "mcp_approval_request":
             arguments = item.get("arguments")
-            return arguments if isinstance(arguments, str) else _json_dumps(arguments)
+            return (
+                arguments
+                if isinstance(arguments, str)
+                else _json_dumps(arguments)
+            )
         case "local_shell_call" | "shell_call":
             return _json_dumps({"action": item.get("action")})
         case "apply_patch_call":
             return _json_dumps(
-                {"call_id": item.get("call_id"), "operation": item.get("operation")}
+                {
+                    "call_id": item.get("call_id"),
+                    "operation": item.get("operation"),
+                }
             )
         case "tool_search_call":
             return _json_dumps(
-                {"arguments": item.get("arguments"), "call_id": item.get("call_id")}
+                {
+                    "arguments": item.get("arguments"),
+                    "call_id": item.get("call_id"),
+                }
             )
         case _:
             return "{}"
@@ -839,7 +877,10 @@ def _builtin_tool_result(item: Mapping[str, Any]) -> Any:
         case "web_search_call":
             return {"action": item.get("action")}
         case "file_search_call":
-            return {"queries": item.get("queries"), "results": item.get("results")}
+            return {
+                "queries": item.get("queries"),
+                "results": item.get("results"),
+            }
         case "code_interpreter_call":
             return {
                 "container_id": item.get("container_id"),
@@ -917,10 +958,14 @@ async def _stream_responses(
         messages,
         use_item_references=use_item_references,
     )
-    response_tools = _tools_to_responses(request_tools) if request_tools else None
+    response_tools = (
+        _tools_to_responses(request_tools) if request_tools else None
+    )
 
     api_kwargs: dict[str, Any] = dict(stream_params)
-    api_kwargs.update({"model": model.id, "input": response_input, "stream": True})
+    api_kwargs.update(
+        {"model": model.id, "input": response_input, "stream": True}
+    )
     if response_tools:
         api_kwargs["tools"] = response_tools
 
@@ -958,21 +1003,27 @@ async def _stream_responses(
             if event_type == "response.created":
                 response = data.get("response")
                 if isinstance(response, Mapping):
-                    response_metadata = _provider_metadata_for_response(response)
+                    response_metadata = _provider_metadata_for_response(
+                        response
+                    )
                 continue
 
             if event_type in {"response.completed", "response.incomplete"}:
                 response = data.get("response")
                 if isinstance(response, Mapping):
                     usage = _usage_from_response(response) or usage
-                    response_metadata = _provider_metadata_for_response(response)
+                    response_metadata = _provider_metadata_for_response(
+                        response
+                    )
                 continue
 
             if event_type == "response.failed":
                 response = data.get("response")
                 if isinstance(response, Mapping):
                     usage = _usage_from_response(response) or usage
-                    response_metadata = _provider_metadata_for_response(response)
+                    response_metadata = _provider_metadata_for_response(
+                        response
+                    )
                 continue
 
             if event_type == "error":
@@ -981,7 +1032,9 @@ async def _stream_responses(
                     message = error.get("message") or error.get("code") or error
                 else:
                     message = error or data
-                raise ai_errors.ProviderResponseError(str(message), provider=provider)
+                raise ai_errors.ProviderResponseError(
+                    str(message), provider=provider
+                )
 
             if event_type == "response.output_item.added":
                 item = data.get("item")
@@ -1008,7 +1061,9 @@ async def _stream_responses(
                         block_id=block_id,
                         provider_metadata=_provider_metadata_for_item(
                             item,
-                            reasoning_encrypted_content=item.get("encrypted_content"),
+                            reasoning_encrypted_content=item.get(
+                                "encrypted_content"
+                            ),
                         ),
                     )
                     continue
@@ -1084,7 +1139,11 @@ async def _stream_responses(
                     data,
                 )
                 delta = data.get("delta")
-                if function_state is not None and isinstance(delta, str) and delta:
+                if (
+                    function_state is not None
+                    and isinstance(delta, str)
+                    and delta
+                ):
                     function_state["arguments"] += delta
                     function_state["delta_emitted"] = True
                     yield types.events.ToolDelta(
@@ -1118,7 +1177,9 @@ async def _stream_responses(
                 continue
 
             if event_type == "response.reasoning_summary_part.added":
-                block_id = f"{data.get('item_id')}:{data.get('summary_index', 0)}"
+                block_id = (
+                    f"{data.get('item_id')}:{data.get('summary_index', 0)}"
+                )
                 if block_id not in reasoning_blocks:
                     reasoning_blocks.add(block_id)
                     yield types.events.ReasoningStart(block_id=block_id)
@@ -1128,18 +1189,24 @@ async def _stream_responses(
                 "response.reasoning_summary_text.delta",
                 "response.reasoning_text.delta",
             }:
-                block_id = f"{data.get('item_id')}:{data.get('summary_index', 0)}"
+                block_id = (
+                    f"{data.get('item_id')}:{data.get('summary_index', 0)}"
+                )
                 if block_id not in reasoning_blocks:
                     reasoning_blocks.add(block_id)
                     yield types.events.ReasoningStart(block_id=block_id)
                 delta = data.get("delta")
                 if isinstance(delta, str) and delta:
                     reasoning_delta_blocks.add(block_id)
-                    yield types.events.ReasoningDelta(block_id=block_id, chunk=delta)
+                    yield types.events.ReasoningDelta(
+                        block_id=block_id, chunk=delta
+                    )
                 continue
 
             if event_type == "response.reasoning_summary_part.done":
-                block_id = f"{data.get('item_id')}:{data.get('summary_index', 0)}"
+                block_id = (
+                    f"{data.get('item_id')}:{data.get('summary_index', 0)}"
+                )
                 reasoning_blocks.discard(block_id)
                 reasoning_ended_blocks.add(block_id)
                 yield types.events.ReasoningEnd(block_id=block_id)
@@ -1163,7 +1230,11 @@ async def _stream_responses(
                     data,
                 )
                 delta = data.get("delta")
-                if builtin_state is not None and isinstance(delta, str) and delta:
+                if (
+                    builtin_state is not None
+                    and isinstance(delta, str)
+                    and delta
+                ):
                     builtin_state["arguments"] += delta
                 continue
 
@@ -1205,10 +1276,14 @@ async def _stream_responses(
                                         ),
                                     ),
                                 )
-                            if block_id not in reasoning_delta_blocks and isinstance(
-                                summary, Mapping
+                            if (
+                                block_id not in reasoning_delta_blocks
+                                and isinstance(summary, Mapping)
                             ):
-                                text = summary.get("text")
+                                summary_mapping = cast(
+                                    "Mapping[str, Any]", summary
+                                )
+                                text = summary_mapping.get("text")
                                 if isinstance(text, str) and text:
                                     yield types.events.ReasoningDelta(
                                         block_id=block_id,
@@ -1306,7 +1381,8 @@ async def _stream_responses(
                         tool_call_id = builtin_state["tool_call_id"]
                         tool_name = builtin_state["tool_name"]
                     if arguments and (
-                        builtin_state is None or not builtin_state["delta_emitted"]
+                        builtin_state is None
+                        or not builtin_state["delta_emitted"]
                     ):
                         yield types.events.BuiltinToolDelta(
                             tool_call_id=tool_call_id,
@@ -1330,7 +1406,9 @@ async def _stream_responses(
                                 block_id=str(item.get("id") or tool_call_id),
                                 media_type=image_media_type,
                                 data=result,
-                                provider_metadata=_provider_metadata_for_item(item),
+                                provider_metadata=_provider_metadata_for_item(
+                                    item
+                                ),
                             )
 
                     result_payload = _builtin_tool_result(item)
@@ -1341,7 +1419,9 @@ async def _stream_responses(
                                 tool_call_id=tool_call_id,
                                 tool_name=tool_name,
                                 result=result_payload,
-                                provider_metadata=_provider_metadata_for_item(item),
+                                provider_metadata=_provider_metadata_for_item(
+                                    item
+                                ),
                             ),
                         )
                     continue
@@ -1356,7 +1436,9 @@ async def _stream_responses(
             provider_metadata=response_metadata,
         )
     except openai_sdk.OpenAIError as exc:
-        raise errors.map_error(exc, provider=provider, model_id=model.id) from exc
+        raise errors.map_error(
+            exc, provider=provider, model_id=model.id
+        ) from exc
 
 
 class OpenAIResponsesProtocol(base.ProviderProtocol[Any]):

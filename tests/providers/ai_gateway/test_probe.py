@@ -49,7 +49,9 @@ async def test_auth_ok_model_absent() -> None:
         await model.provider.probe(model)
 
     assert exc_info.value.model_id == model.id
-    assert isinstance(exc_info.value.__cause__, errors.GatewayModelNotFoundError)
+    assert isinstance(
+        exc_info.value.__cause__, errors.GatewayModelNotFoundError
+    )
 
 
 @pytest.mark.parametrize("status", [401, 403])
@@ -58,7 +60,9 @@ async def test_credits_auth_error_raises(status: int) -> None:
     with pytest.raises(ai.ProviderAuthenticationError) as exc_info:
         await model.provider.probe(model)
 
-    assert isinstance(exc_info.value.__cause__, errors.GatewayAuthenticationError)
+    assert isinstance(
+        exc_info.value.__cause__, errors.GatewayAuthenticationError
+    )
 
 
 async def test_missing_configuration_raises_not_configured(

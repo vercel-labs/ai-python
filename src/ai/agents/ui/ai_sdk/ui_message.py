@@ -1,5 +1,4 @@
-"""
-Pydantic models for parsing AI SDK v6 UI messages.
+"""Pydantic models for parsing AI SDK v6 UI messages.
 
 Reference: https://ai-sdk.dev/docs/reference/ai-sdk-core/ui-message
 
@@ -57,9 +56,10 @@ UIToolInvocationState = Literal[
 
 
 class UIToolInvocationPart(pydantic.BaseModel):
-    """Tool invocation part in AI SDK v6 format (legacy type: "tool-invocation").
+    """Tool invocation part in AI SDK v6 format.
 
     Note: The AI SDK frontend typically sends tool-{toolName} format instead.
+    The legacy type is ``tool-invocation``.
     This model is kept for backwards compatibility.
 
     Reference: https://ai-sdk.dev/docs/reference/ai-sdk-core/ui-message
@@ -192,7 +192,7 @@ def _parse_ui_part(part_data: dict[str, Any]) -> UIMessagePart | None:
     part_type = part_data.get("type", "")
 
     if model_cls := _STATIC_UI_PART_TYPES.get(part_type):
-        return cast(UIMessagePart, model_cls.model_validate(part_data))
+        return cast("UIMessagePart", model_cls.model_validate(part_data))
 
     match part_type:
         case str() as t if t.startswith("tool-"):
@@ -214,7 +214,9 @@ class UIMessage(pydantic.BaseModel):
 
     model_config = pydantic.ConfigDict(populate_by_name=True)
 
-    id: str = pydantic.Field(default_factory=lambda: messages_.generate_id("msg"))
+    id: str = pydantic.Field(
+        default_factory=lambda: messages_.generate_id("msg")
+    )
     role: Literal["user", "assistant", "system"]
     parts: list[UIMessagePart] = pydantic.Field(default_factory=list)
 

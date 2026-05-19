@@ -53,7 +53,11 @@ class TestGenerate:
             {
                 "type": "result",
                 "videos": [
-                    {"type": "base64", "data": _MP4_B64, "mediaType": "video/mp4"}
+                    {
+                        "type": "base64",
+                        "data": _MP4_B64,
+                        "mediaType": "video/mp4",
+                    }
                 ],
             }
         )
@@ -90,7 +94,9 @@ class TestGenerate:
         def handler(req: httpx.Request) -> httpx.Response:
             return httpx.Response(200, text=body)
 
-        model = mock_model(httpx.MockTransport(handler), model_id=_VIDEO_MODEL_ID)
+        model = mock_model(
+            httpx.MockTransport(handler), model_id=_VIDEO_MODEL_ID
+        )
 
         with patch(
             "ai.models.core.helpers.files.download",
@@ -113,8 +119,16 @@ class TestGenerate:
             {
                 "type": "result",
                 "videos": [
-                    {"type": "base64", "data": _MP4_B64, "mediaType": "video/mp4"},
-                    {"type": "base64", "data": _WEBM_B64, "mediaType": "video/webm"},
+                    {
+                        "type": "base64",
+                        "data": _MP4_B64,
+                        "mediaType": "video/mp4",
+                    },
+                    {
+                        "type": "base64",
+                        "data": _WEBM_B64,
+                        "mediaType": "video/webm",
+                    },
                 ],
             }
         )
@@ -176,7 +190,9 @@ class TestRequest:
         assert captured["accept"] == "text/event-stream"
         assert captured["ai-gateway-auth-method"] == "api-key"
 
-    async def test_request_body_forwards_parameters_and_input_image(self) -> None:
+    async def test_request_body_forwards_parameters_and_input_image(
+        self,
+    ) -> None:
         captured_body: dict[str, Any] = {}
 
         def handler(req: httpx.Request) -> httpx.Response:
@@ -226,7 +242,9 @@ class TestRequest:
         assert captured_body["duration"] == 5
         assert captured_body["fps"] == 30
         assert captured_body["seed"] == 42
-        assert captured_body["providerOptions"] == {"google": {"enhancePrompt": True}}
+        assert captured_body["providerOptions"] == {
+            "google": {"enhancePrompt": True}
+        }
         assert "image" in captured_body
         assert captured_body["image"]["type"] == "file"
         assert captured_body["image"]["mediaType"] == "image/png"
@@ -283,7 +301,9 @@ class TestErrors:
 
         with pytest.raises(ai.ProviderBadRequestError, match="Content policy"):
             await ai.generate(
-                mock_model(httpx.MockTransport(handler), model_id=_VIDEO_MODEL_ID),
+                mock_model(
+                    httpx.MockTransport(handler), model_id=_VIDEO_MODEL_ID
+                ),
                 [user_msg("test")],
                 params=VideoParams(),
             )
@@ -302,7 +322,9 @@ class TestErrors:
 
         with pytest.raises(ai.ProviderAuthenticationError):
             await ai.generate(
-                mock_model(httpx.MockTransport(handler), model_id=_VIDEO_MODEL_ID),
+                mock_model(
+                    httpx.MockTransport(handler), model_id=_VIDEO_MODEL_ID
+                ),
                 [user_msg("test")],
                 params=VideoParams(),
             )
@@ -315,7 +337,9 @@ class TestErrors:
 
         with pytest.raises(ai.ProviderResponseError, match="SSE stream ended"):
             await ai.generate(
-                mock_model(httpx.MockTransport(handler), model_id=_VIDEO_MODEL_ID),
+                mock_model(
+                    httpx.MockTransport(handler), model_id=_VIDEO_MODEL_ID
+                ),
                 [user_msg("test")],
                 params=VideoParams(),
             )

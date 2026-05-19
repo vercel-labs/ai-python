@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator, Iterable, Mapping, Sequence
-from types import ModuleType
 from typing import TYPE_CHECKING, Any, ClassVar
 
 import httpx
@@ -15,6 +13,9 @@ from . import protocol as protocol_module
 from . import tools as tools_module
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator, Iterable, Mapping, Sequence
+    from types import ModuleType
+
     import anthropic
     import modelsdotdev
     import pydantic
@@ -88,7 +89,9 @@ class AnthropicCompatibleProvider(base.Provider[AnthropicSDKClient]):
             env=env,
         )
         self.anthropic_version = anthropic_version
-        self._close_client_on_aclose = sdk_client is None and http_client is None
+        self._close_client_on_aclose = (
+            sdk_client is None and http_client is None
+        )
         if sdk_client is None:
             sdk_client = self._make_sdk_client(http_client=http_client)
         self._set_client(sdk_client)
@@ -166,8 +169,12 @@ class AnthropicCompatibleProvider(base.Provider[AnthropicSDKClient]):
         if resolved_base_url is None and provider.id == "anthropic":
             resolved_base_url = _BASE_URL
         if resolved_base_url is None:
-            raise ValueError(f"provider {provider.id!r} does not declare an API URL")
-        api_key_env, config_envs = base.provider_config(provider, model_provider_config)
+            raise ValueError(
+                f"provider {provider.id!r} does not declare an API URL"
+            )
+        api_key_env, config_envs = base.provider_config(
+            provider, model_provider_config
+        )
         return cls(
             name=provider.id,
             default_base_url=resolved_base_url,

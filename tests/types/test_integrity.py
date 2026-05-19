@@ -15,7 +15,13 @@ from ai.types import builders, messages
 from ai.types import events as events_
 from ai.types.integrity import IntegrityError, prepare_messages
 
-from ..conftest import MOCK_MODEL, MOCK_PROVIDER, mock_generate, mock_llm, text_msg
+from ..conftest import (
+    MOCK_MODEL,
+    MOCK_PROVIDER,
+    mock_generate,
+    mock_llm,
+    text_msg,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -101,7 +107,9 @@ def test_idempotent() -> None:
 def test_drops_internal_messages() -> None:
     msgs = [
         builders.user_message("hi"),
-        messages.Message(role="internal", parts=[messages.TextPart(text="internal")]),
+        messages.Message(
+            role="internal", parts=[messages.TextPart(text="internal")]
+        ),
         builders.assistant_message("hello"),
     ]
     result = prepare_messages(msgs)
@@ -129,7 +137,9 @@ def test_strips_internal_parts() -> None:
         role="assistant",
         parts=[
             messages.TextPart(text="hi"),
-            messages.HookPart(hook_id="h1", hook_type="confirm", status="resolved"),
+            messages.HookPart(
+                hook_id="h1", hook_type="confirm", status="resolved"
+            ),
         ],
     )
     result = prepare_messages([msg])
@@ -143,7 +153,9 @@ def test_strips_internal_parts_drops_empty_message() -> None:
     msg = messages.Message(
         role="assistant",
         parts=[
-            messages.HookPart(hook_id="h1", hook_type="confirm", status="resolved"),
+            messages.HookPart(
+                hook_id="h1", hook_type="confirm", status="resolved"
+            ),
         ],
     )
     result = prepare_messages([msg])
@@ -154,7 +166,9 @@ def test_internal_parts_strict_raises() -> None:
     msg = messages.Message(
         role="assistant",
         parts=[
-            messages.HookPart(hook_id="h1", hook_type="confirm", status="resolved"),
+            messages.HookPart(
+                hook_id="h1", hook_type="confirm", status="resolved"
+            ),
         ],
     )
     with pytest.raises(IntegrityError) as exc_info:
@@ -226,7 +240,7 @@ def test_inserts_synthetic_result_before_user_interruption() -> None:
 
 
 def test_inserts_synthetic_result_before_next_assistant() -> None:
-    """New assistant message while tool calls pending triggers synthetic results."""
+    """New assistant message with pending tool calls adds synthetic results."""
     msgs = [
         builders.user_message("calc 2+2"),
         _assistant_with_tool_call(),
@@ -243,8 +257,12 @@ def test_multiple_orphaned_calls_get_individual_results() -> None:
     msg = messages.Message(
         role="assistant",
         parts=[
-            messages.ToolCallPart(tool_call_id="tc-1", tool_name="a", tool_args="{}"),
-            messages.ToolCallPart(tool_call_id="tc-2", tool_name="b", tool_args="{}"),
+            messages.ToolCallPart(
+                tool_call_id="tc-1", tool_name="a", tool_args="{}"
+            ),
+            messages.ToolCallPart(
+                tool_call_id="tc-2", tool_name="b", tool_args="{}"
+            ),
         ],
     )
     result = prepare_messages([builders.user_message("go"), msg])
@@ -275,7 +293,6 @@ def test_partial_results_only_fills_missing() -> None:
         builders.user_message("stop"),
     ]
     result = prepare_messages(msgs)
-    # user, assistant, tool(tc-1), synthetic-tool(tc-2), user
     assert len(result) == 5
     synthetic = result[3]
     assert synthetic.role == "tool"
@@ -337,7 +354,12 @@ def test_complete_tool_flow_unchanged() -> None:
     ]
     result = prepare_messages(msgs)
     assert len(result) == 4
-    assert [m.role for m in result] == ["user", "assistant", "tool", "assistant"]
+    assert [m.role for m in result] == [
+        "user",
+        "assistant",
+        "tool",
+        "assistant",
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -352,7 +374,9 @@ def test_strict_collects_all_issues() -> None:
             role="assistant",
             parts=[
                 messages.TextPart(text="hi"),
-                messages.HookPart(hook_id="h1", hook_type="confirm", status="resolved"),
+                messages.HookPart(
+                    hook_id="h1", hook_type="confirm", status="resolved"
+                ),
             ],
         ),
     ]
@@ -514,7 +538,9 @@ async def test_stream_sanitizes_internal_messages() -> None:
 
     msgs = [
         ai.user_message("hi"),
-        messages.Message(role="internal", parts=[messages.TextPart(text="internal")]),
+        messages.Message(
+            role="internal", parts=[messages.TextPart(text="internal")]
+        ),
         ai.assistant_message("hello"),
     ]
     async with models.stream(MOCK_MODEL, msgs) as s:
@@ -563,7 +589,9 @@ async def test_generate_sanitizes_internal_messages() -> None:
 
     msgs = [
         ai.user_message("A cat"),
-        messages.Message(role="internal", parts=[messages.TextPart(text="internal")]),
+        messages.Message(
+            role="internal", parts=[messages.TextPart(text="internal")]
+        ),
     ]
     await models.generate(MOCK_MODEL, msgs, models.ImageParams(n=1))
 

@@ -26,13 +26,15 @@ import asyncio
 import contextlib
 import os
 import threading
-from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import main as ex
 import temporalio.activity
 import temporalio.client
 import temporalio.worker
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 _log_lock = threading.Lock()
 
@@ -82,7 +84,9 @@ LOGGED_ACTIVITIES: list[Callable[..., Any]] = [
 
 
 async def amain(server_addr: str, namespace: str) -> None:
-    client = await temporalio.client.Client.connect(server_addr, namespace=namespace)
+    client = await temporalio.client.Client.connect(
+        server_addr, namespace=namespace
+    )
     async with temporalio.worker.Worker(
         client,
         task_queue=ex.TASK_QUEUE,

@@ -42,7 +42,7 @@ def _patch_client(
     _ = monkeypatch
     captured: dict[str, Any] = {}
     fake = FakeAnthropicClient(captured)
-    return cast(anthropic.AsyncAnthropic, fake), captured
+    return cast("anthropic.AsyncAnthropic", fake), captured
 
 
 _MODEL = ai.Model("claude-sonnet-4-6", provider=ai.get_provider("anthropic"))
@@ -154,7 +154,7 @@ async def test_reasoning_signature_round_trips_from_provider_metadata(
 async def test_builtin_tool_parts_round_trip(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``BuiltinToolCallPart``/``BuiltinToolReturnPart`` serialize back to wire."""
+    """Built-in tool parts serialize back to wire."""
     fake, captured = _patch_client(monkeypatch)
 
     call = messages.BuiltinToolCallPart(
@@ -180,7 +180,9 @@ async def test_builtin_tool_parts_round_trip(
 
     await _drain(protocol.stream(fake, _MODEL, convo, provider="anthropic"))
 
-    assistant = next(m for m in captured["messages"] if m["role"] == "assistant")
+    assistant = next(
+        m for m in captured["messages"] if m["role"] == "assistant"
+    )
     assert assistant["content"] == [
         {
             "type": "server_tool_use",
@@ -215,7 +217,7 @@ async def test_sdk_errors_are_mapped_to_provider_hierarchy(
     with pytest.raises(ai.ProviderOverloadedError) as exc_info:
         await _drain(
             protocol.stream(
-                cast(anthropic.AsyncAnthropic, fake),
+                cast("anthropic.AsyncAnthropic", fake),
                 _MODEL,
                 [ai.user_message("Hi")],
                 provider="anthropic",
@@ -251,7 +253,7 @@ async def test_model_404_is_mapped_to_model_not_found(
     with pytest.raises(ai.ProviderModelNotFoundError) as exc_info:
         await _drain(
             protocol.stream(
-                cast(anthropic.AsyncAnthropic, fake),
+                cast("anthropic.AsyncAnthropic", fake),
                 _MODEL,
                 [ai.user_message("Hi")],
                 provider="anthropic",

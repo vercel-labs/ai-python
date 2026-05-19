@@ -16,7 +16,7 @@ import asyncio
 
 import ai
 
-FILES_DELETED = set()
+FILES_DELETED: set[str] = set()
 
 
 @ai.tool(require_approval=True)
@@ -27,7 +27,7 @@ async def delete_file(path: str) -> str:
     return f"Deleted {path}"
 
 
-AUDIT_LOG = []
+AUDIT_LOG: list[str] = []
 
 
 @ai.tool
@@ -75,10 +75,12 @@ async def main() -> None:
         # next run replays from the same point.
         messages = stream.messages
 
-    print("\n  Run interrupted; approval will be pre-registered for re-entry.\n")
-    assert len(AUDIT_LOG) == 1 and "/tmp/old_logs.txt" in AUDIT_LOG[0], (
-        f"Bad audit log: {AUDIT_LOG}"
+    print(
+        "\n  Run interrupted; approval will be pre-registered for re-entry.\n"
     )
+    assert (
+        len(AUDIT_LOG) == 1 and "/tmp/old_logs.txt" in AUDIT_LOG[0]
+    ), f"Bad audit log: {AUDIT_LOG}"
 
     # -- Second run: pre-register resolution, replay from checkpoint --
     print("--- Run 2: pre-register approval, resume from checkpoint ---")
@@ -95,12 +97,12 @@ async def main() -> None:
                 print(f"  Hook {event.hook.status}: {event.hook.hook_id}")
     print()
 
-    assert {"/tmp/old_logs.txt"} == FILES_DELETED, (
-        f"Wrong files deleted: {FILES_DELETED}"
-    )
-    assert len(AUDIT_LOG) == 1 and "/tmp/old_logs.txt" in AUDIT_LOG[0], (
-        f"Bad audit log: {AUDIT_LOG}"
-    )
+    assert {
+        "/tmp/old_logs.txt"
+    } == FILES_DELETED, f"Wrong files deleted: {FILES_DELETED}"
+    assert (
+        len(AUDIT_LOG) == 1 and "/tmp/old_logs.txt" in AUDIT_LOG[0]
+    ), f"Bad audit log: {AUDIT_LOG}"
 
 
 if __name__ == "__main__":

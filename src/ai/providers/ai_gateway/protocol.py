@@ -1,7 +1,8 @@
 """AI Gateway v3 protocol.
 
 Converts internal messages to AI Gateway wire payloads and maps gateway
-responses back to public event/message types."""
+responses back to public event/message types.
+"""
 
 import base64
 import json
@@ -51,7 +52,7 @@ def _extract_input_files(
 
 
 def _file_part_to_wire(part: types.messages.FilePart) -> dict[str, Any]:
-    """Convert a :class:`FilePart` to the gateway wire format for input files."""
+    """Convert a :class:`FilePart` to gateway input-file wire format."""
     data = part.data
     if isinstance(data, str) and types.media.is_url(data):
         return {"type": "url", "url": data}
@@ -96,7 +97,9 @@ async def _messages_to_prompt(
         match msg.role:
             case "system":
                 text = "".join(
-                    p.text for p in msg.parts if isinstance(p, types.messages.TextPart)
+                    p.text
+                    for p in msg.parts
+                    if isinstance(p, types.messages.TextPart)
                 )
                 result.append({"role": "system", "content": text})
 
@@ -118,7 +121,9 @@ async def _messages_to_prompt(
                                 {"type": "reasoning", "text": text}
                             )
                         case types.messages.TextPart(text=text):
-                            assistant_content.append({"type": "text", "text": text})
+                            assistant_content.append(
+                                {"type": "text", "text": text}
+                            )
                         case types.messages.ToolCallPart() as tp:
                             tool_input: Any = (
                                 json.loads(tp.tool_args) if tp.tool_args else {}
@@ -133,7 +138,9 @@ async def _messages_to_prompt(
                             )
                         case types.messages.BuiltinToolCallPart() as btp:
                             btp_input: Any = (
-                                json.loads(btp.tool_args) if btp.tool_args else {}
+                                json.loads(btp.tool_args)
+                                if btp.tool_args
+                                else {}
                             )
                             assistant_content.append(
                                 {
@@ -157,7 +164,9 @@ async def _messages_to_prompt(
                                     "providerExecuted": True,
                                 }
                             )
-                result.append({"role": "assistant", "content": assistant_content})
+                result.append(
+                    {"role": "assistant", "content": assistant_content}
+                )
 
             case "tool":
                 tool_results: list[dict[str, Any]] = []
@@ -168,7 +177,9 @@ async def _messages_to_prompt(
                             {
                                 "type": "error-text",
                                 "value": (
-                                    str(model_input) if model_input is not None else ""
+                                    str(model_input)
+                                    if model_input is not None
+                                    else ""
                                 ),
                             }
                             if part.is_error
@@ -288,11 +299,15 @@ def _expand_tool_call(
         provider_executed_ids = set()
     tool_name = data.get("toolName", "")
     tool_input = data.get("input", "")
-    args_str = tool_input if isinstance(tool_input, str) else json.dumps(tool_input)
+    args_str = (
+        tool_input if isinstance(tool_input, str) else json.dumps(tool_input)
+    )
     if _is_provider_executed(data) or tc_id in provider_executed_ids:
         provider_executed_ids.add(tc_id)
         return [
-            types.events.BuiltinToolStart(tool_call_id=tc_id, tool_name=tool_name),
+            types.events.BuiltinToolStart(
+                tool_call_id=tc_id, tool_name=tool_name
+            ),
             types.events.BuiltinToolDelta(tool_call_id=tc_id, chunk=args_str),
             types.events.BuiltinToolEnd(
                 tool_call_id=tc_id,
@@ -320,7 +335,9 @@ def _parse_usage(data: Any) -> types.usage.Usage:
     input_tokens_obj = data.get("inputTokens")
     output_tokens_obj = data.get("outputTokens")
 
-    if isinstance(input_tokens_obj, dict) or isinstance(output_tokens_obj, dict):
+    if isinstance(input_tokens_obj, dict) or isinstance(
+        output_tokens_obj, dict
+    ):
         inp = input_tokens_obj if isinstance(input_tokens_obj, dict) else {}
         out = output_tokens_obj if isinstance(output_tokens_obj, dict) else {}
         return types.usage.Usage(
@@ -334,7 +351,9 @@ def _parse_usage(data: Any) -> types.usage.Usage:
 
     return types.usage.Usage(
         input_tokens=data.get("prompt_tokens") or data.get("inputTokens") or 0,
-        output_tokens=(data.get("completion_tokens") or data.get("outputTokens") or 0),
+        output_tokens=(
+            data.get("completion_tokens") or data.get("outputTokens") or 0
+        ),
         raw=data,
     )
 
@@ -363,7 +382,11 @@ def _parse_stream_part(
             return [types.events.TextEnd(block_id=data.get("id", "text"))]
 
         case "reasoning-start":
-            return [types.events.ReasoningStart(block_id=data.get("id", "reasoning"))]
+            return [
+                types.events.ReasoningStart(
+                    block_id=data.get("id", "reasoning")
+                )
+            ]
 
         case "reasoning-delta":
             return [
@@ -374,7 +397,9 @@ def _parse_stream_part(
             ]
 
         case "reasoning-end":
-            return [types.events.ReasoningEnd(block_id=data.get("id", "reasoning"))]
+            return [
+                types.events.ReasoningEnd(block_id=data.get("id", "reasoning"))
+            ]
 
         case "tool-input-start":
             tcid = data.get("id", "")
@@ -430,7 +455,9 @@ def _parse_stream_part(
             ]
 
         case "tool-call":
-            return _expand_tool_call(data, streamed_tool_ids, provider_executed_ids)
+            return _expand_tool_call(
+                data, streamed_tool_ids, provider_executed_ids
+            )
 
         case "tool-result":
             tcid = data.get("toolCallId", "")
@@ -456,7 +483,9 @@ def _parse_stream_part(
             return [
                 types.events.FileEvent(
                     block_id=data.get("id", ""),
-                    media_type=data.get("mediaType", "application/octet-stream"),
+                    media_type=data.get(
+                        "mediaType", "application/octet-stream"
+                    ),
                     data=data.get("data", ""),
                 )
             ]
@@ -555,7 +584,9 @@ async def _generate_image(
     parts: list[types.messages.Part] = []
     for img_b64 in raw_images:
         media_type = types.media.detect_image_media_type(img_b64) or "image/png"
-        parts.append(types.messages.FilePart(data=img_b64, media_type=media_type))
+        parts.append(
+            types.messages.FilePart(data=img_b64, media_type=media_type)
+        )
 
     return types.messages.Message(role="assistant", parts=parts, usage=usage)
 
@@ -614,11 +645,15 @@ async def _generate_video(
             if content_type:
                 media_type = content_type
             parts.append(
-                types.messages.FilePart(data=downloaded_bytes, media_type=media_type)
+                types.messages.FilePart(
+                    data=downloaded_bytes, media_type=media_type
+                )
             )
         else:
             raw_data = video_data.get("data", "")
-            parts.append(types.messages.FilePart(data=raw_data, media_type=media_type))
+            parts.append(
+                types.messages.FilePart(data=raw_data, media_type=media_type)
+            )
 
     return types.messages.Message(role="assistant", parts=parts)
 

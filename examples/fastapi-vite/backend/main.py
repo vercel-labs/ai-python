@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sys
-from collections.abc import AsyncGenerator
+from typing import TYPE_CHECKING
 
 import agent as agent_
 import fastapi
@@ -13,6 +13,9 @@ import fastapi.responses
 import pydantic
 
 import ai
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
 
 app = fastapi.FastAPI(
     title="py-ai-fastapi-chat",
@@ -38,7 +41,9 @@ async def log_validation_errors(
         file=sys.stderr,
         flush=True,
     )
-    return fastapi.responses.JSONResponse({"detail": exc.errors()}, status_code=422)
+    return fastapi.responses.JSONResponse(
+        {"detail": exc.errors()}, status_code=422
+    )
 
 
 @app.get("/health")

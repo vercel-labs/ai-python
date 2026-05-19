@@ -53,8 +53,12 @@ class TestGenerate:
                 json={"images": [_PNG_B64]},
             )
 
-        model = mock_model(httpx.MockTransport(handler), model_id=_IMAGE_MODEL_ID)
-        msg = await ai.generate(model, [user_msg("A sunset over Tokyo")], ImageParams())
+        model = mock_model(
+            httpx.MockTransport(handler), model_id=_IMAGE_MODEL_ID
+        )
+        msg = await ai.generate(
+            model, [user_msg("A sunset over Tokyo")], ImageParams()
+        )
 
         assert msg.role == "assistant"
         assert len(msg.images) == 1
@@ -162,7 +166,9 @@ class TestRequest:
         assert captured_body["size"] == "1024x1024"
         assert captured_body["aspectRatio"] == "16:9"
         assert captured_body["seed"] == 42
-        assert captured_body["providerOptions"] == {"google": {"style": "vivid"}}
+        assert captured_body["providerOptions"] == {
+            "google": {"style": "vivid"}
+        }
         assert "files" in captured_body
         assert len(captured_body["files"]) == 1
         assert captured_body["files"][0]["type"] == "file"
@@ -204,7 +210,9 @@ class TestErrors:
 
         with pytest.raises(ai.ProviderAuthenticationError):
             await ai.generate(
-                mock_model(httpx.MockTransport(handler), model_id=_IMAGE_MODEL_ID),
+                mock_model(
+                    httpx.MockTransport(handler), model_id=_IMAGE_MODEL_ID
+                ),
                 [user_msg("test")],
                 ImageParams(),
             )
@@ -223,7 +231,9 @@ class TestErrors:
 
         with pytest.raises(ai.ProviderRateLimitError):
             await ai.generate(
-                mock_model(httpx.MockTransport(handler), model_id=_IMAGE_MODEL_ID),
+                mock_model(
+                    httpx.MockTransport(handler), model_id=_IMAGE_MODEL_ID
+                ),
                 [user_msg("test")],
                 ImageParams(),
             )

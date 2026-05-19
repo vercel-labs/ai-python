@@ -73,7 +73,8 @@ def perplexity_search(
     country: str | None = None,
     search_domain_filter: list[str] | None = None,
     search_language_filter: list[str] | None = None,
-    search_recency_filter: Literal["day", "week", "month", "year"] | None = None,
+    search_recency_filter: Literal["day", "week", "month", "year"]
+    | None = None,
 ) -> types.tools.Tool:
     return types.tools.Tool(
         kind="provider",

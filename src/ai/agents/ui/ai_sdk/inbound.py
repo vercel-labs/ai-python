@@ -1,4 +1,4 @@
-"""Inbound adapter: AI SDK v6 UIMessages → internal ``ai.messages.Message`` list.
+"""Inbound adapter from AI SDK v6 UIMessages to internal messages.
 
 The primary entry point is :func:`to_messages`, which bundles normalization,
 approval extraction, parsing, and pre-registration of approval resolutions.
@@ -19,7 +19,9 @@ logger = logging.getLogger(__name__)
 
 
 _TOOL_RESULT_STATES: frozenset[str] = frozenset({"output-available"})
-_TOOL_ERROR_STATES: frozenset[str] = frozenset({"output-error", "output-denied"})
+_TOOL_ERROR_STATES: frozenset[str] = frozenset(
+    {"output-error", "output-denied"}
+)
 
 
 def _is_tool_completed(state: ui_message.UIToolInvocationState) -> bool:
@@ -81,7 +83,9 @@ def _decode_wire_output(output: Any) -> Any:
     return MessageBundle(messages=tuple(inner))
 
 
-def _approval_hook_part(tp: ui_message.UIToolPart) -> messages_.HookPart[Any] | None:
+def _approval_hook_part(
+    tp: ui_message.UIToolPart,
+) -> messages_.HookPart[Any] | None:
     """Reconstruct approval hook state from a UI tool part when possible."""
     approval = tp.approval
     if approval is None:
@@ -125,7 +129,7 @@ def _approval_hook_part(tp: ui_message.UIToolPart) -> messages_.HookPart[Any] | 
 
 
 class ApprovalResponse(NamedTuple):
-    """Approval response extracted from a UIToolPart in ``approval-responded`` state."""
+    """Approval response extracted from a responded UIToolPart."""
 
     hook_id: str
     granted: bool
@@ -178,7 +182,7 @@ def apply_approvals(approvals: list[ApprovalResponse]) -> None:
 def _normalize_ui_messages(
     ui_messages: list[ui_message.UIMessage],
 ) -> list[ui_message.UIMessage]:
-    """Heal stale tool-part states from previously persisted assistant history."""
+    """Heal stale tool-part states from persisted assistant history."""
     normalized: list[ui_message.UIMessage] = []
     for message in ui_messages:
         new_parts = []
@@ -210,7 +214,9 @@ def _normalize_ui_messages(
             new_parts.append(part)
 
         normalized.append(
-            message.model_copy(update={"parts": new_parts}) if changed else message
+            message.model_copy(update={"parts": new_parts})
+            if changed
+            else message
         )
     return normalized
 
@@ -252,8 +258,10 @@ def _patch_pending_hook_aborts(
     messages: list[messages_.Message],
     approvals: list[ApprovalResponse],
 ) -> None:
-    """Inject ``is_hook_pending=True`` placeholders for tool calls whose
-    approval was responded to but whose tool result is still missing.
+    """Inject pending-hook placeholders for unresolved tool calls.
+
+    This handles tool calls whose approval was responded to but whose tool
+    result is still missing.
 
     This deals with the case where a prior run emitted multiple tool
     calls, some of which succeeded and some of which aborted on an
@@ -300,7 +308,7 @@ def _patch_pending_hook_aborts(
 
 
 def _is_approval_response(msg: messages_.Message) -> bool:
-    """Internal message that records a resolved tool-approval hook."""
+    """Return whether ``msg`` records a resolved tool-approval hook."""
     if msg.role != "internal" or len(msg.parts) != 1:
         return False
     part = msg.parts[0]
@@ -350,7 +358,9 @@ def _parse(
                     assistant_parts.append(messages_.TextPart(text=text))
 
                 case ui_message.UIReasoningPart(text=reasoning) if reasoning:
-                    assistant_parts.append(messages_.ReasoningPart(text=reasoning))
+                    assistant_parts.append(
+                        messages_.ReasoningPart(text=reasoning)
+                    )
 
                 case ui_message.UIToolInvocationPart() as inv:
                     tool_args = json.dumps(inv.args) if inv.args else "{}"
@@ -420,7 +430,8 @@ def _parse(
 
         if ui_msg.role in ("user", "system") and not assistant_parts:
             raise ValueError(
-                f"Message '{ui_msg.id}' has role '{ui_msg.role}' but no content. "
+                f"Message {ui_msg.id!r} has role {ui_msg.role!r} "
+                "but no content. "
                 "User and system messages require non-empty content."
             )
 
@@ -490,7 +501,9 @@ def _split_assistant_parts(
             messages.append(
                 messages_.Message(role="assistant", parts=current, id=msg_id)
             )
-            messages.append(messages_.Message(role="tool", parts=list(current_results)))
+            messages.append(
+                messages_.Message(role="tool", parts=list(current_results))
+            )
             current = []
             current_results = []
             seen_tool_call = False
@@ -503,8 +516,12 @@ def _split_assistant_parts(
                 current_results.append(results_by_id[part.tool_call_id])
 
     if current:
-        messages.append(messages_.Message(role="assistant", parts=current, id=msg_id))
+        messages.append(
+            messages_.Message(role="assistant", parts=current, id=msg_id)
+        )
     if current_results:
-        messages.append(messages_.Message(role="tool", parts=list(current_results)))
+        messages.append(
+            messages_.Message(role="tool", parts=list(current_results))
+        )
 
     return messages

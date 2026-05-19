@@ -1,4 +1,4 @@
-"""Check connection and list models — verify credentials and model availability."""
+"""Check credentials and model availability."""
 
 import asyncio
 import sys

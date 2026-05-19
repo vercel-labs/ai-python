@@ -5,22 +5,21 @@ import contextlib
 import contextvars
 import dataclasses
 import json
-from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator, Awaitable, Callable
+
     import mcp.client.session
-    import mcp.client.stdio
-    import mcp.client.streamable_http
     import mcp.types
 
 from ... import types
 from ..agent import AgentTool, Tool
 
 __all__ = [
-    "get_stdio_tools",
-    "get_http_tools",
     "close_connections",
+    "get_http_tools",
+    "get_stdio_tools",
 ]
 
 
@@ -33,8 +32,8 @@ class _Connection:
 
 
 # Connection pool stored in contextvar, scoped to Agent.run()
-_pool: contextvars.ContextVar[dict[str, _Connection] | None] = contextvars.ContextVar(
-    "mcp_connections", default=None
+_pool: contextvars.ContextVar[dict[str, _Connection] | None] = (
+    contextvars.ContextVar("mcp_connections", default=None)
 )
 
 _pool_lock = asyncio.Lock()
@@ -56,10 +55,12 @@ async def ensure_connection_pool() -> AsyncIterator[dict[str, _Connection]]:
 
 async def _get_or_create_connection(
     key: str,
-    transport_factory: Callable[[], contextlib.AbstractAsyncContextManager[Any]],
+    transport_factory: Callable[
+        [], contextlib.AbstractAsyncContextManager[Any]
+    ],
 ) -> mcp.client.session.ClientSession:
     """Get an existing connection or create a new one."""
-    import mcp.client.session as _mcp_session
+    import mcp.client.session as _mcp_session  # noqa: PLC0415
 
     pool = _pool.get()
 
@@ -97,14 +98,18 @@ async def _get_or_create_connection(
 def _make_tool_fn(
     connection_key: str,
     tool_name: str,
-    transport_factory: Callable[[], contextlib.AbstractAsyncContextManager[Any]],
+    transport_factory: Callable[
+        [], contextlib.AbstractAsyncContextManager[Any]
+    ],
 ) -> Callable[..., Awaitable[Any]]:
     """Create a tool function that manages its own connection."""
 
     async def call_tool(**kwargs: Any) -> Any:
-        import mcp.types as _mcp_types
+        import mcp.types as _mcp_types  # noqa: PLC0415
 
-        client = await _get_or_create_connection(connection_key, transport_factory)
+        client = await _get_or_create_connection(
+            connection_key, transport_factory
+        )
         try:
             result = await asyncio.wait_for(
                 client.call_tool(tool_name, kwargs),
@@ -121,7 +126,9 @@ def _make_tool_fn(
                 for part in result.content
                 if isinstance(part, _mcp_types.TextContent)
             )
-            raise RuntimeError(f"MCP tool error: {error_text or 'Unknown error'}")
+            raise RuntimeError(
+                f"MCP tool error: {error_text or 'Unknown error'}"
+            )
 
         if result.structuredContent is not None:
             return result.structuredContent
@@ -168,8 +175,9 @@ async def get_stdio_tools(
         tools = await ai.mcp.get_stdio_tools(
             "npx", "-y", "@anthropic/mcp-server-filesystem", "/tmp"
         )
+
     """
-    import mcp.client.stdio as _mcp_stdio
+    import mcp.client.stdio as _mcp_stdio  # noqa: PLC0415
 
     connection_key = f"stdio:{command}:{':'.join(args)}"
 
@@ -187,7 +195,9 @@ async def get_stdio_tools(
     result = await client.list_tools()
 
     return [
-        _mcp_tool_to_native(mcp_tool, connection_key, transport_factory, tool_prefix)
+        _mcp_tool_to_native(
+            mcp_tool, connection_key, transport_factory, tool_prefix
+        )
         for mcp_tool in result.tools
     ]
 
@@ -217,22 +227,29 @@ async def get_http_tools(
             "http://localhost:3000/mcp",
             headers={"Authorization": "Bearer xxx"}
         )
+
     """
-    import httpx as _httpx
-    import mcp.client.streamable_http as _mcp_http
+    import httpx as _httpx  # noqa: PLC0415
+    import mcp.client.streamable_http as _mcp_http  # noqa: PLC0415
 
     connection_key = f"http:{url}"
 
     def transport_factory() -> contextlib.AbstractAsyncContextManager[Any]:
         http_client = _httpx.AsyncClient(headers=headers) if headers else None
-        return _mcp_http.streamable_http_client(url=url, http_client=http_client)
+        return _mcp_http.streamable_http_client(
+            url=url, http_client=http_client
+        )
 
     async with ensure_connection_pool():
-        client = await _get_or_create_connection(connection_key, transport_factory)
+        client = await _get_or_create_connection(
+            connection_key, transport_factory
+        )
         result = await client.list_tools()
 
     return [
-        _mcp_tool_to_native(mcp_tool, connection_key, transport_factory, tool_prefix)
+        _mcp_tool_to_native(
+            mcp_tool, connection_key, transport_factory, tool_prefix
+        )
         for mcp_tool in result.tools
     ]
 
@@ -240,7 +257,9 @@ async def get_http_tools(
 def _mcp_tool_to_native(
     mcp_tool: mcp.types.Tool,
     connection_key: str,
-    transport_factory: Callable[[], contextlib.AbstractAsyncContextManager[Any]],
+    transport_factory: Callable[
+        [], contextlib.AbstractAsyncContextManager[Any]
+    ],
     tool_prefix: str | None,
 ) -> AgentTool:
     """Convert an MCP tool to a native AgentTool.

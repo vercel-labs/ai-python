@@ -51,7 +51,7 @@ import main as ex
 import temporalio.client
 import temporalio.testing
 import temporalio.worker
-from _durability_worker import LOGGED_ACTIVITIES
+from _durability_worker import LOGGED_ACTIVITIES  # noqa: PLC2701
 
 # ── Helpers ──────────────────────────────────────────────────────
 
@@ -93,9 +93,9 @@ async def test_happy_path(
         )
 
     assert result, "expected non-empty text"
-    assert "8,336,817" in result or "8336817" in result, (
-        f"expected NYC population in result, got: {result!r}"
-    )
+    assert (
+        "8,336,817" in result or "8336817" in result
+    ), f"expected NYC population in result, got: {result!r}"
     print(f"  ✓ workflow {wid} produced {len(result)} chars")
     print(f"  ✓ activity calls: {dict(read_activity_log(log_file))}")
     return wid
@@ -200,7 +200,7 @@ async def test_activity_caching(
     )
 
     # If worker2 ignored history and re-ran everything, total_post would
-    # be roughly 2× total_pre (worker1's executions + worker2 redoing
+    # be roughly 2x total_pre (worker1's executions + worker2 redoing
     # them all). Catch that case loudly.
     expected_double_run = total_pre * 2
     assert total_post < expected_double_run, (
@@ -241,7 +241,9 @@ async def main() -> None:
     os.environ["DURABILITY_ACTIVITY_LOG"] = str(log_file)
 
     print("Starting embedded Temporal dev server...")
-    async with await temporalio.testing.WorkflowEnvironment.start_local() as env:
+    async with (
+        await temporalio.testing.WorkflowEnvironment.start_local() as env
+    ):
         client = env.client
 
         wid = await test_happy_path(client, log_file)
