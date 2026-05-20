@@ -13,7 +13,7 @@ UI_MESSAGE_STREAM_HEADERS = {
 }
 
 
-# different kinds of messages expected by the frontend
+# different kinds of stream events expected by the frontend
 
 FinishReason = Literal[
     "stop", "length", "content-filter", "tool-calls", "error", "other"
@@ -21,7 +21,7 @@ FinishReason = Literal[
 
 
 @dataclasses.dataclass
-class StartPart:
+class UIStartEvent:
     """Indicates the beginning of a new message with metadata."""
 
     type: Literal["start"] = dataclasses.field(default="start", init=False)
@@ -30,7 +30,7 @@ class StartPart:
 
 
 @dataclasses.dataclass
-class TextStartPart:
+class UITextStartEvent:
     """Indicates the beginning of a text block."""
 
     id: str
@@ -41,7 +41,7 @@ class TextStartPart:
 
 
 @dataclasses.dataclass
-class TextDeltaPart:
+class UITextDeltaEvent:
     """Contains incremental text content for the text block."""
 
     id: str
@@ -53,7 +53,7 @@ class TextDeltaPart:
 
 
 @dataclasses.dataclass
-class TextEndPart:
+class UITextEndEvent:
     """Indicates the completion of a text block."""
 
     id: str
@@ -64,7 +64,7 @@ class TextEndPart:
 
 
 @dataclasses.dataclass
-class ReasoningStartPart:
+class UIReasoningStartEvent:
     """Indicates the beginning of a reasoning block."""
 
     id: str
@@ -75,7 +75,7 @@ class ReasoningStartPart:
 
 
 @dataclasses.dataclass
-class ReasoningDeltaPart:
+class UIReasoningDeltaEvent:
     """Contains incremental reasoning content for the reasoning block."""
 
     id: str
@@ -87,7 +87,7 @@ class ReasoningDeltaPart:
 
 
 @dataclasses.dataclass
-class ReasoningEndPart:
+class UIReasoningEndEvent:
     """Indicates the completion of a reasoning block."""
 
     id: str
@@ -98,8 +98,8 @@ class ReasoningEndPart:
 
 
 @dataclasses.dataclass
-class CustomPart:
-    """Provider-specific content that does not fit standard UI parts."""
+class UICustomEvent:
+    """Provider-specific content that does not fit standard UI events."""
 
     kind: str
     type: Literal["custom"] = dataclasses.field(default="custom", init=False)
@@ -107,7 +107,7 @@ class CustomPart:
 
 
 @dataclasses.dataclass
-class SourceUrlPart:
+class UISourceUrlEvent:
     """References to external URLs."""
 
     source_id: str
@@ -120,7 +120,7 @@ class SourceUrlPart:
 
 
 @dataclasses.dataclass
-class SourceDocumentPart:
+class UISourceDocumentEvent:
     """References to documents or files."""
 
     source_id: str
@@ -134,8 +134,8 @@ class SourceDocumentPart:
 
 
 @dataclasses.dataclass
-class FilePart:
-    """The file parts contain references to files with their media type."""
+class UIFileEvent:
+    """References to files with their media type."""
 
     url: str
     media_type: str
@@ -144,7 +144,7 @@ class FilePart:
 
 
 @dataclasses.dataclass
-class ReasoningFilePart:
+class UIReasoningFileEvent:
     """A file generated as part of model reasoning."""
 
     url: str
@@ -156,14 +156,14 @@ class ReasoningFilePart:
 
 
 @dataclasses.dataclass
-class DataPart:
-    """Custom data part for arbitrary structured data.
+class UIDataEvent:
+    """Custom data event for arbitrary structured data.
 
-    Data parts support type-specific handling.
+    Data events support type-specific handling.
 
     The wire type is ``data-{data_type}`` (e.g. ``data-custom``), exposed
-    via the ``type`` property so that ``DataPart`` is uniform with every
-    other ``UIMessageStreamPart`` variant.
+    via the ``type`` property so that ``UIDataEvent`` is uniform with every
+    other ``UIMessageStreamEvent`` variant.
     """
 
     data_type: str
@@ -178,7 +178,7 @@ class DataPart:
 
 
 @dataclasses.dataclass
-class ToolInputStartPart:
+class UIToolInputStartEvent:
     """Indicates the beginning of tool input streaming."""
 
     tool_call_id: str
@@ -194,7 +194,7 @@ class ToolInputStartPart:
 
 
 @dataclasses.dataclass
-class ToolInputDeltaPart:
+class UIToolInputDeltaEvent:
     """Incremental chunks of tool input as it's being generated."""
 
     tool_call_id: str
@@ -205,7 +205,7 @@ class ToolInputDeltaPart:
 
 
 @dataclasses.dataclass
-class ToolInputAvailablePart:
+class UIToolInputAvailableEvent:
     """Indicates that tool input is complete and ready for execution."""
 
     tool_call_id: str
@@ -222,7 +222,7 @@ class ToolInputAvailablePart:
 
 
 @dataclasses.dataclass
-class ToolInputErrorPart:
+class UIToolInputErrorEvent:
     """Indicates an error occurred during tool input processing."""
 
     tool_call_id: str
@@ -240,7 +240,7 @@ class ToolInputErrorPart:
 
 
 @dataclasses.dataclass
-class ToolOutputAvailablePart:
+class UIToolOutputAvailableEvent:
     """Contains the result of tool execution."""
 
     tool_call_id: str
@@ -256,7 +256,7 @@ class ToolOutputAvailablePart:
 
 
 @dataclasses.dataclass
-class ToolOutputErrorPart:
+class UIToolOutputErrorEvent:
     """Indicates an error occurred during tool execution."""
 
     tool_call_id: str
@@ -271,7 +271,7 @@ class ToolOutputErrorPart:
 
 
 @dataclasses.dataclass
-class ToolOutputDeniedPart:
+class UIToolOutputDeniedEvent:
     """Indicates tool execution was denied."""
 
     tool_call_id: str
@@ -281,7 +281,7 @@ class ToolOutputDeniedPart:
 
 
 @dataclasses.dataclass
-class ToolApprovalRequestPart:
+class UIToolApprovalRequestEvent:
     """Requests approval for tool execution."""
 
     approval_id: str
@@ -293,7 +293,7 @@ class ToolApprovalRequestPart:
 
 
 @dataclasses.dataclass
-class ToolApprovalResponsePart:
+class UIToolApprovalResponseEvent:
     """Records an approval decision for a tool call."""
 
     approval_id: str
@@ -307,8 +307,8 @@ class ToolApprovalResponsePart:
 
 
 @dataclasses.dataclass
-class StartStepPart:
-    """A part indicating the start of a step."""
+class UIStartStepEvent:
+    """Indicates the start of a step."""
 
     type: Literal["start-step"] = dataclasses.field(
         default="start-step", init=False
@@ -316,8 +316,8 @@ class StartStepPart:
 
 
 @dataclasses.dataclass
-class FinishStepPart:
-    """A part indicating that a step has been completed."""
+class UIFinishStepEvent:
+    """Indicates that a step has been completed."""
 
     type: Literal["finish-step"] = dataclasses.field(
         default="finish-step", init=False
@@ -325,8 +325,8 @@ class FinishStepPart:
 
 
 @dataclasses.dataclass
-class FinishPart:
-    """A part indicating the completion of a message."""
+class UIFinishEvent:
+    """Indicates the completion of a message."""
 
     type: Literal["finish"] = dataclasses.field(default="finish", init=False)
     finish_reason: FinishReason | None = None
@@ -334,7 +334,7 @@ class FinishPart:
 
 
 @dataclasses.dataclass
-class AbortPart:
+class UIAbortEvent:
     """Indicates the message was aborted."""
 
     type: Literal["abort"] = dataclasses.field(default="abort", init=False)
@@ -342,7 +342,7 @@ class AbortPart:
 
 
 @dataclasses.dataclass
-class MessageMetadataPart:
+class UIMessageMetadataEvent:
     """Contains message metadata."""
 
     message_metadata: Any
@@ -352,40 +352,40 @@ class MessageMetadataPart:
 
 
 @dataclasses.dataclass
-class ErrorPart:
-    """The error parts are appended to the message as they are received."""
+class UIErrorEvent:
+    """Errors appended to the message as they are received."""
 
     error_text: str
     type: Literal["error"] = dataclasses.field(default="error", init=False)
 
 
-UIMessageStreamPart = (
-    StartPart
-    | TextStartPart
-    | TextDeltaPart
-    | TextEndPart
-    | ReasoningStartPart
-    | ReasoningDeltaPart
-    | ReasoningEndPart
-    | CustomPart
-    | SourceUrlPart
-    | SourceDocumentPart
-    | FilePart
-    | ReasoningFilePart
-    | DataPart
-    | ToolInputStartPart
-    | ToolInputDeltaPart
-    | ToolInputAvailablePart
-    | ToolInputErrorPart
-    | ToolOutputAvailablePart
-    | ToolOutputErrorPart
-    | ToolOutputDeniedPart
-    | ToolApprovalRequestPart
-    | ToolApprovalResponsePart
-    | StartStepPart
-    | FinishStepPart
-    | FinishPart
-    | AbortPart
-    | MessageMetadataPart
-    | ErrorPart
+UIMessageStreamEvent = (
+    UIStartEvent
+    | UITextStartEvent
+    | UITextDeltaEvent
+    | UITextEndEvent
+    | UIReasoningStartEvent
+    | UIReasoningDeltaEvent
+    | UIReasoningEndEvent
+    | UICustomEvent
+    | UISourceUrlEvent
+    | UISourceDocumentEvent
+    | UIFileEvent
+    | UIReasoningFileEvent
+    | UIDataEvent
+    | UIToolInputStartEvent
+    | UIToolInputDeltaEvent
+    | UIToolInputAvailableEvent
+    | UIToolInputErrorEvent
+    | UIToolOutputAvailableEvent
+    | UIToolOutputErrorEvent
+    | UIToolOutputDeniedEvent
+    | UIToolApprovalRequestEvent
+    | UIToolApprovalResponseEvent
+    | UIStartStepEvent
+    | UIFinishStepEvent
+    | UIFinishEvent
+    | UIAbortEvent
+    | UIMessageMetadataEvent
+    | UIErrorEvent
 )

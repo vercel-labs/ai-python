@@ -1,4 +1,4 @@
-"""Convert internal event streams into AI SDK UI protocol parts."""
+"""Convert internal event streams into AI SDK UI protocol events."""
 
 from __future__ import annotations
 
@@ -15,8 +15,8 @@ if TYPE_CHECKING:
 
 async def to_stream(
     events: AsyncIterable[events_.AgentEvent],
-) -> AsyncGenerator[ui_events.UIMessageStreamPart]:
-    """Walk ``events`` once, emitting AI SDK UI stream parts.
+) -> AsyncGenerator[ui_events.UIMessageStreamEvent]:
+    """Walk ``events`` once, emitting AI SDK UI stream events.
 
     Streaming text/reasoning/tool-input deltas come from model events.
     Tool results come from ``ToolCallResult``.  Hook signals come from
@@ -26,17 +26,17 @@ async def to_stream(
 
     async for event in events:
         if isinstance(event, events_.ToolCallResult):
-            for part in state.on_tool_result(event):
-                yield part
+            for ui_event in state.on_tool_result(event):
+                yield ui_event
         elif isinstance(event, events_.PartialToolCallResult):
-            for part in state.on_partial_tool_result(event):
-                yield part
+            for ui_event in state.on_partial_tool_result(event):
+                yield ui_event
         elif isinstance(event, events_.HookEvent):
-            for part in state.on_hook(event):
-                yield part
+            for ui_event in state.on_hook(event):
+                yield ui_event
         else:
-            for part in state.on_event(event):
-                yield part
+            for ui_event in state.on_event(event):
+                yield ui_event
 
-    for part in state.finish():
-        yield part
+    for ui_event in state.finish():
+        yield ui_event

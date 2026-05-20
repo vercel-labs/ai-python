@@ -19,8 +19,8 @@ async def _gen(
 
 async def _collect(
     stream_events: list[agent_events_.AgentEvent],
-) -> list[ui_events.UIMessageStreamPart]:
-    return [part async for part in to_stream(_gen(stream_events))]
+) -> list[ui_events.UIMessageStreamEvent]:
+    return [event async for event in to_stream(_gen(stream_events))]
 
 
 async def test_stream_start_uses_runtime_message_id() -> None:
@@ -40,7 +40,9 @@ async def test_stream_start_uses_runtime_message_id() -> None:
         ]
     )
 
-    start = next(part for part in out if isinstance(part, ui_events.StartPart))
+    start = next(
+        event for event in out if isinstance(event, ui_events.UIStartEvent)
+    )
     assert start.message_id == "assistant-runtime-id"
 
 
@@ -55,17 +57,23 @@ async def test_event_driven_text_streaming() -> None:
         ]
     )
 
-    assert isinstance(out[0], ui_events.StartPart)
-    assert isinstance(out[1], ui_events.StartStepPart)
-    assert isinstance(out[2], ui_events.TextStartPart) and out[2].id == text_id
-    assert isinstance(out[3], ui_events.TextDeltaPart) and out[3].delta == "hi"
-    assert isinstance(out[4], ui_events.TextEndPart) and out[4].id == text_id
-    assert isinstance(out[5], ui_events.FinishStepPart)
-    assert isinstance(out[6], ui_events.FinishPart)
+    assert isinstance(out[0], ui_events.UIStartEvent)
+    assert isinstance(out[1], ui_events.UIStartStepEvent)
+    assert (
+        isinstance(out[2], ui_events.UITextStartEvent)
+        and out[2].id == text_id
+    )
+    assert (
+        isinstance(out[3], ui_events.UITextDeltaEvent)
+        and out[3].delta == "hi"
+    )
+    assert isinstance(out[4], ui_events.UITextEndEvent) and out[4].id == text_id
+    assert isinstance(out[5], ui_events.UIFinishStepEvent)
+    assert isinstance(out[6], ui_events.UIFinishEvent)
 
 
-async def test_tool_call_and_result_emit_terminal_parts() -> None:
-    """ToolCallResult emits tool input and output parts."""
+async def test_tool_call_and_result_emit_terminal_events() -> None:
+    """ToolCallResult emits tool input and output events."""
     tool_result_msg = messages_.Message(
         role="tool",
         parts=[
@@ -96,13 +104,13 @@ async def test_tool_call_and_result_emit_terminal_parts() -> None:
             ),
         ]
     )
-    types = [type(part).__name__ for part in out]
-    assert "ToolInputStartPart" in types
-    assert "ToolOutputAvailablePart" in types
+    types = [type(event).__name__ for event in out]
+    assert "UIToolInputStartEvent" in types
+    assert "UIToolOutputAvailableEvent" in types
 
 
 async def test_tool_result_without_streaming_emits_input_start() -> None:
-    """ToolCallResult for a non-streamed tool emits input + output parts."""
+    """ToolCallResult for a non-streamed tool emits input + output events."""
     tool_result_msg = messages_.Message(
         role="tool",
         parts=[
@@ -127,14 +135,14 @@ async def test_tool_result_without_streaming_emits_input_start() -> None:
             ),
         ]
     )
-    types = [type(part).__name__ for part in out]
-    assert "ToolInputStartPart" in types
-    assert "ToolInputAvailablePart" in types
-    assert "ToolOutputAvailablePart" in types
+    types = [type(event).__name__ for event in out]
+    assert "UIToolInputStartEvent" in types
+    assert "UIToolInputAvailableEvent" in types
+    assert "UIToolOutputAvailableEvent" in types
 
 
-async def test_approval_request_hook_emits_approval_part() -> None:
-    """HookEvent with pending status emits a ToolApprovalRequestPart."""
+async def test_approval_request_hook_emits_approval_event() -> None:
+    """HookEvent with pending status emits a UIToolApprovalRequestEvent."""
     out = await _collect(
         [
             # Streaming tool events first
@@ -168,16 +176,16 @@ async def test_approval_request_hook_emits_approval_part() -> None:
             ),
         ]
     )
-    approval_parts = [
-        p for p in out if isinstance(p, ui_events.ToolApprovalRequestPart)
+    approval_events = [
+        p for p in out if isinstance(p, ui_events.UIToolApprovalRequestEvent)
     ]
-    assert len(approval_parts) == 1
-    assert approval_parts[0].tool_call_id == "tc1"
-    assert approval_parts[0].approval_id == "approve_tc1"
+    assert len(approval_events) == 1
+    assert approval_events[0].tool_call_id == "tc1"
+    assert approval_events[0].approval_id == "approve_tc1"
 
 
 async def test_partial_tool_results_emit_preliminary_outputs() -> None:
-    """Each partial result yields a preliminary part."""
+    """Each partial result yields a preliminary event."""
     out = await _collect(
         [
             agent_events_.PartialToolCallResult(
@@ -204,7 +212,7 @@ async def test_partial_tool_results_emit_preliminary_outputs() -> None:
     prelim = [
         p
         for p in out
-        if isinstance(p, ui_events.ToolOutputAvailablePart) and p.preliminary
+        if isinstance(p, ui_events.UIToolOutputAvailableEvent) and p.preliminary
     ]
     assert [p.output for p in prelim] == [
         "hit 1, ",
@@ -239,7 +247,7 @@ async def test_partial_message_bundle_becomes_ui_message() -> None:
     [prelim] = [
         p
         for p in out
-        if isinstance(p, ui_events.ToolOutputAvailablePart) and p.preliminary
+        if isinstance(p, ui_events.UIToolOutputAvailableEvent) and p.preliminary
     ]
     assert isinstance(prelim.output, UIMessage)
     assert prelim.output.role == "assistant"
@@ -258,7 +266,7 @@ async def test_partial_tool_result_without_factory_is_skipped() -> None:
         ]
     )
     assert not any(
-        isinstance(p, ui_events.ToolOutputAvailablePart) for p in out
+        isinstance(p, ui_events.UIToolOutputAvailableEvent) for p in out
     )
 
 
@@ -292,13 +300,15 @@ async def test_builtin_tool_stream_marks_provider_executed_dynamic() -> None:
         ]
     )
 
-    start = next(p for p in out if isinstance(p, ui_events.ToolInputStartPart))
+    start = next(
+        p for p in out if isinstance(p, ui_events.UIToolInputStartEvent)
+    )
     assert start.provider_executed is True
     assert start.dynamic is True
     assert start.provider_metadata == {"provider": {"start": True}}
 
     available = next(
-        p for p in out if isinstance(p, ui_events.ToolInputAvailablePart)
+        p for p in out if isinstance(p, ui_events.UIToolInputAvailableEvent)
     )
     assert available.provider_executed is True
     assert available.dynamic is True
@@ -306,7 +316,7 @@ async def test_builtin_tool_stream_marks_provider_executed_dynamic() -> None:
     assert available.provider_metadata == {"provider": {"call": True}}
 
     result = next(
-        p for p in out if isinstance(p, ui_events.ToolOutputAvailablePart)
+        p for p in out if isinstance(p, ui_events.UIToolOutputAvailableEvent)
     )
     assert result.provider_executed is True
     assert result.dynamic is True
@@ -314,7 +324,7 @@ async def test_builtin_tool_stream_marks_provider_executed_dynamic() -> None:
     assert result.provider_metadata == {"provider": {"result": True}}
 
 
-async def test_file_event_emits_file_part_with_data_url_and_metadata() -> None:
+async def test_file_event_emits_ui_file_event() -> None:
     out = await _collect(
         [
             events_.FileEvent(
@@ -325,13 +335,13 @@ async def test_file_event_emits_file_part_with_data_url_and_metadata() -> None:
         ]
     )
 
-    file_part = next(p for p in out if isinstance(p, ui_events.FilePart))
-    assert file_part.url == "data:image/png;base64,YWJj"
-    assert file_part.media_type == "image/png"
-    assert file_part.provider_metadata == {"provider": {"file": True}}
+    file_event = next(p for p in out if isinstance(p, ui_events.UIFileEvent))
+    assert file_event.url == "data:image/png;base64,YWJj"
+    assert file_event.media_type == "image/png"
+    assert file_event.provider_metadata == {"provider": {"file": True}}
 
 
-async def test_resolved_approval_hook_emits_response_part() -> None:
+async def test_resolved_approval_hook_emits_response_event() -> None:
     hook: messages_.HookPart[Any] = messages_.HookPart(
         hook_id="approve_tc1",
         hook_type="ToolApproval",
@@ -358,14 +368,14 @@ async def test_resolved_approval_hook_emits_response_part() -> None:
     )
 
     response = next(
-        p for p in out if isinstance(p, ui_events.ToolApprovalResponsePart)
+        p for p in out if isinstance(p, ui_events.UIToolApprovalResponseEvent)
     )
     assert response.approval_id == "approve_tc1"
     assert response.approved is False
     assert response.reason == "not allowed"
     assert response.provider_executed is True
     assert response.provider_metadata == {"provider": {"approval": True}}
-    assert any(isinstance(p, ui_events.ToolOutputDeniedPart) for p in out)
+    assert any(isinstance(p, ui_events.UIToolOutputDeniedEvent) for p in out)
 
 
 # NOTE: agent-change boundary detection used to be driven by

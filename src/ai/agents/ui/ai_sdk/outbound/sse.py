@@ -36,19 +36,19 @@ def _json_default(obj: Any) -> Any:
     )
 
 
-def serialize_part(part: ui_events.UIMessageStreamPart) -> str:
-    """Serialize a stream part to JSON with camelCase keys."""
-    d = dataclasses.asdict(part)
-    if isinstance(part, ui_events.DataPart):
-        d["type"] = part.type
+def serialize_event(event: ui_events.UIMessageStreamEvent) -> str:
+    """Serialize a stream event to JSON with camelCase keys."""
+    d = dataclasses.asdict(event)
+    if isinstance(event, ui_events.UIDataEvent):
+        d["type"] = event.type
         del d["data_type"]
     camel_dict = {_to_camel_case(k): v for k, v in d.items() if v is not None}
     return json.dumps(camel_dict, default=_json_default)
 
 
-def format_sse(part: ui_events.UIMessageStreamPart) -> str:
-    """Format a stream part as an SSE data line."""
-    return f"data: {serialize_part(part)}\n\n"
+def format_sse(event: ui_events.UIMessageStreamEvent) -> str:
+    """Format a stream event as an SSE data line."""
+    return f"data: {serialize_event(event)}\n\n"
 
 
 def format_done_sse() -> str:
@@ -60,6 +60,6 @@ async def to_sse(
     events: AsyncIterable[events_.AgentEvent],
 ) -> AsyncGenerator[str]:
     """Convert an internal event stream into SSE strings."""
-    async for part in to_stream(events):
-        yield format_sse(part)
+    async for event in to_stream(events):
+        yield format_sse(event)
     yield format_done_sse()

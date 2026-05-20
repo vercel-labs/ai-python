@@ -101,24 +101,24 @@ class _StreamState:
 
     # -- boundary helpers ----------------------------------------------------
 
-    def _close_open_blocks(self) -> list[ui_events.UIMessageStreamPart]:
-        parts: list[ui_events.UIMessageStreamPart] = []
+    def _close_open_blocks(self) -> list[ui_events.UIMessageStreamEvent]:
+        events: list[ui_events.UIMessageStreamEvent] = []
         for rid in list(self.open_reasoning_ids):
-            parts.append(ui_events.ReasoningEndPart(id=rid))
+            events.append(ui_events.UIReasoningEndEvent(id=rid))
             self.completed_reasoning_ids.add(rid)
         self.open_reasoning_ids.clear()
         for tid in list(self.open_text_ids):
-            parts.append(ui_events.TextEndPart(id=tid))
+            events.append(ui_events.UITextEndEvent(id=tid))
             self.completed_text_ids.add(tid)
         self.open_text_ids.clear()
-        return parts
+        return events
 
-    def _finish_step(self) -> list[ui_events.UIMessageStreamPart]:
-        parts = self._close_open_blocks()
+    def _finish_step(self) -> list[ui_events.UIMessageStreamEvent]:
+        events = self._close_open_blocks()
         if self.in_step:
-            parts.append(ui_events.FinishStepPart())
+            events.append(ui_events.UIFinishStepEvent())
             self.in_step = False
-        return parts
+        return events
 
     def _reset_step_tracking(self) -> None:
         self.started_tool_inputs.clear()
@@ -130,26 +130,26 @@ class _StreamState:
     def _ensure_started(
         self,
         message_id: str | None = None,
-    ) -> list[ui_events.UIMessageStreamPart]:
-        """Lazily emit StartPart / StartStepPart on the first event."""
-        parts: list[ui_events.UIMessageStreamPart] = []
+    ) -> list[ui_events.UIMessageStreamEvent]:
+        """Lazily emit UIStartEvent / UIStartStepEvent on the first event."""
+        events: list[ui_events.UIMessageStreamEvent] = []
 
         if not self.emitted_start:
             self.ui_message_id = message_id
-            parts.append(ui_events.StartPart(message_id=self.ui_message_id))
-            parts.append(ui_events.StartStepPart())
+            events.append(ui_events.UIStartEvent(message_id=self.ui_message_id))
+            events.append(ui_events.UIStartStepEvent())
             self.emitted_start = True
             self.in_step = True
             self._reset_step_tracking()
 
-        return parts
+        return events
 
     # -- phase: streaming events --------------------------------------------
 
     def on_event(
         self, event: events_.Event
-    ) -> list[ui_events.UIMessageStreamPart]:
-        out: list[ui_events.UIMessageStreamPart] = []
+    ) -> list[ui_events.UIMessageStreamEvent]:
+        out: list[ui_events.UIMessageStreamEvent] = []
 
         # Lazily open the UI message on the first streaming event.
         if not self.emitted_start:
@@ -159,7 +159,7 @@ class _StreamState:
             case events_.TextStart(block_id=pid):
                 self.open_text_ids.add(pid)
                 out.append(
-                    ui_events.TextStartPart(
+                    ui_events.UITextStartEvent(
                         id=pid,
                         provider_metadata=event.provider_metadata,
                     )
@@ -169,14 +169,14 @@ class _StreamState:
                 if pid not in self.open_text_ids:
                     self.open_text_ids.add(pid)
                     out.append(
-                        ui_events.TextStartPart(
+                        ui_events.UITextStartEvent(
                             id=pid,
                             provider_metadata=event.provider_metadata,
                         )
                     )
                 self.text_delta_ids.add(pid)
                 out.append(
-                    ui_events.TextDeltaPart(
+                    ui_events.UITextDeltaEvent(
                         id=pid,
                         delta=chunk,
                         provider_metadata=event.provider_metadata,
@@ -188,7 +188,7 @@ class _StreamState:
                     self.open_text_ids.discard(pid)
                     self.completed_text_ids.add(pid)
                     out.append(
-                        ui_events.TextEndPart(
+                        ui_events.UITextEndEvent(
                             id=pid,
                             provider_metadata=event.provider_metadata,
                         )
@@ -197,7 +197,7 @@ class _StreamState:
             case events_.ReasoningStart(block_id=pid):
                 self.open_reasoning_ids.add(pid)
                 out.append(
-                    ui_events.ReasoningStartPart(
+                    ui_events.UIReasoningStartEvent(
                         id=pid,
                         provider_metadata=event.provider_metadata,
                     )
@@ -207,14 +207,14 @@ class _StreamState:
                 if pid not in self.open_reasoning_ids:
                     self.open_reasoning_ids.add(pid)
                     out.append(
-                        ui_events.ReasoningStartPart(
+                        ui_events.UIReasoningStartEvent(
                             id=pid,
                             provider_metadata=event.provider_metadata,
                         )
                     )
                 self.reasoning_delta_ids.add(pid)
                 out.append(
-                    ui_events.ReasoningDeltaPart(
+                    ui_events.UIReasoningDeltaEvent(
                         id=pid,
                         delta=chunk,
                         provider_metadata=event.provider_metadata,
@@ -226,7 +226,7 @@ class _StreamState:
                     self.open_reasoning_ids.discard(pid)
                     self.completed_reasoning_ids.add(pid)
                     out.append(
-                        ui_events.ReasoningEndPart(
+                        ui_events.UIReasoningEndEvent(
                             id=pid,
                             provider_metadata=event.provider_metadata,
                         )
@@ -238,7 +238,7 @@ class _StreamState:
                     return out
                 self.started_tool_inputs.add(tcid)
                 out.append(
-                    ui_events.ToolInputStartPart(
+                    ui_events.UIToolInputStartEvent(
                         tool_call_id=tcid,
                         tool_name=name,
                         provider_metadata=event.provider_metadata,
@@ -249,14 +249,14 @@ class _StreamState:
                 if tcid not in self.started_tool_inputs:
                     self.started_tool_inputs.add(tcid)
                     out.append(
-                        ui_events.ToolInputStartPart(
+                        ui_events.UIToolInputStartEvent(
                             tool_call_id=tcid,
                             tool_name=self.tool_names.get(tcid, ""),
                             provider_metadata=event.provider_metadata,
                         )
                     )
                 out.append(
-                    ui_events.ToolInputDeltaPart(
+                    ui_events.UIToolInputDeltaEvent(
                         tool_call_id=tcid,
                         input_text_delta=chunk,
                     )
@@ -271,7 +271,7 @@ class _StreamState:
                     return out
                 self.started_tool_inputs.add(tcid)
                 out.append(
-                    ui_events.ToolInputStartPart(
+                    ui_events.UIToolInputStartEvent(
                         tool_call_id=tcid,
                         tool_name=name,
                         provider_executed=True,
@@ -284,7 +284,7 @@ class _StreamState:
                 if tcid not in self.started_tool_inputs:
                     self.started_tool_inputs.add(tcid)
                     out.append(
-                        ui_events.ToolInputStartPart(
+                        ui_events.UIToolInputStartEvent(
                             tool_call_id=tcid,
                             tool_name=self.tool_names.get(tcid, ""),
                             provider_executed=True,
@@ -293,7 +293,7 @@ class _StreamState:
                         )
                     )
                 out.append(
-                    ui_events.ToolInputDeltaPart(
+                    ui_events.UIToolInputDeltaEvent(
                         tool_call_id=tcid,
                         input_text_delta=chunk,
                     )
@@ -303,7 +303,7 @@ class _StreamState:
                 if tcid not in self.input_available_emitted:
                     self.input_available_emitted.add(tcid)
                     out.append(
-                        ui_events.ToolInputAvailablePart(
+                        ui_events.UIToolInputAvailableEvent(
                             tool_call_id=tcid,
                             tool_name=tc.tool_name,
                             input=_normalize_tool_input(tc.tool_args),
@@ -320,7 +320,7 @@ class _StreamState:
                 self.emitted_tool_results.add(tcid)
                 if result.is_error:
                     out.append(
-                        ui_events.ToolOutputErrorPart(
+                        ui_events.UIToolOutputErrorEvent(
                             tool_call_id=tcid,
                             error_text=str(result.result),
                             provider_executed=True,
@@ -331,7 +331,7 @@ class _StreamState:
                     )
                 else:
                     out.append(
-                        ui_events.ToolOutputAvailablePart(
+                        ui_events.UIToolOutputAvailableEvent(
                             tool_call_id=tcid,
                             output=result.result,
                             provider_executed=True,
@@ -346,7 +346,7 @@ class _StreamState:
                 data=data,
             ):
                 out.append(
-                    ui_events.FilePart(
+                    ui_events.UIFileEvent(
                         url=media.data_to_data_url(data, media_type),
                         media_type=media_type,
                         provider_metadata=event.provider_metadata,
@@ -359,10 +359,10 @@ class _StreamState:
 
     def on_tool_result(
         self, event: events_.ToolCallResult
-    ) -> list[ui_events.UIMessageStreamPart]:
-        """Handle a ``ToolCallResult`` — emit tool input/output parts."""
+    ) -> list[ui_events.UIMessageStreamEvent]:
+        """Handle a ``ToolCallResult`` — emit tool input/output events."""
         msg = event.message
-        out: list[ui_events.UIMessageStreamPart] = []
+        out: list[ui_events.UIMessageStreamEvent] = []
 
         out.extend(self._ensure_started(msg.turn_id))
 
@@ -376,14 +376,14 @@ class _StreamState:
                 if part.tool_call_id not in self.started_tool_inputs:
                     self.started_tool_inputs.add(part.tool_call_id)
                     out.append(
-                        ui_events.ToolInputStartPart(
+                        ui_events.UIToolInputStartEvent(
                             tool_call_id=part.tool_call_id,
                             tool_name=part.tool_name,
                             provider_metadata=part.provider_metadata,
                         )
                     )
                 out.append(
-                    ui_events.ToolInputAvailablePart(
+                    ui_events.UIToolInputAvailableEvent(
                         tool_call_id=part.tool_call_id,
                         tool_name=part.tool_name,
                         input=_normalize_tool_input(part.tool_args),
@@ -402,7 +402,7 @@ class _StreamState:
             self.emitted_tool_results.add(part.tool_call_id)
             if part.is_error:
                 out.append(
-                    ui_events.ToolOutputErrorPart(
+                    ui_events.UIToolOutputErrorEvent(
                         tool_call_id=part.tool_call_id,
                         error_text=_tool_error_text(part),
                         provider_metadata=part.provider_metadata,
@@ -417,7 +417,7 @@ class _StreamState:
                     # streaming view if any.
                     continue
                 out.append(
-                    ui_events.ToolOutputAvailablePart(
+                    ui_events.UIToolOutputAvailableEvent(
                         tool_call_id=part.tool_call_id,
                         output=wire_output,
                         provider_metadata=part.provider_metadata,
@@ -428,17 +428,17 @@ class _StreamState:
 
     def on_partial_tool_result(
         self, event: events_.PartialToolCallResult
-    ) -> list[ui_events.UIMessageStreamPart]:
+    ) -> list[ui_events.UIMessageStreamEvent]:
         """Feed the value and emit a preliminary output.
 
         Each PartialToolCallResult carries one yielded value plus the
         aggregator factory the tool was declared with.  We instantiate
         the aggregator once per ``tool_call_id`` and use its snapshot
-        as the ``output`` of a preliminary ``ToolOutputAvailablePart``.
+        as the ``output`` of a preliminary ``UIToolOutputAvailableEvent``.
         The AI SDK supersedes preliminary outputs with the final
         ``ToolCallResult`` when it arrives.
         """
-        out: list[ui_events.UIMessageStreamPart] = []
+        out: list[ui_events.UIMessageStreamEvent] = []
 
         tcid = event.tool_call_id
         factory = event.aggregator_factory
@@ -460,7 +460,7 @@ class _StreamState:
             return out
 
         out.append(
-            ui_events.ToolOutputAvailablePart(
+            ui_events.UIToolOutputAvailableEvent(
                 tool_call_id=tcid,
                 output=wire_output,
                 preliminary=True,
@@ -472,10 +472,10 @@ class _StreamState:
 
     def on_hook(
         self, event: events_.HookEvent
-    ) -> list[ui_events.UIMessageStreamPart]:
-        """Handle a ``HookEvent`` — emit approval parts."""
+    ) -> list[ui_events.UIMessageStreamEvent]:
+        """Handle a ``HookEvent`` — emit approval events."""
         hook_part = event.hook
-        out: list[ui_events.UIMessageStreamPart] = []
+        out: list[ui_events.UIMessageStreamEvent] = []
 
         # Ensure the UI message is started.
         out.extend(self._ensure_started(event.message.turn_id))
@@ -489,7 +489,7 @@ class _StreamState:
                 return out
             self.emitted_approval_requests.add(tc_id)
             out.append(
-                ui_events.ToolApprovalRequestPart(
+                ui_events.UIToolApprovalRequestEvent(
                     approval_id=hook_part.hook_id,
                     tool_call_id=tc_id,
                     is_automatic=_metadata_bool(
@@ -500,7 +500,7 @@ class _StreamState:
         elif hook_part.status == "resolved":
             resolution: dict[str, Any] = hook_part.resolution or {}
             out.append(
-                ui_events.ToolApprovalResponsePart(
+                ui_events.UIToolApprovalResponseEvent(
                     approval_id=hook_part.hook_id,
                     approved=bool(resolution.get("granted")),
                     reason=resolution.get("reason"),
@@ -513,10 +513,10 @@ class _StreamState:
                 )
             )
             if not resolution.get("granted"):
-                out.append(ui_events.ToolOutputDeniedPart(tool_call_id=tc_id))
+                out.append(ui_events.UIToolOutputDeniedEvent(tool_call_id=tc_id))
         elif hook_part.status == "cancelled":
             out.append(
-                ui_events.ToolOutputErrorPart(
+                ui_events.UIToolOutputErrorEvent(
                     tool_call_id=tc_id,
                     error_text="Hook cancelled",
                 )
@@ -526,8 +526,8 @@ class _StreamState:
 
     # -- phase: stream finish ------------------------------------------------
 
-    def finish(self) -> list[ui_events.UIMessageStreamPart]:
-        parts = self._finish_step()
+    def finish(self) -> list[ui_events.UIMessageStreamEvent]:
+        events = self._finish_step()
         if self.emitted_start:
-            parts.append(ui_events.FinishPart(finish_reason="stop"))
-        return parts
+            events.append(ui_events.UIFinishEvent(finish_reason="stop"))
+        return events
