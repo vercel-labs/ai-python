@@ -621,12 +621,10 @@ class HookPrompt(textual.widgets.Static):
         height: auto;
         padding: 0 1;
         border: round $warning;
-        background: $surface;
         margin-bottom: 1;
     }
     HookPrompt:focus {
         border: round $warning;
-        background: $surface-lighten-1;
     }
     """
 
@@ -695,7 +693,6 @@ class TauApp(textual.app.App[None]):
         max-height: 12;            /* MAX_LINES (10) + 2 for the border */
         padding: 0 1;              /* breathing room left/right of the cursor */
         border: round $surface-lighten-2;
-        background: $surface;
     }
     #usage-bar {
         height: 1;
@@ -710,6 +707,7 @@ class TauApp(textual.app.App[None]):
     ]
 
     TITLE = "tau"
+    theme = "ansi-dark"
 
     # State read by ``chat_loop``.  Public on purpose — the agent
     # function is meant to be readable next to the app.
