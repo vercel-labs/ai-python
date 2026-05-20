@@ -10,7 +10,7 @@ from ai.agents.ui.ai_sdk.inbound import (
     _normalize_ui_messages,
     extract_approvals,
 )
-from ai.agents.ui.ai_sdk.ui_message import UIMessage, UIToolPart
+from ai.agents.ui.ai_sdk.ui_messages import UIMessage, UIToolPart
 from ai.types import messages as messages_
 
 

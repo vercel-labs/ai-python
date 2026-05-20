@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from collections.abc import AsyncGenerator
 
-from ai.agents.ui.ai_sdk import protocol, to_sse
+from ai.agents.ui.ai_sdk import to_sse, ui_events
 from ai.agents.ui.ai_sdk.outbound.sse import (
     format_done_sse,
     format_sse,
@@ -14,27 +14,27 @@ from ai.types import events as events_
 
 
 def test_serialize_part_camelcases_keys() -> None:
-    part = protocol.StartPart(message_id="m1")
+    part = ui_events.StartPart(message_id="m1")
     payload = json.loads(serialize_part(part))
     assert payload == {"type": "start", "messageId": "m1"}
 
 
 def test_format_sse_wraps_data_line() -> None:
-    part = protocol.TextDeltaPart(id="t1", delta="hi")
+    part = ui_events.TextDeltaPart(id="t1", delta="hi")
     line = format_sse(part)
     assert line.startswith("data: ")
     assert line.endswith("\n\n")
 
 
 def test_serialize_data_part_uses_type_with_prefix() -> None:
-    part = protocol.DataPart(data_type="custom", data={"k": 1})
+    part = ui_events.DataPart(data_type="custom", data={"k": 1})
     payload = json.loads(serialize_part(part))
     assert payload["type"] == "data-custom"
     assert "dataType" not in payload
 
 
 def test_serialize_protocol_fields_use_ai_sdk_wire_names() -> None:
-    part = protocol.ToolApprovalResponsePart(
+    part = ui_events.ToolApprovalResponsePart(
         approval_id="approval-1",
         approved=False,
         reason="no",

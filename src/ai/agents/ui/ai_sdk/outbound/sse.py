@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 import pydantic
 
-from .. import protocol
+from .. import ui_events
 from .stream import to_stream
 
 if TYPE_CHECKING:
@@ -36,17 +36,17 @@ def _json_default(obj: Any) -> Any:
     )
 
 
-def serialize_part(part: protocol.UIMessageStreamPart) -> str:
+def serialize_part(part: ui_events.UIMessageStreamPart) -> str:
     """Serialize a stream part to JSON with camelCase keys."""
     d = dataclasses.asdict(part)
-    if isinstance(part, protocol.DataPart):
+    if isinstance(part, ui_events.DataPart):
         d["type"] = part.type
         del d["data_type"]
     camel_dict = {_to_camel_case(k): v for k, v in d.items() if v is not None}
     return json.dumps(camel_dict, default=_json_default)
 
 
-def format_sse(part: protocol.UIMessageStreamPart) -> str:
+def format_sse(part: ui_events.UIMessageStreamPart) -> str:
     """Format a stream part as an SSE data line."""
     return f"data: {serialize_part(part)}\n\n"
 

@@ -4,7 +4,7 @@ from collections import Counter
 
 from ai.agents.ui import ai_sdk
 from ai.agents.ui.ai_sdk import to_ui_messages
-from ai.agents.ui.ai_sdk.ui_message import (
+from ai.agents.ui.ai_sdk.ui_messages import (
     UIDynamicToolPart,
     UIFilePart,
     UITextPart,

@@ -10,12 +10,12 @@ from ._state import _StreamState
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, AsyncIterable
 
-    from .. import protocol
+    from .. import ui_events
 
 
 async def to_stream(
     events: AsyncIterable[events_.AgentEvent],
-) -> AsyncGenerator[protocol.UIMessageStreamPart]:
+) -> AsyncGenerator[ui_events.UIMessageStreamPart]:
     """Walk ``events`` once, emitting AI SDK UI stream parts.
 
     Streaming text/reasoning/tool-input deltas come from model events.

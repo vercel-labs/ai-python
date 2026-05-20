@@ -13,7 +13,8 @@ from typing import Any, NamedTuple
 from ....types import messages as messages_
 from ...agent import MessageBundle
 from ...hooks import resolve_hook
-from . import _roundtrip, ui_message
+from . import _roundtrip
+from . import ui_messages as ui_messages_
 
 logger = logging.getLogger(__name__)
 
@@ -24,11 +25,11 @@ _TOOL_ERROR_STATES: frozenset[str] = frozenset(
 )
 
 
-def _is_tool_completed(state: ui_message.UIToolInvocationState) -> bool:
+def _is_tool_completed(state: ui_messages_.UIToolInvocationState) -> bool:
     return state in _TOOL_RESULT_STATES or state in _TOOL_ERROR_STATES
 
 
-def _is_tool_error(state: ui_message.UIToolInvocationState) -> bool:
+def _is_tool_error(state: ui_messages_.UIToolInvocationState) -> bool:
     return state in _TOOL_ERROR_STATES
 
 
@@ -46,7 +47,7 @@ def _normalize_tool_args(tool_input: Any) -> str:
 
 
 def _tool_input_for_args(
-    part: ui_message.UIToolPart | ui_message.UIDynamicToolPart,
+    part: ui_messages_.UIToolPart | ui_messages_.UIDynamicToolPart,
 ) -> Any:
     if part.state == "output-error" and part.input is None:
         return part.raw_input
@@ -54,7 +55,7 @@ def _tool_input_for_args(
 
 
 def _tool_result_output(
-    part: ui_message.UIToolPart | ui_message.UIDynamicToolPart,
+    part: ui_messages_.UIToolPart | ui_messages_.UIDynamicToolPart,
 ) -> Any:
     if part.state == "output-error":
         return _error_result(part.error_text, part.output)
@@ -98,7 +99,7 @@ def _decode_wire_output(output: Any) -> Any:
     if output.get("role") != "assistant" or "parts" not in output:
         return output
     try:
-        ui_msg = ui_message.UIMessage.model_validate(output)
+        ui_msg = ui_messages_.UIMessage.model_validate(output)
     except Exception:
         return output
     inner = list(_parse([ui_msg]))
@@ -106,7 +107,7 @@ def _decode_wire_output(output: Any) -> Any:
 
 
 def _approval_hook_part(
-    tp: ui_message.UIToolPart | ui_message.UIDynamicToolPart,
+    tp: ui_messages_.UIToolPart | ui_messages_.UIDynamicToolPart,
 ) -> messages_.HookPart[Any] | None:
     """Reconstruct approval hook state from a UI tool part when possible."""
     approval = tp.approval
@@ -150,7 +151,7 @@ def _approval_hook_part(
 
 
 def _approval_metadata(
-    tp: ui_message.UIToolPart | ui_message.UIDynamicToolPart,
+    tp: ui_messages_.UIToolPart | ui_messages_.UIDynamicToolPart,
 ) -> dict[str, Any]:
     metadata: dict[str, Any] = {}
     if tp.approval is not None and tp.approval.is_automatic is not None:
@@ -177,7 +178,7 @@ class ApprovalResponse(NamedTuple):
 
 
 def extract_approvals(
-    ui_messages: list[ui_message.UIMessage],
+    ui_messages: list[ui_messages_.UIMessage],
 ) -> list[ApprovalResponse]:
     """Return every approval response found in *ui_messages*.
 
@@ -187,7 +188,7 @@ def extract_approvals(
     for ui_msg in ui_messages:
         for part in ui_msg.parts:
             if not isinstance(
-                part, ui_message.UIToolPart | ui_message.UIDynamicToolPart
+                part, ui_messages_.UIToolPart | ui_messages_.UIDynamicToolPart
             ):
                 continue
             if (
@@ -221,10 +222,10 @@ def apply_approvals(approvals: list[ApprovalResponse]) -> None:
 
 
 def _normalize_ui_messages(
-    ui_messages: list[ui_message.UIMessage],
-) -> list[ui_message.UIMessage]:
+    ui_messages: list[ui_messages_.UIMessage],
+) -> list[ui_messages_.UIMessage]:
     """Heal stale tool-part states from persisted assistant history."""
-    normalized: list[ui_message.UIMessage] = []
+    normalized: list[ui_messages_.UIMessage] = []
     for message in ui_messages:
         new_parts = []
         changed = False
@@ -270,7 +271,7 @@ def _normalize_ui_messages(
 
 
 def to_messages(
-    ui_messages: list[ui_message.UIMessage],
+    ui_messages: list[ui_messages_.UIMessage],
 ) -> tuple[list[messages_.Message], list[ApprovalResponse]]:
     """Parse a UI request into runtime messages + extracted approvals.
 
@@ -363,7 +364,7 @@ def _is_approval_response(msg: messages_.Message) -> bool:
 
 
 def _parse(
-    ui_messages: list[ui_message.UIMessage],
+    ui_messages: list[ui_messages_.UIMessage],
 ) -> list[messages_.Message]:
     def _build_result_part(
         *,
@@ -414,7 +415,7 @@ def _parse(
 
         for part in ui_msg.parts:
             match part:
-                case ui_message.UITextPart(text=text) if text:
+                case ui_messages_.UITextPart(text=text) if text:
                     assistant_parts.append(
                         messages_.TextPart(
                             text=text,
@@ -422,7 +423,7 @@ def _parse(
                         )
                     )
 
-                case ui_message.UIReasoningPart(text=reasoning) if reasoning:
+                case ui_messages_.UIReasoningPart(text=reasoning) if reasoning:
                     assistant_parts.append(
                         messages_.ReasoningPart(
                             text=reasoning,
@@ -430,7 +431,7 @@ def _parse(
                         )
                     )
 
-                case ui_message.UIToolInvocationPart() as inv:
+                case ui_messages_.UIToolInvocationPart() as inv:
                     tool_args = json.dumps(inv.args) if inv.args else "{}"
                     if inv.provider_executed:
                         assistant_parts.append(
@@ -470,8 +471,8 @@ def _parse(
 
                 case (
                     (
-                        ui_message.UIToolPart()
-                        | ui_message.UIDynamicToolPart()
+                        ui_messages_.UIToolPart()
+                        | ui_messages_.UIDynamicToolPart()
                     ) as tp
                 ):
                     tool_input = _tool_input_for_args(tp)
@@ -532,7 +533,7 @@ def _parse(
                                 }
                             )
 
-                case ui_message.UIFilePart() as fp:
+                case ui_messages_.UIFilePart() as fp:
                     assistant_parts.append(
                         messages_.FilePart(
                             data=fp.url,
@@ -543,12 +544,12 @@ def _parse(
                     )
 
                 case (
-                    ui_message.UIStepStartPart()
-                    | ui_message.UISourceUrlPart()
-                    | ui_message.UISourceDocumentPart()
-                    | ui_message.UIReasoningFilePart()
-                    | ui_message.UICustomPart()
-                    | ui_message.UIDataPart()
+                    ui_messages_.UIStepStartPart()
+                    | ui_messages_.UISourceUrlPart()
+                    | ui_messages_.UISourceDocumentPart()
+                    | ui_messages_.UIReasoningFilePart()
+                    | ui_messages_.UICustomPart()
+                    | ui_messages_.UIDataPart()
                 ):
                     pass
 

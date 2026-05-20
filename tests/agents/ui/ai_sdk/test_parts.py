@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from ai.agents.ui.ai_sdk import _parts
-from ai.agents.ui.ai_sdk.ui_message import (
+from ai.agents.ui.ai_sdk.ui_messages import (
     UIReasoningPart,
     UITextPart,
     UIToolApproval,

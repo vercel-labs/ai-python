@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator
+from typing import Any
 
 import ai
-from ai.agents.ui.ai_sdk import protocol, to_stream
+from ai.agents.ui.ai_sdk import to_stream, ui_events
 from ai.types import events as agent_events_
 from ai.types import events as events_
 from ai.types import messages as messages_
@@ -18,7 +19,7 @@ async def _gen(
 
 async def _collect(
     stream_events: list[agent_events_.AgentEvent],
-) -> list[protocol.UIMessageStreamPart]:
+) -> list[ui_events.UIMessageStreamPart]:
     return [part async for part in to_stream(_gen(stream_events))]
 
 
@@ -39,7 +40,7 @@ async def test_stream_start_uses_runtime_message_id() -> None:
         ]
     )
 
-    start = next(part for part in out if isinstance(part, protocol.StartPart))
+    start = next(part for part in out if isinstance(part, ui_events.StartPart))
     assert start.message_id == "assistant-runtime-id"
 
 
@@ -54,13 +55,13 @@ async def test_event_driven_text_streaming() -> None:
         ]
     )
 
-    assert isinstance(out[0], protocol.StartPart)
-    assert isinstance(out[1], protocol.StartStepPart)
-    assert isinstance(out[2], protocol.TextStartPart) and out[2].id == text_id
-    assert isinstance(out[3], protocol.TextDeltaPart) and out[3].delta == "hi"
-    assert isinstance(out[4], protocol.TextEndPart) and out[4].id == text_id
-    assert isinstance(out[5], protocol.FinishStepPart)
-    assert isinstance(out[6], protocol.FinishPart)
+    assert isinstance(out[0], ui_events.StartPart)
+    assert isinstance(out[1], ui_events.StartStepPart)
+    assert isinstance(out[2], ui_events.TextStartPart) and out[2].id == text_id
+    assert isinstance(out[3], ui_events.TextDeltaPart) and out[3].delta == "hi"
+    assert isinstance(out[4], ui_events.TextEndPart) and out[4].id == text_id
+    assert isinstance(out[5], ui_events.FinishStepPart)
+    assert isinstance(out[6], ui_events.FinishPart)
 
 
 async def test_tool_call_and_result_emit_terminal_parts() -> None:
@@ -168,7 +169,7 @@ async def test_approval_request_hook_emits_approval_part() -> None:
         ]
     )
     approval_parts = [
-        p for p in out if isinstance(p, protocol.ToolApprovalRequestPart)
+        p for p in out if isinstance(p, ui_events.ToolApprovalRequestPart)
     ]
     assert len(approval_parts) == 1
     assert approval_parts[0].tool_call_id == "tc1"
@@ -203,7 +204,7 @@ async def test_partial_tool_results_emit_preliminary_outputs() -> None:
     prelim = [
         p
         for p in out
-        if isinstance(p, protocol.ToolOutputAvailablePart) and p.preliminary
+        if isinstance(p, ui_events.ToolOutputAvailablePart) and p.preliminary
     ]
     assert [p.output for p in prelim] == [
         "hit 1, ",
@@ -215,7 +216,7 @@ async def test_partial_tool_results_emit_preliminary_outputs() -> None:
 
 async def test_partial_message_bundle_becomes_ui_message() -> None:
     """MessageAggregator's snapshot collapses to one UIMessage."""
-    from ai.agents.ui.ai_sdk.ui_message import UIMessage
+    from ai.agents.ui.ai_sdk.ui_messages import UIMessage
 
     inner_msg = messages_.Message(
         role="assistant",
@@ -238,7 +239,7 @@ async def test_partial_message_bundle_becomes_ui_message() -> None:
     [prelim] = [
         p
         for p in out
-        if isinstance(p, protocol.ToolOutputAvailablePart) and p.preliminary
+        if isinstance(p, ui_events.ToolOutputAvailablePart) and p.preliminary
     ]
     assert isinstance(prelim.output, UIMessage)
     assert prelim.output.role == "assistant"
@@ -256,7 +257,9 @@ async def test_partial_tool_result_without_factory_is_skipped() -> None:
             ),
         ]
     )
-    assert not any(isinstance(p, protocol.ToolOutputAvailablePart) for p in out)
+    assert not any(
+        isinstance(p, ui_events.ToolOutputAvailablePart) for p in out
+    )
 
 
 async def test_builtin_tool_stream_marks_provider_executed_dynamic() -> None:
@@ -289,13 +292,13 @@ async def test_builtin_tool_stream_marks_provider_executed_dynamic() -> None:
         ]
     )
 
-    start = next(p for p in out if isinstance(p, protocol.ToolInputStartPart))
+    start = next(p for p in out if isinstance(p, ui_events.ToolInputStartPart))
     assert start.provider_executed is True
     assert start.dynamic is True
     assert start.provider_metadata == {"provider": {"start": True}}
 
     available = next(
-        p for p in out if isinstance(p, protocol.ToolInputAvailablePart)
+        p for p in out if isinstance(p, ui_events.ToolInputAvailablePart)
     )
     assert available.provider_executed is True
     assert available.dynamic is True
@@ -303,7 +306,7 @@ async def test_builtin_tool_stream_marks_provider_executed_dynamic() -> None:
     assert available.provider_metadata == {"provider": {"call": True}}
 
     result = next(
-        p for p in out if isinstance(p, protocol.ToolOutputAvailablePart)
+        p for p in out if isinstance(p, ui_events.ToolOutputAvailablePart)
     )
     assert result.provider_executed is True
     assert result.dynamic is True
@@ -322,14 +325,14 @@ async def test_file_event_emits_file_part_with_data_url_and_metadata() -> None:
         ]
     )
 
-    file_part = next(p for p in out if isinstance(p, protocol.FilePart))
+    file_part = next(p for p in out if isinstance(p, ui_events.FilePart))
     assert file_part.url == "data:image/png;base64,YWJj"
     assert file_part.media_type == "image/png"
     assert file_part.provider_metadata == {"provider": {"file": True}}
 
 
 async def test_resolved_approval_hook_emits_response_part() -> None:
-    hook = messages_.HookPart(
+    hook: messages_.HookPart[Any] = messages_.HookPart(
         hook_id="approve_tc1",
         hook_type="ToolApproval",
         status="resolved",
@@ -355,14 +358,14 @@ async def test_resolved_approval_hook_emits_response_part() -> None:
     )
 
     response = next(
-        p for p in out if isinstance(p, protocol.ToolApprovalResponsePart)
+        p for p in out if isinstance(p, ui_events.ToolApprovalResponsePart)
     )
     assert response.approval_id == "approve_tc1"
     assert response.approved is False
     assert response.reason == "not allowed"
     assert response.provider_executed is True
     assert response.provider_metadata == {"provider": {"approval": True}}
-    assert any(isinstance(p, protocol.ToolOutputDeniedPart) for p in out)
+    assert any(isinstance(p, ui_events.ToolOutputDeniedPart) for p in out)
 
 
 # NOTE: agent-change boundary detection used to be driven by

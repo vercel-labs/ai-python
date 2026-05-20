@@ -7,8 +7,8 @@ from .inbound import (
     to_messages,
 )
 from .outbound import to_sse, to_stream, to_ui_messages
-from .protocol import UI_MESSAGE_STREAM_HEADERS
-from .ui_message import UIMessage
+from .ui_events import UI_MESSAGE_STREAM_HEADERS
+from .ui_messages import UIMessage
 
 __all__ = [
     "UI_MESSAGE_STREAM_HEADERS",

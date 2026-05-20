@@ -12,11 +12,11 @@ from typing import Any, TypeGuard, cast
 
 from ....types import media
 from ....types import messages as messages_
-from . import _approvals, ui_message
+from . import _approvals, ui_messages
 
-UIToolLike = ui_message.UIToolPart | ui_message.UIDynamicToolPart
+UIToolLike = ui_messages.UIToolPart | ui_messages.UIDynamicToolPart
 
-_TOOL_STATE_RANK: dict[ui_message.UIToolInvocationState, int] = {
+_TOOL_STATE_RANK: dict[ui_messages.UIToolInvocationState, int] = {
     "input-streaming": 0,
     "input-available": 1,
     "approval-requested": 2,
@@ -44,9 +44,9 @@ def _metadata_bool(metadata: dict[str, Any], key: str) -> bool | None:
     return value if isinstance(value, bool) else None
 
 
-def _is_tool_part(part: ui_message.UIMessagePart) -> TypeGuard[UIToolLike]:
+def _is_tool_part(part: ui_messages.UIMessagePart) -> TypeGuard[UIToolLike]:
     return isinstance(
-        part, ui_message.UIToolPart | ui_message.UIDynamicToolPart
+        part, ui_messages.UIToolPart | ui_messages.UIDynamicToolPart
     )
 
 
@@ -54,13 +54,13 @@ def _tool_call_id(part: UIToolLike) -> str:
     return part.tool_call_id
 
 
-def to_ui_parts(parts: list[messages_.Part]) -> list[ui_message.UIMessagePart]:
+def to_ui_parts(parts: list[messages_.Part]) -> list[ui_messages.UIMessagePart]:
     """Convert internal Part objects to UIMessagePart objects."""
-    result: list[ui_message.UIMessagePart] = []
+    result: list[ui_messages.UIMessagePart] = []
     for part in parts:
         if isinstance(part, messages_.TextPart) and part.text:
             result.append(
-                ui_message.UITextPart.model_validate(
+                ui_messages.UITextPart.model_validate(
                     {
                         "type": "text",
                         "text": part.text,
@@ -70,7 +70,7 @@ def to_ui_parts(parts: list[messages_.Part]) -> list[ui_message.UIMessagePart]:
             )
         elif isinstance(part, messages_.ReasoningPart) and part.text:
             result.append(
-                ui_message.UIReasoningPart.model_validate(
+                ui_messages.UIReasoningPart.model_validate(
                     {
                         "type": "reasoning",
                         "text": part.text,
@@ -80,7 +80,7 @@ def to_ui_parts(parts: list[messages_.Part]) -> list[ui_message.UIMessagePart]:
             )
         elif isinstance(part, messages_.ToolCallPart):
             result.append(
-                ui_message.UIToolPart.model_validate(
+                ui_messages.UIToolPart.model_validate(
                     {
                         "type": f"tool-{part.tool_name}",
                         "toolCallId": part.tool_call_id,
@@ -92,7 +92,7 @@ def to_ui_parts(parts: list[messages_.Part]) -> list[ui_message.UIMessagePart]:
             )
         elif isinstance(part, messages_.BuiltinToolCallPart):
             result.append(
-                ui_message.UIDynamicToolPart.model_validate(
+                ui_messages.UIDynamicToolPart.model_validate(
                     {
                         "type": "dynamic-tool",
                         "toolName": part.tool_name,
@@ -106,7 +106,7 @@ def to_ui_parts(parts: list[messages_.Part]) -> list[ui_message.UIMessagePart]:
             )
         elif isinstance(part, messages_.BuiltinToolReturnPart):
             result.append(
-                ui_message.UIDynamicToolPart.model_validate(
+                ui_messages.UIDynamicToolPart.model_validate(
                     {
                         "type": "dynamic-tool",
                         "toolName": part.tool_name,
@@ -128,7 +128,7 @@ def to_ui_parts(parts: list[messages_.Part]) -> list[ui_message.UIMessagePart]:
             )
         elif isinstance(part, messages_.FilePart):
             result.append(
-                ui_message.UIFilePart.model_validate(
+                ui_messages.UIFilePart.model_validate(
                     {
                         "type": "file",
                         "mediaType": part.media_type,
@@ -184,10 +184,10 @@ def _merge_tool_part(
 
 
 def dedupe_tool_parts(
-    ui_parts: list[ui_message.UIMessagePart],
-) -> list[ui_message.UIMessagePart]:
+    ui_parts: list[ui_messages.UIMessagePart],
+) -> list[ui_messages.UIMessagePart]:
     """Collapse duplicate UIToolParts by tool_call_id."""
-    result: list[ui_message.UIMessagePart] = []
+    result: list[ui_messages.UIMessagePart] = []
     tool_index: dict[str, int] = {}
 
     for part in ui_parts:
@@ -209,7 +209,7 @@ def dedupe_tool_parts(
 
 
 def merge_tool_results(
-    ui_parts: list[ui_message.UIMessagePart],
+    ui_parts: list[ui_messages.UIMessagePart],
     tool_parts: list[messages_.Part],
 ) -> None:
     """Merge ToolResultParts into existing UIToolParts in-place."""
@@ -263,7 +263,7 @@ def merge_tool_results(
 
 
 def merge_approval_signals(
-    ui_parts: list[ui_message.UIMessagePart],
+    ui_parts: list[ui_messages.UIMessagePart],
     internal_parts: list[messages_.Part],
 ) -> None:
     """Merge HookPart approval state into existing UIToolParts in-place."""
@@ -296,7 +296,7 @@ def merge_approval_signals(
             updates["provider_executed"] = provider_executed
         if part.status == "pending":
             updates["state"] = "approval-requested"
-            updates["approval"] = ui_message.UIToolApproval.model_validate(
+            updates["approval"] = ui_messages.UIToolApproval.model_validate(
                 {
                     "id": part.hook_id,
                     "isAutomatic": _metadata_bool(
@@ -309,7 +309,7 @@ def merge_approval_signals(
                 "dict[str, Any]",
                 part.resolution if isinstance(part.resolution, dict) else {},
             )
-            updates["approval"] = ui_message.UIToolApproval.model_validate(
+            updates["approval"] = ui_messages.UIToolApproval.model_validate(
                 {
                     "id": part.hook_id,
                     "approved": resolution.get("granted"),

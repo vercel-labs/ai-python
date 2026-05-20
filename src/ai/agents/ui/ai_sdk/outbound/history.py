@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from .. import _parts, _roundtrip, ui_message
+from .. import _parts, _roundtrip, ui_messages
 
 if TYPE_CHECKING:
     from .....types import messages as messages_
@@ -28,7 +28,7 @@ def _belongs_to_bubble(
 
 def to_ui_messages(
     messages: list[messages_.Message],
-) -> list[ui_message.UIMessage]:
+) -> list[ui_messages.UIMessage]:
     """Group persisted messages into UIMessage bubbles.
 
     ``user``/``system`` messages become standalone UIMessages.  Runs of
@@ -36,7 +36,7 @@ def to_ui_messages(
     assistant UIMessage, with tool results and approval state folded into
     the corresponding tool-call parts.
     """
-    result: list[ui_message.UIMessage] = []
+    result: list[ui_messages.UIMessage] = []
 
     i = 0
     while i < len(messages):
@@ -44,7 +44,7 @@ def to_ui_messages(
 
         if msg.role in ("user", "system"):
             result.append(
-                ui_message.UIMessage(
+                ui_messages.UIMessage(
                     id=msg.id,
                     role=msg.role,
                     metadata=_roundtrip.metadata_for([msg]),
@@ -55,7 +55,7 @@ def to_ui_messages(
             continue
 
         if msg.role == "assistant":
-            ui_parts: list[ui_message.UIMessagePart] = []
+            ui_parts: list[ui_messages.UIMessagePart] = []
             source_messages: list[messages_.Message] = []
             bubble_id = _assistant_bubble_id(msg)
 
@@ -79,7 +79,7 @@ def to_ui_messages(
             ui_parts = _parts.dedupe_tool_parts(ui_parts)
 
             result.append(
-                ui_message.UIMessage(
+                ui_messages.UIMessage(
                     id=bubble_id,
                     role="assistant",
                     metadata=_roundtrip.metadata_for(source_messages),
