@@ -154,9 +154,9 @@ class SessionManager:
 async def chat_loop(app: TauApp) -> None:
     """Drain the pending queue, running one agent turn per queued message.
 
-    Reads from ``app.pending`` and ``app.session.messages``; writes
-    streamed text into a fresh assistant bubble on ``app.transcript``.
-    All interaction with the ``ai`` library lives here.
+    Reads from ``app.pending`` and ``app.session.messages``; dispatches
+    streamed events to app methods for rendering.  All interaction with
+    the ``ai`` library lives here.
     """
     while app.pending:
         # Pop one queued message into history per turn so the model sees
@@ -166,52 +166,31 @@ async def chat_loop(app: TauApp) -> None:
         try:
             await _run_turn(app)
         except asyncio.CancelledError:
-            app.transcript.add_bubble("system", "interrupted")
+            app.show_system("interrupted")
             raise
         except Exception as exc:  # noqa: BLE001 — surface in the UI
-            app.transcript.add_bubble("system", f"error: {_flatten_error(exc)}")
+            app.show_system(f"error: {_flatten_error(exc)}")
 
 
 async def _run_turn(app: TauApp) -> None:
-    """Execute a single agent turn, streaming events into the transcript."""
-    # One assistant bubble per turn for streamed text; tool calls
-    # get their own bubbles below.
-    text_bubble: Bubble | None = None
-    thinking_bubble: Bubble | None = None
-    tool_bubbles: dict[str, Bubble] = {}
+    """Execute a single agent turn, dispatching events to the app."""
     interrupted = False
     async with app.agent.run(app.model, app.session.messages, params=STREAM_PARAMS) as stream:
         try:
             async for event in stream:
-                following = app.transcript.at_bottom
                 if isinstance(event, ai.events.ReasoningDelta):
-                    if thinking_bubble is None:
-                        thinking_bubble = app.transcript.add_bubble("thinking")
-                    thinking_bubble.append(event.chunk)
-                elif isinstance(event, ai.events.ReasoningEnd):
-                    thinking_bubble = None
+                    app.append_thinking(event.chunk)
                 elif isinstance(event, ai.events.TextDelta):
-                    if text_bubble is None:
-                        text_bubble = app.transcript.add_bubble("assistant")
-                    text_bubble.append(event.chunk)
+                    app.append_text(event.chunk)
                 elif isinstance(event, ai.events.ToolEnd):
                     tc = event.tool_call
-                    bubble = app.transcript.add_bubble(
-                        "tool",
-                        _format_tool_call(tc.tool_name, tc.tool_args),
-                    )
-                    tool_bubbles[tc.tool_call_id] = bubble
-                    # The next text chunk should start a fresh bubble
-                    # so tool output and prose stay separated.
-                    text_bubble = None
+                    app.show_tool_call(tc.tool_name, tc.tool_args)
                 elif isinstance(event, ai.events.ToolCallResult):
                     for part in event.results:
-                        preview = _format_tool_result(part.result, part.is_error)
-                        app.transcript.add_bubble("tool", preview)
+                        app.show_tool_result(part.result, part.is_error)
                 elif isinstance(event, ai.events.HookEvent):
                     app.on_hook_event(event.hook)
-                if following:
-                    app.transcript.scroll_end(animate=False)
+                app.follow_scroll()
         except asyncio.CancelledError:
             interrupted = True
         # Persist whatever the agent added (assistant + tool turns)
@@ -669,9 +648,8 @@ class TauApp(textual.app.App[None]):
 
     def _start_new_session(self) -> None:
         self.session.start(MODEL_ID)
-        self.transcript.add_bubble(
-            "system",
-            f"connected — model: {MODEL_ID}  session: {self.session.session_id}",
+        self.show_system(
+            f"connected — model: {MODEL_ID}  session: {self.session.session_id}"
         )
 
     def _restore_session(self, path: pathlib.Path) -> None:
@@ -691,8 +669,7 @@ class TauApp(textual.app.App[None]):
                             part.result, getattr(part, "is_error", False)
                         )
                         self.transcript.add_bubble("tool", preview)
-        self.transcript.add_bubble(
-            "system",
+        self.show_system(
             f"resumed session {self.session.session_id} "
             f"({len(self.session.messages) - 1} messages) — model: {MODEL_ID}",
         )
@@ -720,6 +697,52 @@ class TauApp(textual.app.App[None]):
     @property
     def transcript(self) -> Transcript:
         return self.query_one("#transcript", Transcript)
+
+    # ------------------------------------------------------------------
+    # Rendering — called by the agent loop
+    # ------------------------------------------------------------------
+
+    # Per-turn bubble state.  Reset at the start of each turn via
+    # ``run_turn``; the agent loop calls the methods below which
+    # lazily create bubbles as needed.
+    _text_bubble: Bubble | None = None
+    _thinking_bubble: Bubble | None = None
+
+    def _reset_turn_bubbles(self) -> None:
+        self._text_bubble = None
+        self._thinking_bubble = None
+
+    def append_thinking(self, chunk: str) -> None:
+        """Append a reasoning/thinking chunk (lazily creates the bubble)."""
+        if self._thinking_bubble is None:
+            self._thinking_bubble = self.transcript.add_bubble("thinking")
+        self._thinking_bubble.append(chunk)
+
+    def append_text(self, chunk: str) -> None:
+        """Append an assistant text chunk (lazily creates the bubble)."""
+        if self._text_bubble is None:
+            self._text_bubble = self.transcript.add_bubble("assistant")
+        self._text_bubble.append(chunk)
+
+    def show_tool_call(self, name: str, args: str) -> None:
+        """Show a completed tool invocation line."""
+        self.transcript.add_bubble("tool", _format_tool_call(name, args))
+        # Next text from the model should start a fresh bubble so
+        # tool output and prose stay visually separated.
+        self._text_bubble = None
+
+    def show_tool_result(self, result: Any, is_error: bool) -> None:
+        """Show the (possibly truncated) result of a tool call."""
+        self.transcript.add_bubble("tool", _format_tool_result(result, is_error))
+
+    def show_system(self, text: str) -> None:
+        """Show a system/status message."""
+        self.transcript.add_bubble("system", text)
+
+    def follow_scroll(self) -> None:
+        """Scroll to the bottom if the user was already there."""
+        if self.transcript.at_bottom:
+            self.transcript.scroll_end(animate=False)
 
     # ------------------------------------------------------------------
     # Input → turn
@@ -751,6 +774,7 @@ class TauApp(textual.app.App[None]):
     @textual.work(exclusive=True, group="turn")
     async def run_turn(self) -> None:
         self._turn_worker = textual.worker.get_current_worker()
+        self._reset_turn_bubbles()
         try:
             await chat_loop(self)
         finally:
@@ -814,9 +838,8 @@ class TauApp(textual.app.App[None]):
                 reason="operator approved" if granted else "operator denied",
             ),
         )
-        self.transcript.add_bubble(
-            "system",
-            f"{'approved' if granted else 'denied'}: {hook.metadata.get('tool', '?')}",
+        self.show_system(
+            f"{'approved' if granted else 'denied'}: {hook.metadata.get('tool', '?')}"
         )
 
     async def on_hook_prompt_decided(self, event: HookPrompt.Decided) -> None:
