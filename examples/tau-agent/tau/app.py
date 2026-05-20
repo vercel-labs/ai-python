@@ -160,7 +160,16 @@ def _replay_session(app: TauApp) -> None:
         if msg.role == "user":
             app.transcript.add_bubble("user", msg.text)
         elif msg.role == "assistant":
-            app.transcript.add_bubble("assistant", msg.text)
+            for part in msg.parts:
+                if isinstance(part, ai.messages.ReasoningPart):
+                    app.transcript.add_bubble("thinking", part.text)
+                elif isinstance(part, ai.messages.TextPart):
+                    app.transcript.add_bubble("assistant", part.text)
+                elif isinstance(part, ai.messages.ToolCallPart):
+                    app.transcript.add_bubble(
+                        "tool",
+                        _format_tool_call(part.tool_name, part.tool_args),
+                    )
         elif msg.role == "tool":
             for part in msg.parts:
                 if isinstance(part, ai.messages.ToolResultPart):
