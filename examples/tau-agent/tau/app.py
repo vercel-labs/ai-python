@@ -824,13 +824,17 @@ class TauApp(textual.app.App[None]):
     # Hook plumbing
     # ------------------------------------------------------------------
 
+    def _resolve_hook(self, hook: Hook, decision: str) -> None:
+        """Resolve a hook and show a transcript note."""
+        granted = self._approval.resolve(hook, decision)
+        self.show_system(f"{'approved' if granted else 'denied'}: {hook.tool}")
+
     def on_hook_event(self, hook: Hook) -> None:
         if hook.status == "pending":
             # Check if the tracker can auto-resolve this hook.
             auto = self._approval.check(hook)
             if auto is not None:
-                self._approval.resolve(hook, "yes" if auto else "no")
-                self.show_system(f"{'approved' if auto else 'denied'}: {hook.tool}")
+                self._resolve_hook(hook, "yes" if auto else "no")
                 return
             self._hook_queue.append(hook)
             self._activate_next_hook()
@@ -865,8 +869,7 @@ class TauApp(textual.app.App[None]):
         hook = self._active_hook
         if hook is None or hook.hook_id != event.hook_id:
             return
-        granted = self._approval.resolve(hook, event.decision)
-        self.show_system(f"{'approved' if granted else 'denied'}: {hook.tool}")
+        self._resolve_hook(hook, event.decision)
         self._dismiss_active_prompt()
         self._activate_next_hook()
 
