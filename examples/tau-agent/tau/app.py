@@ -420,6 +420,16 @@ class ApprovalTracker:
         return granted
 
 
+def _bell() -> None:
+    """Ring the terminal bell to notify the operator."""
+    try:
+        with open("/dev/tty", "w") as tty:
+            tty.write("\a")
+            tty.flush()
+    except OSError:
+        pass
+
+
 # ---------------------------------------------------------------------------
 # Widgets
 # ---------------------------------------------------------------------------
@@ -795,7 +805,7 @@ class TauApp(textual.app.App[None]):
     # Input → turn
     # ------------------------------------------------------------------
 
-    async def on_text_area_changed(
+    def on_text_area_changed(
         self, event: textual.widgets.TextArea.Changed
     ) -> None:
         # Grow/shrink the composer as the user types or wraps.
@@ -873,7 +883,7 @@ class TauApp(textual.app.App[None]):
         composer = self.query_one("#composer", Composer)
         dock.mount(prompt, before=composer)
         prompt.focus()
-        self._bell()
+        _bell()
 
     def _dismiss_active_prompt(self) -> None:
         for prompt in self.query(HookPrompt).results():
@@ -889,20 +899,10 @@ class TauApp(textual.app.App[None]):
         self._dismiss_active_prompt()
         self._activate_next_hook()
 
-    @staticmethod
-    def _bell() -> None:
-        """Ring the terminal bell to notify the operator."""
-        try:
-            with open("/dev/tty", "w") as tty:
-                tty.write("\a")
-                tty.flush()
-        except OSError:
-            pass
-
     def _set_busy(self, busy: bool) -> None:
         self._busy = busy
         if not busy:
-            self._bell()
+            _bell()
         # Composer stays enabled while busy — the user can keep typing
         # and queue the next message.  Only the placeholder changes.
         inp = self.query_one("#composer", Composer)

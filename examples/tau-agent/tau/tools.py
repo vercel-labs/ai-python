@@ -1,10 +1,13 @@
 """tau's coding tools — pi's seven built-ins, plain Python.
 
 Mirrors pi's tool surface (read, write, edit, bash, grep, find, ls) so
-the model gets the same affordances.  Mutating tools (write, edit,
-bash) are flagged ``require_approval=True``; the agent's default loop
-gates them behind a ``ToolApproval`` hook that tau renders as a y/n
-prompt in the composer.
+the model gets the same affordances.
+
+All tools use ``require_approval=True`` so the ``ai`` library fires a
+hook for every invocation.  The ``ApprovalTracker`` in ``tau.app``
+auto-approves safe cases (e.g. reads under cwd) without prompting the
+operator; this is the only way to get hooks — the library doesn't
+support per-invocation gating otherwise.
 
 No workspace jail — paths resolve against the process cwd and the
 host (or the approval flow) is what keeps things in line.
