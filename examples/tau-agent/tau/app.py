@@ -151,6 +151,27 @@ class SessionManager:
 # ---------------------------------------------------------------------------
 
 
+def _replay_session(app: TauApp) -> None:
+    """Replay persisted messages into the transcript after a restore."""
+    for msg in app.session.messages:
+        if msg.role == "system":
+            continue
+        if msg.role == "user":
+            app.transcript.add_bubble("user", msg.text)
+        elif msg.role == "assistant":
+            app.transcript.add_bubble("assistant", msg.text)
+        elif msg.role == "tool":
+            for part in msg.parts:
+                if hasattr(part, "result"):
+                    app.show_tool_result(
+                        part.result, getattr(part, "is_error", False)
+                    )
+    app.show_system(
+        f"resumed session {app.session.session_id} "
+        f"({len(app.session.messages) - 1} messages) — model: {MODEL_ID}",
+    )
+
+
 async def chat_loop(app: TauApp) -> None:
     """Drain the pending queue, running one agent turn per queued message.
 
@@ -654,24 +675,7 @@ class TauApp(textual.app.App[None]):
 
     def _restore_session(self, path: pathlib.Path) -> None:
         self.session.restore(path)
-        # Replay conversation into transcript bubbles.
-        for msg in self.session.messages:
-            if msg.role == "system":
-                continue  # don't clutter the UI with the system prompt
-            if msg.role == "user":
-                self.transcript.add_bubble("user", msg.text)
-            elif msg.role == "assistant":
-                self.transcript.add_bubble("assistant", msg.text)
-            elif msg.role == "tool":
-                for part in msg.parts:
-                    if hasattr(part, "result"):
-                        self.show_tool_result(
-                            part.result, getattr(part, "is_error", False)
-                        )
-        self.show_system(
-            f"resumed session {self.session.session_id} "
-            f"({len(self.session.messages) - 1} messages) — model: {MODEL_ID}",
-        )
+        _replay_session(self)
         self.session.refresh_usage()
         self._update_usage_display()
 
