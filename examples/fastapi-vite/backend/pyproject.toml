@@ -7,3 +7,6 @@ dependencies = [
     "fastapi[standard]>=0.128.1",
     "ai>=0.0.1.dev5",
 ]
+
+[tool.uv]
+exclude-newer = "2 days"

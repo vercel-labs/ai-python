@@ -7,6 +7,10 @@ resolution-markers = [
     "python_full_version < '3.14'",
 ]
 
+[options]
+exclude-newer = "2026-05-18T18:36:33.433440494Z"
+exclude-newer-span = "P2D"
+
 [[package]]
 name = "ai"
 source = { editable = "." }
