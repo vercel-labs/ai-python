@@ -253,7 +253,6 @@ async def _run_turn(app: TauApp) -> None:
                             app.show_tool_result(part.result, part.is_error)
                 elif isinstance(event, ai.events.HookEvent):
                     app.on_hook_event(Hook.from_event(event.hook))
-                app.follow_scroll()
         except asyncio.CancelledError:
             interrupted = True
         # Persist whatever the agent added (assistant + tool turns)
@@ -539,23 +538,11 @@ class Transcript(textual.containers.VerticalScroll):
     """
 
     def add_bubble(
-        self, role: str, text: str = "", *, auto_scroll: bool = False
+        self, role: str, text: str = ""
     ) -> Bubble:
         bubble = Bubble(role, text)
         self.mount(bubble)
-        if auto_scroll:
-            self.scroll_end(animate=False)
         return bubble
-
-    @property
-    def at_bottom(self) -> bool:
-        """True when the scrollback is at (or within 1 row of) the end.
-
-        Used to decide whether streaming text should auto-scroll: if
-        the user has scrolled up to read earlier output, we don't yank
-        them back down on every chunk.
-        """
-        return self.scroll_y >= self.max_scroll_y - 1
 
 
 class Composer(textual.widgets.TextArea):
@@ -757,7 +744,7 @@ class TauApp(textual.app.App[None]):
             self._restore_session(self._resume_path)
         else:
             self._start_new_session()
-        self.transcript.scroll_end(animate=False)
+        self.transcript.anchor()
         self.query_one("#composer", Composer).focus()
 
     # ------------------------------------------------------------------
@@ -849,11 +836,6 @@ class TauApp(textual.app.App[None]):
         """Show a system/status message."""
         self.transcript.add_bubble("system", text)
 
-    def follow_scroll(self) -> None:
-        """Scroll to the bottom if the user was already there."""
-        if self.transcript.at_bottom:
-            self.transcript.scroll_end(animate=False)
-
     # ------------------------------------------------------------------
     # Input → turn
     # ------------------------------------------------------------------
@@ -870,7 +852,7 @@ class TauApp(textual.app.App[None]):
         if not text:
             return
 
-        self.transcript.add_bubble("user", text, auto_scroll=True)
+        self.transcript.add_bubble("user", text)
         # All submissions enter the queue; ``run_turn`` is the sole
         # consumer.  The user bubble shows up immediately so the message
         # feels sent even when it won't reach the model until the
