@@ -4,7 +4,7 @@ import json
 from collections.abc import AsyncGenerator
 
 from ai.agents.ui.ai_sdk import to_sse, ui_events
-from ai.agents.ui.ai_sdk.outbound.sse import (
+from ai.agents.ui.ai_sdk.outbound_stream import (
     format_done_sse,
     format_sse,
     serialize_event,

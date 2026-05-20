@@ -6,10 +6,8 @@ import pytest
 
 from ai.agents.agent import MessageBundle
 from ai.agents.ui.ai_sdk import to_messages
-from ai.agents.ui.ai_sdk.inbound import (
-    _normalize_ui_messages,
-    extract_approvals,
-)
+from ai.agents.ui.ai_sdk.approvals import extract_approvals
+from ai.agents.ui.ai_sdk.inbound_messages import _normalize_ui_messages
 from ai.agents.ui.ai_sdk.ui_messages import UIMessage, UIToolPart
 from ai.types import messages as messages_
 

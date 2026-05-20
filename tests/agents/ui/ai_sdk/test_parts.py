@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ai.agents.ui.ai_sdk import _parts
+from ai.agents.ui.ai_sdk import outbound_messages
 from ai.agents.ui.ai_sdk.ui_messages import (
     UIReasoningPart,
     UITextPart,
@@ -15,7 +15,7 @@ def test_to_ui_parts_text_and_reasoning() -> None:
         messages_.ReasoningPart(text="thinking"),
         messages_.TextPart(text="hi"),
     ]
-    ui_parts = _parts.to_ui_parts(parts)
+    ui_parts = outbound_messages.to_ui_parts(parts)
     assert isinstance(ui_parts[0], UIReasoningPart)
     assert ui_parts[0].text == "thinking"
     assert isinstance(ui_parts[1], UITextPart)
@@ -30,7 +30,7 @@ def test_to_ui_parts_tool_call_parses_json_args() -> None:
             tool_args='{"q": "x"}',
         )
     ]
-    ui_parts = _parts.to_ui_parts(parts)
+    ui_parts = outbound_messages.to_ui_parts(parts)
     assert isinstance(ui_parts[0], UIToolPart)
     assert ui_parts[0].type == "tool-search"
     assert ui_parts[0].input == {"q": "x"}
@@ -45,8 +45,8 @@ def test_merge_tool_results_updates_state_and_output() -> None:
             tool_args="{}",
         )
     ]
-    ui_parts = _parts.to_ui_parts(parts)
-    _parts.merge_tool_results(
+    ui_parts = outbound_messages.to_ui_parts(parts)
+    outbound_messages.merge_tool_results(
         ui_parts,
         [
             messages_.ToolResultPart(
@@ -70,9 +70,9 @@ def test_merge_approval_signals_pending_then_resolved() -> None:
             tool_args="{}",
         )
     ]
-    ui_parts = _parts.to_ui_parts(parts)
+    ui_parts = outbound_messages.to_ui_parts(parts)
 
-    _parts.merge_approval_signals(
+    outbound_messages.merge_approval_signals(
         ui_parts,
         [
             messages_.HookPart(
@@ -87,7 +87,7 @@ def test_merge_approval_signals_pending_then_resolved() -> None:
     assert requested.state == "approval-requested"
     assert isinstance(requested.approval, UIToolApproval)
 
-    _parts.merge_approval_signals(
+    outbound_messages.merge_approval_signals(
         ui_parts,
         [
             messages_.HookPart(

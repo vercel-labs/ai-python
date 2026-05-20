@@ -8,13 +8,14 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, NamedTuple
+from typing import Any
 
 from ....types import messages as messages_
 from ...agent import MessageBundle
-from ...hooks import resolve_hook
-from . import _roundtrip
+from . import approvals, id_utils
 from . import ui_messages as ui_messages_
+from .approvals import ApprovalResponse, extract_approvals
+from .tool_utils import normalize_tool_args
 
 logger = logging.getLogger(__name__)
 
@@ -31,19 +32,6 @@ def _is_tool_completed(state: ui_messages_.UIToolInvocationState) -> bool:
 
 def _is_tool_error(state: ui_messages_.UIToolInvocationState) -> bool:
     return state in _TOOL_ERROR_STATES
-
-
-# TODO(datamodel-rework §4): once tool args have a canonical shape, drop
-# these normalizers.
-def _normalize_tool_args(tool_input: Any) -> str:
-    """Normalize tool input (JSON string, JSON value, or None) to a string."""
-    match tool_input:
-        case str():
-            return tool_input
-        case None:
-            return "{}"
-        case _:
-            return json.dumps(tool_input)
 
 
 def _tool_input_for_args(
@@ -104,121 +92,6 @@ def _decode_wire_output(output: Any) -> Any:
         return output
     inner = list(_parse([ui_msg]))
     return MessageBundle(messages=tuple(inner))
-
-
-def _approval_hook_part(
-    tp: ui_messages_.UIToolPart | ui_messages_.UIDynamicToolPart,
-) -> messages_.HookPart[Any] | None:
-    """Reconstruct approval hook state from a UI tool part when possible."""
-    approval = tp.approval
-    if approval is None:
-        return None
-    metadata = _approval_metadata(tp)
-
-    if tp.state == "approval-requested":
-        return messages_.HookPart(
-            hook_id=approval.id,
-            hook_type="ToolApproval",
-            status="pending",
-            metadata=metadata,
-        )
-
-    if tp.state == "approval-responded" and approval.approved is not None:
-        return messages_.HookPart(
-            hook_id=approval.id,
-            hook_type="ToolApproval",
-            status="resolved",
-            metadata=metadata,
-            resolution={
-                "granted": approval.approved,
-                "reason": approval.reason,
-            },
-        )
-
-    if tp.state == "output-denied":
-        return messages_.HookPart(
-            hook_id=approval.id,
-            hook_type="ToolApproval",
-            status="resolved",
-            metadata=metadata,
-            resolution={
-                "granted": False,
-                "reason": approval.reason,
-            },
-        )
-
-    return None
-
-
-def _approval_metadata(
-    tp: ui_messages_.UIToolPart | ui_messages_.UIDynamicToolPart,
-) -> dict[str, Any]:
-    metadata: dict[str, Any] = {}
-    if tp.approval is not None and tp.approval.is_automatic is not None:
-        metadata["isAutomatic"] = tp.approval.is_automatic
-    if tp.provider_executed is not None:
-        metadata["providerExecuted"] = tp.provider_executed
-    if tp.call_provider_metadata is not None:
-        metadata["callProviderMetadata"] = tp.call_provider_metadata
-    return metadata
-
-
-# ============================================================================
-# Approval extraction + bulk resolution
-# ============================================================================
-
-
-class ApprovalResponse(NamedTuple):
-    """Approval response extracted from a responded UIToolPart."""
-
-    hook_id: str
-    granted: bool
-    reason: str | None
-    tool_call_id: str
-
-
-def extract_approvals(
-    ui_messages: list[ui_messages_.UIMessage],
-) -> list[ApprovalResponse]:
-    """Return every approval response found in *ui_messages*.
-
-    Pure function — does not resolve hooks or trigger side effects.
-    """
-    approvals: list[ApprovalResponse] = []
-    for ui_msg in ui_messages:
-        for part in ui_msg.parts:
-            if not isinstance(
-                part, ui_messages_.UIToolPart | ui_messages_.UIDynamicToolPart
-            ):
-                continue
-            if (
-                part.state == "approval-responded"
-                and part.approval is not None
-                and part.approval.approved is not None
-            ):
-                approvals.append(
-                    ApprovalResponse(
-                        hook_id=part.approval.id,
-                        granted=part.approval.approved,
-                        reason=part.approval.reason,
-                        tool_call_id=part.tool_call_id,
-                    )
-                )
-    return approvals
-
-
-def apply_approvals(approvals: list[ApprovalResponse]) -> None:
-    """Pre-register each approval resolution with the hooks registry."""
-    for approval in approvals:
-        resolve_hook(
-            approval.hook_id,
-            {"granted": approval.granted, "reason": approval.reason},
-        )
-
-
-# ============================================================================
-# UI message normalization (heal stale tool states)
-# ============================================================================
 
 
 def _normalize_ui_messages(
@@ -292,10 +165,14 @@ def to_messages(
     :meth:`Agent.run` if the run should resume from a hook.
     """
     normalized = _normalize_ui_messages(ui_messages)
-    approvals = extract_approvals(normalized)
-    messages = [m for m in _parse(normalized) if not _is_approval_response(m)]
-    _patch_pending_hook_aborts(messages, approvals)
-    return messages, approvals
+    approval_responses = extract_approvals(normalized)
+    messages = [
+        m
+        for m in _parse(normalized)
+        if not approvals.is_resolved_approval_message(m)
+    ]
+    _patch_pending_hook_aborts(messages, approval_responses)
+    return messages, approval_responses
 
 
 def _patch_pending_hook_aborts(
@@ -351,18 +228,6 @@ def _patch_pending_hook_aborts(
         messages[-1] = tool_msg.model_copy(update={"parts": new_parts})
 
 
-def _is_approval_response(msg: messages_.Message) -> bool:
-    """Return whether ``msg`` records a resolved tool-approval hook."""
-    if msg.role != "internal" or len(msg.parts) != 1:
-        return False
-    part = msg.parts[0]
-    return (
-        isinstance(part, messages_.HookPart)
-        and part.hook_type == "ToolApproval"
-        and part.status == "resolved"
-    )
-
-
 def _parse(
     ui_messages: list[ui_messages_.UIMessage],
 ) -> list[messages_.Message]:
@@ -408,7 +273,7 @@ def _parse(
     result: list[messages_.Message] = []
 
     for ui_msg in ui_messages:
-        source_messages = _roundtrip.source_messages_from(ui_msg.metadata)
+        source_messages = id_utils.source_messages_from(ui_msg.metadata)
         assistant_parts: list[messages_.Part] = []
         tool_result_parts: list[messages_.ToolResultPart] = []
         hook_parts: list[messages_.HookPart[Any]] = []
@@ -476,7 +341,7 @@ def _parse(
                     ) as tp
                 ):
                     tool_input = _tool_input_for_args(tp)
-                    tool_args = _normalize_tool_args(tool_input)
+                    tool_args = normalize_tool_args(tool_input)
 
                     if tp.provider_executed:
                         assistant_parts.append(
@@ -496,7 +361,7 @@ def _parse(
                                 provider_metadata=tp.call_provider_metadata,
                             )
                         )
-                    approval_hook = _approval_hook_part(tp)
+                    approval_hook = approvals.hook_part_from_tool_part(tp)
                     if approval_hook is not None:
                         hook_parts.append(approval_hook)
 
@@ -580,11 +445,11 @@ def _parse(
                     )
                 )
             result.extend(
-                _roundtrip.restore_source_ids(parsed, source_messages)
+                id_utils.restore_source_ids(parsed, source_messages)
             )
         else:
             result.extend(
-                _roundtrip.restore_source_ids(
+                id_utils.restore_source_ids(
                     [
                         messages_.Message(
                             id=ui_msg.id,

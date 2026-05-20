@@ -1,16 +1,22 @@
-"""Stream state bookkeeping for the event-first outbound walk."""
+"""Live event stream conversion for the AI SDK UI protocol."""
 
 from __future__ import annotations
 
+import dataclasses
 import json
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from .....types import events as events_
-from .....types import media
-from .....types import messages as messages_
-from ....agent import MessageBundle
-from .. import _approvals, ui_events
-from . import history
+import pydantic
+
+from ....types import events as events_
+from ....types import media
+from ....types import messages as messages_
+from ...agent import MessageBundle
+from . import approvals, outbound_messages, ui_events
+from .tool_utils import normalize_tool_input
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator, AsyncIterable
 
 
 def _tool_error_text(part: messages_.ToolResultPart) -> str:
@@ -25,26 +31,6 @@ def _tool_error_text(part: messages_.ToolResultPart) -> str:
     return "Tool execution failed"
 
 
-def _normalize_tool_input(raw: str) -> Any:
-    try:
-        return json.loads(raw)
-    except Exception:
-        return raw
-
-
-def _metadata_bool(metadata: dict[str, Any], key: str) -> bool | None:
-    value = metadata.get(key)
-    return value if isinstance(value, bool) else None
-
-
-def _metadata_dict(
-    metadata: dict[str, Any],
-    key: str,
-) -> dict[str, Any] | None:
-    value = metadata.get(key)
-    return value if isinstance(value, dict) else None
-
-
 def _to_wire_output(snapshot: Any) -> Any:
     """Convert an aggregator snapshot to its UI wire representation.
 
@@ -57,7 +43,7 @@ def _to_wire_output(snapshot: Any) -> Any:
     skip emitting in that case.
     """
     if isinstance(snapshot, MessageBundle):
-        ui_msgs = history.to_ui_messages(list(snapshot.messages))
+        ui_msgs = outbound_messages.to_ui_messages(list(snapshot.messages))
         return ui_msgs[-1] if ui_msgs else None
     return snapshot
 
@@ -306,7 +292,7 @@ class _StreamState:
                         ui_events.UIToolInputAvailableEvent(
                             tool_call_id=tcid,
                             tool_name=tc.tool_name,
-                            input=_normalize_tool_input(tc.tool_args),
+                            input=normalize_tool_input(tc.tool_args),
                             provider_executed=True,
                             provider_metadata=tc.provider_metadata
                             or event.provider_metadata,
@@ -386,7 +372,7 @@ class _StreamState:
                     ui_events.UIToolInputAvailableEvent(
                         tool_call_id=part.tool_call_id,
                         tool_name=part.tool_name,
-                        input=_normalize_tool_input(part.tool_args),
+                        input=normalize_tool_input(part.tool_args),
                         provider_metadata=part.provider_metadata,
                     )
                 )
@@ -480,7 +466,7 @@ class _StreamState:
         # Ensure the UI message is started.
         out.extend(self._ensure_started(event.message.turn_id))
 
-        tc_id = _approvals.tool_call_id_for(hook_part)
+        tc_id = approvals.tool_call_id_for(hook_part)
         if tc_id is None:
             return out
 
@@ -492,7 +478,7 @@ class _StreamState:
                 ui_events.UIToolApprovalRequestEvent(
                     approval_id=hook_part.hook_id,
                     tool_call_id=tc_id,
-                    is_automatic=_metadata_bool(
+                    is_automatic=approvals.metadata_bool(
                         hook_part.metadata, "isAutomatic"
                     ),
                 )
@@ -504,10 +490,10 @@ class _StreamState:
                     approval_id=hook_part.hook_id,
                     approved=bool(resolution.get("granted")),
                     reason=resolution.get("reason"),
-                    provider_executed=_metadata_bool(
+                    provider_executed=approvals.metadata_bool(
                         hook_part.metadata, "providerExecuted"
                     ),
-                    provider_metadata=_metadata_dict(
+                    provider_metadata=approvals.metadata_dict(
                         hook_part.metadata, "callProviderMetadata"
                     ),
                 )
@@ -531,3 +517,69 @@ class _StreamState:
         if self.emitted_start:
             events.append(ui_events.UIFinishEvent(finish_reason="stop"))
         return events
+
+
+async def to_stream(
+    events: AsyncIterable[events_.AgentEvent],
+) -> AsyncGenerator[ui_events.UIMessageStreamEvent]:
+    """Walk internal events once, emitting AI SDK UI stream events."""
+    state = _StreamState()
+
+    async for event in events:
+        if isinstance(event, events_.ToolCallResult):
+            for ui_event in state.on_tool_result(event):
+                yield ui_event
+        elif isinstance(event, events_.PartialToolCallResult):
+            for ui_event in state.on_partial_tool_result(event):
+                yield ui_event
+        elif isinstance(event, events_.HookEvent):
+            for ui_event in state.on_hook(event):
+                yield ui_event
+        else:
+            for ui_event in state.on_event(event):
+                yield ui_event
+
+    for ui_event in state.finish():
+        yield ui_event
+
+
+def _to_camel_case(snake_str: str) -> str:
+    components = snake_str.split("_")
+    return components[0] + "".join(x.title() for x in components[1:])
+
+
+def _json_default(obj: Any) -> Any:
+    if isinstance(obj, pydantic.BaseModel):
+        return obj.model_dump(mode="json", by_alias=True)
+    raise TypeError(
+        f"Object of type {type(obj).__name__} is not JSON serializable"
+    )
+
+
+def serialize_event(event: ui_events.UIMessageStreamEvent) -> str:
+    """Serialize a stream event to JSON with camelCase keys."""
+    d = dataclasses.asdict(event)
+    if isinstance(event, ui_events.UIDataEvent):
+        d["type"] = event.type
+        del d["data_type"]
+    camel_dict = {_to_camel_case(k): v for k, v in d.items() if v is not None}
+    return json.dumps(camel_dict, default=_json_default)
+
+
+def format_sse(event: ui_events.UIMessageStreamEvent) -> str:
+    """Format a stream event as an SSE data line."""
+    return f"data: {serialize_event(event)}\n\n"
+
+
+def format_done_sse() -> str:
+    """Format the AI SDK UI stream termination marker."""
+    return "data: [DONE]\n\n"
+
+
+async def to_sse(
+    events: AsyncIterable[events_.AgentEvent],
+) -> AsyncGenerator[str]:
+    """Convert an internal event stream into SSE strings."""
+    async for event in to_stream(events):
+        yield format_sse(event)
+    yield format_done_sse()

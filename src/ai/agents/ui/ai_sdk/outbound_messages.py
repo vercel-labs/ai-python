@@ -1,18 +1,13 @@
-"""Shared conversions between internal Part objects and UIMessagePart objects.
-
-Used by ``outbound.history`` to reconstruct UIMessages from persisted
-``ai.messages.Message`` lists. The live outbound stream does not use these; it
-emits wire-protocol deltas directly from event streams.
-"""
+"""Persisted-message conversion for AI SDK UI messages."""
 
 from __future__ import annotations
 
-import json
 from typing import Any, TypeGuard, cast
 
 from ....types import media
 from ....types import messages as messages_
-from . import _approvals, ui_messages
+from . import approvals, id_utils, ui_messages
+from .tool_utils import normalize_tool_input
 
 UIToolLike = ui_messages.UIToolPart | ui_messages.UIDynamicToolPart
 
@@ -27,23 +22,6 @@ _TOOL_STATE_RANK: dict[ui_messages.UIToolInvocationState, int] = {
 }
 
 
-def _normalize_tool_input(raw: str) -> Any:
-    """Parse tool args JSON string into a JSON value; fall back to raw string.
-
-    TODO(datamodel-rework §4): once ``ToolCallPart.tool_args`` has a
-    canonical shape, drop this helper.
-    """
-    try:
-        return json.loads(raw)
-    except (json.JSONDecodeError, TypeError):
-        return raw
-
-
-def _metadata_bool(metadata: dict[str, Any], key: str) -> bool | None:
-    value = metadata.get(key)
-    return value if isinstance(value, bool) else None
-
-
 def _is_tool_part(part: ui_messages.UIMessagePart) -> TypeGuard[UIToolLike]:
     return isinstance(
         part, ui_messages.UIToolPart | ui_messages.UIDynamicToolPart
@@ -54,8 +32,24 @@ def _tool_call_id(part: UIToolLike) -> str:
     return part.tool_call_id
 
 
+def _message_turn_key(message: messages_.Message) -> str | None:
+    return message.turn_id
+
+
+def _assistant_bubble_id(message: messages_.Message) -> str:
+    return _message_turn_key(message) or message.id
+
+
+def _belongs_to_bubble(
+    message: messages_.Message,
+    bubble_id: str,
+) -> bool:
+    key = _message_turn_key(message)
+    return key is None or key == bubble_id
+
+
 def to_ui_parts(parts: list[messages_.Part]) -> list[ui_messages.UIMessagePart]:
-    """Convert internal Part objects to UIMessagePart objects."""
+    """Convert internal parts to UI message parts."""
     result: list[ui_messages.UIMessagePart] = []
     for part in parts:
         if isinstance(part, messages_.TextPart) and part.text:
@@ -85,7 +79,7 @@ def to_ui_parts(parts: list[messages_.Part]) -> list[ui_messages.UIMessagePart]:
                         "type": f"tool-{part.tool_name}",
                         "toolCallId": part.tool_call_id,
                         "state": "input-available",
-                        "input": _normalize_tool_input(part.tool_args),
+                        "input": normalize_tool_input(part.tool_args),
                         "callProviderMetadata": part.provider_metadata,
                     }
                 )
@@ -98,7 +92,7 @@ def to_ui_parts(parts: list[messages_.Part]) -> list[ui_messages.UIMessagePart]:
                         "toolName": part.tool_name,
                         "toolCallId": part.tool_call_id,
                         "state": "input-available",
-                        "input": _normalize_tool_input(part.tool_args),
+                        "input": normalize_tool_input(part.tool_args),
                         "providerExecuted": True,
                         "callProviderMetadata": part.provider_metadata,
                     }
@@ -186,7 +180,7 @@ def _merge_tool_part(
 def dedupe_tool_parts(
     ui_parts: list[ui_messages.UIMessagePart],
 ) -> list[ui_messages.UIMessagePart]:
-    """Collapse duplicate UIToolParts by tool_call_id."""
+    """Collapse duplicate UI tool parts by tool_call_id."""
     result: list[ui_messages.UIMessagePart] = []
     tool_index: dict[str, int] = {}
 
@@ -212,7 +206,7 @@ def merge_tool_results(
     ui_parts: list[ui_messages.UIMessagePart],
     tool_parts: list[messages_.Part],
 ) -> None:
-    """Merge ToolResultParts into existing UIToolParts in-place."""
+    """Merge tool result parts into existing UI tool parts."""
     tool_index: dict[str, int] = {}
     for idx, ui_part in enumerate(ui_parts):
         if _is_tool_part(ui_part):
@@ -245,9 +239,7 @@ def merge_tool_results(
                 updates["output"] = part.result
         else:
             continue
-        # Hook-abort placeholders are internal: the corresponding
-        # HookPart(pending) carries the user-visible state via
-        # merge_approval_signals.
+
         if isinstance(part, messages_.ToolResultPart) and part.is_hook_pending:
             continue
         idx_opt = tool_index.get(tool_call_id)
@@ -266,7 +258,7 @@ def merge_approval_signals(
     ui_parts: list[ui_messages.UIMessagePart],
     internal_parts: list[messages_.Part],
 ) -> None:
-    """Merge HookPart approval state into existing UIToolParts in-place."""
+    """Merge approval hook state into existing UI tool parts."""
     tool_index: dict[str, int] = {}
     for idx, ui_part in enumerate(ui_parts):
         if _is_tool_part(ui_part):
@@ -276,7 +268,7 @@ def merge_approval_signals(
         if not isinstance(part, messages_.HookPart):
             continue
 
-        tool_call_id = _approvals.tool_call_id_for(part)
+        tool_call_id = approvals.tool_call_id_for(part)
         if tool_call_id is None:
             continue
 
@@ -290,7 +282,7 @@ def merge_approval_signals(
             continue
 
         updates: dict[str, Any] = {}
-        if (provider_executed := _metadata_bool(
+        if (provider_executed := approvals.metadata_bool(
             part.metadata, "providerExecuted"
         )) is not None:
             updates["provider_executed"] = provider_executed
@@ -299,7 +291,7 @@ def merge_approval_signals(
             updates["approval"] = ui_messages.UIToolApproval.model_validate(
                 {
                     "id": part.hook_id,
-                    "isAutomatic": _metadata_bool(
+                    "isAutomatic": approvals.metadata_bool(
                         part.metadata, "isAutomatic"
                     ),
                 }
@@ -314,7 +306,7 @@ def merge_approval_signals(
                     "id": part.hook_id,
                     "approved": resolution.get("granted"),
                     "reason": resolution.get("reason"),
-                    "isAutomatic": _metadata_bool(
+                    "isAutomatic": approvals.metadata_bool(
                         part.metadata, "isAutomatic"
                     ),
                 }
@@ -330,3 +322,64 @@ def merge_approval_signals(
 
         if updates:
             ui_parts[idx] = existing.model_copy(update=updates)
+
+
+def to_ui_messages(
+    messages: list[messages_.Message],
+) -> list[ui_messages.UIMessage]:
+    """Group persisted messages into UI message bubbles."""
+    result: list[ui_messages.UIMessage] = []
+
+    i = 0
+    while i < len(messages):
+        msg = messages[i]
+
+        if msg.role in ("user", "system"):
+            result.append(
+                ui_messages.UIMessage(
+                    id=msg.id,
+                    role=msg.role,
+                    metadata=id_utils.metadata_for([msg]),
+                    parts=to_ui_parts(msg.parts),
+                )
+            )
+            i += 1
+            continue
+
+        if msg.role == "assistant":
+            ui_parts: list[ui_messages.UIMessagePart] = []
+            source_messages: list[messages_.Message] = []
+            bubble_id = _assistant_bubble_id(msg)
+
+            while i < len(messages) and messages[i].role in (
+                "assistant",
+                "tool",
+                "internal",
+            ):
+                current = messages[i]
+                if not _belongs_to_bubble(current, bubble_id):
+                    break
+                source_messages.append(current)
+                if current.role == "assistant":
+                    ui_parts.extend(to_ui_parts(current.parts))
+                    ui_parts = dedupe_tool_parts(ui_parts)
+                elif current.role == "tool":
+                    merge_tool_results(ui_parts, current.parts)
+                elif current.role == "internal":
+                    merge_approval_signals(ui_parts, current.parts)
+                i += 1
+            ui_parts = dedupe_tool_parts(ui_parts)
+
+            result.append(
+                ui_messages.UIMessage(
+                    id=bubble_id,
+                    role="assistant",
+                    metadata=id_utils.metadata_for(source_messages),
+                    parts=ui_parts,
+                )
+            )
+            continue
+
+        i += 1
+
+    return result
