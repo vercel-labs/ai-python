@@ -339,12 +339,14 @@ class ApprovalTracker:
                 return True
         return None
 
-    def remember(self, hook: ai.messages.HookPart[Any], decision: str) -> None:
-        """Update approval state based on an operator decision.
+    def resolve(self, hook: ai.messages.HookPart[Any], decision: str) -> bool:
+        """Resolve a hook: update approval state, signal the library.
 
-        Only ``'always_this'``, ``'allow_dir'``, and ``'always_all'``
-        have lasting effects; ``'yes'`` and ``'no'`` are one-shot.
+        *decision* is one of ``'yes'``, ``'no'``, ``'always_this'``,
+        ``'allow_dir'``, ``'always_all'``.  Returns whether the hook
+        was granted.
         """
+        # Remember lasting decisions.
         if decision == "always_this":
             kwargs = hook.metadata.get("kwargs", {}) or {}
             cmd = kwargs.get("command", "")
@@ -353,15 +355,24 @@ class ApprovalTracker:
         elif decision == "allow_dir":
             tool = hook.metadata.get("tool", "")
             path = _tool_path(hook)
-            if path is None:
-                return
-            directory = path if path.is_dir() else path.parent
-            if tool in _READ_TOOLS:
-                self._approved_read_dirs.add(directory)
-            elif tool in _WRITE_TOOLS:
-                self._approved_write_dirs.add(directory)
+            if path is not None:
+                directory = path if path.is_dir() else path.parent
+                if tool in _READ_TOOLS:
+                    self._approved_read_dirs.add(directory)
+                elif tool in _WRITE_TOOLS:
+                    self._approved_write_dirs.add(directory)
         elif decision == "always_all":
             self._approve_all = True
+
+        granted = decision != "no"
+        ai.resolve_hook(
+            hook.hook_id,
+            ai.tools.ToolApproval(
+                granted=granted,
+                reason="operator approved" if granted else "operator denied",
+            ),
+        )
+        return granted
 
 
 # ---------------------------------------------------------------------------
@@ -798,9 +809,11 @@ class TauApp(textual.app.App[None]):
     def on_hook_event(self, hook: ai.messages.HookPart[Any]) -> None:
         if hook.status == "pending":
             # Check if the tracker can auto-resolve this hook.
-            decision = self._approval.check(hook)
-            if decision is not None:
-                self._resolve_hook(hook, granted=decision)
+            auto = self._approval.check(hook)
+            if auto is not None:
+                self._approval.resolve(hook, "yes" if auto else "no")
+                tool = hook.metadata.get("tool", "?")
+                self.show_system(f"{'approved' if auto else 'denied'}: {tool}")
                 return
             self._hook_queue.append(hook)
             self._activate_next_hook()
@@ -831,25 +844,13 @@ class TauApp(textual.app.App[None]):
         self._active_hook = None
         self.query_one("#composer", Composer).focus()
 
-    def _resolve_hook(self, hook: ai.messages.HookPart[Any], *, granted: bool) -> None:
-        """Resolve a hook and show a transcript note."""
-        ai.resolve_hook(
-            hook.hook_id,
-            ai.tools.ToolApproval(
-                granted=granted,
-                reason="operator approved" if granted else "operator denied",
-            ),
-        )
-        self.show_system(
-            f"{'approved' if granted else 'denied'}: {hook.metadata.get('tool', '?')}"
-        )
-
     async def on_hook_prompt_decided(self, event: HookPrompt.Decided) -> None:
         hook = self._active_hook
         if hook is None or hook.hook_id != event.hook_id:
             return
-        self._approval.remember(hook, event.decision)
-        self._resolve_hook(hook, granted=event.decision != "no")
+        granted = self._approval.resolve(hook, event.decision)
+        tool = hook.metadata.get("tool", "?")
+        self.show_system(f"{'approved' if granted else 'denied'}: {tool}")
         self._dismiss_active_prompt()
         self._activate_next_hook()
 
