@@ -16,7 +16,6 @@ host (or the approval flow) is what keeps things in line.
 from __future__ import annotations
 
 import asyncio
-import base64
 import dataclasses
 import pathlib
 import re
@@ -227,7 +226,7 @@ async def read(
     with a "Use offset=N to continue" hint.  offset is 1-indexed.
 
     Supports image files (jpg, png, gif, webp) which are returned as
-    base64-encoded image attachments.
+    base64-encoded data via FilePart objects.
     """
     p = pathlib.Path(path).expanduser()
     if not p.exists():
@@ -235,15 +234,15 @@ async def read(
     if not p.is_file():
         raise IsADirectoryError(f"Not a file: {path}")
 
-    # Image files: return base64 data for the model to see.
+    # Image files: return a text label + FilePart so providers emit
+    # a real image content block instead of stringified JSON.
     mime = _detect_image_mime(p)
     if mime is not None:
         data = p.read_bytes()
-        b64 = base64.b64encode(data).decode("ascii")
-        size_kb = len(data) / 1024
+        size_str = format_size(len(data))
         return [
-            {"type": "text", "text": f"Read image file [{mime}, {size_kb:.1f}KB]"},
-            {"type": "image", "data": b64, "mimeType": mime},
+            f"Read image file [{mime}, {size_str}]",
+            ai.file_part(data, media_type=mime),
         ]
 
     text = p.read_text(encoding="utf-8", errors="replace")

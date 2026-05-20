@@ -299,8 +299,17 @@ def _short_value(v: Any) -> str:
     return s
 
 
+def _json_default(obj: Any) -> Any:
+    """json.dumps fallback: serialize pydantic models via model_dump."""
+    if hasattr(obj, "model_dump"):
+        return obj.model_dump(mode="json")
+    raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
+
+
 def _format_tool_result(result: Any, is_error: bool) -> str:
-    text = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False)
+    text = result if isinstance(result, str) else json.dumps(
+        result, ensure_ascii=False, default=_json_default
+    )
     if len(text) > RESULT_PREVIEW_CHARS:
         text = (
             text[:RESULT_PREVIEW_CHARS]
