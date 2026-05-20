@@ -56,7 +56,7 @@ STREAM_PARAMS: dict[str, Any] | None = (
 
 _ADVERTISE = os.environ.get("TAU_ADVERTISE", "") == "1"
 
-SYSTEM_PROMPT = """\
+_BASE_SYSTEM_PROMPT = """\
 You are tau, a focused coding assistant running inside a terminal TUI.
 Keep replies concise and use code blocks when showing code.
 
@@ -71,6 +71,34 @@ When writing or suggesting commit messages, always include a trailer line:
     if _ADVERTISE
     else ""
 )
+
+
+def _find_agents_md() -> str | None:
+    """Walk up from cwd looking for AGENTS.md; return its contents or None."""
+    cur = pathlib.Path.cwd().resolve()
+    for directory in (cur, *cur.parents):
+        path = directory / "AGENTS.md"
+        if path.is_file():
+            try:
+                return path.read_text(encoding="utf-8")
+            except OSError:
+                return None
+    return None
+
+
+def _build_system_prompt() -> str:
+    prompt = _BASE_SYSTEM_PROMPT
+    agents_md = _find_agents_md()
+    if agents_md:
+        prompt += (
+            "\nThe following project-level instructions were loaded from "
+            "AGENTS.md and should be followed:\n\n"
+            f"{agents_md}\n"
+        )
+    return prompt
+
+
+SYSTEM_PROMPT = _build_system_prompt()
 
 # How many characters of a tool result to show inline; the full result
 # still goes to the model.
