@@ -266,7 +266,7 @@ def _format_tool_result(result: Any, is_error: bool) -> str:
         )
     marker = "✗" if is_error else "←"
     indented = "\n  ".join(text.splitlines() or [""])
-    return f"\n  {marker} {indented}"
+    return f"{marker}\n  {indented}"
 
 
 # ---------------------------------------------------------------------------
