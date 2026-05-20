@@ -205,9 +205,15 @@ async def _run_turn(app: TauApp) -> None:
                 elif isinstance(event, ai.events.ToolEnd):
                     tc = event.tool_call
                     app.show_tool_call(tc.tool_name, tc.tool_args)
+                elif isinstance(event, ai.events.PartialToolCallResult):
+                    app.append_tool_result(
+                        event.tool_call_id, str(event.value)
+                    )
                 elif isinstance(event, ai.events.ToolCallResult):
                     for part in event.results:
-                        app.show_tool_result(part.result, part.is_error)
+                        # Skip if we already streamed this result.
+                        if part.tool_call_id not in app._tool_result_bubbles:
+                            app.show_tool_result(part.result, part.is_error)
                 elif isinstance(event, ai.events.HookEvent):
                     app.on_hook_event(Hook.from_event(event.hook))
                 app.follow_scroll()
@@ -764,10 +770,12 @@ class TauApp(textual.app.App[None]):
     # lazily create bubbles as needed.
     _text_bubble: Bubble | None = None
     _thinking_bubble: Bubble | None = None
+    _tool_result_bubbles: dict[str, Bubble]
 
     def _reset_turn_bubbles(self) -> None:
         self._text_bubble = None
         self._thinking_bubble = None
+        self._tool_result_bubbles = {}
 
     def append_thinking(self, chunk: str) -> None:
         """Append a reasoning/thinking chunk (lazily creates the bubble)."""
@@ -787,6 +795,14 @@ class TauApp(textual.app.App[None]):
         # Next text from the model should start a fresh bubble so
         # tool output and prose stay visually separated.
         self._text_bubble = None
+
+    def append_tool_result(self, tool_call_id: str, chunk: str) -> None:
+        """Append a streaming chunk to a tool-result bubble."""
+        bubble = self._tool_result_bubbles.get(tool_call_id)
+        if bubble is None:
+            bubble = self.transcript.add_bubble("tool")
+            self._tool_result_bubbles[tool_call_id] = bubble
+        bubble.append(chunk)
 
     def show_tool_result(self, result: Any, is_error: bool) -> None:
         """Show the (possibly truncated) result of a tool call."""
