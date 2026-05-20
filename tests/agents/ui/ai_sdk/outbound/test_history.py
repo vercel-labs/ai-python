@@ -371,6 +371,86 @@ def test_to_ui_messages_maps_builtin_tools_to_dynamic_parts() -> None:
     assert tool_part.result_provider_metadata == {"provider": {"result": True}}
 
 
+def test_collapsed_assistant_turn_roundtrips_internal_ids() -> None:
+    original = [
+        messages_.Message(
+            id="assistant-alpha",
+            turn_id="turn-arbitrary",
+            role="assistant",
+            parts=[
+                messages_.TextPart(id="text-alpha", text="calling first"),
+                messages_.ToolCallPart(
+                    id="call-alpha",
+                    tool_call_id="tc-first",
+                    tool_name="search",
+                    tool_args='{"q":"first"}',
+                ),
+            ],
+        ),
+        messages_.Message(
+            id="tool-beta",
+            turn_id="turn-arbitrary",
+            role="tool",
+            parts=[
+                messages_.ToolResultPart(
+                    id="result-beta",
+                    tool_call_id="tc-first",
+                    tool_name="search",
+                    result={"hits": 1},
+                )
+            ],
+        ),
+        messages_.Message(
+            id="assistant-gamma",
+            turn_id="turn-arbitrary",
+            role="assistant",
+            parts=[
+                messages_.TextPart(id="text-gamma", text="calling second"),
+                messages_.ToolCallPart(
+                    id="call-gamma",
+                    tool_call_id="tc-second",
+                    tool_name="lookup",
+                    tool_args='{"id":2}',
+                ),
+            ],
+        ),
+        messages_.Message(
+            id="tool-delta",
+            turn_id="turn-arbitrary",
+            role="tool",
+            parts=[
+                messages_.ToolResultPart(
+                    id="result-delta",
+                    tool_call_id="tc-second",
+                    tool_name="lookup",
+                    result={"value": 2},
+                )
+            ],
+        ),
+        messages_.Message(
+            id="assistant-epsilon",
+            turn_id="turn-arbitrary",
+            role="assistant",
+            parts=[
+                messages_.TextPart(id="text-epsilon", text="all done"),
+            ],
+        ),
+    ]
+
+    [ui_msg] = ai_sdk.to_ui_messages(original)
+    roundtripped, approvals = ai_sdk.to_messages([ui_msg])
+
+    assert approvals == []
+    assert ui_msg.role == "assistant"
+    assert ui_msg.id == "turn-arbitrary"
+    assert [m.role for m in roundtripped] == [m.role for m in original]
+    assert [m.id for m in roundtripped] == [m.id for m in original]
+    assert [m.turn_id for m in roundtripped] == [m.turn_id for m in original]
+    assert [[p.id for p in m.parts] for m in roundtripped] == [
+        [p.id for p in m.parts] for m in original
+    ]
+
+
 def test_common_id_upsert_persistence_is_idempotent_after_reload() -> None:
     store = IdUpsertStore()
 

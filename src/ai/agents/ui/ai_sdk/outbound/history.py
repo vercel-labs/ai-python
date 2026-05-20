@@ -4,24 +4,14 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from .. import _parts, ui_message
+from .. import _parts, _roundtrip, ui_message
 
 if TYPE_CHECKING:
     from .....types import messages as messages_
 
-_ADAPTER_METADATA_KEY = "aiPython"
-_SOURCE_MESSAGES_KEY = "sourceMessages"
-
-
-def _turn_id_from_message_id(message_id: str) -> str | None:
-    for marker in (":assistant:", ":tool:", ":internal:"):
-        if marker in message_id:
-            return message_id.split(marker, 1)[0]
-    return None
-
 
 def _message_turn_key(message: messages_.Message) -> str | None:
-    return message.turn_id or _turn_id_from_message_id(message.id)
+    return message.turn_id
 
 
 def _assistant_bubble_id(message: messages_.Message) -> str:
@@ -34,27 +24,6 @@ def _belongs_to_bubble(
 ) -> bool:
     key = _message_turn_key(message)
     return key is None or key == bubble_id
-
-
-def _source_message_entry(message: messages_.Message) -> dict[str, object]:
-    return {
-        "id": message.id,
-        "role": message.role,
-        "turnId": message.turn_id,
-        "partIds": [part.id for part in message.parts],
-    }
-
-
-def _adapter_metadata(
-    source_messages: list[messages_.Message],
-) -> dict[str, object]:
-    return {
-        _ADAPTER_METADATA_KEY: {
-            _SOURCE_MESSAGES_KEY: [
-                _source_message_entry(message) for message in source_messages
-            ]
-        }
-    }
 
 
 def to_ui_messages(
@@ -78,7 +47,7 @@ def to_ui_messages(
                 ui_message.UIMessage(
                     id=msg.id,
                     role=msg.role,
-                    metadata=_adapter_metadata([msg]),
+                    metadata=_roundtrip.metadata_for([msg]),
                     parts=_parts.to_ui_parts(msg.parts),
                 )
             )
@@ -113,7 +82,7 @@ def to_ui_messages(
                 ui_message.UIMessage(
                     id=bubble_id,
                     role="assistant",
-                    metadata=_adapter_metadata(source_messages),
+                    metadata=_roundtrip.metadata_for(source_messages),
                     parts=ui_parts,
                 )
             )

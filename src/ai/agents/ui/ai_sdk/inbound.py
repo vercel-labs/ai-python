@@ -13,7 +13,7 @@ from typing import Any, NamedTuple
 from ....types import messages as messages_
 from ...agent import MessageBundle
 from ...hooks import resolve_hook
-from . import ui_message
+from . import _roundtrip, ui_message
 
 logger = logging.getLogger(__name__)
 
@@ -30,54 +30,6 @@ def _is_tool_completed(state: ui_message.UIToolInvocationState) -> bool:
 
 def _is_tool_error(state: ui_message.UIToolInvocationState) -> bool:
     return state in _TOOL_ERROR_STATES
-
-
-class _AdapterIdPolicy:
-    """Stable ids for reconstructing canonical messages from UI bubbles."""
-
-    @staticmethod
-    def message_id(turn_id: str, role: str, index: int) -> str:
-        return f"{turn_id}:{role}:{index}"
-
-    @classmethod
-    def with_stable_part_ids(
-        cls,
-        message_id: str,
-        parts: list[messages_.Part],
-    ) -> list[messages_.Part]:
-        counts: dict[str, int] = {}
-        result: list[messages_.Part] = []
-        for index, part in enumerate(parts):
-            base = cls.part_id(message_id, part, index)
-            seen = counts.get(base, 0)
-            counts[base] = seen + 1
-            part_id = base if seen == 0 else f"{base}:{seen}"
-            result.append(part.model_copy(update={"id": part_id}))
-        return result
-
-    @staticmethod
-    def part_id(
-        message_id: str,
-        part: messages_.Part,
-        index: int,
-    ) -> str:
-        match part:
-            case messages_.TextPart():
-                return f"{message_id}:text:{index}"
-            case messages_.ReasoningPart():
-                return f"{message_id}:reasoning:{index}"
-            case messages_.ToolCallPart(tool_call_id=tool_call_id):
-                return f"{message_id}:call:{tool_call_id}"
-            case messages_.ToolResultPart(tool_call_id=tool_call_id):
-                return f"{message_id}:result:{tool_call_id}"
-            case messages_.BuiltinToolCallPart(tool_call_id=tool_call_id):
-                return f"{message_id}:builtin-call:{tool_call_id}"
-            case messages_.BuiltinToolReturnPart(tool_call_id=tool_call_id):
-                return f"{message_id}:builtin-result:{tool_call_id}"
-            case messages_.HookPart():
-                return f"{message_id}:hook:{index}"
-            case messages_.FilePart():
-                return f"{message_id}:file:{index}"
 
 
 # TODO(datamodel-rework §4): once tool args have a canonical shape, drop
@@ -386,7 +338,6 @@ def _patch_pending_hook_aborts(
             continue
         new_parts.append(
             messages_.ToolResultPart(
-                id=f"{tool_msg.id}:result:{tc.tool_call_id}:hook-pending",
                 tool_call_id=tc.tool_call_id,
                 tool_name=tc.tool_name,
                 result=f"Pending on hook '{hook.hook_id}'",
@@ -456,6 +407,7 @@ def _parse(
     result: list[messages_.Message] = []
 
     for ui_msg in ui_messages:
+        source_messages = _roundtrip.source_messages_from(ui_msg.metadata)
         assistant_parts: list[messages_.Part] = []
         tool_result_parts: list[messages_.ToolResultPart] = []
         hook_parts: list[messages_.HookPart[Any]] = []
@@ -517,8 +469,11 @@ def _parse(
                             )
 
                 case (
-                    ui_message.UIToolPart() | ui_message.UIDynamicToolPart()
-                ) as tp:
+                    (
+                        ui_message.UIToolPart()
+                        | ui_message.UIDynamicToolPart()
+                    ) as tp
+                ):
                     tool_input = _tool_input_for_args(tp)
                     tool_args = _normalize_tool_args(tool_input)
 
@@ -610,35 +565,33 @@ def _parse(
         # LLM APIs expect one message per iteration, so split into
         # assistant + tool message pairs at tool-result boundaries.
         if ui_msg.role == "assistant":
-            result.extend(
-                _split_assistant_parts(
-                    assistant_parts,
-                    tool_result_parts,
-                    turn_id=ui_msg.id,
-                )
+            parsed = _split_assistant_parts(
+                assistant_parts,
+                tool_result_parts,
+                turn_id=ui_msg.id,
             )
-            for index, hp in enumerate(hook_parts):
-                msg_id = _AdapterIdPolicy.message_id(
-                    ui_msg.id, "internal", index
-                )
-                result.append(
+            for hp in hook_parts:
+                parsed.append(
                     messages_.Message(
-                        id=msg_id,
                         turn_id=ui_msg.id,
                         role="internal",
-                        parts=_AdapterIdPolicy.with_stable_part_ids(
-                            msg_id, [hp]
-                        ),
+                        parts=[hp],
                     )
                 )
+            result.extend(
+                _roundtrip.restore_source_ids(parsed, source_messages)
+            )
         else:
-            result.append(
-                messages_.Message(
-                    id=ui_msg.id,
-                    role=ui_msg.role,
-                    parts=_AdapterIdPolicy.with_stable_part_ids(
-                        ui_msg.id, assistant_parts
-                    ),
+            result.extend(
+                _roundtrip.restore_source_ids(
+                    [
+                        messages_.Message(
+                            id=ui_msg.id,
+                            role=ui_msg.role,
+                            parts=assistant_parts,
+                        )
+                    ],
+                    source_messages,
                 )
             )
 
@@ -663,12 +616,10 @@ def _split_assistant_parts(
 
     if not pending_results:
         if parts:
-            msg_id = _AdapterIdPolicy.message_id(turn_id, "assistant", 0)
             return [
                 messages_.Message(
                     role="assistant",
-                    parts=_AdapterIdPolicy.with_stable_part_ids(msg_id, parts),
-                    id=msg_id,
+                    parts=parts,
                     turn_id=turn_id,
                 )
             ]
@@ -678,38 +629,24 @@ def _split_assistant_parts(
     current: list[messages_.Part] = []
     current_results: list[messages_.ToolResultPart] = []
     seen_tool_call = False
-    assistant_index = 0
-    tool_index = 0
 
     def _append_assistant(parts_: list[messages_.Part]) -> None:
-        nonlocal assistant_index
-        msg_id = _AdapterIdPolicy.message_id(
-            turn_id, "assistant", assistant_index
-        )
         messages.append(
             messages_.Message(
                 role="assistant",
-                parts=_AdapterIdPolicy.with_stable_part_ids(msg_id, parts_),
-                id=msg_id,
+                parts=parts_,
                 turn_id=turn_id,
             )
         )
-        assistant_index += 1
 
     def _append_tool(parts_: list[messages_.ToolResultPart]) -> None:
-        nonlocal tool_index
-        msg_id = _AdapterIdPolicy.message_id(turn_id, "tool", tool_index)
         messages.append(
             messages_.Message(
                 role="tool",
-                parts=_AdapterIdPolicy.with_stable_part_ids(
-                    msg_id, list(parts_)
-                ),
-                id=msg_id,
+                parts=list(parts_),
                 turn_id=turn_id,
             )
         )
-        tool_index += 1
 
     for part in parts:
         if (
