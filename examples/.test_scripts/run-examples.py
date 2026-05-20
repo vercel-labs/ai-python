@@ -25,8 +25,8 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent.parent
-SAMPLES = REPO / "examples" / "samples"
-PATCH_SCRIPT = REPO / "examples" / ".test_scripts" / "run-with-patched-model.py"
+EXAMPLES_DIR = REPO / "examples"
+PATCH_SCRIPT = EXAMPLES_DIR / ".test_scripts" / "run-with-patched-model.py"
 
 
 @dataclasses.dataclass
@@ -140,13 +140,8 @@ def _known_sample_map() -> dict[str, Sample]:
     samples: dict[str, Sample] = {}
     for sample in KNOWN_SAMPLES:
         samples[sample.name] = sample
-        if sample.cmd is None:
-            samples[f"samples/{sample.name}"] = sample
-            samples[f"examples/samples/{sample.name}"] = sample
-            samples[_path_key(SAMPLES / sample.name)] = sample
-        else:
-            samples[f"examples/{sample.name}"] = sample
-            samples[_path_key(REPO / "examples" / sample.name)] = sample
+        samples[f"examples/{sample.name}"] = sample
+        samples[_path_key(EXAMPLES_DIR / sample.name)] = sample
     return samples
 
 
@@ -156,9 +151,7 @@ def _sample_path(name: str) -> Path:
         return path
     if path.parts[:1] == ("examples",):
         return REPO / path
-    if path.parts[:1] == ("samples",):
-        return REPO / "examples" / path
-    return SAMPLES / path
+    return EXAMPLES_DIR / path
 
 
 def _select_sample(
@@ -302,8 +295,7 @@ def main() -> None:
         nargs="*",
         metavar="example",
         help=(
-            "example file(s) to run, e.g. stream.py or "
-            "examples/samples/stream.py"
+            "example file(s) to run, e.g. stream.py or " "examples/stream.py"
         ),
     )
     args = parser.parse_args()

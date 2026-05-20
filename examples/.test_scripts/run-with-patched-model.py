@@ -13,7 +13,7 @@ Usage (from repo root):
 Example:
     uv run examples/.test_scripts/run-with-patched-model.py \\
         gateway:openai/gpt-5.4-mini \\
-        examples/samples/stream.py
+        examples/stream.py
 
 """
 
