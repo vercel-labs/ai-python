@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import dataclasses
 import json
 import os
 import pathlib
@@ -208,7 +209,7 @@ async def _run_turn(app: TauApp) -> None:
                     for part in event.results:
                         app.show_tool_result(part.result, part.is_error)
                 elif isinstance(event, ai.events.HookEvent):
-                    app.on_hook_event(event.hook)
+                    app.on_hook_event(Hook.from_event(event.hook))
                 app.follow_scroll()
         except asyncio.CancelledError:
             interrupted = True
@@ -269,6 +270,30 @@ def _format_tool_result(result: Any, is_error: bool) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Hook — thin wrapper so UI code never touches ai.messages.HookPart
+# ---------------------------------------------------------------------------
+
+
+@dataclasses.dataclass
+class Hook:
+    """UI-facing snapshot of a tool-approval hook."""
+
+    hook_id: str
+    tool: str
+    kwargs: dict[str, Any]
+    status: str
+
+    @classmethod
+    def from_event(cls, part: ai.messages.HookPart[Any]) -> Hook:
+        return cls(
+            hook_id=part.hook_id,
+            tool=part.metadata.get("tool", "?"),
+            kwargs=part.metadata.get("kwargs", {}) or {},
+            status=part.status,
+        )
+
+
+# ---------------------------------------------------------------------------
 # Approval tracking
 # ---------------------------------------------------------------------------
 
@@ -278,10 +303,9 @@ _WRITE_TOOLS = frozenset({"write", "edit"})
 _FILE_TOOLS = _READ_TOOLS | _WRITE_TOOLS
 
 
-def _tool_path(hook: ai.messages.HookPart[Any]) -> pathlib.Path | None:
+def _tool_path(hook: Hook) -> pathlib.Path | None:
     """Extract and resolve the path argument from a file-tool hook."""
-    kwargs = hook.metadata.get("kwargs", {}) or {}
-    raw = kwargs.get("path")
+    raw = hook.kwargs.get("path")
     if raw is None:
         return None
     return pathlib.Path(raw).expanduser().resolve()
@@ -325,21 +349,19 @@ class ApprovalTracker:
         )
         return any(path == d or d in path.parents for d in dirs)
 
-    def check(self, hook: ai.messages.HookPart[Any]) -> bool | None:
+    def check(self, hook: Hook) -> bool | None:
         """Return True to auto-approve, False to auto-deny, None to prompt."""
         if self._approve_all:
             return True
-        tool = hook.metadata.get("tool", "")
-        kwargs = hook.metadata.get("kwargs", {}) or {}
-        if tool in _FILE_TOOLS:
-            return True if self._path_ok(tool, _tool_path(hook)) else None
-        if tool == "bash":
-            cmd = kwargs.get("command", "")
+        if hook.tool in _FILE_TOOLS:
+            return True if self._path_ok(hook.tool, _tool_path(hook)) else None
+        if hook.tool == "bash":
+            cmd = hook.kwargs.get("command", "")
             if cmd in self._approved_commands:
                 return True
         return None
 
-    def resolve(self, hook: ai.messages.HookPart[Any], decision: str) -> bool:
+    def resolve(self, hook: Hook, decision: str) -> bool:
         """Resolve a hook: update approval state, signal the library.
 
         *decision* is one of ``'yes'``, ``'no'``, ``'always_this'``,
@@ -348,18 +370,16 @@ class ApprovalTracker:
         """
         # Remember lasting decisions.
         if decision == "always_this":
-            kwargs = hook.metadata.get("kwargs", {}) or {}
-            cmd = kwargs.get("command", "")
+            cmd = hook.kwargs.get("command", "")
             if cmd:
                 self._approved_commands.add(cmd)
         elif decision == "allow_dir":
-            tool = hook.metadata.get("tool", "")
             path = _tool_path(hook)
             if path is not None:
                 directory = path if path.is_dir() else path.parent
-                if tool in _READ_TOOLS:
+                if hook.tool in _READ_TOOLS:
                     self._approved_read_dirs.add(directory)
-                elif tool in _WRITE_TOOLS:
+                elif hook.tool in _WRITE_TOOLS:
                     self._approved_write_dirs.add(directory)
         elif decision == "always_all":
             self._approve_all = True
@@ -555,18 +575,16 @@ class HookPrompt(textual.widgets.Static):
             # 'yes' | 'no' | 'always_this' | 'allow_dir' | 'always_all'
             self.decision = decision
 
-    def __init__(self, hook: ai.messages.HookPart[Any]) -> None:
+    def __init__(self, hook: Hook) -> None:
         super().__init__()
         self._hook_id = hook.hook_id
-        tool = hook.metadata.get("tool", "?")
-        kwargs = hook.metadata.get("kwargs", {}) or {}
-        is_file_tool = tool in _FILE_TOOLS
+        is_file_tool = hook.tool in _FILE_TOOLS
 
         body = rich.text.Text()
         body.append("approve ", style="bold yellow")
-        body.append(tool, style="bold")
+        body.append(hook.tool, style="bold")
         body.append("?\n")
-        body.append("  " + _format_kwargs(kwargs), style="dim")
+        body.append("  " + _format_kwargs(hook.kwargs), style="dim")
         body.append("\n  ")
         body.append("[y]", style="bold green")
         body.append(" yes  ")
@@ -652,8 +670,8 @@ class TauApp(textual.app.App[None]):
         # Approval hooks waiting for operator y/n.  FIFO queue: only the
         # head hook is "active" — ``_active_hook`` mirrors it for fast
         # access from the composer.
-        self._hook_queue: list[ai.messages.HookPart[Any]] = []
-        self._active_hook: ai.messages.HookPart[Any] | None = None
+        self._hook_queue: list[Hook] = []
+        self._active_hook: Hook | None = None
         self._approval = ApprovalTracker()
         self._turn_worker: textual.worker.Worker[None] | None = None
         self._resume_path = resume_path
@@ -806,14 +824,13 @@ class TauApp(textual.app.App[None]):
     # Hook plumbing
     # ------------------------------------------------------------------
 
-    def on_hook_event(self, hook: ai.messages.HookPart[Any]) -> None:
+    def on_hook_event(self, hook: Hook) -> None:
         if hook.status == "pending":
             # Check if the tracker can auto-resolve this hook.
             auto = self._approval.check(hook)
             if auto is not None:
                 self._approval.resolve(hook, "yes" if auto else "no")
-                tool = hook.metadata.get("tool", "?")
-                self.show_system(f"{'approved' if auto else 'denied'}: {tool}")
+                self.show_system(f"{'approved' if auto else 'denied'}: {hook.tool}")
                 return
             self._hook_queue.append(hook)
             self._activate_next_hook()
@@ -849,8 +866,7 @@ class TauApp(textual.app.App[None]):
         if hook is None or hook.hook_id != event.hook_id:
             return
         granted = self._approval.resolve(hook, event.decision)
-        tool = hook.metadata.get("tool", "?")
-        self.show_system(f"{'approved' if granted else 'denied'}: {tool}")
+        self.show_system(f"{'approved' if granted else 'denied'}: {hook.tool}")
         self._dismiss_active_prompt()
         self._activate_next_hook()
 
