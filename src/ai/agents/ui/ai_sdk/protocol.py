@@ -98,6 +98,15 @@ class ReasoningEndPart:
 
 
 @dataclasses.dataclass
+class CustomPart:
+    """Provider-specific content that does not fit standard UI parts."""
+
+    kind: str
+    type: Literal["custom"] = dataclasses.field(default="custom", init=False)
+    provider_metadata: dict[str, Any] | None = None
+
+
+@dataclasses.dataclass
 class SourceUrlPart:
     """References to external URLs."""
 
@@ -135,6 +144,18 @@ class FilePart:
 
 
 @dataclasses.dataclass
+class ReasoningFilePart:
+    """A file generated as part of model reasoning."""
+
+    url: str
+    media_type: str
+    type: Literal["reasoning-file"] = dataclasses.field(
+        default="reasoning-file", init=False
+    )
+    provider_metadata: dict[str, Any] | None = None
+
+
+@dataclasses.dataclass
 class DataPart:
     """Custom data part for arbitrary structured data.
 
@@ -166,6 +187,8 @@ class ToolInputStartPart:
         default="tool-input-start", init=False
     )
     provider_executed: bool | None = None
+    provider_metadata: dict[str, Any] | None = None
+    tool_metadata: dict[str, Any] | None = None
     dynamic: bool | None = None
     title: str | None = None
 
@@ -193,6 +216,7 @@ class ToolInputAvailablePart:
     )
     provider_executed: bool | None = None
     provider_metadata: dict[str, Any] | None = None
+    tool_metadata: dict[str, Any] | None = None
     dynamic: bool | None = None
     title: str | None = None
 
@@ -210,6 +234,7 @@ class ToolInputErrorPart:
     )
     provider_executed: bool | None = None
     provider_metadata: dict[str, Any] | None = None
+    tool_metadata: dict[str, Any] | None = None
     dynamic: bool | None = None
     title: str | None = None
 
@@ -224,6 +249,8 @@ class ToolOutputAvailablePart:
         default="tool-output-available", init=False
     )
     provider_executed: bool | None = None
+    provider_metadata: dict[str, Any] | None = None
+    tool_metadata: dict[str, Any] | None = None
     dynamic: bool | None = None
     preliminary: bool | None = None
 
@@ -238,6 +265,8 @@ class ToolOutputErrorPart:
         default="tool-output-error", init=False
     )
     provider_executed: bool | None = None
+    provider_metadata: dict[str, Any] | None = None
+    tool_metadata: dict[str, Any] | None = None
     dynamic: bool | None = None
 
 
@@ -260,6 +289,21 @@ class ToolApprovalRequestPart:
     type: Literal["tool-approval-request"] = dataclasses.field(
         default="tool-approval-request", init=False
     )
+    is_automatic: bool | None = None
+
+
+@dataclasses.dataclass
+class ToolApprovalResponsePart:
+    """Records an approval decision for a tool call."""
+
+    approval_id: str
+    approved: bool
+    type: Literal["tool-approval-response"] = dataclasses.field(
+        default="tool-approval-response", init=False
+    )
+    reason: str | None = None
+    provider_executed: bool | None = None
+    provider_metadata: dict[str, Any] | None = None
 
 
 @dataclasses.dataclass
@@ -294,6 +338,7 @@ class AbortPart:
     """Indicates the message was aborted."""
 
     type: Literal["abort"] = dataclasses.field(default="abort", init=False)
+    reason: str | None = None
 
 
 @dataclasses.dataclass
@@ -322,9 +367,11 @@ UIMessageStreamPart = (
     | ReasoningStartPart
     | ReasoningDeltaPart
     | ReasoningEndPart
+    | CustomPart
     | SourceUrlPart
     | SourceDocumentPart
     | FilePart
+    | ReasoningFilePart
     | DataPart
     | ToolInputStartPart
     | ToolInputDeltaPart
@@ -334,6 +381,7 @@ UIMessageStreamPart = (
     | ToolOutputErrorPart
     | ToolOutputDeniedPart
     | ToolApprovalRequestPart
+    | ToolApprovalResponsePart
     | StartStepPart
     | FinishStepPart
     | FinishPart

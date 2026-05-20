@@ -51,9 +51,15 @@ def format_sse(part: protocol.UIMessageStreamPart) -> str:
     return f"data: {serialize_part(part)}\n\n"
 
 
+def format_done_sse() -> str:
+    """Format the AI SDK UI stream termination marker."""
+    return "data: [DONE]\n\n"
+
+
 async def to_sse(
     events: AsyncIterable[events_.AgentEvent],
 ) -> AsyncGenerator[str]:
     """Convert an internal event stream into SSE strings."""
     async for part in to_stream(events):
         yield format_sse(part)
+    yield format_done_sse()

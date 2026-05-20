@@ -5,6 +5,8 @@ from collections import Counter
 from ai.agents.ui import ai_sdk
 from ai.agents.ui.ai_sdk import to_ui_messages
 from ai.agents.ui.ai_sdk.ui_message import (
+    UIDynamicToolPart,
+    UIFilePart,
     UITextPart,
     UIToolPart,
 )
@@ -174,6 +176,72 @@ def test_to_ui_messages_merges_assistant_tool_internal() -> None:
     assert ui_msg.parts[2].text == "done"
 
 
+def test_to_ui_messages_records_source_messages_in_metadata() -> None:
+    msgs = [
+        messages_.Message(
+            id="turn-1:assistant:0",
+            turn_id="turn-1",
+            role="assistant",
+            parts=[
+                messages_.TextPart(id="text-0", text="calling"),
+                messages_.ToolCallPart(
+                    id="call-0",
+                    tool_call_id="tc1",
+                    tool_name="search",
+                    tool_args="{}",
+                ),
+            ],
+        ),
+        messages_.Message(
+            id="turn-1:tool:0",
+            turn_id="turn-1",
+            role="tool",
+            parts=[
+                messages_.ToolResultPart(
+                    id="result-0",
+                    tool_call_id="tc1",
+                    tool_name="search",
+                    result={"hits": 2},
+                )
+            ],
+        ),
+        messages_.Message(
+            id="turn-1:assistant:1",
+            turn_id="turn-1",
+            role="assistant",
+            parts=[messages_.TextPart(id="text-1", text="done")],
+        ),
+    ]
+
+    [ui_msg] = to_ui_messages(msgs)
+
+    assert ui_msg.id == "turn-1"
+    assert ui_msg.metadata == {
+        "aiPython": {
+            "sourceMessages": [
+                {
+                    "id": "turn-1:assistant:0",
+                    "role": "assistant",
+                    "turnId": "turn-1",
+                    "partIds": ["text-0", "call-0"],
+                },
+                {
+                    "id": "turn-1:tool:0",
+                    "role": "tool",
+                    "turnId": "turn-1",
+                    "partIds": ["result-0"],
+                },
+                {
+                    "id": "turn-1:assistant:1",
+                    "role": "assistant",
+                    "turnId": "turn-1",
+                    "partIds": ["text-1"],
+                },
+            ]
+        }
+    }
+
+
 def test_to_ui_messages_internal_role_merges_approval() -> None:
     msgs = [
         messages_.Message(
@@ -233,6 +301,74 @@ def test_to_ui_messages_uses_first_assistant_id_as_bubble_id() -> None:
     result = to_ui_messages(msgs)
     assert len(result) == 1
     assert result[0].id == "a1"
+
+
+def test_to_ui_messages_preserves_provider_metadata_and_files() -> None:
+    msgs = [
+        messages_.Message(
+            id="a1",
+            role="assistant",
+            parts=[
+                messages_.TextPart(
+                    text="hello",
+                    provider_metadata={"provider": {"text": True}},
+                ),
+                messages_.FilePart(
+                    data=b"abc",
+                    media_type="image/png",
+                    filename="image.png",
+                    provider_metadata={"provider": {"file": True}},
+                ),
+            ],
+        )
+    ]
+
+    result = to_ui_messages(msgs)
+
+    text_part = result[0].parts[0]
+    assert isinstance(text_part, UITextPart)
+    assert text_part.provider_metadata == {"provider": {"text": True}}
+
+    file_part = result[0].parts[1]
+    assert isinstance(file_part, UIFilePart)
+    assert file_part.url == "data:image/png;base64,YWJj"
+    assert file_part.filename == "image.png"
+    assert file_part.provider_metadata == {"provider": {"file": True}}
+
+
+def test_to_ui_messages_maps_builtin_tools_to_dynamic_parts() -> None:
+    msgs = [
+        messages_.Message(
+            id="a1",
+            role="assistant",
+            parts=[
+                messages_.BuiltinToolCallPart(
+                    tool_call_id="tc1",
+                    tool_name="web_search",
+                    tool_args='{"q":"ai"}',
+                    provider_metadata={"provider": {"call": True}},
+                ),
+                messages_.BuiltinToolReturnPart(
+                    tool_call_id="tc1",
+                    tool_name="web_search",
+                    result={"hits": 1},
+                    provider_metadata={"provider": {"result": True}},
+                ),
+            ],
+        )
+    ]
+
+    result = to_ui_messages(msgs)
+
+    assert len(result[0].parts) == 1
+    tool_part = result[0].parts[0]
+    assert isinstance(tool_part, UIDynamicToolPart)
+    assert tool_part.provider_executed is True
+    assert tool_part.state == "output-available"
+    assert tool_part.input == {"q": "ai"}
+    assert tool_part.output == {"hits": 1}
+    assert tool_part.call_provider_metadata == {"provider": {"call": True}}
+    assert tool_part.result_provider_metadata == {"provider": {"result": True}}
 
 
 def test_common_id_upsert_persistence_is_idempotent_after_reload() -> None:

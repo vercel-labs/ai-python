@@ -4,7 +4,11 @@ import json
 from collections.abc import AsyncGenerator
 
 from ai.agents.ui.ai_sdk import protocol, to_sse
-from ai.agents.ui.ai_sdk.outbound.sse import format_sse, serialize_part
+from ai.agents.ui.ai_sdk.outbound.sse import (
+    format_done_sse,
+    format_sse,
+    serialize_part,
+)
 from ai.types import events as agent_events_
 from ai.types import events as events_
 
@@ -27,6 +31,31 @@ def test_serialize_data_part_uses_type_with_prefix() -> None:
     payload = json.loads(serialize_part(part))
     assert payload["type"] == "data-custom"
     assert "dataType" not in payload
+
+
+def test_serialize_protocol_fields_use_ai_sdk_wire_names() -> None:
+    part = protocol.ToolApprovalResponsePart(
+        approval_id="approval-1",
+        approved=False,
+        reason="no",
+        provider_executed=True,
+        provider_metadata={"provider": {"k": "v"}},
+    )
+
+    payload = json.loads(serialize_part(part))
+
+    assert payload == {
+        "type": "tool-approval-response",
+        "approvalId": "approval-1",
+        "approved": False,
+        "reason": "no",
+        "providerExecuted": True,
+        "providerMetadata": {"provider": {"k": "v"}},
+    }
+
+
+def test_format_done_sse_returns_done_sentinel() -> None:
+    assert format_done_sse() == "data: [DONE]\n\n"
 
 
 async def _gen(
@@ -53,3 +82,4 @@ async def test_to_sse_emits_data_prefixed_lines() -> None:
     # first line is the start part (lazy open)
     first = json.loads(lines[0].removeprefix("data: ").rstrip())
     assert first["type"] == "start"
+    assert lines[-1] == "data: [DONE]\n\n"

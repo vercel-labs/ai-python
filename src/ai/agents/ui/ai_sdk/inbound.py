@@ -82,15 +82,37 @@ class _AdapterIdPolicy:
 
 # TODO(datamodel-rework §4): once tool args have a canonical shape, drop
 # these normalizers.
-def _normalize_tool_args(tool_input: str | dict[str, Any] | None) -> str:
-    """Normalize tool input (JSON string, dict, or None) to a JSON string."""
+def _normalize_tool_args(tool_input: Any) -> str:
+    """Normalize tool input (JSON string, JSON value, or None) to a string."""
     match tool_input:
         case str():
             return tool_input
-        case dict():
-            return json.dumps(tool_input)
-        case _:
+        case None:
             return "{}"
+        case _:
+            return json.dumps(tool_input)
+
+
+def _tool_input_for_args(
+    part: ui_message.UIToolPart | ui_message.UIDynamicToolPart,
+) -> Any:
+    if part.state == "output-error" and part.input is None:
+        return part.raw_input
+    return part.input
+
+
+def _tool_result_output(
+    part: ui_message.UIToolPart | ui_message.UIDynamicToolPart,
+) -> Any:
+    if part.state == "output-error":
+        return _error_result(part.error_text, part.output)
+    if part.state == "output-denied":
+        reason = part.approval.reason if part.approval is not None else None
+        return {
+            "type": "error-text",
+            "value": reason or "Tool call execution denied.",
+        }
+    return part.output
 
 
 def _normalize_tool_result(output: Any) -> dict[str, Any] | None:
@@ -132,18 +154,20 @@ def _decode_wire_output(output: Any) -> Any:
 
 
 def _approval_hook_part(
-    tp: ui_message.UIToolPart,
+    tp: ui_message.UIToolPart | ui_message.UIDynamicToolPart,
 ) -> messages_.HookPart[Any] | None:
     """Reconstruct approval hook state from a UI tool part when possible."""
     approval = tp.approval
     if approval is None:
         return None
+    metadata = _approval_metadata(tp)
 
     if tp.state == "approval-requested":
         return messages_.HookPart(
             hook_id=approval.id,
             hook_type="ToolApproval",
             status="pending",
+            metadata=metadata,
         )
 
     if tp.state == "approval-responded" and approval.approved is not None:
@@ -151,6 +175,7 @@ def _approval_hook_part(
             hook_id=approval.id,
             hook_type="ToolApproval",
             status="resolved",
+            metadata=metadata,
             resolution={
                 "granted": approval.approved,
                 "reason": approval.reason,
@@ -162,6 +187,7 @@ def _approval_hook_part(
             hook_id=approval.id,
             hook_type="ToolApproval",
             status="resolved",
+            metadata=metadata,
             resolution={
                 "granted": False,
                 "reason": approval.reason,
@@ -169,6 +195,19 @@ def _approval_hook_part(
         )
 
     return None
+
+
+def _approval_metadata(
+    tp: ui_message.UIToolPart | ui_message.UIDynamicToolPart,
+) -> dict[str, Any]:
+    metadata: dict[str, Any] = {}
+    if tp.approval is not None and tp.approval.is_automatic is not None:
+        metadata["isAutomatic"] = tp.approval.is_automatic
+    if tp.provider_executed is not None:
+        metadata["providerExecuted"] = tp.provider_executed
+    if tp.call_provider_metadata is not None:
+        metadata["callProviderMetadata"] = tp.call_provider_metadata
+    return metadata
 
 
 # ============================================================================
@@ -195,7 +234,9 @@ def extract_approvals(
     approvals: list[ApprovalResponse] = []
     for ui_msg in ui_messages:
         for part in ui_msg.parts:
-            if not isinstance(part, ui_message.UIToolPart):
+            if not isinstance(
+                part, ui_message.UIToolPart | ui_message.UIDynamicToolPart
+            ):
                 continue
             if (
                 part.state == "approval-responded"
@@ -238,7 +279,9 @@ def _normalize_ui_messages(
         for part in message.parts:
             part_type = getattr(part, "type", None)
             state = getattr(part, "state", None)
-            if isinstance(part_type, str) and part_type.startswith("tool-"):
+            if isinstance(part_type, str) and (
+                part_type.startswith("tool-") or part_type == "dynamic-tool"
+            ):
                 output = getattr(part, "output", None)
                 approval = getattr(part, "approval", None)
                 approved = approval.approved if approval is not None else None
@@ -394,6 +437,22 @@ def _parse(
             is_error=is_error,
         )
 
+    def _build_builtin_return_part(
+        *,
+        tool_call_id: str,
+        tool_name: str,
+        output: Any,
+        is_error: bool,
+        provider_metadata: dict[str, Any] | None,
+    ) -> messages_.BuiltinToolReturnPart:
+        return messages_.BuiltinToolReturnPart(
+            tool_call_id=tool_call_id,
+            tool_name=tool_name,
+            result=output,
+            is_error=is_error,
+            provider_metadata=provider_metadata,
+        )
+
     result: list[messages_.Message] = []
 
     for ui_msg in ui_messages:
@@ -404,62 +463,119 @@ def _parse(
         for part in ui_msg.parts:
             match part:
                 case ui_message.UITextPart(text=text) if text:
-                    assistant_parts.append(messages_.TextPart(text=text))
+                    assistant_parts.append(
+                        messages_.TextPart(
+                            text=text,
+                            provider_metadata=part.provider_metadata,
+                        )
+                    )
 
                 case ui_message.UIReasoningPart(text=reasoning) if reasoning:
                     assistant_parts.append(
-                        messages_.ReasoningPart(text=reasoning)
+                        messages_.ReasoningPart(
+                            text=reasoning,
+                            provider_metadata=part.provider_metadata,
+                        )
                     )
 
                 case ui_message.UIToolInvocationPart() as inv:
                     tool_args = json.dumps(inv.args) if inv.args else "{}"
-                    assistant_parts.append(
-                        messages_.ToolCallPart(
-                            tool_call_id=inv.tool_invocation_id,
-                            tool_name=inv.tool_name,
-                            tool_args=tool_args,
-                        )
-                    )
-                    if _is_tool_completed(inv.state):
-                        tool_result_parts.append(
-                            _build_result_part(
+                    if inv.provider_executed:
+                        assistant_parts.append(
+                            messages_.BuiltinToolCallPart(
                                 tool_call_id=inv.tool_invocation_id,
                                 tool_name=inv.tool_name,
-                                output=inv.result,
-                                is_error=_is_tool_error(inv.state),
+                                tool_args=tool_args,
                             )
                         )
-
-                case ui_message.UIToolPart() as tp:
-                    assistant_parts.append(
-                        messages_.ToolCallPart(
-                            tool_call_id=tp.tool_call_id,
-                            tool_name=tp.tool_name,
-                            tool_args=_normalize_tool_args(tp.input),
+                        if _is_tool_completed(inv.state):
+                            assistant_parts.append(
+                                _build_builtin_return_part(
+                                    tool_call_id=inv.tool_invocation_id,
+                                    tool_name=inv.tool_name,
+                                    output=inv.result,
+                                    is_error=_is_tool_error(inv.state),
+                                    provider_metadata=None,
+                                )
+                            )
+                    else:
+                        assistant_parts.append(
+                            messages_.ToolCallPart(
+                                tool_call_id=inv.tool_invocation_id,
+                                tool_name=inv.tool_name,
+                                tool_args=tool_args,
+                            )
                         )
-                    )
+                        if _is_tool_completed(inv.state):
+                            tool_result_parts.append(
+                                _build_result_part(
+                                    tool_call_id=inv.tool_invocation_id,
+                                    tool_name=inv.tool_name,
+                                    output=inv.result,
+                                    is_error=_is_tool_error(inv.state),
+                                )
+                            )
+
+                case (
+                    ui_message.UIToolPart() | ui_message.UIDynamicToolPart()
+                ) as tp:
+                    tool_input = _tool_input_for_args(tp)
+                    tool_args = _normalize_tool_args(tool_input)
+
+                    if tp.provider_executed:
+                        assistant_parts.append(
+                            messages_.BuiltinToolCallPart(
+                                tool_call_id=tp.tool_call_id,
+                                tool_name=tp.tool_name,
+                                tool_args=tool_args,
+                                provider_metadata=tp.call_provider_metadata,
+                            )
+                        )
+                    else:
+                        assistant_parts.append(
+                            messages_.ToolCallPart(
+                                tool_call_id=tp.tool_call_id,
+                                tool_name=tp.tool_name,
+                                tool_args=tool_args,
+                                provider_metadata=tp.call_provider_metadata,
+                            )
+                        )
                     approval_hook = _approval_hook_part(tp)
                     if approval_hook is not None:
                         hook_parts.append(approval_hook)
 
-                    if tp.state in _TOOL_RESULT_STATES:
+                    if tp.provider_executed and _is_tool_completed(tp.state):
+                        assistant_parts.append(
+                            _build_builtin_return_part(
+                                tool_call_id=tp.tool_call_id,
+                                tool_name=tp.tool_name,
+                                output=_tool_result_output(tp),
+                                is_error=_is_tool_error(tp.state),
+                                provider_metadata=(
+                                    tp.result_provider_metadata
+                                    or tp.call_provider_metadata
+                                ),
+                            )
+                        )
+                    elif tp.state in _TOOL_RESULT_STATES:
                         tool_result_parts.append(
                             _build_result_part(
                                 tool_call_id=tp.tool_call_id,
                                 tool_name=tp.tool_name,
-                                output=tp.output,
-                                is_error=False,
+                                output=_tool_result_output(tp),
+                                is_error=_is_tool_error(tp.state),
                             )
                         )
-                    elif tp.state == "output-error":
-                        tool_result_parts.append(
-                            messages_.ToolResultPart(
-                                tool_call_id=tp.tool_call_id,
-                                tool_name=tp.tool_name,
-                                result=_error_result(tp.error_text, tp.output),
-                                is_error=True,
+                        if tp.result_provider_metadata is not None:
+                            tool_result_parts[-1] = tool_result_parts[
+                                -1
+                            ].model_copy(
+                                update={
+                                    "provider_metadata": (
+                                        tp.result_provider_metadata
+                                    )
+                                }
                             )
-                        )
 
                 case ui_message.UIFilePart() as fp:
                     assistant_parts.append(
@@ -467,6 +583,7 @@ def _parse(
                             data=fp.url,
                             media_type=fp.media_type,
                             filename=fp.filename,
+                            provider_metadata=fp.provider_metadata,
                         )
                     )
 
@@ -474,6 +591,9 @@ def _parse(
                     ui_message.UIStepStartPart()
                     | ui_message.UISourceUrlPart()
                     | ui_message.UISourceDocumentPart()
+                    | ui_message.UIReasoningFilePart()
+                    | ui_message.UICustomPart()
+                    | ui_message.UIDataPart()
                 ):
                     pass
 

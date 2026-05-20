@@ -160,6 +160,36 @@ def test_extract_approvals_returns_approved_responses() -> None:
     assert approvals[0].reason == "nope"
 
 
+def test_extract_approvals_handles_dynamic_tool_responses() -> None:
+    approvals = extract_approvals(
+        [
+            _ui(
+                "assistant",
+                {
+                    "type": "dynamic-tool",
+                    "toolName": "web_search",
+                    "toolCallId": "tc1",
+                    "state": "approval-responded",
+                    "input": {"query": "ai"},
+                    "approval": {
+                        "id": "approve_tc1",
+                        "approved": True,
+                        "reason": "ok",
+                        "isAutomatic": True,
+                    },
+                    "providerExecuted": True,
+                },
+            )
+        ]
+    )
+
+    assert len(approvals) == 1
+    assert approvals[0].hook_id == "approve_tc1"
+    assert approvals[0].granted is True
+    assert approvals[0].reason == "ok"
+    assert approvals[0].tool_call_id == "tc1"
+
+
 def test_normalize_ui_messages_heals_stale_tool_state() -> None:
     ui = [
         _ui(
@@ -237,3 +267,78 @@ def test_to_messages_passthrough_keeps_wire_shape() -> None:
     part = tool_msgs[0].tool_results[0]
     assert part.result == {"pong": True}
     assert part.get_model_input() == {"pong": True}
+
+
+def test_to_messages_accepts_metadata_and_ui_only_parts() -> None:
+    ui = [
+        UIMessage.model_validate(
+            {
+                "id": "a1",
+                "role": "assistant",
+                "metadata": {"trace": "t1"},
+                "parts": [
+                    {"type": "custom", "kind": "openai.compaction"},
+                    {
+                        "type": "data-weather",
+                        "id": "weather-1",
+                        "data": {"status": "loading"},
+                    },
+                    {
+                        "type": "source-url",
+                        "sourceId": "src-1",
+                        "url": "https://example.com",
+                    },
+                    {
+                        "type": "reasoning-file",
+                        "mediaType": "image/png",
+                        "url": "data:image/png;base64,AAAA",
+                    },
+                    {
+                        "type": "text",
+                        "text": "visible",
+                        "providerMetadata": {"provider": {"k": "v"}},
+                    },
+                ],
+            }
+        )
+    ]
+
+    messages, approvals = to_messages(ui)
+
+    assert approvals == []
+    assert len(messages) == 1
+    assert messages[0].text == "visible"
+    text = messages[0].parts[0]
+    assert isinstance(text, messages_.TextPart)
+    assert text.provider_metadata == {"provider": {"k": "v"}}
+
+
+def test_to_messages_dynamic_provider_executed_tool_becomes_builtin() -> None:
+    messages, _ = to_messages(
+        [
+            _ui(
+                "assistant",
+                {
+                    "type": "dynamic-tool",
+                    "toolName": "web_search",
+                    "toolCallId": "tc1",
+                    "state": "output-available",
+                    "input": {"query": "ai"},
+                    "output": [{"title": "result"}],
+                    "providerExecuted": True,
+                    "callProviderMetadata": {"provider": {"call": 1}},
+                    "resultProviderMetadata": {"provider": {"result": 1}},
+                },
+            )
+        ]
+    )
+
+    assert len(messages) == 1
+    assert messages[0].role == "assistant"
+    [call] = messages[0].builtin_tool_calls
+    [result] = messages[0].builtin_tool_returns
+    assert call.tool_name == "web_search"
+    assert call.tool_args == '{"query": "ai"}'
+    assert call.provider_metadata == {"provider": {"call": 1}}
+    assert result.result == [{"title": "result"}]
+    assert result.provider_metadata == {"provider": {"result": 1}}

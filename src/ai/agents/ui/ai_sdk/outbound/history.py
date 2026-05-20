@@ -9,6 +9,9 @@ from .. import _parts, ui_message
 if TYPE_CHECKING:
     from .....types import messages as messages_
 
+_ADAPTER_METADATA_KEY = "aiPython"
+_SOURCE_MESSAGES_KEY = "sourceMessages"
+
 
 def _turn_id_from_message_id(message_id: str) -> str | None:
     for marker in (":assistant:", ":tool:", ":internal:"):
@@ -33,6 +36,27 @@ def _belongs_to_bubble(
     return key is None or key == bubble_id
 
 
+def _source_message_entry(message: messages_.Message) -> dict[str, object]:
+    return {
+        "id": message.id,
+        "role": message.role,
+        "turnId": message.turn_id,
+        "partIds": [part.id for part in message.parts],
+    }
+
+
+def _adapter_metadata(
+    source_messages: list[messages_.Message],
+) -> dict[str, object]:
+    return {
+        _ADAPTER_METADATA_KEY: {
+            _SOURCE_MESSAGES_KEY: [
+                _source_message_entry(message) for message in source_messages
+            ]
+        }
+    }
+
+
 def to_ui_messages(
     messages: list[messages_.Message],
 ) -> list[ui_message.UIMessage]:
@@ -54,6 +78,7 @@ def to_ui_messages(
                 ui_message.UIMessage(
                     id=msg.id,
                     role=msg.role,
+                    metadata=_adapter_metadata([msg]),
                     parts=_parts.to_ui_parts(msg.parts),
                 )
             )
@@ -62,6 +87,7 @@ def to_ui_messages(
 
         if msg.role == "assistant":
             ui_parts: list[ui_message.UIMessagePart] = []
+            source_messages: list[messages_.Message] = []
             bubble_id = _assistant_bubble_id(msg)
 
             while i < len(messages) and messages[i].role in (
@@ -72,6 +98,7 @@ def to_ui_messages(
                 current = messages[i]
                 if not _belongs_to_bubble(current, bubble_id):
                     break
+                source_messages.append(current)
                 if current.role == "assistant":
                     ui_parts.extend(_parts.to_ui_parts(current.parts))
                     ui_parts = _parts.dedupe_tool_parts(ui_parts)
@@ -86,6 +113,7 @@ def to_ui_messages(
                 ui_message.UIMessage(
                     id=bubble_id,
                     role="assistant",
+                    metadata=_adapter_metadata(source_messages),
                     parts=ui_parts,
                 )
             )

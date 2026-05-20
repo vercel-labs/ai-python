@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from .....types import events as events_
+from .....types import media
 from .....types import messages as messages_
 from ....agent import MessageBundle
 from .. import _approvals, protocol
@@ -21,6 +23,26 @@ def _tool_error_text(part: messages_.ToolResultPart) -> str:
             if isinstance(value, str) and value:
                 return value
     return "Tool execution failed"
+
+
+def _normalize_tool_input(raw: str) -> Any:
+    try:
+        return json.loads(raw)
+    except Exception:
+        return raw
+
+
+def _metadata_bool(metadata: dict[str, Any], key: str) -> bool | None:
+    value = metadata.get(key)
+    return value if isinstance(value, bool) else None
+
+
+def _metadata_dict(
+    metadata: dict[str, Any],
+    key: str,
+) -> dict[str, Any] | None:
+    value = metadata.get(key)
+    return value if isinstance(value, dict) else None
 
 
 def _to_wire_output(snapshot: Any) -> Any:
@@ -136,37 +158,79 @@ class _StreamState:
         match event:
             case events_.TextStart(block_id=pid):
                 self.open_text_ids.add(pid)
-                out.append(protocol.TextStartPart(id=pid))
+                out.append(
+                    protocol.TextStartPart(
+                        id=pid,
+                        provider_metadata=event.provider_metadata,
+                    )
+                )
 
             case events_.TextDelta(block_id=pid, chunk=chunk):
                 if pid not in self.open_text_ids:
                     self.open_text_ids.add(pid)
-                    out.append(protocol.TextStartPart(id=pid))
+                    out.append(
+                        protocol.TextStartPart(
+                            id=pid,
+                            provider_metadata=event.provider_metadata,
+                        )
+                    )
                 self.text_delta_ids.add(pid)
-                out.append(protocol.TextDeltaPart(id=pid, delta=chunk))
+                out.append(
+                    protocol.TextDeltaPart(
+                        id=pid,
+                        delta=chunk,
+                        provider_metadata=event.provider_metadata,
+                    )
+                )
 
             case events_.TextEnd(block_id=pid):
                 if pid in self.open_text_ids:
                     self.open_text_ids.discard(pid)
                     self.completed_text_ids.add(pid)
-                    out.append(protocol.TextEndPart(id=pid))
+                    out.append(
+                        protocol.TextEndPart(
+                            id=pid,
+                            provider_metadata=event.provider_metadata,
+                        )
+                    )
 
             case events_.ReasoningStart(block_id=pid):
                 self.open_reasoning_ids.add(pid)
-                out.append(protocol.ReasoningStartPart(id=pid))
+                out.append(
+                    protocol.ReasoningStartPart(
+                        id=pid,
+                        provider_metadata=event.provider_metadata,
+                    )
+                )
 
             case events_.ReasoningDelta(block_id=pid, chunk=chunk):
                 if pid not in self.open_reasoning_ids:
                     self.open_reasoning_ids.add(pid)
-                    out.append(protocol.ReasoningStartPart(id=pid))
+                    out.append(
+                        protocol.ReasoningStartPart(
+                            id=pid,
+                            provider_metadata=event.provider_metadata,
+                        )
+                    )
                 self.reasoning_delta_ids.add(pid)
-                out.append(protocol.ReasoningDeltaPart(id=pid, delta=chunk))
+                out.append(
+                    protocol.ReasoningDeltaPart(
+                        id=pid,
+                        delta=chunk,
+                        provider_metadata=event.provider_metadata,
+                    )
+                )
 
             case events_.ReasoningEnd(block_id=pid):
                 if pid in self.open_reasoning_ids:
                     self.open_reasoning_ids.discard(pid)
                     self.completed_reasoning_ids.add(pid)
-                    out.append(protocol.ReasoningEndPart(id=pid))
+                    out.append(
+                        protocol.ReasoningEndPart(
+                            id=pid,
+                            provider_metadata=event.provider_metadata,
+                        )
+                    )
 
             case events_.ToolStart(tool_call_id=tcid, tool_name=name):
                 self.tool_names[tcid] = name
@@ -177,6 +241,7 @@ class _StreamState:
                     protocol.ToolInputStartPart(
                         tool_call_id=tcid,
                         tool_name=name,
+                        provider_metadata=event.provider_metadata,
                     )
                 )
 
@@ -187,6 +252,7 @@ class _StreamState:
                         protocol.ToolInputStartPart(
                             tool_call_id=tcid,
                             tool_name=self.tool_names.get(tcid, ""),
+                            provider_metadata=event.provider_metadata,
                         )
                     )
                 out.append(
@@ -198,6 +264,94 @@ class _StreamState:
 
             case events_.ToolEnd():
                 pass
+
+            case events_.BuiltinToolStart(tool_call_id=tcid, tool_name=name):
+                self.tool_names[tcid] = name
+                if tcid in self.started_tool_inputs:
+                    return out
+                self.started_tool_inputs.add(tcid)
+                out.append(
+                    protocol.ToolInputStartPart(
+                        tool_call_id=tcid,
+                        tool_name=name,
+                        provider_executed=True,
+                        provider_metadata=event.provider_metadata,
+                        dynamic=True,
+                    )
+                )
+
+            case events_.BuiltinToolDelta(tool_call_id=tcid, chunk=chunk):
+                if tcid not in self.started_tool_inputs:
+                    self.started_tool_inputs.add(tcid)
+                    out.append(
+                        protocol.ToolInputStartPart(
+                            tool_call_id=tcid,
+                            tool_name=self.tool_names.get(tcid, ""),
+                            provider_executed=True,
+                            provider_metadata=event.provider_metadata,
+                            dynamic=True,
+                        )
+                    )
+                out.append(
+                    protocol.ToolInputDeltaPart(
+                        tool_call_id=tcid,
+                        input_text_delta=chunk,
+                    )
+                )
+
+            case events_.BuiltinToolEnd(tool_call_id=tcid, tool_call=tc):
+                if tcid not in self.input_available_emitted:
+                    self.input_available_emitted.add(tcid)
+                    out.append(
+                        protocol.ToolInputAvailablePart(
+                            tool_call_id=tcid,
+                            tool_name=tc.tool_name,
+                            input=_normalize_tool_input(tc.tool_args),
+                            provider_executed=True,
+                            provider_metadata=tc.provider_metadata
+                            or event.provider_metadata,
+                            dynamic=True,
+                        )
+                    )
+
+            case events_.BuiltinToolResult(tool_call_id=tcid, result=result):
+                if tcid in self.emitted_tool_results:
+                    return out
+                self.emitted_tool_results.add(tcid)
+                if result.is_error:
+                    out.append(
+                        protocol.ToolOutputErrorPart(
+                            tool_call_id=tcid,
+                            error_text=str(result.result),
+                            provider_executed=True,
+                            provider_metadata=result.provider_metadata
+                            or event.provider_metadata,
+                            dynamic=True,
+                        )
+                    )
+                else:
+                    out.append(
+                        protocol.ToolOutputAvailablePart(
+                            tool_call_id=tcid,
+                            output=result.result,
+                            provider_executed=True,
+                            provider_metadata=result.provider_metadata
+                            or event.provider_metadata,
+                            dynamic=True,
+                        )
+                    )
+
+            case events_.FileEvent(
+                media_type=media_type,
+                data=data,
+            ):
+                out.append(
+                    protocol.FilePart(
+                        url=media.data_to_data_url(data, media_type),
+                        media_type=media_type,
+                        provider_metadata=event.provider_metadata,
+                    )
+                )
 
         return out
 
@@ -225,13 +379,15 @@ class _StreamState:
                         protocol.ToolInputStartPart(
                             tool_call_id=part.tool_call_id,
                             tool_name=part.tool_name,
+                            provider_metadata=part.provider_metadata,
                         )
                     )
                 out.append(
                     protocol.ToolInputAvailablePart(
                         tool_call_id=part.tool_call_id,
                         tool_name=part.tool_name,
-                        input=part.tool_args,
+                        input=_normalize_tool_input(part.tool_args),
+                        provider_metadata=part.provider_metadata,
                     )
                 )
 
@@ -249,6 +405,7 @@ class _StreamState:
                     protocol.ToolOutputErrorPart(
                         tool_call_id=part.tool_call_id,
                         error_text=_tool_error_text(part),
+                        provider_metadata=part.provider_metadata,
                     )
                 )
             else:
@@ -263,6 +420,7 @@ class _StreamState:
                     protocol.ToolOutputAvailablePart(
                         tool_call_id=part.tool_call_id,
                         output=wire_output,
+                        provider_metadata=part.provider_metadata,
                     )
                 )
 
@@ -334,10 +492,26 @@ class _StreamState:
                 protocol.ToolApprovalRequestPart(
                     approval_id=hook_part.hook_id,
                     tool_call_id=tc_id,
+                    is_automatic=_metadata_bool(
+                        hook_part.metadata, "isAutomatic"
+                    ),
                 )
             )
         elif hook_part.status == "resolved":
             resolution: dict[str, Any] = hook_part.resolution or {}
+            out.append(
+                protocol.ToolApprovalResponsePart(
+                    approval_id=hook_part.hook_id,
+                    approved=bool(resolution.get("granted")),
+                    reason=resolution.get("reason"),
+                    provider_executed=_metadata_bool(
+                        hook_part.metadata, "providerExecuted"
+                    ),
+                    provider_metadata=_metadata_dict(
+                        hook_part.metadata, "callProviderMetadata"
+                    ),
+                )
+            )
             if not resolution.get("granted"):
                 out.append(protocol.ToolOutputDeniedPart(tool_call_id=tc_id))
         elif hook_part.status == "cancelled":

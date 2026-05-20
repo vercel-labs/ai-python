@@ -259,6 +259,112 @@ async def test_partial_tool_result_without_factory_is_skipped() -> None:
     assert not any(isinstance(p, protocol.ToolOutputAvailablePart) for p in out)
 
 
+async def test_builtin_tool_stream_marks_provider_executed_dynamic() -> None:
+    out = await _collect(
+        [
+            events_.BuiltinToolStart(
+                tool_call_id="tc1",
+                tool_name="web_search",
+                provider_metadata={"provider": {"start": True}},
+            ),
+            events_.BuiltinToolDelta(tool_call_id="tc1", chunk='{"q":"ai"}'),
+            events_.BuiltinToolEnd(
+                tool_call_id="tc1",
+                tool_call=messages_.BuiltinToolCallPart(
+                    tool_call_id="tc1",
+                    tool_name="web_search",
+                    tool_args='{"q":"ai"}',
+                    provider_metadata={"provider": {"call": True}},
+                ),
+            ),
+            events_.BuiltinToolResult(
+                tool_call_id="tc1",
+                result=messages_.BuiltinToolReturnPart(
+                    tool_call_id="tc1",
+                    tool_name="web_search",
+                    result={"hits": 1},
+                    provider_metadata={"provider": {"result": True}},
+                ),
+            ),
+        ]
+    )
+
+    start = next(p for p in out if isinstance(p, protocol.ToolInputStartPart))
+    assert start.provider_executed is True
+    assert start.dynamic is True
+    assert start.provider_metadata == {"provider": {"start": True}}
+
+    available = next(
+        p for p in out if isinstance(p, protocol.ToolInputAvailablePart)
+    )
+    assert available.provider_executed is True
+    assert available.dynamic is True
+    assert available.input == {"q": "ai"}
+    assert available.provider_metadata == {"provider": {"call": True}}
+
+    result = next(
+        p for p in out if isinstance(p, protocol.ToolOutputAvailablePart)
+    )
+    assert result.provider_executed is True
+    assert result.dynamic is True
+    assert result.output == {"hits": 1}
+    assert result.provider_metadata == {"provider": {"result": True}}
+
+
+async def test_file_event_emits_file_part_with_data_url_and_metadata() -> None:
+    out = await _collect(
+        [
+            events_.FileEvent(
+                media_type="image/png",
+                data=b"abc",
+                provider_metadata={"provider": {"file": True}},
+            )
+        ]
+    )
+
+    file_part = next(p for p in out if isinstance(p, protocol.FilePart))
+    assert file_part.url == "data:image/png;base64,YWJj"
+    assert file_part.media_type == "image/png"
+    assert file_part.provider_metadata == {"provider": {"file": True}}
+
+
+async def test_resolved_approval_hook_emits_response_part() -> None:
+    hook = messages_.HookPart(
+        hook_id="approve_tc1",
+        hook_type="ToolApproval",
+        status="resolved",
+        metadata={
+            "providerExecuted": True,
+            "callProviderMetadata": {"provider": {"approval": True}},
+        },
+        resolution={"granted": False, "reason": "not allowed"},
+    )
+
+    out = await _collect(
+        [
+            agent_events_.HookEvent(
+                message=messages_.Message(
+                    id="turn-1:internal:0",
+                    turn_id="turn-1",
+                    role="internal",
+                    parts=[hook],
+                ),
+                hook=hook,
+            )
+        ]
+    )
+
+    response = next(
+        p for p in out if isinstance(p, protocol.ToolApprovalResponsePart)
+    )
+    assert response.approval_id == "approve_tc1"
+    assert response.approved is False
+    assert response.reason == "not allowed"
+    assert response.provider_executed is True
+    assert response.provider_metadata == {"provider": {"approval": True}}
+    assert any(isinstance(p, protocol.ToolOutputDeniedPart) for p in out)
+
+
 # NOTE: agent-change boundary detection used to be driven by
 # Message.source_label.  That field has been removed; agent-change
 # routing in the AI SDK adapter now needs to come from
