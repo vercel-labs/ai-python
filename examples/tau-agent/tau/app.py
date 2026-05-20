@@ -339,28 +339,29 @@ class ApprovalTracker:
                 return True
         return None
 
-    def approve_command(self, hook: ai.messages.HookPart[Any]) -> None:
-        """Remember to always approve this exact bash command."""
-        kwargs = hook.metadata.get("kwargs", {}) or {}
-        cmd = kwargs.get("command", "")
-        if cmd:
-            self._approved_commands.add(cmd)
+    def remember(self, hook: ai.messages.HookPart[Any], decision: str) -> None:
+        """Update approval state based on an operator decision.
 
-    def approve_directory(self, hook: ai.messages.HookPart[Any]) -> None:
-        """Allow all future operations in this path's directory."""
-        tool = hook.metadata.get("tool", "")
-        path = _tool_path(hook)
-        if path is None:
-            return
-        directory = path if path.is_dir() else path.parent
-        if tool in _READ_TOOLS:
-            self._approved_read_dirs.add(directory)
-        elif tool in _WRITE_TOOLS:
-            self._approved_write_dirs.add(directory)
-
-    def approve_all(self) -> None:
-        """Auto-approve every future tool call this session."""
-        self._approve_all = True
+        Only ``'always_this'``, ``'allow_dir'``, and ``'always_all'``
+        have lasting effects; ``'yes'`` and ``'no'`` are one-shot.
+        """
+        if decision == "always_this":
+            kwargs = hook.metadata.get("kwargs", {}) or {}
+            cmd = kwargs.get("command", "")
+            if cmd:
+                self._approved_commands.add(cmd)
+        elif decision == "allow_dir":
+            tool = hook.metadata.get("tool", "")
+            path = _tool_path(hook)
+            if path is None:
+                return
+            directory = path if path.is_dir() else path.parent
+            if tool in _READ_TOOLS:
+                self._approved_read_dirs.add(directory)
+            elif tool in _WRITE_TOOLS:
+                self._approved_write_dirs.add(directory)
+        elif decision == "always_all":
+            self._approve_all = True
 
 
 # ---------------------------------------------------------------------------
@@ -847,14 +848,8 @@ class TauApp(textual.app.App[None]):
         hook = self._active_hook
         if hook is None or hook.hook_id != event.hook_id:
             return
-        granted = event.decision != "no"
-        if event.decision == "always_this":
-            self._approval.approve_command(hook)
-        elif event.decision == "allow_dir":
-            self._approval.approve_directory(hook)
-        elif event.decision == "always_all":
-            self._approval.approve_all()
-        self._resolve_hook(hook, granted=granted)
+        self._approval.remember(hook, event.decision)
+        self._resolve_hook(hook, granted=event.decision != "no")
         self._dismiss_active_prompt()
         self._activate_next_hook()
 
