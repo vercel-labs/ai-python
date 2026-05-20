@@ -6,11 +6,12 @@ wire protocol without editing it.
 
 Usage (from repo root):
 
-    uv run examples/run-with-patched-model.py <model> <file.py>
-    uv run examples/run-with-patched-model.py --protocol=responses <file.py>
+    uv run examples/.test_scripts/run-with-patched-model.py <model> <file.py>
+    uv run examples/.test_scripts/run-with-patched-model.py \\
+        --protocol=responses <file.py>
 
 Example:
-    uv run examples/run-with-patched-model.py \\
+    uv run examples/.test_scripts/run-with-patched-model.py \\
         gateway:openai/gpt-5.4-mini \\
         examples/samples/stream.py
 

@@ -25,4 +25,4 @@ echo "=== pytest ==="
 uv run pytest
 
 echo "=== check-examples ==="
-uv run examples/check-examples.py
+uv run examples/.test_scripts/check-examples.py
