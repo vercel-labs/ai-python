@@ -665,10 +665,9 @@ class TauApp(textual.app.App[None]):
             elif msg.role == "tool":
                 for part in msg.parts:
                     if hasattr(part, "result"):
-                        preview = _format_tool_result(
+                        self.show_tool_result(
                             part.result, getattr(part, "is_error", False)
                         )
-                        self.transcript.add_bubble("tool", preview)
         self.show_system(
             f"resumed session {self.session.session_id} "
             f"({len(self.session.messages) - 1} messages) — model: {MODEL_ID}",
