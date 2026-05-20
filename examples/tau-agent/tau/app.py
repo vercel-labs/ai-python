@@ -293,6 +293,15 @@ class Hook:
         )
 
 
+@dataclasses.dataclass
+class PromptOption:
+    """One option in an approval prompt."""
+
+    key: str  # keyboard shortcut
+    decision: str  # value passed to ApprovalTracker.resolve
+    label: str  # display text
+
+
 # ---------------------------------------------------------------------------
 # Approval tracking
 # ---------------------------------------------------------------------------
@@ -349,17 +358,33 @@ class ApprovalTracker:
         )
         return any(path == d or d in path.parents for d in dirs)
 
-    def check(self, hook: Hook) -> bool | None:
-        """Return True to auto-approve, False to auto-deny, None to prompt."""
+    def check(self, hook: Hook) -> bool | list[PromptOption]:
+        """Auto-resolve or return prompt options.
+
+        Returns ``True``/``False`` to auto-approve/deny, or a list of
+        :class:`PromptOption` when the operator needs to decide.
+        """
         if self._approve_all:
             return True
         if hook.tool in _FILE_TOOLS:
-            return True if self._path_ok(hook.tool, _tool_path(hook)) else None
+            if self._path_ok(hook.tool, _tool_path(hook)):
+                return True
+            return [
+                PromptOption("y", "yes", "yes"),
+                PromptOption("n", "no", "no"),
+                PromptOption("d", "allow_dir", "allow dir"),
+                PromptOption("a", "always_all", "always all"),
+            ]
         if hook.tool == "bash":
             cmd = hook.kwargs.get("command", "")
             if cmd in self._approved_commands:
                 return True
-        return None
+        return [
+            PromptOption("y", "yes", "yes"),
+            PromptOption("n", "no", "no"),
+            PromptOption("!", "always_this", "always this"),
+            PromptOption("a", "always_all", "always all"),
+        ]
 
     def resolve(self, hook: Hook, decision: str) -> bool:
         """Resolve a hook: update approval state, signal the library.
@@ -556,29 +581,18 @@ class HookPrompt(textual.widgets.Static):
     }
     """
 
-    BINDINGS = [
-        textual.binding.Binding("y", "decide('yes')", "approve", show=True),
-        textual.binding.Binding("n", "decide('no')", "deny", show=True),
-        textual.binding.Binding(
-            "exclamation_mark", "decide('always_this')", "always this", show=True
-        ),
-        textual.binding.Binding("d", "decide('allow_dir')", "allow dir", show=True),
-        textual.binding.Binding("a", "decide('always_all')", "always all", show=True),
-    ]
-
     can_focus = True
 
     class Decided(textual.message.Message):
         def __init__(self, hook_id: str, decision: str) -> None:
             super().__init__()
             self.hook_id = hook_id
-            # 'yes' | 'no' | 'always_this' | 'allow_dir' | 'always_all'
             self.decision = decision
 
-    def __init__(self, hook: Hook) -> None:
+    def __init__(self, hook: Hook, options: list[PromptOption]) -> None:
         super().__init__()
         self._hook_id = hook.hook_id
-        is_file_tool = hook.tool in _FILE_TOOLS
+        self._options = {opt.key: opt.decision for opt in options}
 
         body = rich.text.Text()
         body.append("approve ", style="bold yellow")
@@ -586,22 +600,24 @@ class HookPrompt(textual.widgets.Static):
         body.append("?\n")
         body.append("  " + _format_kwargs(hook.kwargs), style="dim")
         body.append("\n  ")
-        body.append("[y]", style="bold green")
-        body.append(" yes  ")
-        body.append("[n]", style="bold red")
-        body.append(" no  ")
-        if is_file_tool:
-            body.append("[d]", style="bold cyan")
-            body.append(" allow dir  ")
-        else:
-            body.append("[!]", style="bold cyan")
-            body.append(" always this  ")
-        body.append("[a]", style="bold cyan")
-        body.append(" always all")
+        for i, opt in enumerate(options):
+            style = (
+                "bold green" if opt.decision == "yes"
+                else "bold red" if opt.decision == "no"
+                else "bold cyan"
+            )
+            if i > 0:
+                body.append("  ")
+            body.append(f"[{opt.key}]", style=style)
+            body.append(f" {opt.label}")
         self.update(body)
 
-    def action_decide(self, decision: str) -> None:
-        self.post_message(self.Decided(self._hook_id, decision))
+    async def _on_key(self, event: textual.events.Key) -> None:
+        decision = self._options.get(event.character or "")
+        if decision is not None:
+            event.stop()
+            event.prevent_default()
+            self.post_message(self.Decided(self._hook_id, decision))
 
 
 def _format_kwargs(kwargs: dict[str, Any]) -> str:
@@ -670,7 +686,7 @@ class TauApp(textual.app.App[None]):
         # Approval hooks waiting for operator y/n.  FIFO queue: only the
         # head hook is "active" — ``_active_hook`` mirrors it for fast
         # access from the composer.
-        self._hook_queue: list[Hook] = []
+        self._hook_queue: list[tuple[Hook, list[PromptOption]]] = []
         self._active_hook: Hook | None = None
         self._approval = ApprovalTracker()
         self._turn_worker: textual.worker.Worker[None] | None = None
@@ -831,17 +847,17 @@ class TauApp(textual.app.App[None]):
 
     def on_hook_event(self, hook: Hook) -> None:
         if hook.status == "pending":
-            # Check if the tracker can auto-resolve this hook.
-            auto = self._approval.check(hook)
-            if auto is not None:
-                self._resolve_hook(hook, "yes" if auto else "no")
+            result = self._approval.check(hook)
+            if isinstance(result, bool):
+                self._resolve_hook(hook, "yes" if result else "no")
                 return
-            self._hook_queue.append(hook)
+            self._hook_queue.append((hook, result))
             self._activate_next_hook()
         elif hook.status in ("resolved", "cancelled"):
             # Drop from queue if it was sitting there waiting.
             self._hook_queue = [
-                h for h in self._hook_queue if h.hook_id != hook.hook_id
+                (h, opts) for h, opts in self._hook_queue
+                if h.hook_id != hook.hook_id
             ]
             if self._active_hook and self._active_hook.hook_id == hook.hook_id:
                 self._dismiss_active_prompt()
@@ -850,9 +866,9 @@ class TauApp(textual.app.App[None]):
     def _activate_next_hook(self) -> None:
         if self._active_hook is not None or not self._hook_queue:
             return
-        hook = self._hook_queue.pop(0)
+        hook, options = self._hook_queue.pop(0)
         self._active_hook = hook
-        prompt = HookPrompt(hook)
+        prompt = HookPrompt(hook, options)
         dock = self.query_one("#composer-dock", textual.containers.Container)
         composer = self.query_one("#composer", Composer)
         dock.mount(prompt, before=composer)
