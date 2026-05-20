@@ -16,13 +16,32 @@ host (or the approval flow) is what keeps things in line.
 from __future__ import annotations
 
 import asyncio
+import base64
 import dataclasses
 import pathlib
 import re
-from typing import Literal
+from typing import Any, Literal
 
 import ai
 import pydantic
+
+# Image formats we support (subset that models typically accept).
+_IMAGE_MIME_TYPES = frozenset({
+    "image/jpeg",
+    "image/png",
+    "image/gif",
+    "image/webp",
+})
+
+
+def _detect_image_mime(path: pathlib.Path) -> str | None:
+    """Read magic bytes and return a supported image MIME type, or None."""
+    try:
+        header = path.read_bytes()[:32]
+    except OSError:
+        return None
+    mime = ai.messages.media.detect_image_media_type(header)
+    return mime if mime in _IMAGE_MIME_TYPES else None
 
 # ---------------------------------------------------------------------------
 # Truncation — match pi's defaults
@@ -200,18 +219,32 @@ async def read(
     path: str,
     offset: int | None = None,
     limit: int | None = None,
-) -> str:
+) -> Any:
     """Read the contents of a file.
 
     Output is truncated to 2000 lines or 50KB (whichever is hit first).
     Use offset/limit for large files; when truncated, the result ends
     with a "Use offset=N to continue" hint.  offset is 1-indexed.
+
+    Supports image files (jpg, png, gif, webp) which are returned as
+    base64-encoded image attachments.
     """
     p = pathlib.Path(path).expanduser()
     if not p.exists():
         raise FileNotFoundError(f"No such file: {path}")
     if not p.is_file():
         raise IsADirectoryError(f"Not a file: {path}")
+
+    # Image files: return base64 data for the model to see.
+    mime = _detect_image_mime(p)
+    if mime is not None:
+        data = p.read_bytes()
+        b64 = base64.b64encode(data).decode("ascii")
+        size_kb = len(data) / 1024
+        return [
+            {"type": "text", "text": f"Read image file [{mime}, {size_kb:.1f}KB]"},
+            {"type": "image", "data": b64, "mimeType": mime},
+        ]
 
     text = p.read_text(encoding="utf-8", errors="replace")
     all_lines = text.split("\n")
