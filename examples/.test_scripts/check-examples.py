@@ -2,7 +2,7 @@
 """Typecheck all example directories with mypy.
 
 Usage (from repo root):
-    uv run examples/check-examples.py
+    uv run examples/.test_scripts/check-examples.py
 """
 
 import os
@@ -10,7 +10,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parent.parent
+REPO = Path(__file__).resolve().parent.parent.parent
 MYPY_VERSION = "mypy>=1.11"
 
 # Each entry: (display name, directory to check, extra --with deps)

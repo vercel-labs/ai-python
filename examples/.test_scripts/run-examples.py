@@ -2,17 +2,17 @@
 """Run examples and report results.
 
 Usage (from repo root):
-    uv run examples/run-examples.py             # text-only samples
-    uv run examples/run-examples.py --image     # also run image samples
-    uv run examples/run-examples.py --video     # also run video samples
-    uv run examples/run-examples.py --e2e       # also run e2e test scripts
-    uv run examples/run-examples.py --all       # run everything
-    uv run examples/run-examples.py --parallel  # run in parallel
-    uv run examples/run-examples.py stream.py tools_schema.py
+    uv run examples/.test_scripts/run-examples.py  # text-only samples
+    uv run examples/.test_scripts/run-examples.py --image  # also image samples
+    uv run examples/.test_scripts/run-examples.py --video  # also video samples
+    uv run examples/.test_scripts/run-examples.py --e2e  # also e2e test scripts
+    uv run examples/.test_scripts/run-examples.py --all  # everything
+    uv run examples/.test_scripts/run-examples.py --parallel  # in parallel
+    uv run examples/.test_scripts/run-examples.py stream.py tools_schema.py
         # run selected example files
-    uv run examples/run-examples.py --model gateway:openai/gpt-5.4-mini
+    uv run examples/.test_scripts/run-examples.py --model MODEL
         # patch ai.get_model() to use the given model for every sample
-    uv run examples/run-examples.py --protocol=responses
+    uv run examples/.test_scripts/run-examples.py --protocol=responses
         # patch model/provider helpers and ai.stream()/ai.generate()
 """
 
@@ -24,9 +24,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parent.parent
+REPO = Path(__file__).resolve().parent.parent.parent
 SAMPLES = REPO / "examples" / "samples"
-PATCH_SCRIPT = REPO / "examples" / "run-with-patched-model.py"
+PATCH_SCRIPT = REPO / "examples" / ".test_scripts" / "run-with-patched-model.py"
 
 
 @dataclasses.dataclass

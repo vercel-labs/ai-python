@@ -25,4 +25,4 @@ jobs:
 
       - run: uv run pytest
 
-      - run: uv run examples/check-examples.py
+      - run: uv run examples/.test_scripts/check-examples.py
