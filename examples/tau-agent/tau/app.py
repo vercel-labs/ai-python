@@ -162,10 +162,8 @@ def _replay_session(app: TauApp) -> None:
             app.transcript.add_bubble("assistant", msg.text)
         elif msg.role == "tool":
             for part in msg.parts:
-                if hasattr(part, "result"):
-                    app.show_tool_result(
-                        part.result, getattr(part, "is_error", False)
-                    )
+                if isinstance(part, ai.messages.ToolResultPart):
+                    app.show_tool_result(part.result, part.is_error)
     app.show_system(
         f"resumed session {app.session.session_id} "
         f"({len(app.session.messages) - 1} messages) — model: {MODEL_ID}",
