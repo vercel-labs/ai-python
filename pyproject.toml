@@ -73,6 +73,7 @@ examples = [
 
 [tool.uv]
 default-groups = ["dev", "examples"]
+exclude-newer = "2 days"
 
 [tool.mypy]
 python_version = "3.12"

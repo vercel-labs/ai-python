@@ -10,5 +10,8 @@ dependencies = [
     "websockets>=15.0",
 ]
 
+[tool.uv]
+exclude-newer = "2 days"
+
 [tool.uv.sources]
 ai = { path = "../..", editable = true }
