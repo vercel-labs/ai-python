@@ -523,31 +523,6 @@ class _StreamState:
         return events
 
 
-async def to_stream(
-    events: AsyncIterable[events_.AgentEvent],
-) -> AsyncGenerator[ui_events.UIMessageStreamEvent]:
-    """Walk internal events once, emitting AI SDK UI stream events."""
-    state = _StreamState()
-
-    async for event in events:
-        match event:
-            case events_.ToolCallResult():
-                for ui_event in state.on_tool_result(event):
-                    yield ui_event
-            case events_.PartialToolCallResult():
-                for ui_event in state.on_partial_tool_result(event):
-                    yield ui_event
-            case events_.HookEvent():
-                for ui_event in state.on_hook(event):
-                    yield ui_event
-            case _:
-                for ui_event in state.on_event(event):
-                    yield ui_event
-
-    for ui_event in state.finish():
-        yield ui_event
-
-
 def _to_camel_case(snake_str: str) -> str:
     components = snake_str.split("_")
     return components[0] + "".join(x.title() for x in components[1:])
@@ -579,6 +554,31 @@ def format_sse(event: ui_events.UIMessageStreamEvent) -> str:
 def format_done_sse() -> str:
     """Format the AI SDK UI stream termination marker."""
     return "data: [DONE]\n\n"
+
+
+async def to_stream(
+    events: AsyncIterable[events_.AgentEvent],
+) -> AsyncGenerator[ui_events.UIMessageStreamEvent]:
+    """Walk internal events once, emitting AI SDK UI stream events."""
+    state = _StreamState()
+
+    async for event in events:
+        match event:
+            case events_.ToolCallResult():
+                for ui_event in state.on_tool_result(event):
+                    yield ui_event
+            case events_.PartialToolCallResult():
+                for ui_event in state.on_partial_tool_result(event):
+                    yield ui_event
+            case events_.HookEvent():
+                for ui_event in state.on_hook(event):
+                    yield ui_event
+            case _:
+                for ui_event in state.on_event(event):
+                    yield ui_event
+
+    for ui_event in state.finish():
+        yield ui_event
 
 
 async def to_sse(

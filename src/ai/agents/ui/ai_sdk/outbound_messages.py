@@ -22,6 +22,209 @@ _TOOL_STATE_RANK: dict[ui_messages.UIToolInvocationState, int] = {
 }
 
 
+def _merge_tool_part(
+    existing: UIToolLike,
+    candidate: UIToolLike,
+) -> UIToolLike:
+    """Merge duplicate UI tool parts, keeping the first display position."""
+    existing_rank = _TOOL_STATE_RANK.get(existing.state, 0)
+    candidate_rank = _TOOL_STATE_RANK.get(candidate.state, 0)
+    updates: dict[str, Any] = {}
+
+    if candidate_rank >= existing_rank:
+        updates["state"] = candidate.state
+        if candidate.state == "output-denied":
+            updates["output"] = None
+
+    if existing.input is None and candidate.input is not None:
+        updates["input"] = candidate.input
+    if candidate.output is not None:
+        updates["output"] = candidate.output
+    if candidate.raw_input is not None:
+        updates["raw_input"] = candidate.raw_input
+    if candidate.error_text is not None:
+        updates["error_text"] = candidate.error_text
+    if candidate.approval is not None:
+        updates["approval"] = candidate.approval
+    if candidate.provider_executed is not None:
+        updates["provider_executed"] = candidate.provider_executed
+    if candidate.call_provider_metadata is not None:
+        updates["call_provider_metadata"] = candidate.call_provider_metadata
+    if candidate.result_provider_metadata is not None:
+        updates["result_provider_metadata"] = candidate.result_provider_metadata
+    if candidate.tool_metadata is not None:
+        updates["tool_metadata"] = candidate.tool_metadata
+    if candidate.preliminary is not None:
+        updates["preliminary"] = candidate.preliminary
+    if candidate.title is not None:
+        updates["title"] = candidate.title
+
+    return existing.model_copy(update=updates) if updates else existing
+
+
+def _tool_part_index_by_call_id(
+    ui_parts: list[ui_messages.UIMessagePart],
+) -> dict[str, int]:
+    return {
+        ui_part.tool_call_id: idx
+        for idx, ui_part in enumerate(ui_parts)
+        if isinstance(
+            ui_part, ui_messages.UIToolPart | ui_messages.UIDynamicToolPart
+        )
+    }
+
+
+def dedupe_tool_parts(
+    ui_parts: list[ui_messages.UIMessagePart],
+) -> list[ui_messages.UIMessagePart]:
+    """Collapse duplicate UI tool parts by tool_call_id."""
+    result: list[ui_messages.UIMessagePart] = []
+    tool_index: dict[str, int] = {}
+
+    for part in ui_parts:
+        if not isinstance(
+            part, ui_messages.UIToolPart | ui_messages.UIDynamicToolPart
+        ):
+            result.append(part)
+            continue
+
+        idx = tool_index.get(part.tool_call_id)
+        if idx is None:
+            tool_index[part.tool_call_id] = len(result)
+            result.append(part)
+            continue
+
+        existing = result[idx]
+        if isinstance(
+            existing, ui_messages.UIToolPart | ui_messages.UIDynamicToolPart
+        ):
+            result[idx] = _merge_tool_part(existing, part)
+
+    return result
+
+
+def merge_tool_results(
+    ui_parts: list[ui_messages.UIMessagePart],
+    tool_parts: list[messages_.Part],
+) -> None:
+    """Merge tool result parts into existing UI tool parts."""
+    tool_index = _tool_part_index_by_call_id(ui_parts)
+
+    for part in tool_parts:
+        updates: dict[str, Any]
+        match part:
+            case messages_.ToolResultPart() if part.is_hook_pending:
+                continue
+            case messages_.ToolResultPart():
+                tool_call_id = part.tool_call_id
+                state = "output-error" if part.is_error else "output-available"
+                updates = {
+                    "state": state,
+                    "result_provider_metadata": part.provider_metadata,
+                }
+                if part.is_error:
+                    updates["error_text"] = str(part.result)
+                else:
+                    updates["output"] = part.result
+            case messages_.BuiltinToolReturnPart():
+                tool_call_id = part.tool_call_id
+                updates = {
+                    "state": (
+                        "output-error" if part.is_error else "output-available"
+                    ),
+                    "provider_executed": True,
+                    "result_provider_metadata": part.provider_metadata,
+                }
+                if part.is_error:
+                    updates["error_text"] = str(part.result)
+                else:
+                    updates["output"] = part.result
+            case _:
+                continue
+
+        idx_opt = tool_index.get(tool_call_id)
+        if idx_opt is None:
+            continue
+        idx = idx_opt
+        existing = ui_parts[idx]
+        if not isinstance(
+            existing, ui_messages.UIToolPart | ui_messages.UIDynamicToolPart
+        ):
+            continue
+        if existing.state == "output-denied":
+            continue
+        ui_parts[idx] = existing.model_copy(update=updates)
+
+
+def merge_approval_signals(
+    ui_parts: list[ui_messages.UIMessagePart],
+    internal_parts: list[messages_.Part],
+) -> None:
+    """Merge approval hook state into existing UI tool parts."""
+    tool_index = _tool_part_index_by_call_id(ui_parts)
+
+    for part in internal_parts:
+        if not isinstance(part, messages_.HookPart):
+            continue
+
+        tool_call_id = approvals.tool_call_id_for(part)
+        if tool_call_id is None:
+            continue
+
+        idx_opt = tool_index.get(tool_call_id)
+        if idx_opt is None:
+            continue
+        idx = idx_opt
+
+        existing = ui_parts[idx]
+        if not isinstance(
+            existing, ui_messages.UIToolPart | ui_messages.UIDynamicToolPart
+        ):
+            continue
+
+        updates: dict[str, Any] = {}
+        provider_executed = part.metadata.get("providerExecuted")
+        if isinstance(provider_executed, bool):
+            updates["provider_executed"] = provider_executed
+        is_automatic = part.metadata.get("isAutomatic")
+        is_automatic = is_automatic if isinstance(is_automatic, bool) else None
+        match part.status:
+            case "pending":
+                updates["state"] = "approval-requested"
+                updates["approval"] = ui_messages.UIToolApproval.model_validate(
+                    {
+                        "id": part.hook_id,
+                        "isAutomatic": is_automatic,
+                    }
+                )
+            case "resolved":
+                resolution = cast(
+                    "dict[str, Any]",
+                    part.resolution
+                    if isinstance(part.resolution, dict)
+                    else {},
+                )
+                updates["approval"] = ui_messages.UIToolApproval.model_validate(
+                    {
+                        "id": part.hook_id,
+                        "approved": resolution.get("granted"),
+                        "reason": resolution.get("reason"),
+                        "isAutomatic": is_automatic,
+                    }
+                )
+                if resolution.get("granted", False):
+                    updates["state"] = "approval-responded"
+                else:
+                    updates["state"] = "output-denied"
+                    updates["output"] = None
+            case "cancelled":
+                updates["state"] = "output-error"
+                updates["error_text"] = "Hook cancelled"
+
+        if updates:
+            ui_parts[idx] = existing.model_copy(update=updates)
+
+
 def to_ui_parts(parts: list[messages_.Part]) -> list[ui_messages.UIMessagePart]:
     """Convert internal parts to UI message parts."""
     result: list[ui_messages.UIMessagePart] = []
@@ -110,211 +313,6 @@ def to_ui_parts(parts: list[messages_.Part]) -> list[ui_messages.UIMessagePart]:
                     )
                 )
     return result
-
-
-def _merge_tool_part(
-    existing: UIToolLike,
-    candidate: UIToolLike,
-) -> UIToolLike:
-    """Merge duplicate UI tool parts, keeping the first display position."""
-    existing_rank = _TOOL_STATE_RANK.get(existing.state, 0)
-    candidate_rank = _TOOL_STATE_RANK.get(candidate.state, 0)
-    updates: dict[str, Any] = {}
-
-    if candidate_rank >= existing_rank:
-        updates["state"] = candidate.state
-        if candidate.state == "output-denied":
-            updates["output"] = None
-
-    if existing.input is None and candidate.input is not None:
-        updates["input"] = candidate.input
-    if candidate.output is not None:
-        updates["output"] = candidate.output
-    if candidate.raw_input is not None:
-        updates["raw_input"] = candidate.raw_input
-    if candidate.error_text is not None:
-        updates["error_text"] = candidate.error_text
-    if candidate.approval is not None:
-        updates["approval"] = candidate.approval
-    if candidate.provider_executed is not None:
-        updates["provider_executed"] = candidate.provider_executed
-    if candidate.call_provider_metadata is not None:
-        updates["call_provider_metadata"] = candidate.call_provider_metadata
-    if candidate.result_provider_metadata is not None:
-        updates["result_provider_metadata"] = candidate.result_provider_metadata
-    if candidate.tool_metadata is not None:
-        updates["tool_metadata"] = candidate.tool_metadata
-    if candidate.preliminary is not None:
-        updates["preliminary"] = candidate.preliminary
-    if candidate.title is not None:
-        updates["title"] = candidate.title
-
-    return existing.model_copy(update=updates) if updates else existing
-
-
-def dedupe_tool_parts(
-    ui_parts: list[ui_messages.UIMessagePart],
-) -> list[ui_messages.UIMessagePart]:
-    """Collapse duplicate UI tool parts by tool_call_id."""
-    result: list[ui_messages.UIMessagePart] = []
-    tool_index: dict[str, int] = {}
-
-    for part in ui_parts:
-        if not isinstance(
-            part, ui_messages.UIToolPart | ui_messages.UIDynamicToolPart
-        ):
-            result.append(part)
-            continue
-
-        idx = tool_index.get(part.tool_call_id)
-        if idx is None:
-            tool_index[part.tool_call_id] = len(result)
-            result.append(part)
-            continue
-
-        existing = result[idx]
-        if isinstance(
-            existing, ui_messages.UIToolPart | ui_messages.UIDynamicToolPart
-        ):
-            result[idx] = _merge_tool_part(existing, part)
-
-    return result
-
-
-def merge_tool_results(
-    ui_parts: list[ui_messages.UIMessagePart],
-    tool_parts: list[messages_.Part],
-) -> None:
-    """Merge tool result parts into existing UI tool parts."""
-    tool_index: dict[str, int] = {}
-    for idx, ui_part in enumerate(ui_parts):
-        if isinstance(
-            ui_part, ui_messages.UIToolPart | ui_messages.UIDynamicToolPart
-        ):
-            tool_index[ui_part.tool_call_id] = idx
-
-    for part in tool_parts:
-        updates: dict[str, Any]
-        match part:
-            case messages_.ToolResultPart() if part.is_hook_pending:
-                continue
-            case messages_.ToolResultPart():
-                tool_call_id = part.tool_call_id
-                state = "output-error" if part.is_error else "output-available"
-                updates = {
-                    "state": state,
-                    "result_provider_metadata": part.provider_metadata,
-                }
-                if part.is_error:
-                    updates["error_text"] = str(part.result)
-                else:
-                    updates["output"] = part.result
-            case messages_.BuiltinToolReturnPart():
-                tool_call_id = part.tool_call_id
-                updates = {
-                    "state": (
-                        "output-error" if part.is_error else "output-available"
-                    ),
-                    "provider_executed": True,
-                    "result_provider_metadata": part.provider_metadata,
-                }
-                if part.is_error:
-                    updates["error_text"] = str(part.result)
-                else:
-                    updates["output"] = part.result
-            case _:
-                continue
-
-        idx_opt = tool_index.get(tool_call_id)
-        if idx_opt is None:
-            continue
-        idx = idx_opt
-        existing = ui_parts[idx]
-        if not isinstance(
-            existing, ui_messages.UIToolPart | ui_messages.UIDynamicToolPart
-        ):
-            continue
-        if existing.state == "output-denied":
-            continue
-        ui_parts[idx] = existing.model_copy(update=updates)
-
-
-def merge_approval_signals(
-    ui_parts: list[ui_messages.UIMessagePart],
-    internal_parts: list[messages_.Part],
-) -> None:
-    """Merge approval hook state into existing UI tool parts."""
-    tool_index: dict[str, int] = {}
-    for idx, ui_part in enumerate(ui_parts):
-        if isinstance(
-            ui_part, ui_messages.UIToolPart | ui_messages.UIDynamicToolPart
-        ):
-            tool_index[ui_part.tool_call_id] = idx
-
-    for part in internal_parts:
-        if not isinstance(part, messages_.HookPart):
-            continue
-
-        tool_call_id = approvals.tool_call_id_for(part)
-        if tool_call_id is None:
-            continue
-
-        idx_opt = tool_index.get(tool_call_id)
-        if idx_opt is None:
-            continue
-        idx = idx_opt
-
-        existing = ui_parts[idx]
-        if not isinstance(
-            existing, ui_messages.UIToolPart | ui_messages.UIDynamicToolPart
-        ):
-            continue
-
-        updates: dict[str, Any] = {}
-        provider_executed = part.metadata.get("providerExecuted")
-        if isinstance(provider_executed, bool):
-            updates["provider_executed"] = provider_executed
-        is_automatic = part.metadata.get("isAutomatic")
-        is_automatic = is_automatic if isinstance(is_automatic, bool) else None
-        match part.status:
-            case "pending":
-                updates["state"] = "approval-requested"
-                updates["approval"] = (
-                    ui_messages.UIToolApproval.model_validate(
-                        {
-                            "id": part.hook_id,
-                            "isAutomatic": is_automatic,
-                        }
-                    )
-                )
-            case "resolved":
-                resolution = cast(
-                    "dict[str, Any]",
-                    part.resolution
-                    if isinstance(part.resolution, dict)
-                    else {},
-                )
-                updates["approval"] = (
-                    ui_messages.UIToolApproval.model_validate(
-                        {
-                            "id": part.hook_id,
-                            "approved": resolution.get("granted"),
-                            "reason": resolution.get("reason"),
-                            "isAutomatic": is_automatic,
-                        }
-                    )
-                )
-                if resolution.get("granted", False):
-                    updates["state"] = "approval-responded"
-                else:
-                    updates["state"] = "output-denied"
-                    updates["output"] = None
-            case "cancelled":
-                updates["state"] = "output-error"
-                updates["error_text"] = "Hook cancelled"
-
-        if updates:
-            ui_parts[idx] = existing.model_copy(update=updates)
 
 
 def to_ui_messages(

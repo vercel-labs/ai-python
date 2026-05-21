@@ -78,6 +78,30 @@ def _decode_wire_output(output: Any) -> Any:
     return MessageBundle(messages=tuple(inner))
 
 
+def _build_result_part(
+    *,
+    tool_call_id: str,
+    tool_name: str,
+    output: Any,
+    is_error: bool,
+) -> messages_.ToolResultPart:
+    if is_error:
+        result: Any = output
+    else:
+        decoded = _decode_wire_output(output)
+        result = (
+            decoded
+            if isinstance(decoded, MessageBundle)
+            else _normalize_tool_result(decoded)
+        )
+    return messages_.ToolResultPart(
+        tool_call_id=tool_call_id,
+        tool_name=tool_name,
+        result=result,
+        is_error=is_error,
+    )
+
+
 def _normalize_ui_messages(
     ui_messages: list[ui_messages_.UIMessage],
 ) -> list[ui_messages_.UIMessage]:
@@ -120,43 +144,6 @@ def _normalize_ui_messages(
             else message
         )
     return normalized
-
-
-# ============================================================================
-# UI → internal message conversion
-# ============================================================================
-
-
-def to_messages(
-    ui_messages: list[ui_messages_.UIMessage],
-) -> tuple[list[messages_.Message], list[ApprovalResponse]]:
-    """Parse a UI request into runtime messages + extracted approvals.
-
-    Pure: normalizes stale tool states, extracts approval responses,
-    parses UIMessages into an ``ai.messages.Message`` list (split at
-    tool boundaries), drops the internal tombstones for approval
-    responses, and patches the trailing tool message with
-    ``is_hook_pending`` placeholders for tool calls whose approval was
-    just responded to but never recorded a real tool result.
-
-    Sub-agent tool outputs (UIMessage wire shape) are decoded back to
-    ``MessageBundle`` so the parent agent's message history carries the
-    rich snapshot.  Per-tool model-facing values are populated by
-    :meth:`Agent.run` (which has the tool registry), not here.
-
-    Returns ``(messages, approvals)``.  The caller can pre-register
-    resolutions via :func:`apply_approvals` before calling
-    :meth:`Agent.run` if the run should resume from a hook.
-    """
-    normalized = _normalize_ui_messages(ui_messages)
-    approval_responses = extract_approvals(normalized)
-    messages = [
-        m
-        for m in _parse(normalized)
-        if not approvals.is_resolved_approval_message(m)
-    ]
-    _patch_pending_hook_aborts(messages, approval_responses)
-    return messages, approval_responses
 
 
 def _patch_pending_hook_aborts(
@@ -215,29 +202,6 @@ def _patch_pending_hook_aborts(
 def _parse(
     ui_messages: list[ui_messages_.UIMessage],
 ) -> list[messages_.Message]:
-    def _build_result_part(
-        *,
-        tool_call_id: str,
-        tool_name: str,
-        output: Any,
-        is_error: bool,
-    ) -> messages_.ToolResultPart:
-        if is_error:
-            result: Any = output
-        else:
-            decoded = _decode_wire_output(output)
-            result = (
-                decoded
-                if isinstance(decoded, MessageBundle)
-                else (_normalize_tool_result(decoded))
-            )
-        return messages_.ToolResultPart(
-            tool_call_id=tool_call_id,
-            tool_name=tool_name,
-            result=result,
-            is_error=is_error,
-        )
-
     result: list[messages_.Message] = []
 
     for ui_msg in ui_messages:
@@ -525,3 +489,40 @@ def _split_assistant_parts(
         )
 
     return messages
+
+
+# ============================================================================
+# UI → internal message conversion
+# ============================================================================
+
+
+def to_messages(
+    ui_messages: list[ui_messages_.UIMessage],
+) -> tuple[list[messages_.Message], list[ApprovalResponse]]:
+    """Parse a UI request into runtime messages + extracted approvals.
+
+    Pure: normalizes stale tool states, extracts approval responses,
+    parses UIMessages into an ``ai.messages.Message`` list (split at
+    tool boundaries), drops the internal tombstones for approval
+    responses, and patches the trailing tool message with
+    ``is_hook_pending`` placeholders for tool calls whose approval was
+    just responded to but never recorded a real tool result.
+
+    Sub-agent tool outputs (UIMessage wire shape) are decoded back to
+    ``MessageBundle`` so the parent agent's message history carries the
+    rich snapshot.  Per-tool model-facing values are populated by
+    :meth:`Agent.run` (which has the tool registry), not here.
+
+    Returns ``(messages, approvals)``.  The caller can pre-register
+    resolutions via :func:`apply_approvals` before calling
+    :meth:`Agent.run` if the run should resume from a hook.
+    """
+    normalized = _normalize_ui_messages(ui_messages)
+    approval_responses = extract_approvals(normalized)
+    messages = [
+        m
+        for m in _parse(normalized)
+        if not approvals.is_resolved_approval_message(m)
+    ]
+    _patch_pending_hook_aborts(messages, approval_responses)
+    return messages, approval_responses

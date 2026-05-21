@@ -23,6 +23,54 @@ class SourceMessage:
     part_ids: tuple[str, ...]
 
 
+def _parse_source_message(raw: object) -> SourceMessage | None:
+    if not isinstance(raw, dict):
+        return None
+
+    raw_dict = cast("dict[str, object]", raw)
+    message_id = raw_dict.get("id")
+    role = raw_dict.get("role")
+    if not isinstance(message_id, str) or role not in _VALID_ROLES:
+        return None
+
+    raw_turn_id = raw_dict.get("turnId")
+    turn_id = raw_turn_id if isinstance(raw_turn_id, str) else None
+
+    raw_part_ids = raw_dict.get("partIds")
+    part_ids = (
+        tuple(part_id for part_id in raw_part_ids if isinstance(part_id, str))
+        if isinstance(raw_part_ids, list)
+        else ()
+    )
+
+    return SourceMessage(
+        id=message_id,
+        role=cast("MessageRole", role),
+        turn_id=turn_id,
+        part_ids=part_ids,
+    )
+
+
+def _restore_message_ids(
+    message: messages_.Message,
+    source: SourceMessage,
+) -> messages_.Message:
+    updates: dict[str, object] = {
+        "id": source.id,
+        "turn_id": source.turn_id,
+    }
+
+    if len(source.part_ids) == len(message.parts):
+        updates["parts"] = [
+            part.model_copy(update={"id": part_id})
+            for part, part_id in zip(
+                message.parts, source.part_ids, strict=True
+            )
+        ]
+
+    return message.model_copy(update=updates)
+
+
 def metadata_for(
     source_messages: list[messages_.Message],
 ) -> dict[str, object]:
@@ -91,51 +139,3 @@ def restore_source_ids(
         restored.append(_restore_message_ids(message, source))
 
     return restored
-
-
-def _parse_source_message(raw: object) -> SourceMessage | None:
-    if not isinstance(raw, dict):
-        return None
-
-    raw_dict = cast("dict[str, object]", raw)
-    message_id = raw_dict.get("id")
-    role = raw_dict.get("role")
-    if not isinstance(message_id, str) or role not in _VALID_ROLES:
-        return None
-
-    raw_turn_id = raw_dict.get("turnId")
-    turn_id = raw_turn_id if isinstance(raw_turn_id, str) else None
-
-    raw_part_ids = raw_dict.get("partIds")
-    part_ids = (
-        tuple(part_id for part_id in raw_part_ids if isinstance(part_id, str))
-        if isinstance(raw_part_ids, list)
-        else ()
-    )
-
-    return SourceMessage(
-        id=message_id,
-        role=cast("MessageRole", role),
-        turn_id=turn_id,
-        part_ids=part_ids,
-    )
-
-
-def _restore_message_ids(
-    message: messages_.Message,
-    source: SourceMessage,
-) -> messages_.Message:
-    updates: dict[str, object] = {
-        "id": source.id,
-        "turn_id": source.turn_id,
-    }
-
-    if len(source.part_ids) == len(message.parts):
-        updates["parts"] = [
-            part.model_copy(update={"id": part_id})
-            for part, part_id in zip(
-                message.parts, source.part_ids, strict=True
-            )
-        ]
-
-    return message.model_copy(update=updates)
