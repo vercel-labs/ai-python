@@ -154,7 +154,7 @@ ai.resolve_hook("approve_send_email", {"granted": True, "reason": "approved"})
 
 ## Examples
 
-Focused samples live in `examples/samples/`.
+Focused samples live in `examples/`.
 
 End-to-end demos:
 

@@ -13,28 +13,35 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent.parent
 MYPY_VERSION = "mypy>=1.11"
 
-# Each entry: (display name, directory to check, extra --with deps)
-EXAMPLES: list[tuple[str, Path, list[str]]] = [
-    ("samples", REPO / "examples" / "samples", []),
+_SAMPLE_FILES = sorted(p.name for p in (REPO / "examples").glob("*.py"))
+
+# Each entry: (display name, directory to check, extra --with deps, targets)
+EXAMPLES: list[tuple[str, Path, list[str], list[str]]] = [
+    ("samples", REPO / "examples", [], _SAMPLE_FILES),
     (
         "fastapi-vite/backend",
         REPO / "examples" / "fastapi-vite" / "backend",
         ["fastapi"],
+        ["."],
     ),
     (
         "multiagent-textual",
         REPO / "examples" / "multiagent-textual",
         ["fastapi", "textual", "websockets"],
+        ["."],
     ),
     (
         "temporal-direct",
         REPO / "examples" / "temporal-direct",
         ["temporalio"],
+        ["."],
     ),
 ]
 
 
-def run_mypy(name: str, directory: Path, extra_deps: list[str]) -> bool:
+def run_mypy(
+    name: str, directory: Path, extra_deps: list[str], targets: list[str]
+) -> bool:
     header = f"{'=' * 20} {name} {'=' * 20}"
     print(header)
 
@@ -56,7 +63,7 @@ def run_mypy(name: str, directory: Path, extra_deps: list[str]) -> bool:
         "mypy",
         "--config-file",
         str(REPO / "pyproject.toml"),
-        ".",
+        *targets,
     ]
 
     env = {k: v for k, v in os.environ.items() if k != "VIRTUAL_ENV"}
@@ -69,8 +76,8 @@ def run_mypy(name: str, directory: Path, extra_deps: list[str]) -> bool:
 
 def main() -> None:
     results: list[tuple[str, bool]] = []
-    for name, directory, extra_deps in EXAMPLES:
-        ok = run_mypy(name, directory, extra_deps)
+    for name, directory, extra_deps, targets in EXAMPLES:
+        ok = run_mypy(name, directory, extra_deps, targets)
         results.append((name, ok))
 
     print("=" * 60)
