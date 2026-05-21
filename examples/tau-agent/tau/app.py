@@ -88,6 +88,10 @@ Keep replies concise and use code blocks when showing code.
 You have access to the read, write, edit, bash, grep, find, and ls
 tools.  Mutating tools (write, edit, bash) require operator approval.
 """ + (
+    "You also have a web_search tool for current information.\n"
+    if _provider_tools(MODEL_ID)
+    else ""
+) + (
     f"""
 When writing or suggesting commit messages, always include a trailer line:
 
