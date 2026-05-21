@@ -1138,9 +1138,15 @@ class Agent:
     def __init__(
         self,
         *,
-        tools: list[AgentTool] | None = None,
+        tools: Sequence[AgentTool | Tool] | None = None,
     ) -> None:
-        self._tools: list[AgentTool] = [*self.TOOLS, *(tools or [])]
+        self._tools: list[AgentTool] = []
+        self._provider_tools: list[Tool] = []
+        for t in [*self.TOOLS, *(tools or [])]:
+            if isinstance(t, AgentTool):
+                self._tools.append(t)
+            else:
+                self._provider_tools.append(t)
 
     @property
     def tools(self) -> list[AgentTool]:
@@ -1243,7 +1249,10 @@ class Agent:
         context = Context(
             model=model,
             messages=list(messages),
-            tools=[t.tool for t in self._tools],
+            tools=[
+                *[t.tool for t in self._tools],
+                *self._provider_tools,
+            ],
             output_type=output_type,
             params=params,
         )
@@ -1287,7 +1296,7 @@ class Agent:
 
 def agent(
     *,
-    tools: list[AgentTool] | None = None,
+    tools: Sequence[AgentTool | Tool] | None = None,
 ) -> Agent:
     """Create an Agent."""
     return Agent(tools=tools)
