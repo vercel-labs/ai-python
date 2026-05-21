@@ -68,6 +68,7 @@ class _StreamState:
         self.completed_reasoning_ids: set[str] = set()
         self.text_delta_ids: set[str] = set()
         self.reasoning_delta_ids: set[str] = set()
+        self.source_messages: dict[str, messages_.Message] = {}
 
         # Per-tool-call aggregators for streaming generator tools.  Each
         # PartialToolCallResult feeds its value into the aggregator and
@@ -77,6 +78,23 @@ class _StreamState:
         ] = {}
 
     # -- boundary helpers ----------------------------------------------------
+
+    def _track_source_message(self, message: messages_.Message | None) -> None:
+        if message is None or message.id == "<unset>":
+            return
+        self.source_messages[message.id] = message
+
+    def _latest_assistant_metadata(self) -> Any | None:
+        messages = [
+            msg
+            for msg in self.source_messages.values()
+            if msg.role != "system" and msg.parts
+        ]
+        ui_messages = outbound_messages.to_ui_messages(messages)
+        for message in reversed(ui_messages):
+            if message.role == "assistant":
+                return message.metadata
+        return None
 
     def _close_open_blocks(self) -> list[ui_events.UIMessageStreamEvent]:
         events: list[ui_events.UIMessageStreamEvent] = []
@@ -117,6 +135,7 @@ class _StreamState:
         self, event: events_.Event
     ) -> list[ui_events.UIMessageStreamEvent]:
         out: list[ui_events.UIMessageStreamEvent] = []
+        self._track_source_message(event.message)
 
         # Lazily open the UI message on the first streaming event.
         if not self.emitted_start:
@@ -338,6 +357,7 @@ class _StreamState:
         msg = event.message
         out: list[ui_events.UIMessageStreamEvent] = []
 
+        self._track_source_message(msg)
         out.extend(self._ensure_started(msg.turn_id))
 
         # Emit ToolInputAvailable for each tool call that triggered
@@ -451,6 +471,7 @@ class _StreamState:
         hook_part = event.hook
         out: list[ui_events.UIMessageStreamEvent] = []
 
+        self._track_source_message(event.message)
         # Ensure the UI message is started.
         out.extend(self._ensure_started(event.message.turn_id))
 
@@ -519,7 +540,12 @@ class _StreamState:
             events.append(ui_events.UIFinishStepEvent())
             self.in_step = False
         if self.emitted_start:
-            events.append(ui_events.UIFinishEvent(finish_reason="stop"))
+            events.append(
+                ui_events.UIFinishEvent(
+                    finish_reason="stop",
+                    message_metadata=self._latest_assistant_metadata(),
+                )
+            )
         return events
 
 

@@ -29,6 +29,15 @@ async def _collect(
     return [event async for event in to_stream(_gen(stream_events))]
 
 
+def _source_messages(metadata: Any | None) -> list[dict[str, Any]]:
+    assert isinstance(metadata, dict)
+    adapter_metadata = metadata.get("aiPython")
+    assert isinstance(adapter_metadata, dict)
+    source_messages = adapter_metadata.get("sourceMessages")
+    assert isinstance(source_messages, list)
+    return source_messages
+
+
 def test_serialize_event_camelcases_keys() -> None:
     event = ui_events.UIStartEvent(message_id="m1")
     payload = json.loads(serialize_event(event))
@@ -116,6 +125,99 @@ async def test_stream_start_uses_runtime_message_id() -> None:
     assert start.message_id == "assistant-runtime-id"
 
 
+async def test_finish_metadata_tracks_streamed_assistant_message() -> None:
+    assistant = messages_.Message(
+        id="assistant-1",
+        role="assistant",
+        parts=[messages_.TextPart(id="text-1", text="hello")],
+    )
+
+    out = await _collect(
+        [
+            events_.TextStart(block_id="text-1", message=assistant),
+            events_.TextDelta(
+                block_id="text-1", chunk="hello", message=assistant
+            ),
+            events_.TextEnd(block_id="text-1", message=assistant),
+        ]
+    )
+
+    finish = next(
+        event for event in out if isinstance(event, ui_events.UIFinishEvent)
+    )
+    assert _source_messages(finish.message_metadata) == [
+        {
+            "id": "assistant-1",
+            "role": "assistant",
+            "turnId": None,
+            "partIds": ["text-1"],
+        }
+    ]
+
+
+async def test_finish_metadata_tracks_tool_and_internal_messages() -> None:
+    tool_call = messages_.ToolCallPart(
+        id="call-1",
+        tool_call_id="tc1",
+        tool_name="search",
+        tool_args="{}",
+    )
+    assistant = messages_.Message(
+        id="assistant-1",
+        turn_id="turn-1",
+        role="assistant",
+        parts=[tool_call],
+    )
+    tool = messages_.Message(
+        id="tool-1",
+        turn_id="turn-1",
+        role="tool",
+        parts=[
+            messages_.ToolResultPart(
+                id="result-1",
+                tool_call_id="tc1",
+                tool_name="search",
+                result={"hits": 1},
+            )
+        ],
+    )
+    hook = messages_.HookPart[Any](
+        id="hook-1",
+        hook_id="approve_tc1",
+        hook_type="ToolApproval",
+        status="pending",
+    )
+    internal = messages_.Message(
+        id="internal-1",
+        turn_id="turn-1",
+        role="internal",
+        parts=[hook],
+    )
+
+    out = await _collect(
+        [
+            events_.ToolStart(
+                tool_call_id="tc1", tool_name="search", message=assistant
+            ),
+            events_.ToolEnd(
+                tool_call_id="tc1", tool_call=tool_call, message=assistant
+            ),
+            agent_events_.ToolCallResult(
+                message=tool,
+                results=tool.tool_results,
+            ),
+            agent_events_.HookEvent(message=internal, hook=hook),
+        ]
+    )
+
+    finish = next(
+        event for event in out if isinstance(event, ui_events.UIFinishEvent)
+    )
+    assert [
+        source["id"] for source in _source_messages(finish.message_metadata)
+    ] == ["assistant-1", "tool-1", "internal-1"]
+
+
 async def test_event_driven_text_streaming() -> None:
     """Streaming text events lazily open a UI message."""
     text_id = "txt1"
@@ -138,6 +240,27 @@ async def test_event_driven_text_streaming() -> None:
     assert isinstance(out[4], ui_events.UITextEndEvent) and out[4].id == text_id
     assert isinstance(out[5], ui_events.UIFinishStepEvent)
     assert isinstance(out[6], ui_events.UIFinishEvent)
+    assert out[6].message_metadata is None
+
+
+async def test_finish_metadata_ignores_empty_messages() -> None:
+    assistant = messages_.Message(
+        id="assistant-empty",
+        role="assistant",
+        parts=[],
+    )
+
+    out = await _collect(
+        [
+            events_.StreamStart(message=assistant),
+            events_.StreamEnd(message=assistant),
+        ]
+    )
+
+    finish = next(
+        event for event in out if isinstance(event, ui_events.UIFinishEvent)
+    )
+    assert finish.message_metadata is None
 
 
 async def test_tool_call_and_result_emit_terminal_events() -> None:
