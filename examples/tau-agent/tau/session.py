@@ -4,7 +4,8 @@ Sessions are stored as JSONL files under ``.tau/sessions/``.  Each line
 is a JSON-serialised ``ai.messages.Message``.  The first line is always
 a metadata object (not a Message) carrying session-level info:
 
-    {"meta": true, "session_id": "...", "model": "...", "cwd": "...", "created": "..."}
+    {"meta": true, "session_id": "...", "model": "...",
+     "cwd": "...", "created": "..."}
 
 Usage:
     # New session (default)

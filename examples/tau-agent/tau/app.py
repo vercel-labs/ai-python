@@ -47,7 +47,9 @@ STREAM_PARAMS: dict[str, Any] | None = (
     {
         "providerOptions": {
             "gateway": {"caching": "auto"},
-            "anthropic": {"thinking": {"type": "enabled", "budget_tokens": 10000}},
+            "anthropic": {
+                "thinking": {"type": "enabled", "budget_tokens": 10000}
+            },
         }
     }
     if MODEL_ID.startswith("gateway:")
@@ -232,7 +234,9 @@ async def chat_loop(app: TauApp) -> None:
 async def _run_turn(app: TauApp) -> None:
     """Execute a single agent turn, dispatching events to the app."""
     interrupted = False
-    async with app.agent.run(app.model, app.session.messages, params=STREAM_PARAMS) as stream:
+    async with app.agent.run(
+        app.model, app.session.messages, params=STREAM_PARAMS
+    ) as stream:
         try:
             async for event in stream:
                 if isinstance(event, ai.events.ReasoningDelta):
@@ -243,9 +247,7 @@ async def _run_turn(app: TauApp) -> None:
                     tc = event.tool_call
                     app.show_tool_call(tc.tool_name, tc.tool_args)
                 elif isinstance(event, ai.events.PartialToolCallResult):
-                    app.append_tool_result(
-                        event.tool_call_id, str(event.value)
-                    )
+                    app.append_tool_result(event.tool_call_id, str(event.value))
                 elif isinstance(event, ai.events.ToolCallResult):
                     for part in event.results:
                         # Skip if we already streamed this result.
@@ -303,12 +305,16 @@ def _json_default(obj: Any) -> Any:
     """json.dumps fallback: serialize pydantic models via model_dump."""
     if hasattr(obj, "model_dump"):
         return obj.model_dump(mode="json")
-    raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
+    raise TypeError(
+        f"Object of type {type(obj).__name__} is not JSON serializable"
+    )
 
 
 def _format_tool_result(result: Any, is_error: bool) -> str:
-    text = result if isinstance(result, str) else json.dumps(
-        result, ensure_ascii=False, default=_json_default
+    text = (
+        result
+        if isinstance(result, str)
+        else json.dumps(result, ensure_ascii=False, default=_json_default)
     )
     if len(text) > RESULT_PREVIEW_CHARS:
         text = (
@@ -546,9 +552,7 @@ class Transcript(textual.containers.VerticalScroll):
     }
     """
 
-    def add_bubble(
-        self, role: str, text: str = ""
-    ) -> Bubble:
+    def add_bubble(self, role: str, text: str = "") -> Bubble:
         bubble = Bubble(role, text)
         self.mount(bubble)
         return bubble
@@ -598,7 +602,9 @@ class Composer(textual.widgets.TextArea):
         # wrapping.  Clamp it so the composer never collapses to 0 lines
         # or eats the whole screen.  +2 accounts for the top+bottom of
         # the rounded border (box-sizing is border-box by default).
-        n = max(self.MIN_LINES, min(self.MAX_LINES, self.wrapped_document.height))
+        n = max(
+            self.MIN_LINES, min(self.MAX_LINES, self.wrapped_document.height)
+        )
         self.styles.height = n + 2
 
 
@@ -649,8 +655,10 @@ class HookPrompt(textual.widgets.Static):
         body.append("\n  ")
         for i, opt in enumerate(options):
             style = (
-                "bold green" if opt.decision == "yes"
-                else "bold red" if opt.decision == "no"
+                "bold green"
+                if opt.decision == "yes"
+                else "bold red"
+                if opt.decision == "no"
                 else "bold cyan"
             )
             if i > 0:
@@ -689,7 +697,7 @@ class TauApp(textual.app.App[None]):
         padding: 0 1 1 1;
     }
     #composer {
-        height: 3;                 /* refresh_height() resizes this dynamically */
+        height: 3;                 /* refresh_height() resizes */
         max-height: 12;            /* MAX_LINES (10) + 2 for the border */
         padding: 0 1;              /* breathing room left/right of the cursor */
         border: round $surface-lighten-2;
@@ -703,7 +711,9 @@ class TauApp(textual.app.App[None]):
 
     BINDINGS = [
         textual.binding.Binding("ctrl+c", "quit", "quit", priority=True),
-        textual.binding.Binding("escape", "interrupt", "interrupt", priority=True),
+        textual.binding.Binding(
+            "escape", "interrupt", "interrupt", priority=True
+        ),
     ]
 
     TITLE = "tau"
@@ -778,7 +788,10 @@ class TauApp(textual.app.App[None]):
         parts: list[str] = []
         # Approximate current context size: last turn's in + out.
         if self.session.last_usage is not None:
-            ctx = self.session.last_usage.input_tokens + self.session.last_usage.output_tokens
+            ctx = (
+                self.session.last_usage.input_tokens
+                + self.session.last_usage.output_tokens
+            )
             parts.append(f"ctx: ~{ctx:,}")
         # input_tokens includes cache-read; subtract to show uncached.
         uncached_in = u.input_tokens - (u.cache_read_tokens or 0)
@@ -786,7 +799,9 @@ class TauApp(textual.app.App[None]):
         if u.cache_read_tokens:
             parts.append(f"cached: {u.cache_read_tokens:,}")
         parts.append(f"out: {u.output_tokens:,}")
-        self.query_one("#usage-bar", textual.widgets.Static).update("  ".join(parts))
+        self.query_one("#usage-bar", textual.widgets.Static).update(
+            "  ".join(parts)
+        )
 
     @property
     def transcript(self) -> Transcript:
@@ -837,7 +852,9 @@ class TauApp(textual.app.App[None]):
 
     def show_tool_result(self, result: Any, is_error: bool) -> None:
         """Show the (possibly truncated) result of a tool call."""
-        self.transcript.add_bubble("tool", _format_tool_result(result, is_error))
+        self.transcript.add_bubble(
+            "tool", _format_tool_result(result, is_error)
+        )
 
     def show_system(self, text: str) -> None:
         """Show a system/status message."""
@@ -908,7 +925,8 @@ class TauApp(textual.app.App[None]):
         elif hook.status in ("resolved", "cancelled"):
             # Drop from queue if it was sitting there waiting.
             self._hook_queue = [
-                (h, opts) for h, opts in self._hook_queue
+                (h, opts)
+                for h, opts in self._hook_queue
                 if h.hook_id != hook.hook_id
             ]
             if self._active_hook and self._active_hook.hook_id == hook.hook_id:

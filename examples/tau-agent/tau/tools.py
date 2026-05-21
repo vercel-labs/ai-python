@@ -25,12 +25,14 @@ import ai
 import pydantic
 
 # Image formats we support (subset that models typically accept).
-_IMAGE_MIME_TYPES = frozenset({
-    "image/jpeg",
-    "image/png",
-    "image/gif",
-    "image/webp",
-})
+_IMAGE_MIME_TYPES = frozenset(
+    {
+        "image/jpeg",
+        "image/png",
+        "image/gif",
+        "image/webp",
+    }
+)
 
 
 def _detect_image_mime(path: pathlib.Path) -> str | None:
@@ -41,6 +43,7 @@ def _detect_image_mime(path: pathlib.Path) -> str | None:
         return None
     mime = ai.messages.media.detect_image_media_type(header)
     return mime if mime in _IMAGE_MIME_TYPES else None
+
 
 # ---------------------------------------------------------------------------
 # Truncation — match pi's defaults
@@ -372,7 +375,8 @@ async def edit(path: str, edits: list[TextEdit]) -> str:
             raise ValueError(f"edits[{i}].oldText not found in {path}")
         if count > 1:
             raise ValueError(
-                f"edits[{i}].oldText matches {count} times in {path}; must be unique"
+                f"edits[{i}].oldText matches {count} times "
+                f"in {path}; must be unique"
             )
         pos = content.index(e.oldText)
         spans.append((pos, pos + len(e.oldText), e.newText, i))
@@ -398,7 +402,9 @@ async def edit(path: str, edits: list[TextEdit]) -> str:
 
 
 @ai.tool(require_approval=True)
-async def bash(command: str, timeout: float | None = None) -> ai.StreamingTextTool:
+async def bash(
+    command: str, timeout: float | None = None
+) -> ai.StreamingTextTool:
     """Execute a bash command in the current working directory.
 
     Returns stdout and stderr.  Output is truncated to the last 2000
@@ -415,11 +421,16 @@ async def bash(command: str, timeout: float | None = None) -> ai.StreamingTextTo
     buf: list[str] = []
     timed_out = False
     deadline = (
-        asyncio.get_event_loop().time() + timeout if timeout is not None else None
+        asyncio.get_event_loop().time() + timeout
+        if timeout is not None
+        else None
     )
     try:
         async for raw in proc.stdout:
-            if deadline is not None and asyncio.get_event_loop().time() > deadline:
+            if (
+                deadline is not None
+                and asyncio.get_event_loop().time() > deadline
+            ):
                 raise TimeoutError
             line = raw.decode("utf-8", errors="replace")
             buf.append(line)
@@ -528,9 +539,13 @@ async def grep(
                 continue
             if context > 0:
                 ctx_chunks = []
-                for j in range(max(0, i - context), min(len(lines), i + context + 1)):
+                for j in range(
+                    max(0, i - context), min(len(lines), i + context + 1)
+                ):
                     sep = ":" if j == i else "-"
-                    ctx_chunks.append(f"{rel_path}{sep}{j + 1}{sep}{_short(lines[j])}")
+                    ctx_chunks.append(
+                        f"{rel_path}{sep}{j + 1}{sep}{_short(lines[j])}"
+                    )
                 entry = "\n".join(ctx_chunks)
             else:
                 entry = f"{rel_path}:{i + 1}:{_short(line)}"
