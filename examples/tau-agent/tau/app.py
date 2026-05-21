@@ -56,6 +56,29 @@ STREAM_PARAMS: dict[str, Any] | None = (
     else None
 )
 
+
+def _provider_tools(model_id: str) -> list[Any]:
+    """Return provider-executed tools for the model's backend.
+
+    Anthropic and OpenAI both offer server-side web search.
+    The gateway passes through provider-specific tools, so we
+    pick the right one based on the underlying provider.
+    """
+    # Normalise: "gateway:anthropic/..." → "anthropic",
+    #            "anthropic:..." → "anthropic"
+    mid = model_id.lower()
+    if mid.startswith("gateway:"):
+        mid = mid[len("gateway:"):]
+    provider = mid.split("/")[0].split(":")[0]
+
+    if provider == "anthropic":
+        from ai.providers.anthropic import tools as ant
+        return [ant.web_search()]
+    if provider in ("openai", "xai"):
+        from ai.providers.openai import tools as oai
+        return [oai.web_search()]
+    return []
+
 _ADVERTISE = os.environ.get("TAU_ADVERTISE", "") == "1"
 
 _BASE_SYSTEM_PROMPT = """\
@@ -763,7 +786,9 @@ class TauApp(textual.app.App[None]):
     ) -> None:
         super().__init__()
         self.model = ai.get_model(MODEL_ID)
-        self.agent = ai.agent(tools=tools.TOOLS)
+        self.agent = ai.agent(
+            tools=[*tools.TOOLS, *_provider_tools(MODEL_ID)],
+        )
         self.session = SessionManager(SYSTEM_PROMPT)
         # User messages typed while a turn is streaming.  Drained one at
         # a time at the end of each turn so user/assistant alternation
