@@ -561,8 +561,13 @@ class Transcript(textual.containers.VerticalScroll):
 class Composer(textual.widgets.TextArea):
     """Multi-line input that grows with its content.
 
-    Enter submits.  Shift+Enter (or alt+enter, depending on terminal)
-    inserts a newline.  Height tracks the wrapped line count between
+    Enter submits.  Newline shortcuts:
+
+    - Ctrl+J (all terminals)
+    - Trailing backslash before Enter (all terminals)
+    - Shift/Alt+Enter (Kitty keyboard protocol)
+
+    Height tracks the wrapped line count between
     ``MIN_LINES`` and ``MAX_LINES``.
     """
 
@@ -587,11 +592,36 @@ class Composer(textual.widgets.TextArea):
     def on_mount(self) -> None:
         self.refresh_height()
 
+    def _insert_newline(self) -> None:
+        """Insert a newline and grow the composer."""
+        self.insert("\n")
+        self.refresh_height()
+
     async def _on_key(self, event: textual.events.Key) -> None:
-        # Plain enter submits; shift+enter inserts a newline.
+        # Newline shortcuts:
+        #  - Ctrl+J (LF — works on all terminals)
+        #  - Shift/Alt+Enter (Kitty keyboard protocol)
+        if event.key in (
+            "ctrl+j",
+            "shift+enter",
+            "alt+enter",
+        ):
+            event.stop()
+            event.prevent_default()
+            self._insert_newline()
+            return
+        # Plain Enter submits — unless the line ends with \
+        # (backslash continuation), in which case strip it and
+        # insert a newline instead.
         if event.key == "enter":
             event.stop()
             event.prevent_default()
+            if self.text.endswith("\\"):
+                # Delete the backslash (cursor is at end)
+                # then insert a newline in its place.
+                self.action_delete_left()
+                self._insert_newline()
+                return
             value = self.text
             self.text = ""
             self.refresh_height()
