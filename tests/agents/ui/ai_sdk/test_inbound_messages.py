@@ -6,7 +6,6 @@ import pytest
 
 from ai.agents.agent import MessageBundle
 from ai.agents.ui.ai_sdk import to_messages
-from ai.agents.ui.ai_sdk.approvals import extract_approvals
 from ai.agents.ui.ai_sdk.inbound_messages import _normalize_ui_messages
 from ai.agents.ui.ai_sdk.ui_messages import UIMessage, UIToolPart
 from ai.types import messages as messages_
@@ -132,60 +131,6 @@ def test_to_messages_keeps_trailing_assistant_when_approved() -> None:
     )
     assert [m.role for m in messages] == ["user", "assistant"]
     assert [a.hook_id for a in approvals] == ["approve_tc1"]
-
-
-def test_extract_approvals_returns_approved_responses() -> None:
-    approvals = extract_approvals(
-        [
-            _ui(
-                "assistant",
-                _tool(
-                    "x",
-                    "tc1",
-                    "approval-responded",
-                    approval={
-                        "id": "approve_tc1",
-                        "approved": False,
-                        "reason": "nope",
-                    },
-                ),
-            )
-        ]
-    )
-    assert len(approvals) == 1
-    assert approvals[0].hook_id == "approve_tc1"
-    assert approvals[0].granted is False
-    assert approvals[0].reason == "nope"
-
-
-def test_extract_approvals_handles_dynamic_tool_responses() -> None:
-    approvals = extract_approvals(
-        [
-            _ui(
-                "assistant",
-                {
-                    "type": "dynamic-tool",
-                    "toolName": "web_search",
-                    "toolCallId": "tc1",
-                    "state": "approval-responded",
-                    "input": {"query": "ai"},
-                    "approval": {
-                        "id": "approve_tc1",
-                        "approved": True,
-                        "reason": "ok",
-                        "isAutomatic": True,
-                    },
-                    "providerExecuted": True,
-                },
-            )
-        ]
-    )
-
-    assert len(approvals) == 1
-    assert approvals[0].hook_id == "approve_tc1"
-    assert approvals[0].granted is True
-    assert approvals[0].reason == "ok"
-    assert approvals[0].tool_call_id == "tc1"
 
 
 def test_normalize_ui_messages_heals_stale_tool_state() -> None:

@@ -282,9 +282,11 @@ def merge_approval_signals(
             continue
 
         updates: dict[str, Any] = {}
-        if (provider_executed := approvals.metadata_bool(
-            part.metadata, "providerExecuted"
-        )) is not None:
+        if (
+            provider_executed := approvals.metadata_bool(
+                part.metadata, "providerExecuted"
+            )
+        ) is not None:
             updates["provider_executed"] = provider_executed
         if part.status == "pending":
             updates["state"] = "approval-requested"

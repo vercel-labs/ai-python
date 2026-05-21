@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncGenerator
 from typing import Any
 
 import ai
-from ai.agents.ui.ai_sdk import to_stream, ui_events
+from ai.agents.ui.ai_sdk import to_sse, to_stream, ui_events
+from ai.agents.ui.ai_sdk.outbound_stream import (
+    format_done_sse,
+    format_sse,
+    serialize_event,
+)
 from ai.types import events as agent_events_
 from ai.types import events as events_
 from ai.types import messages as messages_
@@ -21,6 +27,70 @@ async def _collect(
     stream_events: list[agent_events_.AgentEvent],
 ) -> list[ui_events.UIMessageStreamEvent]:
     return [event async for event in to_stream(_gen(stream_events))]
+
+
+def test_serialize_event_camelcases_keys() -> None:
+    event = ui_events.UIStartEvent(message_id="m1")
+    payload = json.loads(serialize_event(event))
+    assert payload == {"type": "start", "messageId": "m1"}
+
+
+def test_format_sse_wraps_data_line() -> None:
+    event = ui_events.UITextDeltaEvent(id="t1", delta="hi")
+    line = format_sse(event)
+    assert line.startswith("data: ")
+    assert line.endswith("\n\n")
+
+
+def test_serialize_data_event_uses_type_with_prefix() -> None:
+    event = ui_events.UIDataEvent(data_type="custom", data={"k": 1})
+    payload = json.loads(serialize_event(event))
+    assert payload["type"] == "data-custom"
+    assert "dataType" not in payload
+
+
+def test_serialize_protocol_fields_use_ai_sdk_wire_names() -> None:
+    event = ui_events.UIToolApprovalResponseEvent(
+        approval_id="approval-1",
+        approved=False,
+        reason="no",
+        provider_executed=True,
+        provider_metadata={"provider": {"k": "v"}},
+    )
+
+    payload = json.loads(serialize_event(event))
+
+    assert payload == {
+        "type": "tool-approval-response",
+        "approvalId": "approval-1",
+        "approved": False,
+        "reason": "no",
+        "providerExecuted": True,
+        "providerMetadata": {"provider": {"k": "v"}},
+    }
+
+
+def test_format_done_sse_returns_done_sentinel() -> None:
+    assert format_done_sse() == "data: [DONE]\n\n"
+
+
+async def test_to_sse_emits_data_prefixed_lines() -> None:
+    lines = [
+        line
+        async for line in to_sse(
+            _gen(
+                [
+                    events_.TextStart(block_id="t1"),
+                    events_.TextDelta(block_id="t1", chunk="hi"),
+                    events_.TextEnd(block_id="t1"),
+                ]
+            )
+        )
+    ]
+    assert all(line.startswith("data: ") for line in lines)
+    first = json.loads(lines[0].removeprefix("data: ").rstrip())
+    assert first["type"] == "start"
+    assert lines[-1] == "data: [DONE]\n\n"
 
 
 async def test_stream_start_uses_runtime_message_id() -> None:
@@ -60,12 +130,10 @@ async def test_event_driven_text_streaming() -> None:
     assert isinstance(out[0], ui_events.UIStartEvent)
     assert isinstance(out[1], ui_events.UIStartStepEvent)
     assert (
-        isinstance(out[2], ui_events.UITextStartEvent)
-        and out[2].id == text_id
+        isinstance(out[2], ui_events.UITextStartEvent) and out[2].id == text_id
     )
     assert (
-        isinstance(out[3], ui_events.UITextDeltaEvent)
-        and out[3].delta == "hi"
+        isinstance(out[3], ui_events.UITextDeltaEvent) and out[3].delta == "hi"
     )
     assert isinstance(out[4], ui_events.UITextEndEvent) and out[4].id == text_id
     assert isinstance(out[5], ui_events.UIFinishStepEvent)

@@ -444,9 +444,7 @@ def _parse(
                         parts=[hp],
                     )
                 )
-            result.extend(
-                id_utils.restore_source_ids(parsed, source_messages)
-            )
+            result.extend(id_utils.restore_source_ids(parsed, source_messages))
         else:
             result.extend(
                 id_utils.restore_source_ids(

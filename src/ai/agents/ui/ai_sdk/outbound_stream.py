@@ -499,7 +499,9 @@ class _StreamState:
                 )
             )
             if not resolution.get("granted"):
-                out.append(ui_events.UIToolOutputDeniedEvent(tool_call_id=tc_id))
+                out.append(
+                    ui_events.UIToolOutputDeniedEvent(tool_call_id=tc_id)
+                )
         elif hook_part.status == "cancelled":
             out.append(
                 ui_events.UIToolOutputErrorEvent(

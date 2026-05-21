@@ -48,11 +48,13 @@ def source_messages_from(metadata: object) -> list[SourceMessage]:
     if not isinstance(metadata, dict):
         return []
 
-    adapter_metadata = metadata.get(ADAPTER_METADATA_KEY)
+    metadata_dict = cast("dict[str, object]", metadata)
+    adapter_metadata = metadata_dict.get(ADAPTER_METADATA_KEY)
     if not isinstance(adapter_metadata, dict):
         return []
 
-    raw_source_messages = adapter_metadata.get(SOURCE_MESSAGES_KEY)
+    adapter_metadata_dict = cast("dict[str, object]", adapter_metadata)
+    raw_source_messages = adapter_metadata_dict.get(SOURCE_MESSAGES_KEY)
     if not isinstance(raw_source_messages, list):
         return []
 
@@ -95,15 +97,16 @@ def _parse_source_message(raw: object) -> SourceMessage | None:
     if not isinstance(raw, dict):
         return None
 
-    message_id = raw.get("id")
-    role = raw.get("role")
+    raw_dict = cast("dict[str, object]", raw)
+    message_id = raw_dict.get("id")
+    role = raw_dict.get("role")
     if not isinstance(message_id, str) or role not in _VALID_ROLES:
         return None
 
-    raw_turn_id = raw.get("turnId")
+    raw_turn_id = raw_dict.get("turnId")
     turn_id = raw_turn_id if isinstance(raw_turn_id, str) else None
 
-    raw_part_ids = raw.get("partIds")
+    raw_part_ids = raw_dict.get("partIds")
     part_ids = (
         tuple(part_id for part_id in raw_part_ids if isinstance(part_id, str))
         if isinstance(raw_part_ids, list)
