@@ -26,88 +26,89 @@ def to_ui_parts(parts: list[messages_.Part]) -> list[ui_messages.UIMessagePart]:
     """Convert internal parts to UI message parts."""
     result: list[ui_messages.UIMessagePart] = []
     for part in parts:
-        if isinstance(part, messages_.TextPart) and part.text:
-            result.append(
-                ui_messages.UITextPart.model_validate(
-                    {
-                        "type": "text",
-                        "text": part.text,
-                        "providerMetadata": part.provider_metadata,
-                    }
+        match part:
+            case messages_.TextPart(text=text) if text:
+                result.append(
+                    ui_messages.UITextPart.model_validate(
+                        {
+                            "type": "text",
+                            "text": text,
+                            "providerMetadata": part.provider_metadata,
+                        }
+                    )
                 )
-            )
-        elif isinstance(part, messages_.ReasoningPart) and part.text:
-            result.append(
-                ui_messages.UIReasoningPart.model_validate(
-                    {
-                        "type": "reasoning",
-                        "text": part.text,
-                        "providerMetadata": part.provider_metadata,
-                    }
+            case messages_.ReasoningPart(text=text) if text:
+                result.append(
+                    ui_messages.UIReasoningPart.model_validate(
+                        {
+                            "type": "reasoning",
+                            "text": text,
+                            "providerMetadata": part.provider_metadata,
+                        }
+                    )
                 )
-            )
-        elif isinstance(part, messages_.ToolCallPart):
-            result.append(
-                ui_messages.UIToolPart.model_validate(
-                    {
-                        "type": f"tool-{part.tool_name}",
-                        "toolCallId": part.tool_call_id,
-                        "state": "input-available",
-                        "input": normalize_tool_input(part.tool_args),
-                        "callProviderMetadata": part.provider_metadata,
-                    }
+            case messages_.ToolCallPart():
+                result.append(
+                    ui_messages.UIToolPart.model_validate(
+                        {
+                            "type": f"tool-{part.tool_name}",
+                            "toolCallId": part.tool_call_id,
+                            "state": "input-available",
+                            "input": normalize_tool_input(part.tool_args),
+                            "callProviderMetadata": part.provider_metadata,
+                        }
+                    )
                 )
-            )
-        elif isinstance(part, messages_.BuiltinToolCallPart):
-            result.append(
-                ui_messages.UIDynamicToolPart.model_validate(
-                    {
-                        "type": "dynamic-tool",
-                        "toolName": part.tool_name,
-                        "toolCallId": part.tool_call_id,
-                        "state": "input-available",
-                        "input": normalize_tool_input(part.tool_args),
-                        "providerExecuted": True,
-                        "callProviderMetadata": part.provider_metadata,
-                    }
+            case messages_.BuiltinToolCallPart():
+                result.append(
+                    ui_messages.UIDynamicToolPart.model_validate(
+                        {
+                            "type": "dynamic-tool",
+                            "toolName": part.tool_name,
+                            "toolCallId": part.tool_call_id,
+                            "state": "input-available",
+                            "input": normalize_tool_input(part.tool_args),
+                            "providerExecuted": True,
+                            "callProviderMetadata": part.provider_metadata,
+                        }
+                    )
                 )
-            )
-        elif isinstance(part, messages_.BuiltinToolReturnPart):
-            result.append(
-                ui_messages.UIDynamicToolPart.model_validate(
-                    {
-                        "type": "dynamic-tool",
-                        "toolName": part.tool_name,
-                        "toolCallId": part.tool_call_id,
-                        "state": (
-                            "output-error"
-                            if part.is_error
-                            else "output-available"
-                        ),
-                        "input": None,
-                        "output": None if part.is_error else part.result,
-                        "errorText": (
-                            str(part.result) if part.is_error else None
-                        ),
-                        "providerExecuted": True,
-                        "resultProviderMetadata": part.provider_metadata,
-                    }
+            case messages_.BuiltinToolReturnPart():
+                result.append(
+                    ui_messages.UIDynamicToolPart.model_validate(
+                        {
+                            "type": "dynamic-tool",
+                            "toolName": part.tool_name,
+                            "toolCallId": part.tool_call_id,
+                            "state": (
+                                "output-error"
+                                if part.is_error
+                                else "output-available"
+                            ),
+                            "input": None,
+                            "output": None if part.is_error else part.result,
+                            "errorText": (
+                                str(part.result) if part.is_error else None
+                            ),
+                            "providerExecuted": True,
+                            "resultProviderMetadata": part.provider_metadata,
+                        }
+                    )
                 )
-            )
-        elif isinstance(part, messages_.FilePart):
-            result.append(
-                ui_messages.UIFilePart.model_validate(
-                    {
-                        "type": "file",
-                        "mediaType": part.media_type,
-                        "url": media.data_to_data_url(
-                            part.data, part.media_type
-                        ),
-                        "filename": part.filename,
-                        "providerMetadata": part.provider_metadata,
-                    }
+            case messages_.FilePart():
+                result.append(
+                    ui_messages.UIFilePart.model_validate(
+                        {
+                            "type": "file",
+                            "mediaType": part.media_type,
+                            "url": media.data_to_data_url(
+                                part.data, part.media_type
+                            ),
+                            "filename": part.filename,
+                            "providerMetadata": part.provider_metadata,
+                        }
+                    )
                 )
-            )
     return result
 
 
@@ -193,35 +194,37 @@ def merge_tool_results(
             tool_index[ui_part.tool_call_id] = idx
 
     for part in tool_parts:
-        if isinstance(part, messages_.ToolResultPart):
-            tool_call_id = part.tool_call_id
-            state = "output-error" if part.is_error else "output-available"
-            updates: dict[str, Any] = {
-                "state": state,
-                "result_provider_metadata": part.provider_metadata,
-            }
-            if part.is_error:
-                updates["error_text"] = str(part.result)
-            else:
-                updates["output"] = part.result
-        elif isinstance(part, messages_.BuiltinToolReturnPart):
-            tool_call_id = part.tool_call_id
-            updates = {
-                "state": (
-                    "output-error" if part.is_error else "output-available"
-                ),
-                "provider_executed": True,
-                "result_provider_metadata": part.provider_metadata,
-            }
-            if part.is_error:
-                updates["error_text"] = str(part.result)
-            else:
-                updates["output"] = part.result
-        else:
-            continue
+        updates: dict[str, Any]
+        match part:
+            case messages_.ToolResultPart() if part.is_hook_pending:
+                continue
+            case messages_.ToolResultPart():
+                tool_call_id = part.tool_call_id
+                state = "output-error" if part.is_error else "output-available"
+                updates = {
+                    "state": state,
+                    "result_provider_metadata": part.provider_metadata,
+                }
+                if part.is_error:
+                    updates["error_text"] = str(part.result)
+                else:
+                    updates["output"] = part.result
+            case messages_.BuiltinToolReturnPart():
+                tool_call_id = part.tool_call_id
+                updates = {
+                    "state": (
+                        "output-error" if part.is_error else "output-available"
+                    ),
+                    "provider_executed": True,
+                    "result_provider_metadata": part.provider_metadata,
+                }
+                if part.is_error:
+                    updates["error_text"] = str(part.result)
+                else:
+                    updates["output"] = part.result
+            case _:
+                continue
 
-        if isinstance(part, messages_.ToolResultPart) and part.is_hook_pending:
-            continue
         idx_opt = tool_index.get(tool_call_id)
         if idx_opt is None:
             continue
@@ -273,35 +276,42 @@ def merge_approval_signals(
             updates["provider_executed"] = provider_executed
         is_automatic = part.metadata.get("isAutomatic")
         is_automatic = is_automatic if isinstance(is_automatic, bool) else None
-        if part.status == "pending":
-            updates["state"] = "approval-requested"
-            updates["approval"] = ui_messages.UIToolApproval.model_validate(
-                {
-                    "id": part.hook_id,
-                    "isAutomatic": is_automatic,
-                }
-            )
-        elif part.status == "resolved":
-            resolution = cast(
-                "dict[str, Any]",
-                part.resolution if isinstance(part.resolution, dict) else {},
-            )
-            updates["approval"] = ui_messages.UIToolApproval.model_validate(
-                {
-                    "id": part.hook_id,
-                    "approved": resolution.get("granted"),
-                    "reason": resolution.get("reason"),
-                    "isAutomatic": is_automatic,
-                }
-            )
-            if resolution.get("granted", False):
-                updates["state"] = "approval-responded"
-            else:
-                updates["state"] = "output-denied"
-                updates["output"] = None
-        elif part.status == "cancelled":
-            updates["state"] = "output-error"
-            updates["error_text"] = "Hook cancelled"
+        match part.status:
+            case "pending":
+                updates["state"] = "approval-requested"
+                updates["approval"] = (
+                    ui_messages.UIToolApproval.model_validate(
+                        {
+                            "id": part.hook_id,
+                            "isAutomatic": is_automatic,
+                        }
+                    )
+                )
+            case "resolved":
+                resolution = cast(
+                    "dict[str, Any]",
+                    part.resolution
+                    if isinstance(part.resolution, dict)
+                    else {},
+                )
+                updates["approval"] = (
+                    ui_messages.UIToolApproval.model_validate(
+                        {
+                            "id": part.hook_id,
+                            "approved": resolution.get("granted"),
+                            "reason": resolution.get("reason"),
+                            "isAutomatic": is_automatic,
+                        }
+                    )
+                )
+                if resolution.get("granted", False):
+                    updates["state"] = "approval-responded"
+                else:
+                    updates["state"] = "output-denied"
+                    updates["output"] = None
+            case "cancelled":
+                updates["state"] = "output-error"
+                updates["error_text"] = "Hook cancelled"
 
         if updates:
             ui_parts[idx] = existing.model_copy(update=updates)
@@ -317,52 +327,54 @@ def to_ui_messages(
     while i < len(messages):
         msg = messages[i]
 
-        if msg.role in ("user", "system"):
-            result.append(
-                ui_messages.UIMessage(
-                    id=msg.id,
-                    role=msg.role,
-                    metadata=id_utils.metadata_for([msg]),
-                    parts=to_ui_parts(msg.parts),
+        match msg.role:
+            case "user" | "system":
+                result.append(
+                    ui_messages.UIMessage(
+                        id=msg.id,
+                        role=msg.role,
+                        metadata=id_utils.metadata_for([msg]),
+                        parts=to_ui_parts(msg.parts),
+                    )
                 )
-            )
-            i += 1
-            continue
-
-        if msg.role == "assistant":
-            ui_parts: list[ui_messages.UIMessagePart] = []
-            source_messages: list[messages_.Message] = []
-            bubble_id = msg.turn_id or msg.id
-
-            while i < len(messages) and messages[i].role in (
-                "assistant",
-                "tool",
-                "internal",
-            ):
-                current = messages[i]
-                if current.turn_id is not None and current.turn_id != bubble_id:
-                    break
-                source_messages.append(current)
-                if current.role == "assistant":
-                    ui_parts.extend(to_ui_parts(current.parts))
-                    ui_parts = dedupe_tool_parts(ui_parts)
-                elif current.role == "tool":
-                    merge_tool_results(ui_parts, current.parts)
-                elif current.role == "internal":
-                    merge_approval_signals(ui_parts, current.parts)
                 i += 1
-            ui_parts = dedupe_tool_parts(ui_parts)
+            case "assistant":
+                ui_parts: list[ui_messages.UIMessagePart] = []
+                source_messages: list[messages_.Message] = []
+                bubble_id = msg.turn_id or msg.id
 
-            result.append(
-                ui_messages.UIMessage(
-                    id=bubble_id,
-                    role="assistant",
-                    metadata=id_utils.metadata_for(source_messages),
-                    parts=ui_parts,
+                while i < len(messages) and messages[i].role in (
+                    "assistant",
+                    "tool",
+                    "internal",
+                ):
+                    current = messages[i]
+                    if (
+                        current.turn_id is not None
+                        and current.turn_id != bubble_id
+                    ):
+                        break
+                    source_messages.append(current)
+                    match current.role:
+                        case "assistant":
+                            ui_parts.extend(to_ui_parts(current.parts))
+                            ui_parts = dedupe_tool_parts(ui_parts)
+                        case "tool":
+                            merge_tool_results(ui_parts, current.parts)
+                        case "internal":
+                            merge_approval_signals(ui_parts, current.parts)
+                    i += 1
+                ui_parts = dedupe_tool_parts(ui_parts)
+
+                result.append(
+                    ui_messages.UIMessage(
+                        id=bubble_id,
+                        role="assistant",
+                        metadata=id_utils.metadata_for(source_messages),
+                        parts=ui_parts,
+                    )
                 )
-            )
-            continue
-
-        i += 1
+            case _:
+                i += 1
 
     return result

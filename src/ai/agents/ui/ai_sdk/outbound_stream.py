@@ -460,51 +460,54 @@ class _StreamState:
 
         is_automatic = hook_part.metadata.get("isAutomatic")
         is_automatic = is_automatic if isinstance(is_automatic, bool) else None
-        if hook_part.status == "pending":
-            if tc_id in self.emitted_approval_requests:
-                return out
-            self.emitted_approval_requests.add(tc_id)
-            out.append(
-                ui_events.UIToolApprovalRequestEvent(
-                    approval_id=hook_part.hook_id,
-                    tool_call_id=tc_id,
-                    is_automatic=is_automatic,
-                )
-            )
-        elif hook_part.status == "resolved":
-            resolution: dict[str, Any] = hook_part.resolution or {}
-            provider_executed = hook_part.metadata.get("providerExecuted")
-            provider_executed = (
-                provider_executed
-                if isinstance(provider_executed, bool)
-                else None
-            )
-            provider_metadata = hook_part.metadata.get("callProviderMetadata")
-            provider_metadata = (
-                provider_metadata
-                if isinstance(provider_metadata, dict)
-                else None
-            )
-            out.append(
-                ui_events.UIToolApprovalResponseEvent(
-                    approval_id=hook_part.hook_id,
-                    approved=bool(resolution.get("granted")),
-                    reason=resolution.get("reason"),
-                    provider_executed=provider_executed,
-                    provider_metadata=provider_metadata,
-                )
-            )
-            if not resolution.get("granted"):
+        match hook_part.status:
+            case "pending":
+                if tc_id in self.emitted_approval_requests:
+                    return out
+                self.emitted_approval_requests.add(tc_id)
                 out.append(
-                    ui_events.UIToolOutputDeniedEvent(tool_call_id=tc_id)
+                    ui_events.UIToolApprovalRequestEvent(
+                        approval_id=hook_part.hook_id,
+                        tool_call_id=tc_id,
+                        is_automatic=is_automatic,
+                    )
                 )
-        elif hook_part.status == "cancelled":
-            out.append(
-                ui_events.UIToolOutputErrorEvent(
-                    tool_call_id=tc_id,
-                    error_text="Hook cancelled",
+            case "resolved":
+                resolution: dict[str, Any] = hook_part.resolution or {}
+                provider_executed = hook_part.metadata.get("providerExecuted")
+                provider_executed = (
+                    provider_executed
+                    if isinstance(provider_executed, bool)
+                    else None
                 )
-            )
+                provider_metadata = hook_part.metadata.get(
+                    "callProviderMetadata"
+                )
+                provider_metadata = (
+                    provider_metadata
+                    if isinstance(provider_metadata, dict)
+                    else None
+                )
+                out.append(
+                    ui_events.UIToolApprovalResponseEvent(
+                        approval_id=hook_part.hook_id,
+                        approved=bool(resolution.get("granted")),
+                        reason=resolution.get("reason"),
+                        provider_executed=provider_executed,
+                        provider_metadata=provider_metadata,
+                    )
+                )
+                if not resolution.get("granted"):
+                    out.append(
+                        ui_events.UIToolOutputDeniedEvent(tool_call_id=tc_id)
+                    )
+            case "cancelled":
+                out.append(
+                    ui_events.UIToolOutputErrorEvent(
+                        tool_call_id=tc_id,
+                        error_text="Hook cancelled",
+                    )
+                )
 
         return out
 
@@ -527,18 +530,19 @@ async def to_stream(
     state = _StreamState()
 
     async for event in events:
-        if isinstance(event, events_.ToolCallResult):
-            for ui_event in state.on_tool_result(event):
-                yield ui_event
-        elif isinstance(event, events_.PartialToolCallResult):
-            for ui_event in state.on_partial_tool_result(event):
-                yield ui_event
-        elif isinstance(event, events_.HookEvent):
-            for ui_event in state.on_hook(event):
-                yield ui_event
-        else:
-            for ui_event in state.on_event(event):
-                yield ui_event
+        match event:
+            case events_.ToolCallResult():
+                for ui_event in state.on_tool_result(event):
+                    yield ui_event
+            case events_.PartialToolCallResult():
+                for ui_event in state.on_partial_tool_result(event):
+                    yield ui_event
+            case events_.HookEvent():
+                for ui_event in state.on_hook(event):
+                    yield ui_event
+            case _:
+                for ui_event in state.on_event(event):
+                    yield ui_event
 
     for ui_event in state.finish():
         yield ui_event
