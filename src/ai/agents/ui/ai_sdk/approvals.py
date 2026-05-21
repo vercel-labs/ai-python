@@ -32,37 +32,19 @@ def tool_call_id_for(hook_part: messages_.HookPart[Any]) -> str | None:
     return None
 
 
-def metadata_bool(metadata: dict[str, Any], key: str) -> bool | None:
-    value = metadata.get(key)
-    return value if isinstance(value, bool) else None
-
-
-def metadata_dict(
-    metadata: dict[str, Any],
-    key: str,
-) -> dict[str, Any] | None:
-    value = metadata.get(key)
-    return value if isinstance(value, dict) else None
-
-
-def metadata_from_tool_part(tp: ToolPart) -> dict[str, Any]:
-    metadata: dict[str, Any] = {}
-    if tp.approval is not None and tp.approval.is_automatic is not None:
-        metadata["isAutomatic"] = tp.approval.is_automatic
-    if tp.provider_executed is not None:
-        metadata["providerExecuted"] = tp.provider_executed
-    if tp.call_provider_metadata is not None:
-        metadata["callProviderMetadata"] = tp.call_provider_metadata
-    return metadata
-
-
 def hook_part_from_tool_part(tp: ToolPart) -> messages_.HookPart[Any] | None:
     """Reconstruct approval hook state from a UI tool part when possible."""
     approval = tp.approval
     if approval is None:
         return None
 
-    metadata = metadata_from_tool_part(tp)
+    metadata: dict[str, Any] = {}
+    if approval.is_automatic is not None:
+        metadata["isAutomatic"] = approval.is_automatic
+    if tp.provider_executed is not None:
+        metadata["providerExecuted"] = tp.provider_executed
+    if tp.call_provider_metadata is not None:
+        metadata["callProviderMetadata"] = tp.call_provider_metadata
 
     if tp.state == "approval-requested":
         return messages_.HookPart(

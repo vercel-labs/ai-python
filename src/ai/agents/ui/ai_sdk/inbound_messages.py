@@ -26,22 +26,6 @@ _TOOL_ERROR_STATES: frozenset[str] = frozenset(
 )
 
 
-def _is_tool_completed(state: ui_messages_.UIToolInvocationState) -> bool:
-    return state in _TOOL_RESULT_STATES or state in _TOOL_ERROR_STATES
-
-
-def _is_tool_error(state: ui_messages_.UIToolInvocationState) -> bool:
-    return state in _TOOL_ERROR_STATES
-
-
-def _tool_input_for_args(
-    part: ui_messages_.UIToolPart | ui_messages_.UIDynamicToolPart,
-) -> Any:
-    if part.state == "output-error" and part.input is None:
-        return part.raw_input
-    return part.input
-
-
 def _tool_result_output(
     part: ui_messages_.UIToolPart | ui_messages_.UIDynamicToolPart,
 ) -> Any:
@@ -254,22 +238,6 @@ def _parse(
             is_error=is_error,
         )
 
-    def _build_builtin_return_part(
-        *,
-        tool_call_id: str,
-        tool_name: str,
-        output: Any,
-        is_error: bool,
-        provider_metadata: dict[str, Any] | None,
-    ) -> messages_.BuiltinToolReturnPart:
-        return messages_.BuiltinToolReturnPart(
-            tool_call_id=tool_call_id,
-            tool_name=tool_name,
-            result=output,
-            is_error=is_error,
-            provider_metadata=provider_metadata,
-        )
-
     result: list[messages_.Message] = []
 
     for ui_msg in ui_messages:
@@ -298,6 +266,11 @@ def _parse(
 
                 case ui_messages_.UIToolInvocationPart() as inv:
                     tool_args = json.dumps(inv.args) if inv.args else "{}"
+                    is_completed = (
+                        inv.state in _TOOL_RESULT_STATES
+                        or inv.state in _TOOL_ERROR_STATES
+                    )
+                    is_error = inv.state in _TOOL_ERROR_STATES
                     if inv.provider_executed:
                         assistant_parts.append(
                             messages_.BuiltinToolCallPart(
@@ -306,13 +279,13 @@ def _parse(
                                 tool_args=tool_args,
                             )
                         )
-                        if _is_tool_completed(inv.state):
+                        if is_completed:
                             assistant_parts.append(
-                                _build_builtin_return_part(
+                                messages_.BuiltinToolReturnPart(
                                     tool_call_id=inv.tool_invocation_id,
                                     tool_name=inv.tool_name,
-                                    output=inv.result,
-                                    is_error=_is_tool_error(inv.state),
+                                    result=inv.result,
+                                    is_error=is_error,
                                     provider_metadata=None,
                                 )
                             )
@@ -324,13 +297,13 @@ def _parse(
                                 tool_args=tool_args,
                             )
                         )
-                        if _is_tool_completed(inv.state):
+                        if is_completed:
                             tool_result_parts.append(
                                 _build_result_part(
                                     tool_call_id=inv.tool_invocation_id,
                                     tool_name=inv.tool_name,
                                     output=inv.result,
-                                    is_error=_is_tool_error(inv.state),
+                                    is_error=is_error,
                                 )
                             )
 
@@ -340,8 +313,17 @@ def _parse(
                         | ui_messages_.UIDynamicToolPart()
                     ) as tp
                 ):
-                    tool_input = _tool_input_for_args(tp)
+                    tool_input = (
+                        tp.raw_input
+                        if tp.state == "output-error" and tp.input is None
+                        else tp.input
+                    )
                     tool_args = normalize_tool_args(tool_input)
+                    is_completed = (
+                        tp.state in _TOOL_RESULT_STATES
+                        or tp.state in _TOOL_ERROR_STATES
+                    )
+                    is_error = tp.state in _TOOL_ERROR_STATES
 
                     if tp.provider_executed:
                         assistant_parts.append(
@@ -365,13 +347,13 @@ def _parse(
                     if approval_hook is not None:
                         hook_parts.append(approval_hook)
 
-                    if tp.provider_executed and _is_tool_completed(tp.state):
+                    if tp.provider_executed and is_completed:
                         assistant_parts.append(
-                            _build_builtin_return_part(
+                            messages_.BuiltinToolReturnPart(
                                 tool_call_id=tp.tool_call_id,
                                 tool_name=tp.tool_name,
-                                output=_tool_result_output(tp),
-                                is_error=_is_tool_error(tp.state),
+                                result=_tool_result_output(tp),
+                                is_error=is_error,
                                 provider_metadata=(
                                     tp.result_provider_metadata
                                     or tp.call_provider_metadata
@@ -384,7 +366,7 @@ def _parse(
                                 tool_call_id=tp.tool_call_id,
                                 tool_name=tp.tool_name,
                                 output=_tool_result_output(tp),
-                                is_error=_is_tool_error(tp.state),
+                                is_error=is_error,
                             )
                         )
                         if tp.result_provider_metadata is not None:
@@ -494,32 +476,26 @@ def _split_assistant_parts(
     current_results: list[messages_.ToolResultPart] = []
     seen_tool_call = False
 
-    def _append_assistant(parts_: list[messages_.Part]) -> None:
-        messages.append(
-            messages_.Message(
-                role="assistant",
-                parts=parts_,
-                turn_id=turn_id,
-            )
-        )
-
-    def _append_tool(parts_: list[messages_.ToolResultPart]) -> None:
-        messages.append(
-            messages_.Message(
-                role="tool",
-                parts=list(parts_),
-                turn_id=turn_id,
-            )
-        )
-
     for part in parts:
         if (
             seen_tool_call
             and current_results
             and not isinstance(part, messages_.ToolCallPart)
         ):
-            _append_assistant(current)
-            _append_tool(current_results)
+            messages.append(
+                messages_.Message(
+                    role="assistant",
+                    parts=current,
+                    turn_id=turn_id,
+                )
+            )
+            messages.append(
+                messages_.Message(
+                    role="tool",
+                    parts=list(current_results),
+                    turn_id=turn_id,
+                )
+            )
             current = []
             current_results = []
             seen_tool_call = False
@@ -532,8 +508,20 @@ def _split_assistant_parts(
                 current_results.append(results_by_id[part.tool_call_id])
 
     if current:
-        _append_assistant(current)
+        messages.append(
+            messages_.Message(
+                role="assistant",
+                parts=current,
+                turn_id=turn_id,
+            )
+        )
     if current_results:
-        _append_tool(current_results)
+        messages.append(
+            messages_.Message(
+                role="tool",
+                parts=list(current_results),
+                turn_id=turn_id,
+            )
+        )
 
     return messages

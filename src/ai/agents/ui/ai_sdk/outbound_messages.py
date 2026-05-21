@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, TypeGuard, cast
+from typing import Any, cast
 
 from ....types import media
 from ....types import messages as messages_
@@ -20,32 +20,6 @@ _TOOL_STATE_RANK: dict[ui_messages.UIToolInvocationState, int] = {
     "output-error": 5,
     "output-available": 6,
 }
-
-
-def _is_tool_part(part: ui_messages.UIMessagePart) -> TypeGuard[UIToolLike]:
-    return isinstance(
-        part, ui_messages.UIToolPart | ui_messages.UIDynamicToolPart
-    )
-
-
-def _tool_call_id(part: UIToolLike) -> str:
-    return part.tool_call_id
-
-
-def _message_turn_key(message: messages_.Message) -> str | None:
-    return message.turn_id
-
-
-def _assistant_bubble_id(message: messages_.Message) -> str:
-    return _message_turn_key(message) or message.id
-
-
-def _belongs_to_bubble(
-    message: messages_.Message,
-    bubble_id: str,
-) -> bool:
-    key = _message_turn_key(message)
-    return key is None or key == bubble_id
 
 
 def to_ui_parts(parts: list[messages_.Part]) -> list[ui_messages.UIMessagePart]:
@@ -185,18 +159,22 @@ def dedupe_tool_parts(
     tool_index: dict[str, int] = {}
 
     for part in ui_parts:
-        if not _is_tool_part(part):
+        if not isinstance(
+            part, ui_messages.UIToolPart | ui_messages.UIDynamicToolPart
+        ):
             result.append(part)
             continue
 
-        idx = tool_index.get(_tool_call_id(part))
+        idx = tool_index.get(part.tool_call_id)
         if idx is None:
-            tool_index[_tool_call_id(part)] = len(result)
+            tool_index[part.tool_call_id] = len(result)
             result.append(part)
             continue
 
         existing = result[idx]
-        if _is_tool_part(existing):
+        if isinstance(
+            existing, ui_messages.UIToolPart | ui_messages.UIDynamicToolPart
+        ):
             result[idx] = _merge_tool_part(existing, part)
 
     return result
@@ -209,8 +187,10 @@ def merge_tool_results(
     """Merge tool result parts into existing UI tool parts."""
     tool_index: dict[str, int] = {}
     for idx, ui_part in enumerate(ui_parts):
-        if _is_tool_part(ui_part):
-            tool_index[_tool_call_id(ui_part)] = idx
+        if isinstance(
+            ui_part, ui_messages.UIToolPart | ui_messages.UIDynamicToolPart
+        ):
+            tool_index[ui_part.tool_call_id] = idx
 
     for part in tool_parts:
         if isinstance(part, messages_.ToolResultPart):
@@ -247,7 +227,9 @@ def merge_tool_results(
             continue
         idx = idx_opt
         existing = ui_parts[idx]
-        if not _is_tool_part(existing):
+        if not isinstance(
+            existing, ui_messages.UIToolPart | ui_messages.UIDynamicToolPart
+        ):
             continue
         if existing.state == "output-denied":
             continue
@@ -261,8 +243,10 @@ def merge_approval_signals(
     """Merge approval hook state into existing UI tool parts."""
     tool_index: dict[str, int] = {}
     for idx, ui_part in enumerate(ui_parts):
-        if _is_tool_part(ui_part):
-            tool_index[_tool_call_id(ui_part)] = idx
+        if isinstance(
+            ui_part, ui_messages.UIToolPart | ui_messages.UIDynamicToolPart
+        ):
+            tool_index[ui_part.tool_call_id] = idx
 
     for part in internal_parts:
         if not isinstance(part, messages_.HookPart):
@@ -278,24 +262,23 @@ def merge_approval_signals(
         idx = idx_opt
 
         existing = ui_parts[idx]
-        if not _is_tool_part(existing):
+        if not isinstance(
+            existing, ui_messages.UIToolPart | ui_messages.UIDynamicToolPart
+        ):
             continue
 
         updates: dict[str, Any] = {}
-        if (
-            provider_executed := approvals.metadata_bool(
-                part.metadata, "providerExecuted"
-            )
-        ) is not None:
+        provider_executed = part.metadata.get("providerExecuted")
+        if isinstance(provider_executed, bool):
             updates["provider_executed"] = provider_executed
+        is_automatic = part.metadata.get("isAutomatic")
+        is_automatic = is_automatic if isinstance(is_automatic, bool) else None
         if part.status == "pending":
             updates["state"] = "approval-requested"
             updates["approval"] = ui_messages.UIToolApproval.model_validate(
                 {
                     "id": part.hook_id,
-                    "isAutomatic": approvals.metadata_bool(
-                        part.metadata, "isAutomatic"
-                    ),
+                    "isAutomatic": is_automatic,
                 }
             )
         elif part.status == "resolved":
@@ -308,9 +291,7 @@ def merge_approval_signals(
                     "id": part.hook_id,
                     "approved": resolution.get("granted"),
                     "reason": resolution.get("reason"),
-                    "isAutomatic": approvals.metadata_bool(
-                        part.metadata, "isAutomatic"
-                    ),
+                    "isAutomatic": is_automatic,
                 }
             )
             if resolution.get("granted", False):
@@ -351,7 +332,7 @@ def to_ui_messages(
         if msg.role == "assistant":
             ui_parts: list[ui_messages.UIMessagePart] = []
             source_messages: list[messages_.Message] = []
-            bubble_id = _assistant_bubble_id(msg)
+            bubble_id = msg.turn_id or msg.id
 
             while i < len(messages) and messages[i].role in (
                 "assistant",
@@ -359,7 +340,7 @@ def to_ui_messages(
                 "internal",
             ):
                 current = messages[i]
-                if not _belongs_to_bubble(current, bubble_id):
+                if current.turn_id is not None and current.turn_id != bubble_id:
                     break
                 source_messages.append(current)
                 if current.role == "assistant":

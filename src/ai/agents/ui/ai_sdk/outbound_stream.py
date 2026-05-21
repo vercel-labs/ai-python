@@ -48,15 +48,6 @@ def _to_wire_output(snapshot: Any) -> Any:
     return snapshot
 
 
-def _stream_message_id(event: events_.Event) -> str | None:
-    message = event.message
-    if message.role != "assistant":
-        return None
-    if message.turn_id is not None:
-        return message.turn_id
-    return None if message.id == "<unset>" else message.id
-
-
 class _StreamState:
     """Single-pass state across one ``to_stream()`` call."""
 
@@ -99,20 +90,6 @@ class _StreamState:
         self.open_text_ids.clear()
         return events
 
-    def _finish_step(self) -> list[ui_events.UIMessageStreamEvent]:
-        events = self._close_open_blocks()
-        if self.in_step:
-            events.append(ui_events.UIFinishStepEvent())
-            self.in_step = False
-        return events
-
-    def _reset_step_tracking(self) -> None:
-        self.started_tool_inputs.clear()
-        self.tool_names.clear()
-        self.input_available_emitted.clear()
-        self.emitted_tool_results.clear()
-        self.emitted_approval_requests.clear()
-
     def _ensure_started(
         self,
         message_id: str | None = None,
@@ -126,7 +103,11 @@ class _StreamState:
             events.append(ui_events.UIStartStepEvent())
             self.emitted_start = True
             self.in_step = True
-            self._reset_step_tracking()
+            self.started_tool_inputs.clear()
+            self.tool_names.clear()
+            self.input_available_emitted.clear()
+            self.emitted_tool_results.clear()
+            self.emitted_approval_requests.clear()
 
         return events
 
@@ -139,7 +120,14 @@ class _StreamState:
 
         # Lazily open the UI message on the first streaming event.
         if not self.emitted_start:
-            out.extend(self._ensure_started(_stream_message_id(event)))
+            message = event.message
+            message_id = None
+            if message.role == "assistant":
+                if message.turn_id is not None:
+                    message_id = message.turn_id
+                elif message.id != "<unset>":
+                    message_id = message.id
+            out.extend(self._ensure_started(message_id))
 
         match event:
             case events_.TextStart(block_id=pid):
@@ -470,6 +458,8 @@ class _StreamState:
         if tc_id is None:
             return out
 
+        is_automatic = hook_part.metadata.get("isAutomatic")
+        is_automatic = is_automatic if isinstance(is_automatic, bool) else None
         if hook_part.status == "pending":
             if tc_id in self.emitted_approval_requests:
                 return out
@@ -478,24 +468,30 @@ class _StreamState:
                 ui_events.UIToolApprovalRequestEvent(
                     approval_id=hook_part.hook_id,
                     tool_call_id=tc_id,
-                    is_automatic=approvals.metadata_bool(
-                        hook_part.metadata, "isAutomatic"
-                    ),
+                    is_automatic=is_automatic,
                 )
             )
         elif hook_part.status == "resolved":
             resolution: dict[str, Any] = hook_part.resolution or {}
+            provider_executed = hook_part.metadata.get("providerExecuted")
+            provider_executed = (
+                provider_executed
+                if isinstance(provider_executed, bool)
+                else None
+            )
+            provider_metadata = hook_part.metadata.get("callProviderMetadata")
+            provider_metadata = (
+                provider_metadata
+                if isinstance(provider_metadata, dict)
+                else None
+            )
             out.append(
                 ui_events.UIToolApprovalResponseEvent(
                     approval_id=hook_part.hook_id,
                     approved=bool(resolution.get("granted")),
                     reason=resolution.get("reason"),
-                    provider_executed=approvals.metadata_bool(
-                        hook_part.metadata, "providerExecuted"
-                    ),
-                    provider_metadata=approvals.metadata_dict(
-                        hook_part.metadata, "callProviderMetadata"
-                    ),
+                    provider_executed=provider_executed,
+                    provider_metadata=provider_metadata,
                 )
             )
             if not resolution.get("granted"):
@@ -515,7 +511,10 @@ class _StreamState:
     # -- phase: stream finish ------------------------------------------------
 
     def finish(self) -> list[ui_events.UIMessageStreamEvent]:
-        events = self._finish_step()
+        events = self._close_open_blocks()
+        if self.in_step:
+            events.append(ui_events.UIFinishStepEvent())
+            self.in_step = False
         if self.emitted_start:
             events.append(ui_events.UIFinishEvent(finish_reason="stop"))
         return events

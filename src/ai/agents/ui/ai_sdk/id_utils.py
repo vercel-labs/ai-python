@@ -23,22 +23,19 @@ class SourceMessage:
     part_ids: tuple[str, ...]
 
 
-def source_message_entry(message: messages_.Message) -> dict[str, object]:
-    return {
-        "id": message.id,
-        "role": message.role,
-        "turnId": message.turn_id,
-        "partIds": [part.id for part in message.parts],
-    }
-
-
 def metadata_for(
     source_messages: list[messages_.Message],
 ) -> dict[str, object]:
     return {
         ADAPTER_METADATA_KEY: {
             SOURCE_MESSAGES_KEY: [
-                source_message_entry(message) for message in source_messages
+                {
+                    "id": message.id,
+                    "role": message.role,
+                    "turnId": message.turn_id,
+                    "partIds": [part.id for part in message.parts],
+                }
+                for message in source_messages
             ]
         }
     }
@@ -77,10 +74,13 @@ def restore_source_ids(
     source_index = 0
 
     for message in messages:
-        match_index = _find_next_source(
-            source_messages,
-            role=message.role,
-            start=source_index,
+        match_index = next(
+            (
+                index
+                for index in range(source_index, len(source_messages))
+                if source_messages[index].role == message.role
+            ),
+            None,
         )
         if match_index is None:
             restored.append(message)
@@ -119,18 +119,6 @@ def _parse_source_message(raw: object) -> SourceMessage | None:
         turn_id=turn_id,
         part_ids=part_ids,
     )
-
-
-def _find_next_source(
-    source_messages: list[SourceMessage],
-    *,
-    role: MessageRole,
-    start: int,
-) -> int | None:
-    for index in range(start, len(source_messages)):
-        if source_messages[index].role == role:
-            return index
-    return None
 
 
 def _restore_message_ids(
