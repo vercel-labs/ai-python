@@ -274,12 +274,30 @@ async def _run_turn(app: TauApp) -> None:
                     tc = event.tool_call
                     app.show_tool_call(tc.tool_name, tc.tool_args)
                 elif isinstance(event, ai.events.PartialToolCallResult):
-                    app.append_tool_result(event.tool_call_id, str(event.value))
+                    app.append_tool_result(
+                        event.tool_call_id, str(event.value)
+                    )
                 elif isinstance(event, ai.events.ToolCallResult):
                     for part in event.results:
                         # Skip if we already streamed this result.
-                        if part.tool_call_id not in app._tool_result_bubbles:
-                            app.show_tool_result(part.result, part.is_error)
+                        if (
+                            part.tool_call_id
+                            not in app._tool_result_bubbles
+                        ):
+                            app.show_tool_result(
+                                part.result, part.is_error
+                            )
+                # -- provider-executed (builtin) tools --
+                elif isinstance(event, ai.events.BuiltinToolEnd):
+                    tc = event.tool_call
+                    app.show_tool_call(
+                        tc.tool_name, tc.tool_args
+                    )
+                elif isinstance(event, ai.events.BuiltinToolResult):
+                    app.show_tool_result(
+                        event.result.result,
+                        event.result.is_error,
+                    )
                 elif isinstance(event, ai.events.HookEvent):
                     app.on_hook_event(Hook.from_event(event.hook))
         except asyncio.CancelledError:
@@ -835,6 +853,15 @@ class TauApp(textual.app.App[None]):
 
     def _restore_session(self, path: pathlib.Path) -> None:
         self.session.restore(path)
+        # Replace the persisted system message with the current
+        # one so it reflects the latest tools and AGENTS.md.
+        if (
+            self.session.messages
+            and self.session.messages[0].role == "system"
+        ):
+            self.session.messages[0] = ai.system_message(
+                SYSTEM_PROMPT
+            )
         _replay_session(self)
         self.session.refresh_usage()
         self._update_usage_display()
