@@ -41,7 +41,7 @@ def _detect_image_mime(path: pathlib.Path) -> str | None:
         header = path.read_bytes()[:32]
     except OSError:
         return None
-    mime = ai.messages.media.detect_image_media_type(header)
+    mime = ai.types.media.detect_image_media_type(header)
     return mime if mime in _IMAGE_MIME_TYPES else None
 
 

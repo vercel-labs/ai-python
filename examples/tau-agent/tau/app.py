@@ -281,7 +281,10 @@ async def _run_turn(app: TauApp) -> None:
                     tc = event.tool_call
                     app.show_tool_call(tc.tool_name, tc.tool_args)
                 elif isinstance(event, ai.events.PartialToolCallResult):
-                    app.append_tool_result(event.tool_call_id, str(event.value))
+                    if event.tool_call_id is not None:
+                        app.append_tool_result(
+                            event.tool_call_id, str(event.value)
+                        )
                 elif isinstance(event, ai.events.ToolCallResult):
                     for part in event.results:
                         # Skip if we already streamed this result.
@@ -289,8 +292,8 @@ async def _run_turn(app: TauApp) -> None:
                             app.show_tool_result(part.result, part.is_error)
                 # -- provider-executed (builtin) tools --
                 elif isinstance(event, ai.events.BuiltinToolEnd):
-                    tc = event.tool_call
-                    app.show_tool_call(tc.tool_name, tc.tool_args)
+                    btc = event.tool_call
+                    app.show_tool_call(btc.tool_name, btc.tool_args)
                 elif isinstance(event, ai.events.BuiltinToolResult):
                     app.show_tool_result(
                         event.result.result,

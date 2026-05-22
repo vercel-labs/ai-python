@@ -30,5 +30,6 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 
 [dependency-groups]
 dev = [
+    "mypy~=2.1.0",
     "ruff>=0.15.12",
 ]
