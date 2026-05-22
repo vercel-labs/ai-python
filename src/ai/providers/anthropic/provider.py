@@ -137,7 +137,6 @@ class AnthropicCompatibleProvider(base.Provider[AnthropicSDKClient]):
         tools: Sequence[tools_.Tool] | None = None,
         output_type: type[pydantic.BaseModel] | None = None,
         params: Any = None,
-        protocol: base.ProviderProtocol[Any] | None = None,
     ) -> AsyncGenerator[events.Event]:
         """Stream via the Anthropic messages protocol."""
         return super().stream(
@@ -146,7 +145,6 @@ class AnthropicCompatibleProvider(base.Provider[AnthropicSDKClient]):
             tools=tools,
             output_type=output_type,
             params=params,
-            protocol=protocol,
         )
 
     @classmethod

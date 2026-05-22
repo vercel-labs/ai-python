@@ -21,7 +21,7 @@ import argparse
 import runpy
 import sys
 from collections.abc import Callable
-from typing import Any, cast
+from typing import Any, TypeVar, cast
 
 import ai
 from ai import models
@@ -39,6 +39,8 @@ from ai.providers.openai import (
 )
 
 PROTOCOLS = ("chat", "messages", "responses")
+
+ModelT = TypeVar("ModelT", bound=ai.Model)
 
 
 def _protocol_factory(
@@ -107,36 +109,69 @@ def main() -> None:
         return None
 
     def selected_protocol_for_model(
-        model: Any,
+        model: ai.Model,
     ) -> ai.ProviderProtocol[Any] | None:
-        provider = getattr(model, "provider", None)
-        if provider is None:
-            return None
-        return selected_protocol_for_provider(provider)
+        return selected_protocol_for_provider(model.provider)
+
+    def with_selected_protocol(model: ModelT) -> ModelT:
+        protocol = selected_protocol_for_model(model)
+        if protocol is None:
+            return model
+        return model.with_protocol(protocol)
+
+    class PatchedContext:
+        def __init__(self, context: Any) -> None:
+            self._context = context
+            self._model = with_selected_protocol(context.model)
+
+        @property
+        def model(self) -> Any:
+            return self._model
+
+        @property
+        def messages(self) -> Any:
+            return self._context.messages
+
+        @property
+        def tools(self) -> Any:
+            return self._context.tools
+
+        @property
+        def output_type(self) -> Any:
+            return self._context.output_type
+
+        @property
+        def params(self) -> Any:
+            return self._context.params
 
     def patched_get_model(*_args: Any, **_kwargs: Any) -> ai.Model:
         model_id = args.model or (
             _args[0] if _args else _kwargs.get("model_id")
         )
         model = original_get_model(model_id)
-        model.protocol = selected_protocol_for_model(model)
-        return model
+        return with_selected_protocol(model)
 
-    def patched_stream(*args: Any, **kwargs: Any) -> Any:
-        model = (
-            args[0] if args else getattr(kwargs.get("context"), "model", None)
-        )
-        protocol = selected_protocol_for_model(model)
-        if protocol is not None:
-            kwargs["protocol"] = protocol
-        return original_stream(*args, **kwargs)
+    def patched_stream(*call_args: Any, **kwargs: Any) -> Any:
+        if call_args:
+            call_args = (
+                with_selected_protocol(call_args[0]),
+                *call_args[1:],
+            )
+        elif "model" in kwargs and kwargs["model"] is not None:
+            kwargs["model"] = with_selected_protocol(kwargs["model"])
+        elif kwargs.get("context") is not None:
+            kwargs["context"] = PatchedContext(kwargs["context"])
+        return original_stream(*call_args, **kwargs)
 
-    async def patched_generate(*args: Any, **kwargs: Any) -> Any:
-        model = args[0] if args else kwargs.get("model")
-        protocol = selected_protocol_for_model(model)
-        if protocol is not None:
-            kwargs["protocol"] = protocol
-        return await original_generate(*args, **kwargs)
+    async def patched_generate(*call_args: Any, **kwargs: Any) -> Any:
+        if call_args:
+            call_args = (
+                with_selected_protocol(call_args[0]),
+                *call_args[1:],
+            )
+        elif "model" in kwargs and kwargs["model"] is not None:
+            kwargs["model"] = with_selected_protocol(kwargs["model"])
+        return await original_generate(*call_args, **kwargs)
 
     class PatchedModel(_model.Model):
         def __init__(

@@ -26,7 +26,6 @@ from ...types import integrity
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, AsyncIterator, Sequence
 
-    from ...providers import base as provider_base
     from . import model as model_
     from . import params as params_
 
@@ -43,7 +42,6 @@ class StreamRequest:
     tools: Sequence[types.tools.Tool] | None = None
     output_type: type[pydantic.BaseModel] | None = None
     params: Any = None
-    protocol: provider_base.ProviderProtocol[Any] | None = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -51,7 +49,6 @@ class GenerateRequest:
     model: model_.Model
     messages: list[types.messages.Message]
     params: params_.GenerateParams
-    protocol: provider_base.ProviderProtocol[Any] | None = None
 
 
 @runtime_checkable
@@ -82,7 +79,6 @@ class Executor:
             tools=request.tools,
             output_type=request.output_type,
             params=request.params,
-            protocol=request.protocol,
         ):
             yield ev
 
@@ -93,7 +89,6 @@ class Executor:
             request.model,
             request.messages,
             request.params,
-            protocol=request.protocol,
         )
 
 
@@ -382,7 +377,6 @@ def stream(
     *,
     context: StreamContext,
     params: Any = None,
-    protocol: provider_base.ProviderProtocol[Any] | None = None,
     executor: StreamExecutor = _default_executor,
 ) -> AbstractAsyncContextManager[Stream[str]]: ...
 @overload
@@ -391,7 +385,6 @@ def stream[T: pydantic.BaseModel](
     context: StreamContext,
     output_type: type[T],
     params: Any = None,
-    protocol: provider_base.ProviderProtocol[Any] | None = None,
     executor: StreamExecutor = _default_executor,
 ) -> AbstractAsyncContextManager[Stream[T]]: ...
 @overload
@@ -401,7 +394,6 @@ def stream(
     *,
     tools: Sequence[types.tools.Tool] | None = None,
     params: Any = None,
-    protocol: provider_base.ProviderProtocol[Any] | None = None,
     executor: StreamExecutor = _default_executor,
 ) -> AbstractAsyncContextManager[Stream[str]]: ...
 @overload
@@ -412,7 +404,6 @@ def stream[T: pydantic.BaseModel](
     tools: Sequence[types.tools.Tool] | None = None,
     output_type: type[T],
     params: Any = None,
-    protocol: provider_base.ProviderProtocol[Any] | None = None,
     executor: StreamExecutor = _default_executor,
 ) -> AbstractAsyncContextManager[Stream[T]]: ...
 def stream(
@@ -423,7 +414,6 @@ def stream(
     tools: Sequence[types.tools.Tool] | None = None,
     output_type: type[pydantic.BaseModel] | None = None,
     params: Any = None,
-    protocol: provider_base.ProviderProtocol[Any] | None = None,
     executor: StreamExecutor = _default_executor,
 ) -> AbstractAsyncContextManager[Stream[Any]]:
     """Stream an LLM response.
@@ -463,7 +453,6 @@ def stream(
         tools=tools,
         output_type=output_type,
         params=params,
-        protocol=protocol,
         executor=executor,
     )
 
@@ -476,7 +465,6 @@ async def _stream(
     tools: Sequence[types.tools.Tool] | None,
     output_type: type[pydantic.BaseModel] | None,
     params: Any,
-    protocol: provider_base.ProviderProtocol[Any] | None,
     executor: StreamExecutor,
 ) -> AsyncIterator[Stream[Any]]:
     if messages and messages[-1].replay:
@@ -489,7 +477,11 @@ async def _stream(
     else:
         prepared = integrity.prepare_messages(messages)
         request = StreamRequest(
-            model, prepared, tools, output_type, params, protocol
+            model=model,
+            messages=prepared,
+            tools=tools,
+            output_type=output_type,
+            params=params,
         )
         s = Stream(
             executor._do_stream(request),
@@ -506,12 +498,11 @@ async def generate(
     messages: list[types.messages.Message],
     params: params_.GenerateParams,
     *,
-    protocol: provider_base.ProviderProtocol[Any] | None = None,
     executor: GenerateExecutor = _default_executor,
 ) -> types.messages.Message:
     """Generate a non-streaming response (images, video, etc.)."""
     messages = integrity.prepare_messages(messages)
-    request = GenerateRequest(model, messages, params, protocol)
+    request = GenerateRequest(model, messages, params)
     return await executor._do_generate(request)
 
 

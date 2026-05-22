@@ -19,14 +19,14 @@ async def main() -> None:
         print(f"[SKIP] {provider.name} provider is not configured")
         return
 
-    model = ai.Model("gpt-5.5", provider=provider)
+    model = ai.Model(
+        "gpt-5.5",
+        provider=provider,
+        protocol=OpenAIChatCompletionsProtocol(),
+    )
 
     try:
-        async with ai.stream(
-            model,
-            messages,
-            protocol=OpenAIChatCompletionsProtocol(),
-        ) as stream:
+        async with ai.stream(model, messages) as stream:
             async for event in stream:
                 if isinstance(event, ai.events.TextDelta):
                     print(event.chunk, end="", flush=True)
