@@ -121,9 +121,9 @@ extend-select = [
     "PIE",  # flake8-pie
     "PLE",  # pylint-error
     "PLW",  # pylint-warning
-    "PLC",  # pylint-convention
+    "PLC0415",  # pylint-convention: import not at top of file
+    "PLC2701",  # pylint-convention: private import
     "RUF",  # ruff specific
-    "SIM",  # flake8-simplify
     "T20",  # flake8-print
     "TC",   # flake8-type-checking
     "UP",   # pyupgrade
