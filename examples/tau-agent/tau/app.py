@@ -95,7 +95,7 @@ tools.  Mutating tools (write, edit, bash) require operator approval.
     f"""
 When writing or suggesting commit messages, always include a trailer line:
 
-    Co-authored-by: {MODEL_ID}, via tau
+    Co-authored-by: {_raw_model}, via tau
 """
     if _ADVERTISE
     else ""
