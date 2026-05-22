@@ -560,6 +560,12 @@ class Bubble(textual.widgets.Static):
     Bubble.tool {
         color: $text-muted;
     }
+    Bubble.tool-result {
+        color: $text-muted;
+        background: ansi_bright_black;
+        margin: 0 0 1 0;
+        padding: 0 1;
+    }
     Bubble.thinking {
         color: $text-muted;
         text-style: dim italic;
@@ -928,14 +934,14 @@ class TauApp(textual.app.App[None]):
         """Append a streaming chunk to a tool-result bubble."""
         bubble = self._tool_result_bubbles.get(tool_call_id)
         if bubble is None:
-            bubble = self.transcript.add_bubble("tool")
+            bubble = self.transcript.add_bubble("tool-result")
             self._tool_result_bubbles[tool_call_id] = bubble
         bubble.append(chunk)
 
     def show_tool_result(self, result: Any, is_error: bool) -> None:
         """Show the (possibly truncated) result of a tool call."""
         self.transcript.add_bubble(
-            "tool", _format_tool_result(result, is_error)
+            "tool-result", _format_tool_result(result, is_error)
         )
 
     def show_system(self, text: str) -> None:
