@@ -11,6 +11,12 @@ from .tool_utils import normalize_tool_input
 
 UIToolLike = ui_messages.UIToolPart | ui_messages.UIDynamicToolPart
 
+# Internal history can contain separate records for one tool call
+# (call, approval, result). AI SDK UI expects one tool part per
+# toolCallId, so later/higher-ranked states update the first part
+# https://ai-sdk.dev/docs/reference/ai-sdk-core/ui-message#tooluipart
+# https://ai-sdk.dev/docs/ai-sdk-ui/stream-protocol
+
 _TOOL_STATE_RANK: dict[ui_messages.UIToolInvocationState, int] = {
     "input-streaming": 0,
     "input-available": 1,
@@ -20,6 +26,19 @@ _TOOL_STATE_RANK: dict[ui_messages.UIToolInvocationState, int] = {
     "output-error": 5,
     "output-available": 6,
 }
+
+_MERGEABLE_TOOL_PART_FIELDS = (
+    "raw_input",
+    "output",
+    "error_text",
+    "approval",
+    "provider_executed",
+    "call_provider_metadata",
+    "result_provider_metadata",
+    "tool_metadata",
+    "preliminary",
+    "title",
+)
 
 
 def _merge_tool_part(
@@ -38,26 +57,11 @@ def _merge_tool_part(
 
     if existing.input is None and candidate.input is not None:
         updates["input"] = candidate.input
-    if candidate.output is not None:
-        updates["output"] = candidate.output
-    if candidate.raw_input is not None:
-        updates["raw_input"] = candidate.raw_input
-    if candidate.error_text is not None:
-        updates["error_text"] = candidate.error_text
-    if candidate.approval is not None:
-        updates["approval"] = candidate.approval
-    if candidate.provider_executed is not None:
-        updates["provider_executed"] = candidate.provider_executed
-    if candidate.call_provider_metadata is not None:
-        updates["call_provider_metadata"] = candidate.call_provider_metadata
-    if candidate.result_provider_metadata is not None:
-        updates["result_provider_metadata"] = candidate.result_provider_metadata
-    if candidate.tool_metadata is not None:
-        updates["tool_metadata"] = candidate.tool_metadata
-    if candidate.preliminary is not None:
-        updates["preliminary"] = candidate.preliminary
-    if candidate.title is not None:
-        updates["title"] = candidate.title
+
+    for field in _MERGEABLE_TOOL_PART_FIELDS:
+        value = getattr(candidate, field)
+        if value is not None:
+            updates[field] = value
 
     return existing.model_copy(update=updates) if updates else existing
 

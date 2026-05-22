@@ -1,4 +1,10 @@
-"""Roundtrip metadata for preserving internal message identity."""
+"""Roundtrip metadata for preserving internal message identity.
+
+The adapter writes ``metadata["aiPython"]["sourceMessages"]`` with each
+source message's ``id``, ``role``, ``turnId``, and ``partIds``. Outbound UI
+bubbles can collapse assistant/tool/internal messages into one UI message;
+inbound parsing uses this metadata to restore stable message and part ids.
+"""
 
 from __future__ import annotations
 
@@ -74,6 +80,7 @@ def _restore_message_ids(
 def metadata_for(
     source_messages: list[messages_.Message],
 ) -> dict[str, object]:
+    """Return adapter metadata for restoring collapsed source message ids."""
     return {
         ADAPTER_METADATA_KEY: {
             SOURCE_MESSAGES_KEY: [
@@ -90,6 +97,7 @@ def metadata_for(
 
 
 def source_messages_from(metadata: object) -> list[SourceMessage]:
+    """Parse adapter metadata, ignoring missing or malformed entries."""
     if not isinstance(metadata, dict):
         return []
 
@@ -115,6 +123,7 @@ def restore_source_ids(
     messages: list[messages_.Message],
     source_messages: list[SourceMessage],
 ) -> list[messages_.Message]:
+    """Restore message and part ids from matching source metadata."""
     if not source_messages:
         return messages
 

@@ -324,7 +324,7 @@ def _parse(
                                 ),
                             )
                         )
-                    elif tp.state in _TOOL_RESULT_STATES:
+                    elif is_completed:
                         tool_result_parts.append(
                             _build_result_part(
                                 tool_call_id=tp.tool_call_id,
