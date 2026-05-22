@@ -68,37 +68,44 @@ def _provider_tools(model_id: str) -> list[Any]:
     #            "anthropic:..." → "anthropic"
     mid = model_id.lower()
     if mid.startswith("gateway:"):
-        mid = mid[len("gateway:"):]
+        mid = mid[len("gateway:") :]
     provider = mid.split("/")[0].split(":")[0]
 
     if provider == "anthropic":
         from ai.providers.anthropic import tools as ant
+
         return [ant.web_search()]
     if provider in ("openai", "xai"):
         from ai.providers.openai import tools as oai
+
         return [oai.web_search()]
     return []
 
+
 _ADVERTISE = os.environ.get("TAU_ADVERTISE", "") == "1"
 
-_BASE_SYSTEM_PROMPT = """\
+_BASE_SYSTEM_PROMPT = (
+    """\
 You are tau, a focused coding assistant running inside a terminal TUI.
 Keep replies concise and use code blocks when showing code.
 
 You have access to the read, write, edit, bash, grep, find, and ls
 tools.  Mutating tools (write, edit, bash) require operator approval.
-""" + (
-    "You also have a web_search tool for current information.\n"
-    if _provider_tools(MODEL_ID)
-    else ""
-) + (
-    f"""
+"""
+    + (
+        "You also have a web_search tool for current information.\n"
+        if _provider_tools(MODEL_ID)
+        else ""
+    )
+    + (
+        f"""
 When writing or suggesting commit messages, always include a trailer line:
 
     Co-authored-by: {_raw_model}, via tau
 """
-    if _ADVERTISE
-    else ""
+        if _ADVERTISE
+        else ""
+    )
 )
 
 
@@ -274,25 +281,16 @@ async def _run_turn(app: TauApp) -> None:
                     tc = event.tool_call
                     app.show_tool_call(tc.tool_name, tc.tool_args)
                 elif isinstance(event, ai.events.PartialToolCallResult):
-                    app.append_tool_result(
-                        event.tool_call_id, str(event.value)
-                    )
+                    app.append_tool_result(event.tool_call_id, str(event.value))
                 elif isinstance(event, ai.events.ToolCallResult):
                     for part in event.results:
                         # Skip if we already streamed this result.
-                        if (
-                            part.tool_call_id
-                            not in app._tool_result_bubbles
-                        ):
-                            app.show_tool_result(
-                                part.result, part.is_error
-                            )
+                        if part.tool_call_id not in app._tool_result_bubbles:
+                            app.show_tool_result(part.result, part.is_error)
                 # -- provider-executed (builtin) tools --
                 elif isinstance(event, ai.events.BuiltinToolEnd):
                     tc = event.tool_call
-                    app.show_tool_call(
-                        tc.tool_name, tc.tool_args
-                    )
+                    app.show_tool_call(tc.tool_name, tc.tool_args)
                 elif isinstance(event, ai.events.BuiltinToolResult):
                     app.show_tool_result(
                         event.result.result,
@@ -855,13 +853,8 @@ class TauApp(textual.app.App[None]):
         self.session.restore(path)
         # Replace the persisted system message with the current
         # one so it reflects the latest tools and AGENTS.md.
-        if (
-            self.session.messages
-            and self.session.messages[0].role == "system"
-        ):
-            self.session.messages[0] = ai.system_message(
-                SYSTEM_PROMPT
-            )
+        if self.session.messages and self.session.messages[0].role == "system":
+            self.session.messages[0] = ai.system_message(SYSTEM_PROMPT)
         _replay_session(self)
         self.session.refresh_usage()
         self._update_usage_display()
