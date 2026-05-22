@@ -14,7 +14,7 @@ def generate_id(prefix: str | None = None) -> str:
 
 
 class TextPart(pydantic.BaseModel):
-    id: str = pydantic.Field(default_factory=generate_id)
+    id: str = pydantic.Field(default_factory=lambda: generate_id("part"))
     text: str
     provider_metadata: dict[str, Any] | None = None
 
@@ -25,7 +25,7 @@ _MODEL_INPUT_UNSET: Any = object()
 
 
 class ToolResultPart(pydantic.BaseModel):
-    id: str = pydantic.Field(default_factory=generate_id)
+    id: str = pydantic.Field(default_factory=lambda: generate_id("part"))
     tool_call_id: str
     tool_name: str
     is_error: bool = False
@@ -67,7 +67,7 @@ class ToolResultPart(pydantic.BaseModel):
 
 
 class ToolCallPart(pydantic.BaseModel):
-    id: str = pydantic.Field(default_factory=generate_id)
+    id: str = pydantic.Field(default_factory=lambda: generate_id("part"))
     tool_call_id: str
     tool_name: str
     tool_args: str
@@ -98,7 +98,7 @@ class BuiltinToolCallPart(pydantic.BaseModel):
     host. Adapters emit them when a model uses a built-in tool.
     """
 
-    id: str = pydantic.Field(default_factory=generate_id)
+    id: str = pydantic.Field(default_factory=lambda: generate_id("part"))
     tool_call_id: str
     tool_name: str
     tool_args: str = ""
@@ -110,7 +110,7 @@ class BuiltinToolCallPart(pydantic.BaseModel):
 class BuiltinToolReturnPart(pydantic.BaseModel):
     """The provider's result for a :class:`BuiltinToolCallPart`."""
 
-    id: str = pydantic.Field(default_factory=generate_id)
+    id: str = pydantic.Field(default_factory=lambda: generate_id("part"))
     tool_call_id: str
     tool_name: str
     result: Any = None
@@ -122,7 +122,7 @@ class BuiltinToolReturnPart(pydantic.BaseModel):
 
 
 class ReasoningPart(pydantic.BaseModel):
-    id: str = pydantic.Field(default_factory=generate_id)
+    id: str = pydantic.Field(default_factory=lambda: generate_id("part"))
     text: str
     provider_metadata: dict[str, Any] | None = None
 
@@ -130,7 +130,7 @@ class ReasoningPart(pydantic.BaseModel):
 
 
 class HookPart[T](pydantic.BaseModel):
-    id: str = pydantic.Field(default_factory=generate_id)
+    id: str = pydantic.Field(default_factory=lambda: generate_id("part"))
     hook_id: str
     hook_type: str
     status: Literal["pending", "resolved", "cancelled"]
@@ -158,7 +158,7 @@ class FilePart(pydantic.BaseModel):
 
     model_config = pydantic.ConfigDict(frozen=True)
 
-    id: str = pydantic.Field(default_factory=generate_id)
+    id: str = pydantic.Field(default_factory=lambda: generate_id("part"))
     data: str | bytes
     media_type: str  # IANA media type, e.g. "image/png", "audio/wav"
     filename: str | None = None
@@ -220,7 +220,7 @@ Part = Annotated[
 class Message(pydantic.BaseModel):
     role: Literal["user", "assistant", "system", "tool", "internal"]
     parts: list[Part]
-    id: str = pydantic.Field(default_factory=generate_id)
+    id: str = pydantic.Field(default_factory=lambda: generate_id("msg"))
     turn_id: str | None = None
     usage: usage_.Usage | None = None
     provider_metadata: dict[str, Any] | None = None

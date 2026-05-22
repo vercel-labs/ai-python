@@ -57,6 +57,56 @@ def _tool_result(
     )
 
 
+def _parallel_tool_turn(
+    *,
+    turn_id: str,
+    assistant_prefix: str,
+    tool_call_ids: tuple[str, str] = ("tc-bash", "tc-web"),
+) -> list[messages.Message]:
+    tc_bash, tc_web = tool_call_ids
+
+    return [
+        messages.Message(
+            id=f"{assistant_prefix}:assistant:0",
+            turn_id=turn_id,
+            role="assistant",
+            parts=[
+                messages.ToolCallPart(
+                    id=f"{assistant_prefix}:call:bash",
+                    tool_call_id=tc_bash,
+                    tool_name="bash",
+                    tool_args='{"command":"date"}',
+                ),
+                messages.ToolCallPart(
+                    id=f"{assistant_prefix}:call:web",
+                    tool_call_id=tc_web,
+                    tool_name="web_fetch",
+                    tool_args='{"url":"https://httpbin.org/get"}',
+                ),
+            ],
+        ),
+        messages.Message(
+            id=f"{assistant_prefix}:tool:0",
+            turn_id=turn_id,
+            role="tool",
+            parts=[
+                messages.ToolResultPart(
+                    id=f"{assistant_prefix}:result:bash",
+                    tool_call_id=tc_bash,
+                    tool_name="bash",
+                    result="Tue May 19 2026",
+                ),
+                messages.ToolResultPart(
+                    id=f"{assistant_prefix}:result:web",
+                    tool_call_id=tc_web,
+                    tool_name="web_fetch",
+                    result={"status": 200},
+                ),
+            ],
+        ),
+    ]
+
+
 def _assert_raises_issue(
     msgs: list[messages.Message],
     issue: str,

@@ -13,7 +13,7 @@ UI_MESSAGE_STREAM_HEADERS = {
 }
 
 
-# different kinds of messages expected by the frontend
+# different kinds of stream events expected by the frontend
 
 FinishReason = Literal[
     "stop", "length", "content-filter", "tool-calls", "error", "other"
@@ -21,7 +21,7 @@ FinishReason = Literal[
 
 
 @dataclasses.dataclass
-class StartPart:
+class UIStartEvent:
     """Indicates the beginning of a new message with metadata."""
 
     type: Literal["start"] = dataclasses.field(default="start", init=False)
@@ -30,7 +30,7 @@ class StartPart:
 
 
 @dataclasses.dataclass
-class TextStartPart:
+class UITextStartEvent:
     """Indicates the beginning of a text block."""
 
     id: str
@@ -41,7 +41,7 @@ class TextStartPart:
 
 
 @dataclasses.dataclass
-class TextDeltaPart:
+class UITextDeltaEvent:
     """Contains incremental text content for the text block."""
 
     id: str
@@ -53,7 +53,7 @@ class TextDeltaPart:
 
 
 @dataclasses.dataclass
-class TextEndPart:
+class UITextEndEvent:
     """Indicates the completion of a text block."""
 
     id: str
@@ -64,7 +64,7 @@ class TextEndPart:
 
 
 @dataclasses.dataclass
-class ReasoningStartPart:
+class UIReasoningStartEvent:
     """Indicates the beginning of a reasoning block."""
 
     id: str
@@ -75,7 +75,7 @@ class ReasoningStartPart:
 
 
 @dataclasses.dataclass
-class ReasoningDeltaPart:
+class UIReasoningDeltaEvent:
     """Contains incremental reasoning content for the reasoning block."""
 
     id: str
@@ -87,7 +87,7 @@ class ReasoningDeltaPart:
 
 
 @dataclasses.dataclass
-class ReasoningEndPart:
+class UIReasoningEndEvent:
     """Indicates the completion of a reasoning block."""
 
     id: str
@@ -98,7 +98,16 @@ class ReasoningEndPart:
 
 
 @dataclasses.dataclass
-class SourceUrlPart:
+class UICustomEvent:
+    """Provider-specific content that does not fit standard UI events."""
+
+    kind: str
+    type: Literal["custom"] = dataclasses.field(default="custom", init=False)
+    provider_metadata: dict[str, Any] | None = None
+
+
+@dataclasses.dataclass
+class UISourceUrlEvent:
     """References to external URLs."""
 
     source_id: str
@@ -111,7 +120,7 @@ class SourceUrlPart:
 
 
 @dataclasses.dataclass
-class SourceDocumentPart:
+class UISourceDocumentEvent:
     """References to documents or files."""
 
     source_id: str
@@ -125,8 +134,8 @@ class SourceDocumentPart:
 
 
 @dataclasses.dataclass
-class FilePart:
-    """The file parts contain references to files with their media type."""
+class UIFileEvent:
+    """References to files with their media type."""
 
     url: str
     media_type: str
@@ -135,14 +144,26 @@ class FilePart:
 
 
 @dataclasses.dataclass
-class DataPart:
-    """Custom data part for arbitrary structured data.
+class UIReasoningFileEvent:
+    """A file generated as part of model reasoning."""
 
-    Data parts support type-specific handling.
+    url: str
+    media_type: str
+    type: Literal["reasoning-file"] = dataclasses.field(
+        default="reasoning-file", init=False
+    )
+    provider_metadata: dict[str, Any] | None = None
+
+
+@dataclasses.dataclass
+class UIDataEvent:
+    """Custom data event for arbitrary structured data.
+
+    Data events support type-specific handling.
 
     The wire type is ``data-{data_type}`` (e.g. ``data-custom``), exposed
-    via the ``type`` property so that ``DataPart`` is uniform with every
-    other ``UIMessageStreamPart`` variant.
+    via the ``type`` property so that ``UIDataEvent`` is uniform with every
+    other ``UIMessageStreamEvent`` variant.
     """
 
     data_type: str
@@ -157,7 +178,7 @@ class DataPart:
 
 
 @dataclasses.dataclass
-class ToolInputStartPart:
+class UIToolInputStartEvent:
     """Indicates the beginning of tool input streaming."""
 
     tool_call_id: str
@@ -166,12 +187,14 @@ class ToolInputStartPart:
         default="tool-input-start", init=False
     )
     provider_executed: bool | None = None
+    provider_metadata: dict[str, Any] | None = None
+    tool_metadata: dict[str, Any] | None = None
     dynamic: bool | None = None
     title: str | None = None
 
 
 @dataclasses.dataclass
-class ToolInputDeltaPart:
+class UIToolInputDeltaEvent:
     """Incremental chunks of tool input as it's being generated."""
 
     tool_call_id: str
@@ -182,7 +205,7 @@ class ToolInputDeltaPart:
 
 
 @dataclasses.dataclass
-class ToolInputAvailablePart:
+class UIToolInputAvailableEvent:
     """Indicates that tool input is complete and ready for execution."""
 
     tool_call_id: str
@@ -193,12 +216,13 @@ class ToolInputAvailablePart:
     )
     provider_executed: bool | None = None
     provider_metadata: dict[str, Any] | None = None
+    tool_metadata: dict[str, Any] | None = None
     dynamic: bool | None = None
     title: str | None = None
 
 
 @dataclasses.dataclass
-class ToolInputErrorPart:
+class UIToolInputErrorEvent:
     """Indicates an error occurred during tool input processing."""
 
     tool_call_id: str
@@ -210,12 +234,13 @@ class ToolInputErrorPart:
     )
     provider_executed: bool | None = None
     provider_metadata: dict[str, Any] | None = None
+    tool_metadata: dict[str, Any] | None = None
     dynamic: bool | None = None
     title: str | None = None
 
 
 @dataclasses.dataclass
-class ToolOutputAvailablePart:
+class UIToolOutputAvailableEvent:
     """Contains the result of tool execution."""
 
     tool_call_id: str
@@ -224,12 +249,14 @@ class ToolOutputAvailablePart:
         default="tool-output-available", init=False
     )
     provider_executed: bool | None = None
+    provider_metadata: dict[str, Any] | None = None
+    tool_metadata: dict[str, Any] | None = None
     dynamic: bool | None = None
     preliminary: bool | None = None
 
 
 @dataclasses.dataclass
-class ToolOutputErrorPart:
+class UIToolOutputErrorEvent:
     """Indicates an error occurred during tool execution."""
 
     tool_call_id: str
@@ -238,11 +265,13 @@ class ToolOutputErrorPart:
         default="tool-output-error", init=False
     )
     provider_executed: bool | None = None
+    provider_metadata: dict[str, Any] | None = None
+    tool_metadata: dict[str, Any] | None = None
     dynamic: bool | None = None
 
 
 @dataclasses.dataclass
-class ToolOutputDeniedPart:
+class UIToolOutputDeniedEvent:
     """Indicates tool execution was denied."""
 
     tool_call_id: str
@@ -252,7 +281,7 @@ class ToolOutputDeniedPart:
 
 
 @dataclasses.dataclass
-class ToolApprovalRequestPart:
+class UIToolApprovalRequestEvent:
     """Requests approval for tool execution."""
 
     approval_id: str
@@ -260,11 +289,26 @@ class ToolApprovalRequestPart:
     type: Literal["tool-approval-request"] = dataclasses.field(
         default="tool-approval-request", init=False
     )
+    is_automatic: bool | None = None
 
 
 @dataclasses.dataclass
-class StartStepPart:
-    """A part indicating the start of a step."""
+class UIToolApprovalResponseEvent:
+    """Records an approval decision for a tool call."""
+
+    approval_id: str
+    approved: bool
+    type: Literal["tool-approval-response"] = dataclasses.field(
+        default="tool-approval-response", init=False
+    )
+    reason: str | None = None
+    provider_executed: bool | None = None
+    provider_metadata: dict[str, Any] | None = None
+
+
+@dataclasses.dataclass
+class UIStartStepEvent:
+    """Indicates the start of a step."""
 
     type: Literal["start-step"] = dataclasses.field(
         default="start-step", init=False
@@ -272,8 +316,8 @@ class StartStepPart:
 
 
 @dataclasses.dataclass
-class FinishStepPart:
-    """A part indicating that a step has been completed."""
+class UIFinishStepEvent:
+    """Indicates that a step has been completed."""
 
     type: Literal["finish-step"] = dataclasses.field(
         default="finish-step", init=False
@@ -281,8 +325,8 @@ class FinishStepPart:
 
 
 @dataclasses.dataclass
-class FinishPart:
-    """A part indicating the completion of a message."""
+class UIFinishEvent:
+    """Indicates the completion of a message."""
 
     type: Literal["finish"] = dataclasses.field(default="finish", init=False)
     finish_reason: FinishReason | None = None
@@ -290,14 +334,15 @@ class FinishPart:
 
 
 @dataclasses.dataclass
-class AbortPart:
+class UIAbortEvent:
     """Indicates the message was aborted."""
 
     type: Literal["abort"] = dataclasses.field(default="abort", init=False)
+    reason: str | None = None
 
 
 @dataclasses.dataclass
-class MessageMetadataPart:
+class UIMessageMetadataEvent:
     """Contains message metadata."""
 
     message_metadata: Any
@@ -307,37 +352,40 @@ class MessageMetadataPart:
 
 
 @dataclasses.dataclass
-class ErrorPart:
-    """The error parts are appended to the message as they are received."""
+class UIErrorEvent:
+    """Errors appended to the message as they are received."""
 
     error_text: str
     type: Literal["error"] = dataclasses.field(default="error", init=False)
 
 
-UIMessageStreamPart = (
-    StartPart
-    | TextStartPart
-    | TextDeltaPart
-    | TextEndPart
-    | ReasoningStartPart
-    | ReasoningDeltaPart
-    | ReasoningEndPart
-    | SourceUrlPart
-    | SourceDocumentPart
-    | FilePart
-    | DataPart
-    | ToolInputStartPart
-    | ToolInputDeltaPart
-    | ToolInputAvailablePart
-    | ToolInputErrorPart
-    | ToolOutputAvailablePart
-    | ToolOutputErrorPart
-    | ToolOutputDeniedPart
-    | ToolApprovalRequestPart
-    | StartStepPart
-    | FinishStepPart
-    | FinishPart
-    | AbortPart
-    | MessageMetadataPart
-    | ErrorPart
+UIMessageStreamEvent = (
+    UIStartEvent
+    | UITextStartEvent
+    | UITextDeltaEvent
+    | UITextEndEvent
+    | UIReasoningStartEvent
+    | UIReasoningDeltaEvent
+    | UIReasoningEndEvent
+    | UICustomEvent
+    | UISourceUrlEvent
+    | UISourceDocumentEvent
+    | UIFileEvent
+    | UIReasoningFileEvent
+    | UIDataEvent
+    | UIToolInputStartEvent
+    | UIToolInputDeltaEvent
+    | UIToolInputAvailableEvent
+    | UIToolInputErrorEvent
+    | UIToolOutputAvailableEvent
+    | UIToolOutputErrorEvent
+    | UIToolOutputDeniedEvent
+    | UIToolApprovalRequestEvent
+    | UIToolApprovalResponseEvent
+    | UIStartStepEvent
+    | UIFinishStepEvent
+    | UIFinishEvent
+    | UIAbortEvent
+    | UIMessageMetadataEvent
+    | UIErrorEvent
 )
