@@ -267,6 +267,10 @@ async def chat_loop(app: TauApp) -> None:
     the ``ai`` library lives here.
     """
     while app.pending:
+        # Reset bubble state so each turn gets fresh bubbles — otherwise
+        # a queued message's response appends into the previous turn's
+        # assistant bubble.
+        app._reset_turn_bubbles()
         # Pop one queued message into history per turn so the model sees
         # a clean user → assistant → user → … sequence.
         app.session.messages.append(ai.user_message(app.pending.pop(0)))
