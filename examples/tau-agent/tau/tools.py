@@ -19,9 +19,12 @@ import asyncio
 import dataclasses
 import pathlib
 import re
-from typing import Any, Literal
+from collections.abc import AsyncGenerator
+from typing import Annotated, Any, Literal
 
 import ai
+import ai.agents
+import ai.types.events
 import pydantic
 
 # Image formats we support (subset that models typically accept).
@@ -344,8 +347,85 @@ class TextEdit(pydantic.BaseModel):
     )
 
 
+def edit_string(
+    content: str,
+    edits: list[TextEdit],
+    filename: str = "<string>",
+) -> str:
+    """Apply edits to a string and return the result.
+
+    Each edit's ``oldText`` must match exactly once in *content*.
+    Edits are resolved against the original content and must not overlap.
+    """
+    spans: list[tuple[int, int, str, int]] = []  # start, end, new, idx
+    for i, e in enumerate(edits):
+        if not e.oldText:
+            raise ValueError(f"edits[{i}].oldText is empty")
+        count = content.count(e.oldText)
+        if count == 0:
+            raise ValueError(f"edits[{i}].oldText not found in {filename}")
+        if count > 1:
+            raise ValueError(
+                f"edits[{i}].oldText matches {count} times "
+                f"in {filename}; must be unique"
+            )
+        pos = content.index(e.oldText)
+        spans.append((pos, pos + len(e.oldText), e.newText, i))
+
+    spans.sort()
+    for j in range(1, len(spans)):
+        if spans[j][0] < spans[j - 1][1]:
+            raise ValueError(
+                f"edits[{spans[j - 1][3]}] and edits[{spans[j][3]}] overlap"
+            )
+
+    result = content
+    for start, end, new_text, _ in reversed(spans):
+        result = result[:start] + new_text + result[end:]
+    return result
+
+
+class EditResult(pydantic.BaseModel):
+    """Structured result from the edit tool.
+
+    Persisted in the session so the UI can render a diff on restore.
+    The model only sees ``message`` via the aggregator's
+    ``to_model_input``.
+    """
+
+    message: str
+    old_content: str
+    new_content: str
+
+
+class _EditAggregator(
+    ai.types.events.Aggregator[EditResult, EditResult, str],
+):
+    def __init__(self) -> None:
+        self._result: EditResult | None = None
+
+    def feed(self, item: EditResult) -> None:
+        self._result = item
+
+    def snapshot(self) -> EditResult:
+        assert self._result is not None
+        return self._result
+
+    @classmethod
+    def to_model_input(cls, snapshot: EditResult) -> str:
+        if isinstance(snapshot, dict):
+            return snapshot.get("message", str(snapshot))
+        return snapshot.message
+
+
+type _EditTool = Annotated[
+    AsyncGenerator[EditResult],
+    ai.agents.Aggregate(_EditAggregator),
+]
+
+
 @ai.tool(require_approval=True)
-async def edit(path: str, edits: list[TextEdit]) -> str:
+async def edit(path: str, edits: list[TextEdit]) -> _EditTool:
     """Edit a single file using exact text replacement.
 
     Every edits[].oldText must match a unique, non-overlapping region of
@@ -361,39 +441,14 @@ async def edit(path: str, edits: list[TextEdit]) -> str:
     if not edits:
         raise ValueError("edits must be non-empty")
 
-    content = p.read_text(encoding="utf-8")
-
-    # Resolve each edit to a (start, end) span in the original content
-    # and check uniqueness up front.  Apply right-to-left so spans don't
-    # shift under us.
-    spans: list[tuple[int, int, str, int]] = []  # start, end, new, idx
-    for i, e in enumerate(edits):
-        if not e.oldText:
-            raise ValueError(f"edits[{i}].oldText is empty")
-        count = content.count(e.oldText)
-        if count == 0:
-            raise ValueError(f"edits[{i}].oldText not found in {path}")
-        if count > 1:
-            raise ValueError(
-                f"edits[{i}].oldText matches {count} times "
-                f"in {path}; must be unique"
-            )
-        pos = content.index(e.oldText)
-        spans.append((pos, pos + len(e.oldText), e.newText, i))
-
-    spans.sort()
-    for j in range(1, len(spans)):
-        if spans[j][0] < spans[j - 1][1]:
-            raise ValueError(
-                f"edits[{spans[j - 1][3]}] and edits[{spans[j][3]}] overlap"
-            )
-
-    new_content = content
-    for start, end, new_text, _ in reversed(spans):
-        new_content = new_content[:start] + new_text + new_content[end:]
-
+    old_content = p.read_text(encoding="utf-8")
+    new_content = edit_string(old_content, edits, path)
     p.write_text(new_content, encoding="utf-8")
-    return f"Successfully replaced {len(edits)} block(s) in {path}."
+    yield EditResult(
+        message=f"Successfully replaced {len(edits)} block(s) in {path}.",
+        old_content=old_content,
+        new_content=new_content,
+    )
 
 
 # ---------------------------------------------------------------------------

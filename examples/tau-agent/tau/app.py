@@ -26,6 +26,8 @@ from typing import Any
 
 import ai
 import ai.types.usage
+import pydantic
+import rich.console
 import rich.markdown
 import rich.text
 import textual
@@ -237,7 +239,20 @@ def _replay_session(app: TauApp) -> None:
         elif msg.role == "tool":
             for part in msg.parts:
                 if isinstance(part, ai.messages.ToolResultPart):
-                    app.show_tool_result(part.result, part.is_error)
+                    diff = (
+                        _format_edit_diff_from_result(part.result)
+                        if part.tool_name == "edit"
+                        else None
+                    )
+                    if diff is not None:
+                        app.transcript.add_bubble(
+                            "tool-result",
+                            renderable=diff,
+                        )
+                    result = part.result
+                    if part.tool_name == "edit" and isinstance(result, dict):
+                        result = result.get("message", result)
+                    app.show_tool_result(result, part.is_error)
     app.show_system(
         f"resumed session {app.session.session_id} "
         f"({len(app.session.messages) - 1} messages) — model: {MODEL_ID}",
@@ -279,9 +294,16 @@ async def _run_turn(app: TauApp) -> None:
                     app.append_text(event.chunk)
                 elif isinstance(event, ai.events.ToolEnd):
                     tc = event.tool_call
-                    app.show_tool_call(tc.tool_name, tc.tool_args)
+                    app.show_tool_call(
+                        tc.tool_name,
+                        tc.tool_args,
+                        event.tool_call_id,
+                    )
                 elif isinstance(event, ai.events.PartialToolCallResult):
-                    if event.tool_call_id is not None:
+                    if (
+                        event.tool_call_id is not None
+                        and event.tool_name != "edit"
+                    ):
                         app.append_tool_result(
                             event.tool_call_id, str(event.value)
                         )
@@ -289,7 +311,10 @@ async def _run_turn(app: TauApp) -> None:
                     for part in event.results:
                         # Skip if we already streamed this result.
                         if part.tool_call_id not in app._tool_result_bubbles:
-                            app.show_tool_result(part.result, part.is_error)
+                            result = part.result
+                            if isinstance(result, tools.EditResult):
+                                result = result.message
+                            app.show_tool_result(result, part.is_error)
                 # -- provider-executed (builtin) tools --
                 elif isinstance(event, ai.events.BuiltinToolEnd):
                     btc = event.tool_call
@@ -370,6 +395,126 @@ def _format_tool_result(result: Any, is_error: bool) -> str:
     marker = "✗" if is_error else "←"
     indented = "\n  ".join(text.splitlines() or [""])
     return f"{marker}\n  {indented}"
+
+
+_DIFF_CTX = 2  # context lines above/below each changed line
+_DIFF_ADD = "color(108)"  # green foreground
+_DIFF_DEL = "color(168)"  # red/pink foreground
+
+
+def _render_diff(
+    filepath: str,
+    old_content: str,
+    new_content: str,
+) -> rich.text.Text | None:
+    """Render a pi-style diff between old and new file content.
+
+    Uses ``difflib.SequenceMatcher`` on lines to collapse unchanged
+    regions.  Returns *None* if the contents are identical.
+    """
+    import difflib
+
+    old_lines = old_content.splitlines()
+    new_lines = new_content.splitlines()
+    gutter_w = len(str(max(len(old_lines), len(new_lines)) + 1)) + 1
+
+    sm = difflib.SequenceMatcher(
+        None,
+        old_lines,
+        new_lines,
+        autojunk=False,
+    )
+
+    out = rich.text.Text()
+    out.append("edit ", style="bold")
+    out.append(f"{filepath}\n\n")
+
+    opcodes = sm.get_opcodes()
+    for oi, (op, i1, i2, j1, j2) in enumerate(opcodes):
+        if op == "equal":
+            head_end = i2
+            if oi > 0:
+                head_end = min(i1 + _DIFF_CTX, i2)
+                for k in range(i1, head_end):
+                    _diff_ctx(out, gutter_w, k + 1, old_lines[k])
+            if oi < len(opcodes) - 1:
+                tail_start = max(i2 - _DIFF_CTX, i1)
+                tail_start = max(tail_start, head_end)
+                if tail_start > head_end:
+                    out.append("   ...\n", style="dim")
+                for k in range(tail_start, i2):
+                    _diff_ctx(out, gutter_w, k + 1, old_lines[k])
+        else:
+            if op in ("replace", "delete"):
+                for k in range(i1, i2):
+                    _diff_line(out, gutter_w, "-", k + 1, old_lines[k])
+            if op in ("replace", "insert"):
+                for k in range(j1, j2):
+                    _diff_line(out, gutter_w, "+", k + 1, new_lines[k])
+
+    if out.plain.endswith("\n"):
+        out.right_crop(1)
+    return out or None
+
+
+def _format_edit_diff_from_args(
+    filepath: str,
+    edits: list[dict[str, str]],
+) -> rich.text.Text | None:
+    """Render an edit diff at ToolEnd time by reading the file from disk."""
+    try:
+        old_content = pathlib.Path(filepath).read_text(encoding="utf-8")
+    except OSError:
+        return None
+    try:
+        text_edits = [tools.TextEdit.model_validate(e) for e in edits]
+    except pydantic.ValidationError:
+        return None
+    try:
+        new_content = tools.edit_string(old_content, text_edits, filepath)
+    except (ValueError, KeyError):
+        return None
+    return _render_diff(filepath, old_content, new_content)
+
+
+def _format_edit_diff_from_result(
+    result: Any,
+) -> rich.text.Text | None:
+    """Render an edit diff from a persisted EditResult."""
+    if not isinstance(result, dict):
+        return None
+    try:
+        er = tools.EditResult.model_validate(result)
+    except (pydantic.ValidationError, Exception):
+        return None
+    # Infer filepath from the message.
+    msg = er.message
+    prefix = " in "
+    idx = msg.rfind(prefix)
+    if idx < 0:
+        return None
+    filepath = msg[idx + len(prefix) :].rstrip(".")
+    return _render_diff(filepath, er.old_content, er.new_content)
+
+
+def _diff_ctx(
+    out: rich.text.Text,
+    gw: int,
+    ln: int,
+    text: str,
+) -> None:
+    out.append(f"  {ln:>{gw}} {text}\n", style="dim")
+
+
+def _diff_line(
+    out: rich.text.Text,
+    gw: int,
+    prefix: str,
+    ln: int,
+    text: str,
+) -> None:
+    style = _DIFF_ADD if prefix == "+" else _DIFF_DEL
+    out.append(f"{prefix} {ln:>{gw}} {text}\n", style=style)
 
 
 # ---------------------------------------------------------------------------
@@ -562,7 +707,7 @@ class Bubble(textual.widgets.Static):
     }
     Bubble.tool-result {
         color: $text-muted;
-        background: ansi_bright_black;
+        background: #262626;
         margin: 0 0 1 0;
         padding: 0 1;
     }
@@ -572,12 +717,21 @@ class Bubble(textual.widgets.Static):
     }
     """
 
-    def __init__(self, role: str, initial: str = "") -> None:
+    def __init__(
+        self,
+        role: str,
+        initial: str = "",
+        *,
+        renderable: rich.console.RenderableType | None = None,
+    ) -> None:
         super().__init__()
         self.add_class(role)
         self._role = role
         self._raw = ""
-        if initial:
+        self._renderable = renderable
+        if renderable is not None:
+            self.update(renderable)
+        elif initial:
             self.append(initial)
         else:
             self._redraw()
@@ -604,8 +758,14 @@ class Transcript(textual.containers.VerticalScroll):
     }
     """
 
-    def add_bubble(self, role: str, text: str = "") -> Bubble:
-        bubble = Bubble(role, text)
+    def add_bubble(
+        self,
+        role: str,
+        text: str = "",
+        *,
+        renderable: rich.console.RenderableType | None = None,
+    ) -> Bubble:
+        bubble = Bubble(role, text, renderable=renderable)
         self.mount(bubble)
         return bubble
 
@@ -904,7 +1064,7 @@ class TauApp(textual.app.App[None]):
     # lazily create bubbles as needed.
     _text_bubble: Bubble | None = None
     _thinking_bubble: Bubble | None = None
-    _tool_result_bubbles: dict[str, Bubble]
+    _tool_result_bubbles: dict[str, Bubble] = {}
 
     def _reset_turn_bubbles(self) -> None:
         self._text_bubble = None
@@ -923,12 +1083,34 @@ class TauApp(textual.app.App[None]):
             self._text_bubble = self.transcript.add_bubble("assistant")
         self._text_bubble.append(chunk)
 
-    def show_tool_call(self, name: str, args: str) -> None:
+    def show_tool_call(
+        self, name: str, args: str, tool_call_id: str = ""
+    ) -> None:
         """Show a completed tool invocation line."""
-        self.transcript.add_bubble("tool", _format_tool_call(name, args))
+        rendered = False
+        if name == "edit":
+            rendered = self._show_edit_diff(args)
+        if not rendered:
+            self.transcript.add_bubble("tool", _format_tool_call(name, args))
         # Next text from the model should start a fresh bubble so
         # tool output and prose stay visually separated.
         self._text_bubble = None
+
+    def _show_edit_diff(self, args: str) -> bool:
+        """Try to render an edit call as a diff.  Returns True on success."""
+        try:
+            parsed = json.loads(args) if args else {}
+        except (json.JSONDecodeError, AttributeError):
+            return False
+        filepath = parsed.get("path", "")
+        edits = parsed.get("edits", [])
+        if not filepath or not edits:
+            return False
+        diff = _format_edit_diff_from_args(filepath, edits)
+        if diff is None:
+            return False
+        self.transcript.add_bubble("tool-result", renderable=diff)
+        return True
 
     def append_tool_result(self, tool_call_id: str, chunk: str) -> None:
         """Append a streaming chunk to a tool-result bubble."""
