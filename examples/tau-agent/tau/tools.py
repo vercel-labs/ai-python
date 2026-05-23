@@ -413,6 +413,10 @@ class _EditAggregator(
 
     @classmethod
     def to_model_input(cls, snapshot: EditResult) -> str:
+        # COMPAT: Check if it is a str because old sessions stored it
+        # that way. Probably remove this.
+        if isinstance(snapshot, str):
+            return snapshot
         if isinstance(snapshot, dict):
             return snapshot.get("message", str(snapshot))
         return snapshot.message
