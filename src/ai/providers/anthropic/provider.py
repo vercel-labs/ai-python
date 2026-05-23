@@ -92,9 +92,9 @@ class AnthropicCompatibleProvider(base.Provider[AnthropicSDKClient]):
         self._close_client_on_aclose = (
             sdk_client is None and http_client is None
         )
-        if sdk_client is None:
-            sdk_client = self._make_sdk_client(http_client=http_client)
-        self._set_client(sdk_client)
+        self._pending_http_client = http_client
+        if sdk_client is not None:
+            self._set_client(sdk_client)
 
     def _make_sdk_client(
         self,
@@ -113,6 +113,21 @@ class AnthropicCompatibleProvider(base.Provider[AnthropicSDKClient]):
         )
 
     @property
+    def client(self) -> AnthropicSDKClient:
+        # Constructing the Anthropic SDK client imports httpx internals
+        # (e.g. httpx._models defines a class inheriting from
+        # urllib.request.Request) -- disallowed inside a Temporal
+        # workflow sandbox. Defer until first use so that constructing a
+        # Provider (e.g. via ai.get_model) is safe in a workflow; the
+        # actual HTTP client only materializes in activities.
+        if self._client is None:
+            self._set_client(
+                self._make_sdk_client(http_client=self._pending_http_client)
+            )
+        assert self._client is not None
+        return self._client
+
+    @property
     def sdk_client(self) -> AnthropicSDKClient:
         """Provider SDK client used for Anthropic-compatible API requests."""
         return self.client
@@ -126,8 +141,8 @@ class AnthropicCompatibleProvider(base.Provider[AnthropicSDKClient]):
 
     async def aclose(self) -> None:
         """Close the provider-owned SDK client, if any."""
-        if self._close_client_on_aclose:
-            await self.client.close()
+        if self._close_client_on_aclose and self._client is not None:
+            await self._client.close()
 
     def stream(
         self,

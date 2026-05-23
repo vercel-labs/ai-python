@@ -40,14 +40,29 @@ class GatewayClient:
         self.base_url = base_url
         self.api_key = api_key
         self.headers = dict(headers or {})
-        self._http = client or httpx.AsyncClient(
-            timeout=httpx.Timeout(timeout=300.0, connect=10.0),
-        )
         self._owns_http = client is None
+        self._http_cached: httpx.AsyncClient | None = client
+
+    @property
+    def _http(self) -> httpx.AsyncClient:
+        # Constructing httpx.AsyncClient imports httpcore and anyio, which
+        # executes `threading.local()` at module load -- disallowed inside
+        # a Temporal workflow sandbox. Defer until first request so that
+        # constructing a Provider (e.g. via ai.get_model) is safe in a
+        # workflow; the actual HTTP client only materializes in activities.
+        if self._http_cached is None:
+            self._http_cached = httpx.AsyncClient(
+                timeout=httpx.Timeout(timeout=300.0, connect=10.0),
+            )
+        return self._http_cached
 
     async def aclose(self) -> None:
-        if self._owns_http and not self._http.is_closed:
-            await self._http.aclose()
+        if (
+            self._owns_http
+            and self._http_cached is not None
+            and not self._http_cached.is_closed
+        ):
+            await self._http_cached.aclose()
 
     def url(self, path: str) -> str:
         return f"{self.base_url.rstrip('/')}/{path.lstrip('/')}"

@@ -79,7 +79,7 @@ QUERY = "What's the weather and population of New York and Los Angeles?"
 
 async def test_happy_path(
     client: temporalio.client.Client, log_file: pathlib.Path
-) -> str:
+) -> tuple[str, int]:
     print("\n── test_happy_path ────────────────────────────────")
     log_file.write_text("")
 
@@ -96,9 +96,10 @@ async def test_happy_path(
     assert (
         "8,336,817" in result or "8336817" in result
     ), f"expected NYC population in result, got: {result!r}"
+    counts = read_activity_log(log_file)
     print(f"  ✓ workflow {wid} produced {len(result)} chars")
-    print(f"  ✓ activity calls: {dict(read_activity_log(log_file))}")
-    return wid
+    print(f"  ✓ activity calls: {dict(counts)}")
+    return wid, counts.total()
 
 
 # ── Test 2: replay determinism ───────────────────────────────────
@@ -125,6 +126,7 @@ async def test_activity_caching(
     env: temporalio.testing.WorkflowEnvironment,
     client: temporalio.client.Client,
     log_file: pathlib.Path,
+    baseline_total: int,
 ) -> None:
     print("\n── test_activity_caching ──────────────────────────")
     log_file.write_text("")
@@ -194,21 +196,24 @@ async def test_activity_caching(
     # Sanity: we actually killed worker1 mid-workflow. If worker1 had
     # finished everything before the SIGINT landed, the test would
     # vacuously "pass" the cache invariant without exercising resume.
-    assert total_post > total_pre, (
+    assert total_pre < baseline_total, (
         f"worker1 finished the entire workflow before shutdown landed "
-        f"(pre={total_pre}, post={total_post}); test isn't exercising resume"
+        f"(pre={total_pre}, baseline={baseline_total}); not exercising resume"
     )
 
-    # If worker2 ignored history and re-ran everything, total_post would
-    # be roughly 2x total_pre (worker1's executions + worker2 redoing
-    # them all). Catch that case loudly.
-    expected_double_run = total_pre * 2
-    assert total_post < expected_double_run, (
-        f"suspiciously high activity count after resume: {total_post} "
-        f"(would expect at most ~{expected_double_run - 1} if cache replayed)"
+    # Cache invariant: post-restart total equals one full workflow's
+    # worth of completions (from the happy-path baseline). If worker2
+    # had ignored history and re-run cached activities, total_post
+    # would exceed baseline_total.
+    assert total_post == baseline_total, (
+        f"unexpected activity count after resume: {total_post} "
+        f"(baseline is {baseline_total}); worker2 may have re-run "
+        f"cached activities"
     )
     print("  ✓ resume completed without re-running cached activities")
-    print(f"    (total before: {total_pre}, after: {total_post})")
+    print(
+        f"    (pre={total_pre}, post={total_post}, baseline={baseline_total})"
+    )
 
 
 # ── Entry point ──────────────────────────────────────────────────
@@ -246,9 +251,9 @@ async def main() -> None:
     ):
         client = env.client
 
-        wid = await test_happy_path(client, log_file)
+        wid, baseline_total = await test_happy_path(client, log_file)
         await test_replay_determinism(client, wid)
-        await test_activity_caching(env, client, log_file)
+        await test_activity_caching(env, client, log_file, baseline_total)
 
     print("\nAll durability checks passed.")
 

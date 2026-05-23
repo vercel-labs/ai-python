@@ -93,6 +93,7 @@ TOOL_ACTIVITIES: dict[str, Any] = {
 
 @dataclasses.dataclass
 class LLMParams:
+    model_id: str
     messages: list[dict[str, Any]]
     tool_schemas: list[dict[str, Any]]
 
@@ -148,6 +149,7 @@ class WeatherAgent(ai.Agent):
             result = await temporalio.workflow.execute_activity(
                 llm_call_activity,
                 LLMParams(
+                    model_id=context.model.id,
                     messages=[m.model_dump() for m in context.messages],
                     tool_schemas=tool_schemas,
                 ),
