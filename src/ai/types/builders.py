@@ -13,6 +13,8 @@ if TYPE_CHECKING:
     from . import events as events_
 
 from .messages import (
+    ContentOutput,
+    ContentPart,
     ErrorJsonOutput,
     ErrorTextOutput,
     ExecutionDeniedOutput,
@@ -90,6 +92,35 @@ def file_part(
     if isinstance(data, str):
         return FilePart.from_url(data, media_type=media_type)
     return FilePart.from_bytes(data, media_type=media_type, filename=filename)
+
+
+def text_part(
+    text: str,
+    *,
+    provider_metadata: dict[str, Any] | None = None,
+) -> TextPart:
+    """Create a :class:`TextPart`.
+
+    Bare strings passed to the ``*_message`` builders are coerced into
+    text parts automatically; reach for this when you need to attach
+    ``provider_metadata`` or build a part list directly.
+    """
+    return TextPart(text=text, provider_metadata=provider_metadata)
+
+
+def content_output(*content: str | TextPart | FilePart) -> ContentOutput:
+    """Create a multipart :class:`ContentOutput` tool result.
+
+    Bare strings become :class:`TextPart` objects, mirroring the
+    ``*_message`` builders, so a tool can return mixed text and files
+    without constructing the part list by hand.
+
+    >>> ai.content_output("Here is the chart:", ai.file_part(png_bytes))
+    """
+    parts: list[ContentPart] = []
+    for item in content:
+        parts.append(TextPart(text=item) if isinstance(item, str) else item)
+    return ContentOutput(value=parts)
 
 
 def thinking(

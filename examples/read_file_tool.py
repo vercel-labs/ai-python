@@ -44,13 +44,9 @@ async def read_file(path: str) -> str | ai.messages.ContentOutput:
     data = _resolve_within_allowed(path).read_bytes()
     image_type = media.detect_image_media_type(data)
     if image_type is not None:
-        return ai.messages.ContentOutput(
-            value=[
-                ai.messages.TextPart(
-                    text=f"Loaded {path} ({image_type}, {len(data)} bytes)."
-                ),
-                ai.file_part(data, media_type=image_type),
-            ]
+        return ai.content_output(
+            f"Loaded {path} ({image_type}, {len(data)} bytes).",
+            ai.file_part(data, media_type=image_type),
         )
     return data.decode("utf-8", errors="replace")
 
