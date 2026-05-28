@@ -84,7 +84,8 @@ STREAM_PARAMS: dict[str, Any] | None = (
                 ),
             },
             "anthropic": {
-                "thinking": {"type": "enabled", "budget_tokens": 10000}
+                "thinking": {"type": "adaptive"},
+                "output_config": {"effort": "xhigh"},
             },
         }
     }
