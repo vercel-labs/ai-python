@@ -240,16 +240,17 @@ async def read(
     if not p.is_file():
         raise IsADirectoryError(f"Not a file: {path}")
 
-    # Image files: return a text label + FilePart so providers emit
-    # a real image content block instead of stringified JSON.
+    # Image files: return a ContentOutput carrying a text label + a
+    # FilePart so providers emit a real image content block instead of
+    # trying (and failing) to JSON-serialize the FilePart.
     mime = _detect_image_mime(p)
     if mime is not None:
         data = p.read_bytes()
         size_str = format_size(len(data))
-        return [
+        return ai.content_output(
             f"Read image file [{mime}, {size_str}]",
             ai.file_part(data, media_type=mime),
-        ]
+        )
 
     text = p.read_text(encoding="utf-8", errors="replace")
     all_lines = text.split("\n")
