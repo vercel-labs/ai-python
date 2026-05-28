@@ -84,12 +84,24 @@ def _build_result_part(
     tool_name: str,
     output: Any,
     is_error: bool,
+    kind_hint: str | None = None,
 ) -> messages_.ToolResultPart:
+    """Reconstruct a tool result from its wire form.
+
+    ``kind_hint`` comes from the adapter's ``toolResultKinds`` metadata
+    (see :mod:`id_utils`).  When it marks the result as ``content``, the
+    ``output`` -- a list of dumped content parts -- is rehydrated into a
+    typed :class:`ContentOutput` so providers re-expand it into multimodal
+    blocks; otherwise behaviour matches a plain value round-trip.
+    """
     result: Any
     result_kind: messages_.ResultKind
     if is_error:
         result = output
         result_kind = "error"
+    elif kind_hint == "content":
+        result = messages_.ContentOutput.model_validate({"value": output})
+        result_kind = "content"
     else:
         decoded = _decode_wire_output(output)
         result = (
@@ -210,6 +222,7 @@ def _parse(
 
     for ui_msg in ui_messages:
         source_messages = id_utils.source_messages_from(ui_msg.metadata)
+        result_kinds = id_utils.tool_result_kinds_from(ui_msg.metadata)
         assistant_parts: list[messages_.Part] = []
         tool_result_parts: list[messages_.ToolResultPart] = []
         hook_parts: list[messages_.HookPart[Any]] = []
@@ -272,6 +285,9 @@ def _parse(
                                     tool_name=inv.tool_name,
                                     output=inv.result,
                                     is_error=is_error,
+                                    kind_hint=result_kinds.get(
+                                        inv.tool_invocation_id
+                                    ),
                                 )
                             )
 
@@ -335,6 +351,7 @@ def _parse(
                                 tool_name=tp.tool_name,
                                 output=_tool_result_output(tp),
                                 is_error=is_error,
+                                kind_hint=result_kinds.get(tp.tool_call_id),
                             )
                         )
                         if tp.result_provider_metadata is not None:
