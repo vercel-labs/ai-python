@@ -58,15 +58,30 @@ def _provider_slug(model_id: str) -> str:
     return mid.split("/")[0].split(":")[0]
 
 
-# Only send gateway-specific options when routing through the gateway.  Pin the
-# gateway to the model's own provider via ``only`` so it never falls back to
-# another backend that also serves the model (e.g. Bedrock/Vertex for Claude).
+_PROVIDER = _provider_slug(MODEL_ID)
+
+# Providers whose first-party backend is the model's maker.  For these we pin
+# the gateway to that provider via ``only`` so it never falls back to another
+# backend that also serves the model (e.g. Bedrock/Vertex for Claude).  Other
+# models (open-weight ones, say) are served by many backends where the named
+# provider isn't the maker, so we leave their routing unrestricted.
+#
+# The other providers often don't support all the server side
+# tools. In practice the main way that this becomes a problem is that
+# when there is an error on the main provider, gateway tries falling
+# back to other providers which then fail with unhelpful errors about
+# the tools not existing.
+_PIN_PROVIDERS = frozenset({"anthropic", "openai"})
+
+# Only send gateway-specific options when routing through the gateway.
 STREAM_PARAMS: dict[str, Any] | None = (
     {
         "providerOptions": {
             "gateway": {
                 "caching": "auto",
-                "only": [_provider_slug(MODEL_ID)],
+                **(
+                    {"only": [_PROVIDER]} if _PROVIDER in _PIN_PROVIDERS else {}
+                ),
             },
             "anthropic": {
                 "thinking": {"type": "enabled", "budget_tokens": 10000}
