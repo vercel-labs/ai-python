@@ -72,7 +72,9 @@ async def test_generator_tool_streams_and_returns_result() -> None:
         e for e in all_events if isinstance(e, agent_events_.ToolCallResult)
     ]
     assert len(tool_results) >= 1
-    assert tool_results[0].results[0].result == "Answer for test"
+    tr = tool_results[0].results[0].result
+    assert isinstance(tr, ai.messages.TextOutput | ai.messages.JsonOutput)
+    assert tr.value == "Answer for test"
 
 
 # ---------------------------------------------------------------------------
@@ -179,13 +181,16 @@ async def test_yield_from_nested_agent() -> None:
     tool_results = [
         e for e in all_events if isinstance(e, agent_events_.ToolCallResult)
     ]
-    # MessageAggregator stores the rich MessageBundle as `result` and the
-    # extracted assistant text as the model input (the value the parent
-    # LLM sees on its next turn).
+    # MessageAggregator stores the rich MessageBundle inside the typed
+    # ``result`` (a JsonOutput wrapping the bundle) and the extracted
+    # assistant text as the model input the parent LLM sees on its next turn.
     sub_part = tool_results[0].results[0]
-    assert isinstance(sub_part.result, MessageBundle)
-    assert sub_part.result.messages[0].text == "Mars has two moons."
-    assert sub_part.get_model_input() == "Mars has two moons."
+    assert isinstance(sub_part.result, ai.messages.JsonOutput)
+    assert isinstance(sub_part.result.value, MessageBundle)
+    assert sub_part.result.value.messages[0].text == "Mars has two moons."
+    model_input = sub_part.get_model_input()
+    assert isinstance(model_input, ai.messages.TextOutput)
+    assert model_input.value == "Mars has two moons."
 
     # The outer LLM's second call (index 2) must NOT contain any inner
     # agent messages.  It should only see: the original user message,

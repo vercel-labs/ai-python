@@ -275,5 +275,7 @@ async def test_middleware_can_fix_bad_tool_kwargs() -> None:
 
     assert len(tool_result_msgs) >= 1
     # The fixer middleware supplied x=99, so double should return 198.
-    assert tool_result_msgs[0].tool_results[0].result == 198
+    tr = tool_result_msgs[0].tool_results[0].result
+    assert isinstance(tr, ai.messages.TextOutput | ai.messages.JsonOutput)
+    assert tr.value == 198
     assert tool_result_msgs[0].tool_results[0].is_error is False

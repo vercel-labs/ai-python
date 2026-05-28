@@ -74,8 +74,9 @@ def _error_tool_result(
         types.messages.ToolResultPart(
             tool_call_id=tool_call_id,
             tool_name=tool_name,
-            result=f"{type(unwrapped).__name__}: {unwrapped}",
-            is_error=True,
+            result=types.messages.ErrorTextOutput(
+                value=f"{type(unwrapped).__name__}: {unwrapped}"
+            ),
         ),
         exception=unwrapped,
     )
@@ -174,6 +175,8 @@ def _populate_model_inputs(
     Tool execution sets ``model_input`` directly; this fills in the
     value for tool results that were reconstructed from a wire round-
     trip (e.g. the AI SDK UI inbound path) and never had it computed.
+    The aggregator's ``model_input_from_result`` does any snapshot
+    unwrapping internally.
     """
     for msg in messages:
         if msg.role != "tool":
@@ -187,7 +190,7 @@ def _populate_model_inputs(
             agg_cls = _aggregator_cls(tool.aggregator)
             if agg_cls is None:
                 continue
-            part.set_model_input(agg_cls.to_model_input(part.result))
+            part.set_model_input(agg_cls.model_input_from_result(part.result))
 
 
 class SimpleAggregator[Item, Result](events_.Aggregator[Item, Result, Result]):
@@ -1038,8 +1041,9 @@ def pending_tool_result(
     part = types.messages.ToolResultPart(
         tool_call_id=tool_call_id,
         tool_name=tool_name,
-        result=f"Pending on hook {hook.hook_id!r}",
-        is_error=True,
+        result=types.messages.ErrorTextOutput(
+            value=f"Pending on hook {hook.hook_id!r}"
+        ),
         is_hook_pending=True,
     )
     msg = types.messages.Message(role="tool", parts=[part])

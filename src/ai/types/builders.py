@@ -13,6 +13,9 @@ if TYPE_CHECKING:
     from . import events as events_
 
 from .messages import (
+    ErrorJsonOutput,
+    ErrorTextOutput,
+    ExecutionDeniedOutput,
     FilePart,
     HookPart,
     Message,
@@ -208,11 +211,28 @@ def tool_result_part(
 ) -> ToolResultPart:
     """Create a :class:`ToolResultPart`.
 
+    ``result`` is coerced into a :class:`ToolResultOutput` variant.
+    With ``is_error=True``, a plain value becomes :class:`ErrorTextOutput`
+    (stringifying non-string values); pass an :class:`ErrorJsonOutput`
+    or :class:`ExecutionDeniedOutput` directly for richer error shapes.
+
     >>> ai.tool_result_part("tc-1", result={"temp": 72}, tool_name="weather")
     """
+    if is_error:
+        # Promote plain values to the error variant; pass-through existing
+        # error / denial outputs.
+        if isinstance(
+            result,
+            ErrorTextOutput | ErrorJsonOutput | ExecutionDeniedOutput,
+        ):
+            output: Any = result
+        else:
+            text = str(result) if result is not None else ""
+            output = ErrorTextOutput(value=text)
+    else:
+        output = result
     return ToolResultPart(
         tool_call_id=tool_call_id,
         tool_name=tool_name,
-        result=result,
-        is_error=is_error,
+        result=output,
     )

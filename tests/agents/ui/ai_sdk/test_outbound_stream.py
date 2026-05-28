@@ -177,7 +177,7 @@ async def test_finish_metadata_tracks_tool_and_internal_messages() -> None:
                 id="result-1",
                 tool_call_id="tc1",
                 tool_name="search",
-                result={"hits": 1},
+                result=messages_.JsonOutput(value={"hits": 1}),
             )
         ],
     )
@@ -271,7 +271,7 @@ async def test_tool_call_and_result_emit_terminal_events() -> None:
             messages_.ToolResultPart(
                 tool_call_id="tc1",
                 tool_name="search",
-                result={"hits": 1},
+                result=messages_.JsonOutput(value={"hits": 1}),
             )
         ],
     )
@@ -314,7 +314,7 @@ async def test_tool_result_without_streaming_emits_input_start() -> None:
             messages_.ToolResultPart(
                 tool_call_id="tc1",
                 tool_name="search",
-                result={"hits": 1},
+                result=messages_.JsonOutput(value={"hits": 1}),
             ),
         ],
     )

@@ -108,6 +108,51 @@ async def _file_part_to_openai(
     raise ValueError(f"Unsupported media type for OpenAI: {mt}")
 
 
+def _tool_result_to_openai(
+    output: types.messages.ToolResultOutput,
+) -> str | list[dict[str, Any]]:
+    """Convert a :class:`ToolResultOutput` to OpenAI tool-message content.
+
+    :class:`ContentOutput` expands into a content array with ``text``
+    and ``image_url`` parts (chat-completions API). All other variants
+    are stringified.
+    """
+    match output:
+        case types.messages.TextOutput(value=value):
+            return value
+        case types.messages.ErrorTextOutput(value=value):
+            return value
+        case (
+            types.messages.JsonOutput(value=value)
+            | types.messages.ErrorJsonOutput(value=value)
+        ):
+            return _json_dumps(value) if value is not None else ""
+        case types.messages.ExecutionDeniedOutput(reason=reason):
+            return (
+                f"Tool execution denied: {reason}"
+                if reason
+                else "Tool execution denied"
+            )
+        case types.messages.ContentOutput(value=items):
+            parts: list[dict[str, Any]] = []
+            for item in items:
+                if isinstance(item, types.messages.FilePart):
+                    mt = item.media_type
+                    if mt.startswith("image/"):
+                        data_url = types.media.data_to_data_url(item.data, mt)
+                        parts.append(
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": data_url},
+                            }
+                        )
+                    else:
+                        parts.append({"type": "text", "text": f"[file: {mt}]"})
+                else:
+                    parts.append({"type": "text", "text": item.text})
+            return parts
+
+
 async def _messages_to_openai(
     messages: list[types.messages.Message],
 ) -> list[dict[str, Any]]:
@@ -165,14 +210,14 @@ async def _messages_to_openai(
             case "tool":
                 for part in msg.parts:
                     if isinstance(part, types.messages.ToolResultPart):
-                        model_input = part.get_model_input()
+                        tool_content = _tool_result_to_openai(
+                            part.get_model_input()
+                        )
                         result.append(
                             {
                                 "role": "tool",
                                 "tool_call_id": part.tool_call_id,
-                                "content": str(model_input)
-                                if model_input is not None
-                                else "",
+                                "content": tool_content,
                             }
                         )
 
@@ -511,12 +556,55 @@ def _raw_item_from_metadata(part: Any) -> dict[str, Any] | None:
     return None
 
 
-def _stringify_tool_result(result: Any) -> str:
-    if result is None:
-        return ""
-    if isinstance(result, str):
-        return result
-    return _json_dumps(result)
+def _tool_result_to_responses(
+    output: types.messages.ToolResultOutput,
+) -> str | list[dict[str, Any]]:
+    """Convert a :class:`ToolResultOutput` to a Responses ``output`` value.
+
+    Returns a plain string for text/json/error/denied variants, or an
+    array of ``input_text`` / ``input_image`` / ``input_file`` parts
+    for :class:`ContentOutput` (the Responses API accepts both shapes
+    on ``function_call_output.output``).
+    """
+    match output:
+        case (
+            types.messages.TextOutput(value=value)
+            | types.messages.ErrorTextOutput(value=value)
+        ):
+            return value
+        case (
+            types.messages.JsonOutput(value=value)
+            | types.messages.ErrorJsonOutput(value=value)
+        ):
+            return _json_dumps(value) if value is not None else ""
+        case types.messages.ExecutionDeniedOutput(reason=reason):
+            return (
+                f"Tool execution denied: {reason}"
+                if reason
+                else "Tool execution denied"
+            )
+        case types.messages.ContentOutput(value=items):
+            parts: list[dict[str, Any]] = []
+            for item in items:
+                if isinstance(item, types.messages.FilePart):
+                    data_url = types.media.data_to_data_url(
+                        item.data, item.media_type
+                    )
+                    if item.media_type.startswith("image/"):
+                        parts.append(
+                            {"type": "input_image", "image_url": data_url}
+                        )
+                    else:
+                        entry: dict[str, Any] = {
+                            "type": "input_file",
+                            "file_data": data_url,
+                        }
+                        if item.filename is not None:
+                            entry["filename"] = item.filename
+                        parts.append(entry)
+                else:
+                    parts.append({"type": "input_text", "text": item.text})
+            return parts
 
 
 async def _file_part_to_responses(
@@ -650,7 +738,7 @@ async def _messages_to_responses(
                             {
                                 "type": "function_call_output",
                                 "call_id": part.tool_call_id,
-                                "output": _stringify_tool_result(
+                                "output": _tool_result_to_responses(
                                     part.get_model_input()
                                 ),
                             }

@@ -85,20 +85,22 @@ def _build_result_part(
     output: Any,
     is_error: bool,
 ) -> messages_.ToolResultPart:
+    result: messages_.ToolResultOutput
     if is_error:
-        result: Any = output
+        text = str(output) if output is not None else ""
+        result = messages_.ErrorTextOutput(value=text)
     else:
         decoded = _decode_wire_output(output)
-        result = (
+        raw = (
             decoded
             if isinstance(decoded, MessageBundle)
             else _normalize_tool_result(decoded)
         )
+        result = messages_.coerce_to_output(raw)
     return messages_.ToolResultPart(
         tool_call_id=tool_call_id,
         tool_name=tool_name,
         result=result,
-        is_error=is_error,
     )
 
 
@@ -189,8 +191,9 @@ def _patch_pending_hook_aborts(
             messages_.ToolResultPart(
                 tool_call_id=tc.tool_call_id,
                 tool_name=tc.tool_name,
-                result=f"Pending on hook '{hook.hook_id}'",
-                is_error=True,
+                result=messages_.ErrorTextOutput(
+                    value=f"Pending on hook '{hook.hook_id}'"
+                ),
                 is_hook_pending=True,
             )
         )

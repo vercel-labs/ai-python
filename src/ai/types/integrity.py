@@ -179,8 +179,9 @@ def _fix_missing_results(
                     messages_.ToolResultPart(
                         tool_call_id=tc.tool_call_id,
                         tool_name=tc.tool_name,
-                        result="Tool result not available",
-                        is_error=True,
+                        result=messages_.ErrorTextOutput(
+                            value="Tool result not available"
+                        ),
                     )
                     for tc in pending.values()
                 )

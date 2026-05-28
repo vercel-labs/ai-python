@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any, cast
 
 from ....types import media
@@ -107,6 +108,29 @@ def dedupe_tool_parts(
     return result
 
 
+def _output_view(
+    output: messages_.ToolResultOutput,
+) -> tuple[str, dict[str, Any]]:
+    """Map a :class:`ToolResultOutput` to ``(state, field_updates)``."""
+    match output:
+        case messages_.TextOutput(value=value):
+            return "output-available", {"output": value}
+        case messages_.JsonOutput(value=value):
+            return "output-available", {"output": value}
+        case messages_.ContentOutput(value=items):
+            return "output-available", {
+                "output": [item.model_dump(mode="json") for item in items]
+            }
+        case messages_.ErrorTextOutput(value=value):
+            return "output-error", {"error_text": value}
+        case messages_.ErrorJsonOutput(value=value):
+            return "output-error", {"error_text": json.dumps(value)}
+        case messages_.ExecutionDeniedOutput(reason=reason):
+            return "output-denied", {
+                "error_text": reason or "Tool execution denied."
+            }
+
+
 def merge_tool_results(
     ui_parts: list[ui_messages.UIMessagePart],
     tool_parts: list[messages_.Part],
@@ -121,15 +145,12 @@ def merge_tool_results(
                 continue
             case messages_.ToolResultPart():
                 tool_call_id = part.tool_call_id
-                state = "output-error" if part.is_error else "output-available"
+                state, field_updates = _output_view(part.result)
                 updates = {
                     "state": state,
                     "result_provider_metadata": part.provider_metadata,
+                    **field_updates,
                 }
-                if part.is_error:
-                    updates["error_text"] = str(part.result)
-                else:
-                    updates["output"] = part.result
             case messages_.BuiltinToolReturnPart():
                 tool_call_id = part.tool_call_id
                 updates = {

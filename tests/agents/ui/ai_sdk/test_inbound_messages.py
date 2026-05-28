@@ -185,7 +185,8 @@ def test_to_messages_decodes_subagent_tool_output() -> None:
     tool_msgs = [m for m in messages if m.role == "tool"]
     assert len(tool_msgs) == 1
     result_part = tool_msgs[0].tool_results[0]
-    assert isinstance(result_part.result, MessageBundle)
+    assert isinstance(result_part.result, messages_.JsonOutput)
+    assert isinstance(result_part.result.value, MessageBundle)
     assert not result_part.has_model_input
 
 
@@ -208,8 +209,8 @@ def test_to_messages_passthrough_keeps_wire_shape() -> None:
     messages, _ = to_messages(ui)
     tool_msgs = [m for m in messages if m.role == "tool"]
     part = tool_msgs[0].tool_results[0]
-    assert part.result == {"pong": True}
-    assert part.get_model_input() == {"pong": True}
+    assert isinstance(part.result, messages_.JsonOutput)
+    assert part.result.value == {"pong": True}
 
 
 def test_to_messages_accepts_metadata_and_ui_only_parts() -> None:

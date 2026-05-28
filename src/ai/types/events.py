@@ -1,6 +1,6 @@
 import abc
 from collections.abc import AsyncGenerator, Callable, Sequence
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, cast
 
 import pydantic
 
@@ -289,6 +289,28 @@ class Aggregator[Item, Result, ModelInput]:
         without a live aggregator instance.
         """
         ...
+
+    @classmethod
+    def model_input_from_result(
+        cls, result: messages.ToolResultOutput
+    ) -> messages.ToolResultOutput:
+        """Re-derive model input from a persisted ``ToolResultPart.result``.
+
+        Default: unwrap text/json variants, run :meth:`to_model_input`,
+        then coerce the result back into a :class:`ToolResultOutput`.
+        Subclasses where ``result`` already carries the desired shape
+        (e.g. text-only aggregators) can override to return ``result``
+        unchanged.
+        """
+        if isinstance(result, messages.TextOutput | messages.JsonOutput):
+            # The persisted ``result.value`` is whatever the aggregator's
+            # snapshot serialized to (often a plain dict for pydantic
+            # snapshots); the aggregator is responsible for revalidating
+            # if it cares about a richer in-memory shape.
+            return messages.coerce_to_output(
+                cls.to_model_input(cast("Any", result.value))
+            )
+        return result
 
 
 class PartialToolCallResult(pydantic.BaseModel):

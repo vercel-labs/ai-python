@@ -137,7 +137,9 @@ async def test_mcp_tool_executes_through_agent() -> None:
     # Tool result is visible in messages.
     tool_results = [m for m in msgs if m.role == "tool" and m.tool_results]
     assert len(tool_results) >= 1
-    assert tool_results[0].tool_results[0].result == "echoed: hello"
+    tr = tool_results[0].tool_results[0].result
+    assert isinstance(tr, ai.messages.TextOutput | ai.messages.JsonOutput)
+    assert tr.value == "echoed: hello"
 
     # LLM was called twice (tool call + final text).
     assert llm.call_count == 2

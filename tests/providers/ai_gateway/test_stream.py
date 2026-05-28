@@ -457,7 +457,7 @@ class TestRequest:
         tool_result = messages.ToolResultPart(
             tool_call_id="tc-1",
             tool_name="search",
-            result={"temp": 72},
+            result=messages.JsonOutput(value={"temp": 72}),
         )
         conversation = [
             user_msg("What's the weather?"),

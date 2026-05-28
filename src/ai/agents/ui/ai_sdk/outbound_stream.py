@@ -21,13 +21,20 @@ if TYPE_CHECKING:
 
 def _tool_error_text(part: messages_.ToolResultPart) -> str:
     """Best-effort error text extraction from a failed tool result."""
-    if isinstance(part.result, str) and part.result:
-        return part.result
-    if isinstance(part.result, dict):
-        for key in ("error", "message", "detail"):
-            value = part.result.get(key)
-            if isinstance(value, str) and value:
-                return value
+    output = part.result
+    if isinstance(output, messages_.ErrorTextOutput):
+        return output.value or "Tool execution failed"
+    if isinstance(output, messages_.ErrorJsonOutput):
+        value = output.value
+        if isinstance(value, str) and value:
+            return value
+        if isinstance(value, dict):
+            for key in ("error", "message", "detail"):
+                inner = value.get(key)
+                if isinstance(inner, str) and inner:
+                    return inner
+    if isinstance(output, messages_.ExecutionDeniedOutput):
+        return output.reason or "Tool execution denied"
     return "Tool execution failed"
 
 
@@ -403,7 +410,16 @@ class _StreamState:
                     )
                 )
             else:
-                wire_output = _to_wire_output(part.result)
+                output = part.result
+                raw = (
+                    output.value
+                    if isinstance(
+                        output,
+                        messages_.TextOutput | messages_.JsonOutput,
+                    )
+                    else output
+                )
+                wire_output = _to_wire_output(raw)
                 if wire_output is None:
                     # Aggregator produced no anchor (e.g. sub-agent
                     # tool that yielded nothing).  Skip the final

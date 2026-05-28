@@ -58,13 +58,13 @@ def _parallel_tool_turn(
                     id=f"{prefix}:result:bash",
                     tool_call_id=tc_bash,
                     tool_name="bash",
-                    result="Tue May 19 2026",
+                    result=messages_.TextOutput(value="Tue May 19 2026"),
                 ),
                 messages_.ToolResultPart(
                     id=f"{prefix}:result:web",
                     tool_call_id=tc_web,
                     tool_name="web_fetch",
-                    result={"status": 200},
+                    result=messages_.JsonOutput(value={"status": 200}),
                 ),
             ],
         ),
@@ -124,7 +124,7 @@ def test_merge_tool_results_updates_state_and_output() -> None:
             messages_.ToolResultPart(
                 tool_call_id="tc1",
                 tool_name="search",
-                result={"hits": 3},
+                result=messages_.JsonOutput(value={"hits": 3}),
             )
         ],
     )
@@ -250,7 +250,7 @@ def test_to_ui_messages_merges_assistant_tool_internal() -> None:
                 messages_.ToolResultPart(
                     tool_call_id="tc1",
                     tool_name="search",
-                    result={"hits": 2},
+                    result=messages_.JsonOutput(value={"hits": 2}),
                 )
             ],
         ),
@@ -298,7 +298,7 @@ def test_to_ui_messages_records_source_messages_in_metadata() -> None:
                     id="result-0",
                     tool_call_id="tc1",
                     tool_name="search",
-                    result={"hits": 2},
+                    result=messages_.JsonOutput(value={"hits": 2}),
                 )
             ],
         ),
@@ -493,7 +493,7 @@ def test_collapsed_assistant_turn_roundtrips_internal_ids() -> None:
                     id="result-beta",
                     tool_call_id="tc-first",
                     tool_name="search",
-                    result={"hits": 1},
+                    result=messages_.JsonOutput(value={"hits": 1}),
                 )
             ],
         ),
@@ -520,7 +520,7 @@ def test_collapsed_assistant_turn_roundtrips_internal_ids() -> None:
                     id="result-delta",
                     tool_call_id="tc-second",
                     tool_name="lookup",
-                    result={"value": 2},
+                    result=messages_.JsonOutput(value={"value": 2}),
                 )
             ],
         ),
