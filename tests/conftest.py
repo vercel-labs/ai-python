@@ -45,7 +45,7 @@ class MockProvider(models.Provider):
         *,
         tools: Sequence[ai.tools.Tool] | None = None,
         output_type: type[pydantic.BaseModel] | None = None,
-        params: Any = None,
+        params: models.InferenceRequestParams | None = None,
     ) -> AsyncGenerator[events_.Event]:
         if model.protocol is not None:
             return model.protocol.stream(
@@ -76,7 +76,7 @@ class MockProvider(models.Provider):
         self,
         model: models.Model,
         messages: list[messages_.Message],
-        params: Any,
+        params: models.GenerateParams,
     ) -> messages_.Message:
         if model.protocol is not None:
             return await model.protocol.generate(
@@ -227,7 +227,7 @@ class MockGenerateAdapter:
         self,
         model: models.Model,
         messages: list[messages_.Message],
-        params: Any = None,
+        params: models.GenerateParams,
     ) -> messages_.Message:
         if self._call_index >= len(self._responses):
             raise RuntimeError(

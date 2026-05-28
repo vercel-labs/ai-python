@@ -142,7 +142,7 @@ async def _run(user_text: str) -> ai.types.usage.Usage | None:
         ai.system_message(SYSTEM_PROMPT),
         ai.user_message(user_text),
     ]
-    params = {"providerOptions": {"gateway": {"caching": "auto"}}}
+    params = ai.InferenceRequestParams(cache=ai.CacheParams(mode="auto"))
     async with agent.run(model, messages, params=params) as stream:
         async for _event in stream:
             pass

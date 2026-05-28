@@ -9,11 +9,13 @@ Usage::
     model = ai.get_model("gateway:anthropic/claude-sonnet-4")
     ids = await ai.get_provider("vercel").list_models()
 
-    # Provider-specific request options pass through as raw Gateway body fields.
+    # Raw provider-specific request options pass through in extra_body.
     async with ai.stream(
         model,
         msgs,
-        params={"providerOptions": {"anthropic": {"speed": "fast"}}},
+        params=ai.InferenceRequestParams(
+            extra_body={"providerOptions": {"anthropic": {"speed": "fast"}}}
+        ),
         tools=[anthropic_tools.web_search(max_uses=5)],
     ) as s:
         ...
@@ -30,12 +32,15 @@ Usage::
 """
 
 from . import errors, tools
+from .params import GatewayParams, ProviderTimeoutsParams
 from .protocol import GatewayV3Protocol
 from .provider import GatewayProvider
 
 __all__ = [
+    "GatewayParams",
     "GatewayProvider",
     "GatewayV3Protocol",
+    "ProviderTimeoutsParams",
     "errors",
     "tools",
 ]

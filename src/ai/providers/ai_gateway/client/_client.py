@@ -189,6 +189,7 @@ class GatewayClient:
         streaming: bool = False,
         accept: str | None = None,
         headers: dict[str, str] | None = None,
+        query: Mapping[str, Any] | None = None,
         timeout: httpx.Timeout | float | None = None,
     ) -> AsyncIterator[httpx.Response]:
         request_headers = self.model_headers(
@@ -206,6 +207,7 @@ class GatewayClient:
                 self.url(path),
                 json=body,
                 headers=request_headers,
+                params=query,
             )
             if timeout is None
             else self._http.stream(
@@ -213,6 +215,7 @@ class GatewayClient:
                 self.url(path),
                 json=body,
                 headers=request_headers,
+                params=query,
                 timeout=timeout,
             )
         )

@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     import pydantic
 
     from ...models.core import model as model_
+    from ...models.core import params as params_
     from ...types import events
     from ...types import messages as messages_
     from ...types import tools as tools_
@@ -108,6 +109,7 @@ class OpenAICompatibleProvider(base.Provider[OpenAISDKClient]):
             api_key=self.api_key or "",
             default_headers=self.headers,
             http_client=http_client,
+            _enforce_credentials=False,
         )
 
     @property
@@ -134,7 +136,7 @@ class OpenAICompatibleProvider(base.Provider[OpenAISDKClient]):
         *,
         tools: Sequence[tools_.Tool] | None = None,
         output_type: type[pydantic.BaseModel] | None = None,
-        params: Any = None,
+        params: params_.InferenceRequestParams | None = None,
     ) -> AsyncGenerator[events.Event]:
         """Stream via this provider's configured OpenAI-compatible protocol."""
         return super().stream(

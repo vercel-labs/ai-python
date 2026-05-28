@@ -30,7 +30,7 @@ async def _capture_tools(
     monkeypatch: pytest.MonkeyPatch,
     tools: list[Any],
     *,
-    params: dict[str, Any] | None = None,
+    params: ai.InferenceRequestParams | None = None,
 ) -> dict[str, Any]:
     _ = monkeypatch
     captured: dict[str, Any] = {}
@@ -170,7 +170,9 @@ async def test_user_anthropic_beta_header_wins(
             anthropic_tools.web_search(),
             anthropic_tools.web_fetch(),
         ],
-        params={"extra_headers": {"anthropic-beta": "custom-beta-2026-01-01"}},
+        params=ai.InferenceRequestParams(
+            extra_headers={"anthropic-beta": "custom-beta-2026-01-01"}
+        ),
     )
 
     assert _beta_header(captured) == "custom-beta-2026-01-01"

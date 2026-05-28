@@ -43,6 +43,7 @@ if TYPE_CHECKING:
     import pydantic
 
     from ..models.core.model import Model
+    from ..models.core.params import GenerateParams
     from ..types import events as events_
     from ..types.tools import Tool
     from .agent import Context
@@ -71,7 +72,7 @@ class GenerateContext:
 
     model: Model
     messages: list[messages_.Message]
-    params: Any
+    params: GenerateParams
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "messages", list(self.messages))
