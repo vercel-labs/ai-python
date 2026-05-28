@@ -18,8 +18,8 @@ uv run ruff check "${check_args[@]}" src tests examples
 echo "=== mypy ==="
 uv run mypy src tests
 
-echo "=== pyright ==="
-uv run pyright src tests
+echo "=== ty ==="
+uv run ty check
 
 echo "=== pytest ==="
 uv run pytest
