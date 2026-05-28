@@ -44,11 +44,30 @@ from tau import session, tools
 _raw_model = os.environ.get("TAU_MODEL", "gateway:anthropic/claude-opus-4.8")
 MODEL_ID = _raw_model if ":" in _raw_model else f"gateway:{_raw_model}"
 
-# Only send gateway-specific options when routing through the gateway.
+
+def _provider_slug(model_id: str) -> str:
+    """Extract the backend provider slug from a model id.
+
+    "gateway:anthropic/claude-opus-4.8" -> "anthropic",
+    "anthropic:claude-..."              -> "anthropic",
+    "openai/gpt-..."                    -> "openai".
+    """
+    mid = model_id.lower()
+    if mid.startswith("gateway:"):
+        mid = mid[len("gateway:") :]
+    return mid.split("/")[0].split(":")[0]
+
+
+# Only send gateway-specific options when routing through the gateway.  Pin the
+# gateway to the model's own provider via ``only`` so it never falls back to
+# another backend that also serves the model (e.g. Bedrock/Vertex for Claude).
 STREAM_PARAMS: dict[str, Any] | None = (
     {
         "providerOptions": {
-            "gateway": {"caching": "auto"},
+            "gateway": {
+                "caching": "auto",
+                "only": [_provider_slug(MODEL_ID)],
+            },
             "anthropic": {
                 "thinking": {"type": "enabled", "budget_tokens": 10000}
             },
@@ -66,12 +85,7 @@ def _provider_tools(model_id: str) -> list[Any]:
     The gateway passes through provider-specific tools, so we
     pick the right one based on the underlying provider.
     """
-    # Normalise: "gateway:anthropic/..." → "anthropic",
-    #            "anthropic:..." → "anthropic"
-    mid = model_id.lower()
-    if mid.startswith("gateway:"):
-        mid = mid[len("gateway:") :]
-    provider = mid.split("/")[0].split(":")[0]
+    provider = _provider_slug(model_id)
 
     if provider == "anthropic":
         from ai.providers.anthropic import tools as ant
