@@ -41,7 +41,7 @@ import textual.worker
 
 from tau import session, tools
 
-_raw_model = os.environ.get("TAU_MODEL", "gateway:anthropic/claude-opus-4.6")
+_raw_model = os.environ.get("TAU_MODEL", "gateway:anthropic/claude-opus-4.8")
 MODEL_ID = _raw_model if ":" in _raw_model else f"gateway:{_raw_model}"
 
 # Only send gateway-specific options when routing through the gateway.
