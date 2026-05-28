@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from ai.types import messages, usage
@@ -112,3 +114,106 @@ def test_from_bytes_explicit_overrides() -> None:
 def test_from_bytes_unknown_raises() -> None:
     with pytest.raises(ValueError, match="Cannot detect media_type"):
         messages.FilePart.from_bytes(b"\x00\x01\x02\x03")
+
+
+# ---------------------------------------------------------------------------
+# ToolResultPart -- typed result coercion and round-trip
+# ---------------------------------------------------------------------------
+
+
+def test_tool_result_content_output_with_file_part_round_trip() -> None:
+    """FilePart inside ContentOutput survives JSON round-trip."""
+    fp = messages.FilePart(data=b"fake-image-data", media_type="image/png")
+    trp = messages.ToolResultPart(
+        tool_call_id="tc1",
+        tool_name="read",
+        result=messages.ContentOutput(
+            value=[messages.TextPart(text="label"), fp]
+        ),
+        result_kind="content",
+    )
+    j = trp.model_dump_json()
+    restored = messages.ToolResultPart.model_validate_json(j)
+    assert isinstance(restored.result, messages.ContentOutput)
+    assert len(restored.result.value) == 2
+    text_part, file_part = restored.result.value
+    assert isinstance(text_part, messages.TextPart)
+    assert text_part.text == "label"
+    assert isinstance(file_part, messages.FilePart)
+    assert file_part.media_type == "image/png"
+
+
+def test_tool_result_plain_values_stored_raw() -> None:
+    """Plain str / dict / list / None results are stored as-is and round-trip.
+
+    ``result`` is ``Any`` -- there is no wrapper type, so a tool's return
+    value lands on the part unchanged and survives a JSON round-trip.
+    """
+    cases: list[Any] = ["hello", None, [1, 2, 3], {"key": "val"}]
+    for raw in cases:
+        trp = messages.ToolResultPart(
+            tool_call_id="tc", tool_name="t", result=raw
+        )
+        assert trp.result == raw
+        assert trp.result_kind == "json"
+        restored = messages.ToolResultPart.model_validate_json(
+            trp.model_dump_json()
+        )
+        assert restored.result == raw
+        assert restored.result_kind == "json"
+
+
+def test_tool_result_content_in_message_round_trip() -> None:
+    """ContentOutput with a FilePart survives Message round-trip."""
+    fp = messages.FilePart(data=b"img-data", media_type="image/webp")
+    msg = messages.Message(
+        role="tool",
+        parts=[
+            messages.ToolResultPart(
+                tool_call_id="tc",
+                tool_name="read",
+                result=messages.ContentOutput(
+                    value=[messages.TextPart(text="Read image"), fp]
+                ),
+                result_kind="content",
+            )
+        ],
+    )
+    j = msg.model_dump_json()
+    restored = messages.Message.model_validate_json(j)
+    part = restored.parts[0]
+    assert isinstance(part, messages.ToolResultPart)
+    assert isinstance(part.result, messages.ContentOutput)
+    fp2 = part.result.value[1]
+    assert isinstance(fp2, messages.FilePart)
+    assert fp2.media_type == "image/webp"
+
+
+def test_tool_result_file_part_base64_valid_after_round_trip() -> None:
+    """After round-trip, data_to_base64 produces standard base-64."""
+    import base64
+
+    from ai.types import media as media_
+
+    raw = b"\xff\xd8\xff\xe0\x00\x10JFIF" * 10
+    fp = messages.FilePart(data=raw, media_type="image/jpeg")
+    trp = messages.ToolResultPart(
+        tool_call_id="tc",
+        tool_name="read",
+        result=messages.ContentOutput(
+            value=[messages.TextPart(text="label"), fp]
+        ),
+        result_kind="content",
+    )
+    restored = messages.ToolResultPart.model_validate_json(
+        trp.model_dump_json()
+    )
+    assert isinstance(restored.result, messages.ContentOutput)
+    fp2 = restored.result.value[1]
+    assert isinstance(fp2, messages.FilePart)
+
+    b64 = media_.data_to_base64(fp2.data)
+    assert "_" not in b64
+    assert "-" not in b64
+    decoded = base64.b64decode(b64)
+    assert decoded == raw

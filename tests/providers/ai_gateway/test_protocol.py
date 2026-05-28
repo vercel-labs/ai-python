@@ -125,7 +125,7 @@ class TestMessagesToPrompt:
                         tool_call_id="tc-1",
                         tool_name="get_weather",
                         result="Connection timeout",
-                        is_error=True,
+                        result_kind="error",
                     )
                 ],
             ),
@@ -389,3 +389,128 @@ class TestParseUsage:
         usage = protocol._parse_usage("not a dict")
         assert usage.input_tokens == 0
         assert usage.output_tokens == 0
+
+
+# ---------------------------------------------------------------------------
+# Multi-part tool result helpers
+# ---------------------------------------------------------------------------
+
+
+class TestFilePartToV3Inline:
+    def test_image_data(self) -> None:
+        fp = messages.FilePart(data="b64data", media_type="image/png")
+        entry = protocol._file_part_to_v3_inline(fp)
+        assert entry == {
+            "type": "image-data",
+            "data": "b64data",
+            "mediaType": "image/png",
+        }
+
+    def test_file_data_with_filename(self) -> None:
+        fp = messages.FilePart(
+            data="pdfdata",
+            media_type="application/pdf",
+            filename="doc.pdf",
+        )
+        entry = protocol._file_part_to_v3_inline(fp)
+        assert entry["type"] == "file-data"
+        assert entry["mediaType"] == "application/pdf"
+        assert entry["filename"] == "doc.pdf"
+
+    def test_bytes_become_base64(self) -> None:
+        fp = messages.FilePart(data=b"\x89PNG", media_type="image/png")
+        entry = protocol._file_part_to_v3_inline(fp)
+        assert entry["type"] == "image-data"
+        assert entry["data"] != ""
+
+
+class TestToolResultOutput:
+    @staticmethod
+    def _part(
+        result: object, *, result_kind: messages.ResultKind = "json"
+    ) -> messages.ToolResultPart:
+        return messages.ToolResultPart(
+            tool_call_id="tc-1",
+            tool_name="t",
+            result=result,
+            result_kind=result_kind,
+        )
+
+    def test_text(self) -> None:
+        result = protocol._tool_result_output(self._part("hi"))
+        assert result == {"type": "text", "value": "hi"}
+
+    def test_json(self) -> None:
+        result = protocol._tool_result_output(self._part({"key": "value"}))
+        assert result == {"type": "json", "value": {"key": "value"}}
+
+    def test_error_text(self) -> None:
+        result = protocol._tool_result_output(
+            self._part("oops", result_kind="error")
+        )
+        assert result == {"type": "error-text", "value": "oops"}
+
+    def test_error_json(self) -> None:
+        result = protocol._tool_result_output(
+            self._part({"code": 500}, result_kind="error")
+        )
+        assert result == {"type": "error-json", "value": {"code": 500}}
+
+    def test_content_multipart(self) -> None:
+        fp = messages.FilePart(data="b64", media_type="image/jpeg")
+        result = protocol._tool_result_output(
+            self._part(
+                messages.ContentOutput(
+                    value=[messages.TextPart(text="desc"), fp]
+                ),
+                result_kind="content",
+            )
+        )
+        assert result["type"] == "content"
+        assert result["value"][0] == {"type": "text", "text": "desc"}
+        assert result["value"][1]["type"] == "image-data"
+
+
+class TestMessagesToPromptMultipart:
+    async def test_tool_result_with_file_part(self) -> None:
+        """ContentOutput with a FilePart uses the 'content' wire output."""
+        fp = messages.FilePart(data="iVBOR", media_type="image/png")
+        msgs = [
+            messages.Message(
+                role="assistant",
+                parts=[
+                    messages.ToolCallPart(
+                        tool_call_id="tc-1",
+                        tool_name="read",
+                        tool_args='{"path": "test.png"}',
+                    )
+                ],
+            ),
+            messages.Message(
+                role="tool",
+                parts=[
+                    messages.ToolResultPart(
+                        tool_call_id="tc-1",
+                        tool_name="read",
+                        result=messages.ContentOutput(
+                            value=[
+                                messages.TextPart(text="Image loaded"),
+                                fp,
+                            ]
+                        ),
+                    )
+                ],
+            ),
+        ]
+        result = await protocol._messages_to_prompt(msgs)
+        tr = result[1]["content"][0]
+        assert tr["output"]["type"] == "content"
+        assert tr["output"]["value"][0] == {
+            "type": "text",
+            "text": "Image loaded",
+        }
+        assert tr["output"]["value"][1] == {
+            "type": "image-data",
+            "data": "iVBOR",
+            "mediaType": "image/png",
+        }

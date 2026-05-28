@@ -179,6 +179,29 @@ def _file_part_to_anthropic(
     raise ValueError(f"Unsupported media type for Anthropic: {mt}")
 
 
+def _tool_result_to_anthropic(value: Any) -> str | list[dict[str, Any]]:
+    """Convert a tool result's model-facing value to Anthropic content.
+
+    A :class:`ContentOutput` expands into Anthropic content blocks
+    (image/document) so the model sees actual media.  Everything else is
+    sent as a string (the Anthropic API accepts a string as tool_result
+    content): ``str`` raw, ``None`` as ``""``, anything else JSON-encoded.
+    """
+    if isinstance(value, types.messages.ContentOutput):
+        blocks: list[dict[str, Any]] = []
+        for item in value.value:
+            if isinstance(item, types.messages.FilePart):
+                blocks.append(_file_part_to_anthropic(item))
+            else:
+                blocks.append({"type": "text", "text": item.text})
+        return blocks
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    return json.dumps(value, separators=(",", ":"), default=str)
+
+
 async def _messages_to_anthropic(
     messages: list[types.messages.Message],
 ) -> tuple[str | None, list[dict[str, Any]]]:
@@ -271,13 +294,13 @@ async def _messages_to_anthropic(
                 tool_results: list[dict[str, Any]] = []
                 for part in msg.parts:
                     if isinstance(part, types.messages.ToolResultPart):
-                        model_input = part.get_model_input()
+                        tool_content = _tool_result_to_anthropic(
+                            part.get_model_input()
+                        )
                         entry: dict[str, Any] = {
                             "type": "tool_result",
                             "tool_use_id": part.tool_call_id,
-                            "content": str(model_input)
-                            if model_input is not None
-                            else "",
+                            "content": tool_content,
                         }
                         if part.is_error:
                             entry["is_error"] = True

@@ -85,8 +85,11 @@ def _build_result_part(
     output: Any,
     is_error: bool,
 ) -> messages_.ToolResultPart:
+    result: Any
+    result_kind: messages_.ResultKind
     if is_error:
-        result: Any = output
+        result = output
+        result_kind = "error"
     else:
         decoded = _decode_wire_output(output)
         result = (
@@ -94,11 +97,12 @@ def _build_result_part(
             if isinstance(decoded, MessageBundle)
             else _normalize_tool_result(decoded)
         )
+        result_kind = "json"
     return messages_.ToolResultPart(
         tool_call_id=tool_call_id,
         tool_name=tool_name,
         result=result,
-        is_error=is_error,
+        result_kind=result_kind,
     )
 
 
@@ -190,7 +194,7 @@ def _patch_pending_hook_aborts(
                 tool_call_id=tc.tool_call_id,
                 tool_name=tc.tool_name,
                 result=f"Pending on hook '{hook.hook_id}'",
-                is_error=True,
+                result_kind="error",
                 is_hook_pending=True,
             )
         )

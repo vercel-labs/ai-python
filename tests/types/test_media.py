@@ -73,3 +73,20 @@ def test_empty_or_short_media_returns_none() -> None:
     assert media.detect_audio_media_type(b"") is None
     assert media.detect_image_media_type(bytes([0x89])) is None
     assert media.detect_audio_media_type(bytes([0xFF])) is None
+
+
+def test_data_to_base64_bytes_produces_standard() -> None:
+    """bytes input produces standard base-64 (+ and /)."""
+    data = b"\xff\xd8\xff\xe0"  # JPEG header
+    result = media.data_to_base64(data)
+    decoded = base64.b64decode(result)
+    assert decoded == data
+    # Must be standard base-64, not URL-safe
+    assert "-" not in result
+    assert "_" not in result
+
+
+def test_data_to_base64_str_passthrough() -> None:
+    """Standard base-64 string passes through unchanged."""
+    standard = "/9j/4AAQSkZJRg=="
+    assert media.data_to_base64(standard) == standard

@@ -22,6 +22,7 @@ from typing import (
     Any,
     ClassVar,
     Generic,
+    Literal,
     Protocol,
     Self,
     cast,
@@ -58,6 +59,18 @@ def _unwrap_singleton_group(exc: BaseException) -> BaseException:
     return exc
 
 
+def _result_kind(value: Any) -> Literal["json", "content"]:
+    """Tag a successful tool return value for ``ToolResultPart.result_kind``.
+
+    A :class:`ContentOutput` becomes ``"content"`` (expanded into provider
+    multimodal blocks); everything else is ``"json"`` (the encoder sends a
+    ``str`` raw and JSON-encodes anything else).
+    """
+    if isinstance(value, types.messages.ContentOutput):
+        return "content"
+    return "json"
+
+
 def _error_tool_result(
     exc: BaseException,
     *,
@@ -75,7 +88,7 @@ def _error_tool_result(
             tool_call_id=tool_call_id,
             tool_name=tool_name,
             result=f"{type(unwrapped).__name__}: {unwrapped}",
-            is_error=True,
+            result_kind="error",
         ),
         exception=unwrapped,
     )
@@ -616,6 +629,7 @@ class BoundToolCall:
                 tool_call_id=call.tool_call_id,
                 tool_name=call.tool_name,
                 result=result,
+                result_kind=_result_kind(result),
             )
             part.set_model_input(model_input)
             return tool_result(part)
@@ -1039,7 +1053,7 @@ def pending_tool_result(
         tool_call_id=tool_call_id,
         tool_name=tool_name,
         result=f"Pending on hook {hook.hook_id!r}",
-        is_error=True,
+        result_kind="error",
         is_hook_pending=True,
     )
     msg = types.messages.Message(role="tool", parts=[part])

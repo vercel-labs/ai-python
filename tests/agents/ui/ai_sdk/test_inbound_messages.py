@@ -209,7 +209,6 @@ def test_to_messages_passthrough_keeps_wire_shape() -> None:
     tool_msgs = [m for m in messages if m.role == "tool"]
     part = tool_msgs[0].tool_results[0]
     assert part.result == {"pong": True}
-    assert part.get_model_input() == {"pong": True}
 
 
 def test_to_messages_accepts_metadata_and_ui_only_parts() -> None:

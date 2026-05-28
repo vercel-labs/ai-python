@@ -60,7 +60,8 @@ async def test_agent_tool_then_text() -> None:
     assert llm.call_count == 2
     tool_results = [m for m in msgs if m.role == "tool" and m.tool_results]
     assert len(tool_results) >= 1
-    assert tool_results[0].tool_results[0].result == 10
+    tr = tool_results[0].tool_results[0].result
+    assert tr == 10
 
 
 # -- Agent default loop: multiple tool calls in one message ----------------

@@ -1,3 +1,4 @@
+import base64
 import uuid
 from typing import Annotated, Any, Literal, Self, overload
 
@@ -21,19 +22,127 @@ class TextPart(pydantic.BaseModel):
     kind: Literal["text"] = "text"
 
 
+class FilePart(pydantic.BaseModel):
+    """File, image, or audio content part.
+
+    Covers images (``image/*``), documents (``application/pdf``, ``text/*``),
+    and audio (``audio/*``).  The ``media_type`` field tells provider
+    converters how to format this part for each API.
+
+    ``data`` accepts:
+
+    * **str** -- a URL (``http(s)://...`` or ``data:...``) *or* raw
+      base-64 text.
+    * **bytes** -- raw binary data (will be base-64 encoded when serialized
+      to JSON for providers that need it).
+    """
+
+    model_config = pydantic.ConfigDict(frozen=True)
+
+    id: str = pydantic.Field(default_factory=lambda: generate_id("part"))
+    data: str | bytes
+    media_type: str  # IANA media type, e.g. "image/png", "audio/wav"
+    filename: str | None = None
+    kind: Literal["file"] = "file"
+    provider_metadata: dict[str, Any] | None = None
+
+    @pydantic.field_serializer("data", when_used="json")
+    @classmethod
+    def _serialize_data(cls, v: str | bytes, _info: Any) -> str:
+        """Encode ``bytes`` as standard base-64 for JSON serialization.
+
+        Pydantic's built-in ``ser_json_bytes`` uses URL-safe base-64
+        (``-`` and ``_``) which LLM provider APIs reject.  This
+        serializer uses standard base-64 (``+`` and ``/``) instead.
+        ``str`` values (URLs, existing base-64) pass through unchanged.
+        """
+        if isinstance(v, bytes):
+            return base64.b64encode(v).decode("ascii")
+        return v
+
+    @classmethod
+    def from_url(cls, url: str, *, media_type: str | None = None) -> Self:
+        """Create from a URL, inferring ``media_type`` from the URL if omitted.
+
+        Inference handles ``data:`` URLs (the media type is embedded in the
+        prefix) and ``http(s)://`` URLs (via :func:`mimetypes.guess_type`).
+        Raises :class:`ValueError` if inference fails and no explicit
+        ``media_type`` is provided.
+        """
+        if media_type is None:
+            media_type = media.infer_media_type(url)
+        return cls(data=url, media_type=media_type)
+
+    @classmethod
+    def from_bytes(
+        cls,
+        data: bytes,
+        *,
+        media_type: str | None = None,
+        filename: str | None = None,
+    ) -> Self:
+        """Create from raw bytes, detecting ``media_type`` via magic bytes.
+
+        Attempts image detection first, then audio.  Raises
+        :class:`ValueError` if no ``media_type`` is provided and
+        detection fails.
+        """
+        if media_type is None:
+            media_type = media.detect_image_media_type(
+                data
+            ) or media.detect_audio_media_type(data)
+        if media_type is None:
+            raise ValueError(
+                "Cannot detect media_type from bytes. "
+                "Provide media_type explicitly."
+            )
+        return cls(data=data, media_type=media_type, filename=filename)
+
+
+# ---------------------------------------------------------------------------
+# Multipart tool result -- a tool may return a mix of text and file/image
+# parts so the model sees actual media.  Stored on ``ToolResultPart.result``
+# with ``result_kind="content"``; providers expand it into their multimodal
+# wire format.
+# ---------------------------------------------------------------------------
+
+
+ContentPart = Annotated[
+    TextPart | FilePart,
+    pydantic.Field(discriminator="kind"),
+]
+
+
+class ContentOutput(pydantic.BaseModel):
+    """Multipart tool result -- mix of text and file/image parts."""
+
+    type: Literal["content"] = "content"
+    value: list[ContentPart]
+
+    model_config = pydantic.ConfigDict(frozen=True)
+
+
 _MODEL_INPUT_UNSET: Any = object()
+
+# Coarse tag for the shape of ``ToolResultPart.result``.  ``"content"`` means
+# a :class:`ContentOutput`; ``"error"`` flags an error result; ``"json"`` (the
+# default) is any plain value.  Providers decide text-vs-json at the wire
+# boundary (a ``str`` is sent raw, everything else is JSON-encoded).
+ResultKind = Literal["error", "json", "content"]
 
 
 class ToolResultPart(pydantic.BaseModel):
     id: str = pydantic.Field(default_factory=lambda: generate_id("part"))
     tool_call_id: str
     tool_name: str
-    is_error: bool = False
     is_hook_pending: bool = False
     provider_metadata: dict[str, Any] | None = None
 
-    # The "real" result of the tool call
+    # The "real" result of the tool call.  Stays ``Any``: a plain value
+    # (str, dict, BaseModel, ...), a :class:`ContentOutput` for multipart
+    # results, or an aggregator snapshot.  ``result_kind`` tags its shape.
     result: Any = None
+    result_kind: ResultKind = "json"
 
     # Value the LLM sees on its next turn.  For most tools this is
     # identical to ``result``; for aggregator-backed tools (sub-agents,
@@ -49,6 +158,32 @@ class ToolResultPart(pydantic.BaseModel):
 
     kind: Literal["tool_result"] = "tool_result"
     model_config = pydantic.ConfigDict(frozen=True)
+
+    @pydantic.model_validator(mode="before")
+    @classmethod
+    def _restore_content(cls, data: Any) -> Any:
+        """Rebuild a typed :class:`ContentOutput` after a JSON round-trip.
+
+        ``result`` is ``Any``, so pydantic restores a serialized
+        ``ContentOutput`` as a plain dict.  When ``result_kind`` says the
+        result is content, coerce it back so providers (and the UI adapter)
+        can rely on ``isinstance(result, ContentOutput)``.
+        """
+        if (
+            isinstance(data, dict)
+            and data.get("result_kind") == "content"
+            and isinstance(data.get("result"), dict)
+        ):
+            data = {
+                **data,
+                "result": ContentOutput.model_validate(data["result"]),
+            }
+        return data
+
+    @property
+    def is_error(self) -> bool:
+        """Whether this result represents an error to the model."""
+        return self.result_kind == "error"
 
     def get_model_input(self) -> Any:
         """Return the value the LLM should see, falling back to ``result``."""
@@ -139,69 +274,6 @@ class HookPart[T](pydantic.BaseModel):
 
     kind: Literal["hook"] = "hook"
     model_config = pydantic.ConfigDict(frozen=True)
-
-
-class FilePart(pydantic.BaseModel):
-    """File, image, or audio content part.
-
-    Covers images (``image/*``), documents (``application/pdf``, ``text/*``),
-    and audio (``audio/*``).  The ``media_type`` field tells provider
-    converters how to format this part for each API.
-
-    ``data`` accepts:
-
-    * **str** -- a URL (``http(s)://...`` or ``data:...``) *or* raw
-      base-64 text.
-    * **bytes** -- raw binary data (will be base-64 encoded when serialized
-      to JSON for providers that need it).
-    """
-
-    model_config = pydantic.ConfigDict(frozen=True)
-
-    id: str = pydantic.Field(default_factory=lambda: generate_id("part"))
-    data: str | bytes
-    media_type: str  # IANA media type, e.g. "image/png", "audio/wav"
-    filename: str | None = None
-    kind: Literal["file"] = "file"
-    provider_metadata: dict[str, Any] | None = None
-
-    @classmethod
-    def from_url(cls, url: str, *, media_type: str | None = None) -> Self:
-        """Create from a URL, inferring ``media_type`` from the URL if omitted.
-
-        Inference handles ``data:`` URLs (the media type is embedded in the
-        prefix) and ``http(s)://`` URLs (via :func:`mimetypes.guess_type`).
-        Raises :class:`ValueError` if inference fails and no explicit
-        ``media_type`` is provided.
-        """
-        if media_type is None:
-            media_type = media.infer_media_type(url)
-        return cls(data=url, media_type=media_type)
-
-    @classmethod
-    def from_bytes(
-        cls,
-        data: bytes,
-        *,
-        media_type: str | None = None,
-        filename: str | None = None,
-    ) -> Self:
-        """Create from raw bytes, detecting ``media_type`` via magic bytes.
-
-        Attempts image detection first, then audio.  Raises
-        :class:`ValueError` if no ``media_type`` is provided and
-        detection fails.
-        """
-        if media_type is None:
-            media_type = media.detect_image_media_type(
-                data
-            ) or media.detect_audio_media_type(data)
-        if media_type is None:
-            raise ValueError(
-                "Cannot detect media_type from bytes. "
-                "Provide media_type explicitly."
-            )
-        return cls(data=data, media_type=media_type, filename=filename)
 
 
 Part = Annotated[
