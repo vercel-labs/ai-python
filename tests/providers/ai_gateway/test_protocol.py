@@ -13,10 +13,13 @@ end-to-end in ``test_stream.py`` via real HTTP round-trips.
 from __future__ import annotations
 
 import json
+from collections.abc import AsyncGenerator
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pydantic
 
+from ai import models
 from ai.providers.ai_gateway import protocol
 from ai.types import events as events_
 from ai.types import messages
@@ -66,6 +69,43 @@ class TestMessagesToPrompt:
         content = result[0]["content"]
         assert content[0] == {"type": "reasoning", "text": "Let me think..."}
         assert content[1] == {"type": "text", "text": "42"}
+
+    async def test_assistant_reasoning_replays_signature(self) -> None:
+        """A reasoning part's metadata (the thinking-block signature) must
+        be replayed verbatim as ``providerOptions`` so the upstream can
+        verify its own thinking."""
+        msgs = [
+            messages.Message(
+                role="assistant",
+                parts=[
+                    messages.ReasoningPart(
+                        text="Let me think...",
+                        provider_metadata={
+                            "anthropic": {"signature": "ErMJabc123"}
+                        },
+                    ),
+                ],
+            )
+        ]
+        result = await protocol._messages_to_prompt(msgs)
+        assert result[0]["content"][0] == {
+            "type": "reasoning",
+            "text": "Let me think...",
+            "providerOptions": {"anthropic": {"signature": "ErMJabc123"}},
+        }
+
+    async def test_assistant_reasoning_without_signature_omits_options(
+        self,
+    ) -> None:
+        """No signature -> no ``providerOptions`` key (back-compat)."""
+        msgs = [
+            messages.Message(
+                role="assistant",
+                parts=[messages.ReasoningPart(text="hmm")],
+            )
+        ]
+        result = await protocol._messages_to_prompt(msgs)
+        assert result[0]["content"][0] == {"type": "reasoning", "text": "hmm"}
 
     async def test_tool_call_with_result_produces_two_messages(self) -> None:
         """A completed tool call must produce an assistant message
@@ -323,6 +363,48 @@ class TestParseStreamPartComplex:
         assert done.usage.cache_read_tokens == 50
         assert done.usage.reasoning_tokens == 30
 
+    def test_reasoning_delta_carries_provider_metadata(self) -> None:
+        """A reasoning-delta's ``providerMetadata`` (the thinking-block
+        signature) rides through verbatim on ``provider_metadata``."""
+        events = protocol._parse_stream_part(
+            {
+                "type": "reasoning-delta",
+                "id": "0",
+                "delta": "",
+                "providerMetadata": {"anthropic": {"signature": "ErMJabc123"}},
+            },
+            set(),
+        )
+        assert len(events) == 1
+        delta = events[0]
+        assert isinstance(delta, events_.ReasoningDelta)
+        assert delta.provider_metadata == {
+            "anthropic": {"signature": "ErMJabc123"}
+        }
+
+    def test_reasoning_delta_without_metadata(self) -> None:
+        """A plain reasoning-delta carries no provider_metadata."""
+        events = protocol._parse_stream_part(
+            {"type": "reasoning-delta", "id": "0", "delta": "thinking"},
+            set(),
+        )
+        assert isinstance(events[0], events_.ReasoningDelta)
+        assert events[0].provider_metadata is None
+
+    def test_reasoning_start_drops_routing_metadata(self) -> None:
+        """Metadata on -start is gateway routing info (generationId), not
+        provider reasoning metadata, and must not be replayed."""
+        events = protocol._parse_stream_part(
+            {
+                "type": "reasoning-start",
+                "id": "0",
+                "providerMetadata": {"gateway": {"generationId": "gen_1"}},
+            },
+            set(),
+        )
+        assert isinstance(events[0], events_.ReasoningStart)
+        assert events[0].provider_metadata is None
+
     def test_file_part(self) -> None:
         """A ``file`` stream part (inline image from Gemini/GPT-5)
         must produce a FileEvent."""
@@ -389,3 +471,59 @@ class TestParseUsage:
         usage = protocol._parse_usage("not a dict")
         assert usage.input_tokens == 0
         assert usage.output_tokens == 0
+
+
+# ---------------------------------------------------------------------------
+# Thinking-block round trip (signature survives in -> aggregate -> out)
+# ---------------------------------------------------------------------------
+
+
+class TestReasoningSignatureRoundTrip:
+    """The whole point of capturing the signature: it must survive being
+    parsed from the wire, aggregated into a Message, and re-serialized so
+    the upstream sees its own thinking on the next turn."""
+
+    async def test_signature_survives_round_trip(self) -> None:
+        # Wire parts as the gateway emits them: the signature rides on the
+        # final (empty) reasoning-delta, not the start or end.
+        wire_parts: list[dict[str, Any]] = [
+            {"type": "reasoning-start", "id": "0"},
+            {"type": "reasoning-delta", "id": "0", "delta": "thinking hard"},
+            {
+                "type": "reasoning-delta",
+                "id": "0",
+                "delta": "",
+                "providerMetadata": {"anthropic": {"signature": "ErMJsig=="}},
+            },
+            {"type": "reasoning-end", "id": "0"},
+        ]
+
+        async def _gen() -> AsyncGenerator[events_.Event]:
+            for part in wire_parts:
+                for event in protocol._parse_stream_part(part, set()):
+                    yield event
+
+        stream = models.Stream(_gen())
+        async for _ in stream:
+            pass
+
+        # Aggregated message: one reasoning part carrying the signature.
+        reasoning = [
+            p
+            for p in stream.message.parts
+            if isinstance(p, messages.ReasoningPart)
+        ]
+        assert len(reasoning) == 1
+        assert reasoning[0].text == "thinking hard"
+        assert reasoning[0].provider_metadata == {
+            "anthropic": {"signature": "ErMJsig=="}
+        }
+
+        # Round-trip back out: the metadata is replayed verbatim to the
+        # provider as providerOptions.
+        out = await protocol._messages_to_prompt(
+            [messages.Message(role="assistant", parts=stream.message.parts)]
+        )
+        assert out[0]["content"][0]["providerOptions"] == {
+            "anthropic": {"signature": "ErMJsig=="}
+        }
