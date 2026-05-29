@@ -20,6 +20,25 @@ def test_user_message_mixed_content() -> None:
     assert isinstance(msg.parts[2], messages.TextPart)
 
 
+def test_text_part() -> None:
+    tp = builders.text_part("hello", provider_metadata={"k": "v"})
+    assert isinstance(tp, messages.TextPart)
+    assert tp.text == "hello"
+    assert tp.provider_metadata == {"k": "v"}
+
+
+def test_content_output_coerces_strings() -> None:
+    fp = messages.FilePart(
+        data="https://example.com/img.png", media_type="image/png"
+    )
+    out = builders.content_output("Here:", fp)
+    assert isinstance(out, messages.ContentOutput)
+    assert len(out.value) == 2
+    assert isinstance(out.value[0], messages.TextPart)
+    assert out.value[0].text == "Here:"
+    assert isinstance(out.value[1], messages.FilePart)
+
+
 def test_file_part_from_url() -> None:
     fp = builders.file_part("https://example.com/image.png")
     assert isinstance(fp, messages.FilePart)

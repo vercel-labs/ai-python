@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any, cast
 
 from ....types import media
@@ -107,6 +108,21 @@ def dedupe_tool_parts(
     return result
 
 
+def _output_view(
+    part: messages_.ToolResultPart,
+) -> tuple[str, dict[str, Any]]:
+    """Map a tool result to ``(state, field_updates)`` for the UI wire."""
+    result = part.result
+    if isinstance(result, messages_.ContentOutput):
+        return "output-available", {
+            "output": [item.model_dump(mode="json") for item in result.value]
+        }
+    if part.is_error:
+        text = result if isinstance(result, str) else json.dumps(result)
+        return "output-error", {"error_text": text}
+    return "output-available", {"output": result}
+
+
 def merge_tool_results(
     ui_parts: list[ui_messages.UIMessagePart],
     tool_parts: list[messages_.Part],
@@ -121,15 +137,12 @@ def merge_tool_results(
                 continue
             case messages_.ToolResultPart():
                 tool_call_id = part.tool_call_id
-                state = "output-error" if part.is_error else "output-available"
+                state, field_updates = _output_view(part)
                 updates = {
                     "state": state,
                     "result_provider_metadata": part.provider_metadata,
+                    **field_updates,
                 }
-                if part.is_error:
-                    updates["error_text"] = str(part.result)
-                else:
-                    updates["output"] = part.result
             case messages_.BuiltinToolReturnPart():
                 tool_call_id = part.tool_call_id
                 updates = {

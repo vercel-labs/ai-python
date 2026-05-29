@@ -4,18 +4,25 @@ The adapter writes ``metadata["aiPython"]["sourceMessages"]`` with each
 source message's ``id``, ``role``, ``turnId``, and ``partIds``. Outbound UI
 bubbles can collapse assistant/tool/internal messages into one UI message;
 inbound parsing uses this metadata to restore stable message and part ids.
+
+It also writes ``metadata["aiPython"]["toolResultKinds"]`` mapping a tool
+call id to its ``result_kind`` for results the wire ``state`` can't convey
+(``content``): the multipart payload already round-trips inside the UI tool
+part's ``output``, but the signal to rehydrate it as a typed ``ContentOutput``
+would otherwise be lost.  ``error`` rides the UI ``state`` enum and ``json``
+is the default, so only ``content`` is recorded.
 """
 
 from __future__ import annotations
 
 import dataclasses
-from typing import TYPE_CHECKING, Literal, cast
+from typing import Literal, cast
 
-if TYPE_CHECKING:
-    from ....types import messages as messages_
+from ....types import messages as messages_
 
 ADAPTER_METADATA_KEY = "aiPython"
 SOURCE_MESSAGES_KEY = "sourceMessages"
+TOOL_RESULT_KINDS_KEY = "toolResultKinds"
 
 MessageRole = Literal["user", "assistant", "system", "tool", "internal"]
 _VALID_ROLES = {"user", "assistant", "system", "tool", "internal"}
@@ -77,23 +84,40 @@ def _restore_message_ids(
     return message.model_copy(update=updates)
 
 
+def _tool_result_kinds(
+    source_messages: list[messages_.Message],
+) -> dict[str, str]:
+    """Collect ``{tool_call_id: result_kind}`` for content tool results."""
+    kinds: dict[str, str] = {}
+    for message in source_messages:
+        for part in message.parts:
+            if (
+                isinstance(part, messages_.ToolResultPart)
+                and part.result_kind == "content"
+            ):
+                kinds[part.tool_call_id] = part.result_kind
+    return kinds
+
+
 def metadata_for(
     source_messages: list[messages_.Message],
 ) -> dict[str, object]:
     """Return adapter metadata for restoring collapsed source message ids."""
-    return {
-        ADAPTER_METADATA_KEY: {
-            SOURCE_MESSAGES_KEY: [
-                {
-                    "id": message.id,
-                    "role": message.role,
-                    "turnId": message.turn_id,
-                    "partIds": [part.id for part in message.parts],
-                }
-                for message in source_messages
-            ]
-        }
+    adapter: dict[str, object] = {
+        SOURCE_MESSAGES_KEY: [
+            {
+                "id": message.id,
+                "role": message.role,
+                "turnId": message.turn_id,
+                "partIds": [part.id for part in message.parts],
+            }
+            for message in source_messages
+        ]
     }
+    tool_result_kinds = _tool_result_kinds(source_messages)
+    if tool_result_kinds:
+        adapter[TOOL_RESULT_KINDS_KEY] = tool_result_kinds
+    return {ADAPTER_METADATA_KEY: adapter}
 
 
 def source_messages_from(metadata: object) -> list[SourceMessage]:
@@ -117,6 +141,26 @@ def source_messages_from(metadata: object) -> list[SourceMessage]:
         if source is not None:
             result.append(source)
     return result
+
+
+def tool_result_kinds_from(metadata: object) -> dict[str, str]:
+    """Parse ``{tool_call_id: result_kind}``, ignoring malformed entries."""
+    if not isinstance(metadata, dict):
+        return {}
+    metadata_dict = cast("dict[str, object]", metadata)
+    adapter_metadata = metadata_dict.get(ADAPTER_METADATA_KEY)
+    if not isinstance(adapter_metadata, dict):
+        return {}
+    adapter_metadata_dict = cast("dict[str, object]", adapter_metadata)
+    raw_kinds = adapter_metadata_dict.get(TOOL_RESULT_KINDS_KEY)
+    if not isinstance(raw_kinds, dict):
+        return {}
+    raw_kinds_dict = cast("dict[str, object]", raw_kinds)
+    return {
+        tool_call_id: kind
+        for tool_call_id, kind in raw_kinds_dict.items()
+        if isinstance(tool_call_id, str) and isinstance(kind, str)
+    }
 
 
 def restore_source_ids(

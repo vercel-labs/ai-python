@@ -75,7 +75,8 @@ async def test_tool_call_with_json_args() -> None:
         tool_args='{"a": 1, "b": 2}',
     )
     result = await ai.agents.BoundToolCall(part=part, tool=add)()
-    assert result.results[0].result == 3
+    out = result.results[0].result
+    assert out == 3
 
 
 # -- ToolCall binds a ToolCallPart to a Tool and returns tool messages ----
@@ -101,7 +102,8 @@ async def test_tool_call_returns_tool_message() -> None:
     assert len(result.results) == 1
     assert result.results[0].tool_call_id == "tc-1"
     assert result.results[0].tool_name == "double"
-    assert result.results[0].result == 10
+    out = result.results[0].result
+    assert out == 10
     assert not result.results[0].is_error
 
 
@@ -175,7 +177,8 @@ async def test_tool_call_allows_kwarg_overrides() -> None:
 
     result = await tc(x=7)
 
-    assert result.results[0].result == 14
+    out = result.results[0].result
+    assert out == 14
 
 
 async def test_tool_call_override_validation_failure() -> None:

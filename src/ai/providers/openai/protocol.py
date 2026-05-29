@@ -109,6 +109,38 @@ async def _file_part_to_openai(
     raise ValueError(f"Unsupported media type for OpenAI: {mt}")
 
 
+def _tool_result_to_openai(value: Any) -> str | list[dict[str, Any]]:
+    """Convert a tool result's model-facing value to OpenAI content (chat).
+
+    A :class:`ContentOutput` expands into a content array with ``text``
+    and ``image_url`` parts.  Everything else is sent as a string: ``str``
+    raw, ``None`` as ``""``, anything else JSON-encoded.
+    """
+    if isinstance(value, types.messages.ContentOutput):
+        parts: list[dict[str, Any]] = []
+        for item in value.value:
+            if isinstance(item, types.messages.FilePart):
+                mt = item.media_type
+                if mt.startswith("image/"):
+                    data_url = types.media.data_to_data_url(item.data, mt)
+                    parts.append(
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": data_url},
+                        }
+                    )
+                else:
+                    parts.append({"type": "text", "text": f"[file: {mt}]"})
+            else:
+                parts.append({"type": "text", "text": item.text})
+        return parts
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    return _json_dumps(value)
+
+
 async def _messages_to_openai(
     messages: list[types.messages.Message],
 ) -> list[dict[str, Any]]:
@@ -166,14 +198,14 @@ async def _messages_to_openai(
             case "tool":
                 for part in msg.parts:
                     if isinstance(part, types.messages.ToolResultPart):
-                        model_input = part.get_model_input()
+                        tool_content = _tool_result_to_openai(
+                            part.get_model_input()
+                        )
                         result.append(
                             {
                                 "role": "tool",
                                 "tool_call_id": part.tool_call_id,
-                                "content": str(model_input)
-                                if model_input is not None
-                                else "",
+                                "content": tool_content,
                             }
                         )
 
@@ -809,12 +841,39 @@ def _raw_item_from_metadata(part: Any) -> dict[str, Any] | None:
     return None
 
 
-def _stringify_tool_result(result: Any) -> str:
-    if result is None:
+def _tool_result_to_responses(value: Any) -> str | list[dict[str, Any]]:
+    """Convert a tool result's model-facing value to a Responses ``output``.
+
+    Returns a plain string for ordinary values (``str`` raw, ``None`` as
+    ``""``, anything else JSON-encoded), or an array of ``input_text`` /
+    ``input_image`` / ``input_file`` parts for a :class:`ContentOutput`
+    (the Responses API accepts both shapes on ``function_call_output.output``).
+    """
+    if isinstance(value, types.messages.ContentOutput):
+        parts: list[dict[str, Any]] = []
+        for item in value.value:
+            if isinstance(item, types.messages.FilePart):
+                data_url = types.media.data_to_data_url(
+                    item.data, item.media_type
+                )
+                if item.media_type.startswith("image/"):
+                    parts.append({"type": "input_image", "image_url": data_url})
+                else:
+                    entry: dict[str, Any] = {
+                        "type": "input_file",
+                        "file_data": data_url,
+                    }
+                    if item.filename is not None:
+                        entry["filename"] = item.filename
+                    parts.append(entry)
+            else:
+                parts.append({"type": "input_text", "text": item.text})
+        return parts
+    if value is None:
         return ""
-    if isinstance(result, str):
-        return result
-    return _json_dumps(result)
+    if isinstance(value, str):
+        return value
+    return _json_dumps(value)
 
 
 async def _file_part_to_responses(
@@ -948,7 +1007,7 @@ async def _messages_to_responses(
                             {
                                 "type": "function_call_output",
                                 "call_id": part.tool_call_id,
-                                "output": _stringify_tool_result(
+                                "output": _tool_result_to_responses(
                                     part.get_model_input()
                                 ),
                             }

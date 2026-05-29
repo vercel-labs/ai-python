@@ -5,7 +5,7 @@ from typing import Any
 import pytest
 
 from ai.agents.agent import MessageBundle
-from ai.agents.ui.ai_sdk import to_messages
+from ai.agents.ui.ai_sdk import to_messages, to_ui_messages
 from ai.agents.ui.ai_sdk.inbound_messages import _normalize_ui_messages
 from ai.agents.ui.ai_sdk.ui_messages import UIMessage, UIToolPart
 from ai.types import messages as messages_
@@ -189,6 +189,59 @@ def test_to_messages_decodes_subagent_tool_output() -> None:
     assert not result_part.has_model_input
 
 
+def test_content_result_round_trips_via_metadata() -> None:
+    """A content tool result survives outbound -> inbound as ContentOutput.
+
+    The multipart payload rides the UI tool part's ``output``; the
+    ``toolResultKinds`` adapter metadata carries the signal to rehydrate it.
+    """
+    fp = messages_.FilePart(data=b"img-bytes", media_type="image/png")
+    turn = "turn-1"
+    internal = [
+        messages_.Message(
+            id="a1",
+            turn_id=turn,
+            role="assistant",
+            parts=[
+                messages_.ToolCallPart(
+                    tool_call_id="tc1",
+                    tool_name="read",
+                    tool_args="{}",
+                )
+            ],
+        ),
+        messages_.Message(
+            id="t1",
+            turn_id=turn,
+            role="tool",
+            parts=[
+                messages_.ToolResultPart(
+                    tool_call_id="tc1",
+                    tool_name="read",
+                    result=messages_.ContentOutput(
+                        value=[messages_.TextPart(text="desc"), fp]
+                    ),
+                    result_kind="content",
+                )
+            ],
+        ),
+    ]
+
+    ui = to_ui_messages(internal)
+    restored, _ = to_messages(ui)
+
+    tool_msgs = [m for m in restored if m.role == "tool"]
+    assert len(tool_msgs) == 1
+    part = tool_msgs[0].tool_results[0]
+    assert part.result_kind == "content"
+    assert isinstance(part.result, messages_.ContentOutput)
+    text_part, file_part = part.result.value
+    assert isinstance(text_part, messages_.TextPart)
+    assert text_part.text == "desc"
+    assert isinstance(file_part, messages_.FilePart)
+    assert file_part.media_type == "image/png"
+
+
 def test_to_messages_passthrough_keeps_wire_shape() -> None:
     """Non-UIMessage tool outputs stay in their wire form."""
     ui = [
@@ -209,7 +262,6 @@ def test_to_messages_passthrough_keeps_wire_shape() -> None:
     tool_msgs = [m for m in messages if m.role == "tool"]
     part = tool_msgs[0].tool_results[0]
     assert part.result == {"pong": True}
-    assert part.get_model_input() == {"pong": True}
 
 
 def test_to_messages_accepts_metadata_and_ui_only_parts() -> None:

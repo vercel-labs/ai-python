@@ -153,4 +153,5 @@ async def test_alias_declared_tool_runs_end_to_end() -> None:
     tool_results = [
         e for e in all_events if isinstance(e, agent_events_.ToolCallResult)
     ]
-    assert tool_results[0].results[0].result == "Answer for test"
+    tr = tool_results[0].results[0].result
+    assert tr == "Answer for test"

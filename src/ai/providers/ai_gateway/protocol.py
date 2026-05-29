@@ -92,6 +92,57 @@ def _file_part_to_wire(part: types.messages.FilePart) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Tool result output -> v3 wire
+# ---------------------------------------------------------------------------
+
+
+def _file_part_to_v3_inline(part: types.messages.FilePart) -> dict[str, Any]:
+    """Convert a :class:`FilePart` to an inline v3 content element.
+
+    Images become ``image-data``; everything else becomes ``file-data``.
+    """
+    b64 = types.media.data_to_base64(part.data)
+    if part.media_type.startswith("image/"):
+        return {"type": "image-data", "data": b64, "mediaType": part.media_type}
+    entry: dict[str, Any] = {
+        "type": "file-data",
+        "data": b64,
+        "mediaType": part.media_type,
+    }
+    if part.filename is not None:
+        entry["filename"] = part.filename
+    return entry
+
+
+def _tool_result_output(
+    part: types.messages.ToolResultPart,
+) -> dict[str, Any]:
+    """Convert a tool result to its v3 ``output`` wire form.
+
+    The v3 protocol carries a tagged output union.  A :class:`ContentOutput`
+    becomes ``content``; an error result becomes ``error-text`` (for a
+    ``str``) or ``error-json``; otherwise ``text`` (for a ``str``) or
+    ``json``.  The text-vs-json call is made here, at the wire boundary.
+    """
+    value = part.get_model_input()
+    if isinstance(value, types.messages.ContentOutput):
+        parts: list[dict[str, Any]] = []
+        for item in value.value:
+            if isinstance(item, types.messages.FilePart):
+                parts.append(_file_part_to_v3_inline(item))
+            else:
+                parts.append({"type": "text", "text": item.text})
+        return {"type": "content", "value": parts}
+    if part.is_error:
+        if value is None or isinstance(value, str):
+            return {"type": "error-text", "value": value or ""}
+        return {"type": "error-json", "value": value}
+    if value is None or isinstance(value, str):
+        return {"type": "text", "value": value or ""}
+    return {"type": "json", "value": value}
+
+
+# ---------------------------------------------------------------------------
 # Streaming request building — Message list → v3 prompt
 # ---------------------------------------------------------------------------
 
@@ -210,22 +261,7 @@ async def _messages_to_prompt(
                 tool_results: list[dict[str, Any]] = []
                 for part in msg.parts:
                     if isinstance(part, types.messages.ToolResultPart):
-                        model_input = part.get_model_input()
-                        output = (
-                            {
-                                "type": "error-text",
-                                "value": (
-                                    str(model_input)
-                                    if model_input is not None
-                                    else ""
-                                ),
-                            }
-                            if part.is_error
-                            else {
-                                "type": "json",
-                                "value": model_input,
-                            }
-                        )
+                        output = _tool_result_output(part)
                         tool_results.append(
                             {
                                 "type": "tool-result",

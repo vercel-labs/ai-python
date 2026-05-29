@@ -93,8 +93,10 @@ from .providers import get_provider
 from .types import events, messages, tools
 from .types.builders import (
     assistant_message,
+    content_output,
     file_part,
     system_message,
+    text_part,
     thinking,
     tool_message,
     tool_result_part,
@@ -176,6 +178,7 @@ __all__ = [
     "agent",
     "assistant_message",
     "cancel_hook",
+    "content_output",
     "errors",
     "events",
     "file_part",
@@ -192,6 +195,7 @@ __all__ = [
     "resolve_hook",
     "stream",
     "system_message",
+    "text_part",
     "thinking",
     "tool",
     "tool_message",

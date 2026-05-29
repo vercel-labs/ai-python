@@ -180,7 +180,7 @@ def _fix_missing_results(
                         tool_call_id=tc.tool_call_id,
                         tool_name=tc.tool_name,
                         result="Tool result not available",
-                        is_error=True,
+                        result_kind="error",
                     )
                     for tc in pending.values()
                 )
