@@ -420,12 +420,27 @@ def _json_default(obj: Any) -> Any:
     )
 
 
-def _format_tool_result(result: Any, is_error: bool) -> str:
-    text = (
-        result
-        if isinstance(result, str)
-        else json.dumps(result, ensure_ascii=False, default=_json_default)
+def _content_to_text(output: ai.messages.ContentOutput) -> str:
+    """Render a multipart ``ContentOutput`` for the transcript.
+
+    Only the text parts are shown; file parts (e.g. images from
+    ``read``) carry base-64 blobs we don't want in the bubble, and the
+    tool already includes a human-readable label as a text part.
+    """
+    return "\n".join(
+        part.text
+        for part in output.value
+        if isinstance(part, ai.messages.TextPart)
     )
+
+
+def _format_tool_result(result: Any, is_error: bool) -> str:
+    if isinstance(result, ai.messages.ContentOutput):
+        text = _content_to_text(result)
+    elif isinstance(result, str):
+        text = result
+    else:
+        text = json.dumps(result, ensure_ascii=False, default=_json_default)
     if len(text) > RESULT_PREVIEW_CHARS:
         text = (
             text[:RESULT_PREVIEW_CHARS]
