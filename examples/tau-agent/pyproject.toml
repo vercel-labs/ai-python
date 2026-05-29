@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Tau — a coding-agent chat bot demo built with the ai library and Textual"
 requires-python = ">=3.12"
 dependencies = [
-    "ai",
+    "ai[anthropic,openai]",
     "textual>=3.0",
 ]
 
