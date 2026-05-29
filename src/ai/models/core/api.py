@@ -41,7 +41,7 @@ class StreamRequest:
     messages: list[types.messages.Message]
     tools: Sequence[types.tools.Tool] | None = None
     output_type: type[pydantic.BaseModel] | None = None
-    params: Any = None
+    params: params_.InferenceRequestParams | None = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -369,14 +369,14 @@ class StreamContext(Protocol):
     @property
     def output_type(self) -> type[pydantic.BaseModel] | None: ...
     @property
-    def params(self) -> Any: ...
+    def params(self) -> params_.InferenceRequestParams | None: ...
 
 
 @overload
 def stream(
     *,
     context: StreamContext,
-    params: Any = None,
+    params: params_.InferenceRequestParams | None = None,
     executor: StreamExecutor = _default_executor,
 ) -> AbstractAsyncContextManager[Stream[str]]: ...
 @overload
@@ -384,7 +384,7 @@ def stream[T: pydantic.BaseModel](
     *,
     context: StreamContext,
     output_type: type[T],
-    params: Any = None,
+    params: params_.InferenceRequestParams | None = None,
     executor: StreamExecutor = _default_executor,
 ) -> AbstractAsyncContextManager[Stream[T]]: ...
 @overload
@@ -393,7 +393,7 @@ def stream(
     messages: list[types.messages.Message],
     *,
     tools: Sequence[types.tools.Tool] | None = None,
-    params: Any = None,
+    params: params_.InferenceRequestParams | None = None,
     executor: StreamExecutor = _default_executor,
 ) -> AbstractAsyncContextManager[Stream[str]]: ...
 @overload
@@ -403,7 +403,7 @@ def stream[T: pydantic.BaseModel](
     *,
     tools: Sequence[types.tools.Tool] | None = None,
     output_type: type[T],
-    params: Any = None,
+    params: params_.InferenceRequestParams | None = None,
     executor: StreamExecutor = _default_executor,
 ) -> AbstractAsyncContextManager[Stream[T]]: ...
 def stream(
@@ -413,7 +413,7 @@ def stream(
     context: StreamContext | None = None,
     tools: Sequence[types.tools.Tool] | None = None,
     output_type: type[pydantic.BaseModel] | None = None,
-    params: Any = None,
+    params: params_.InferenceRequestParams | None = None,
     executor: StreamExecutor = _default_executor,
 ) -> AbstractAsyncContextManager[Stream[Any]]:
     """Stream an LLM response.
@@ -464,7 +464,7 @@ async def _stream(
     messages: list[types.messages.Message],
     tools: Sequence[types.tools.Tool] | None,
     output_type: type[pydantic.BaseModel] | None,
-    params: Any,
+    params: params_.InferenceRequestParams | None,
     executor: StreamExecutor,
 ) -> AsyncIterator[Stream[Any]]:
     if messages and messages[-1].replay:

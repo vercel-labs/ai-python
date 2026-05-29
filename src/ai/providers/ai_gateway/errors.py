@@ -20,15 +20,14 @@ def map_error(exc: client_errors.GatewayError) -> ai_errors.ProviderAPIError:
             model_id=exc.model_id,
             provider="ai-gateway",
             http_context=_http_context(exc),
+            body=exc.response_body,
             error_type=exc.type,
             is_retryable=exc.is_retryable,
         )
     if isinstance(exc, client_errors.GatewayInternalServerError):
         return _mapped(ai_errors.ProviderInternalServerError, exc)
     if isinstance(exc, client_errors.GatewayResponseError):
-        return _mapped(
-            ai_errors.ProviderResponseError, exc, body=exc.response_body
-        )
+        return _mapped(ai_errors.ProviderResponseError, exc)
     if isinstance(exc, client_errors.GatewayTimeoutError):
         return _mapped(ai_errors.ProviderTimeoutError, exc)
     return _mapped(ai_errors.ProviderAPIError, exc)
@@ -37,14 +36,12 @@ def map_error(exc: client_errors.GatewayError) -> ai_errors.ProviderAPIError:
 def _mapped(
     cls: type[ai_errors.ProviderAPIError],
     exc: client_errors.GatewayError,
-    *,
-    body: object | None = None,
 ) -> ai_errors.ProviderAPIError:
     return cls(
         str(exc),
         provider="ai-gateway",
         http_context=_http_context(exc),
-        body=body,
+        body=exc.response_body,
         error_type=exc.type,
         is_retryable=exc.is_retryable,
     )

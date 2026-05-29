@@ -111,7 +111,10 @@ class _RaisingOpenAIClient:
         self.closed = True
 
 
-_MODEL = ai.Model("gpt-5.4", provider=ai.get_provider("openai"))
+_MODEL = ai.Model(
+    "gpt-5.4",
+    provider=ai.get_provider("openai", api_key="sk-test"),
+)
 
 
 def _patch(
@@ -157,7 +160,7 @@ async def test_responses_request_uses_responses_input() -> None:
     assert "messages" not in captured
 
 
-async def test_responses_raw_params_and_structured_output() -> None:
+async def test_responses_params_and_structured_output() -> None:
     fake, captured = _patch_responses()
 
     await _drain(
@@ -166,23 +169,74 @@ async def test_responses_raw_params_and_structured_output() -> None:
             _MODEL,
             [ai.user_message("Hi")],
             output_type=_Answer,
-            params={
-                "reasoning": {"effort": "high"},
-                "include": ["file_search_call.results"],
-                "text": {"verbosity": "low"},
-                "extra_headers": {"x-openai-feature": "enabled"},
-            },
+            params=ai.InferenceRequestParams(
+                reasoning=ai.ReasoningParams(effort="high"),
+                context_management=ai.ContextManagementParams(
+                    compaction=ai.TokenThreshold(120_000)
+                ),
+                output=ai.OutputParams(
+                    include=frozenset({"file_search_call.results"}),
+                    reasoning_summary="auto",
+                    text_verbosity="low",
+                ),
+                extra_body={"future_option": True},
+                extra_headers={"x-openai-feature": "enabled"},
+            ),
             provider="openai",
         )
     )
 
-    assert captured["reasoning"] == {"effort": "high"}
+    assert captured["reasoning"] == {"effort": "high", "summary": "auto"}
+    assert captured["context_management"] == [
+        {"type": "compaction", "compact_threshold": 120_000}
+    ]
     assert captured["include"] == ["file_search_call.results"]
     assert captured["extra_headers"] == {"x-openai-feature": "enabled"}
+    assert captured["extra_body"] == {"future_option": True}
     assert captured["text"]["verbosity"] == "low"
     assert captured["text"]["format"]["type"] == "json_schema"
     assert captured["text"]["format"]["name"] == "_Answer"
     assert captured["text"]["format"]["strict"] is True
+
+
+async def test_chat_rejects_text_verbosity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake, _ = _patch(monkeypatch)
+
+    with pytest.raises(ValueError, match="text verbosity"):
+        await _drain(
+            protocol.stream(
+                fake,
+                _MODEL,
+                [ai.user_message("Hi")],
+                params=ai.InferenceRequestParams(
+                    output=ai.OutputParams(text_verbosity="low")
+                ),
+                provider="openai",
+            )
+        )
+
+
+async def test_chat_rejects_context_management(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake, _ = _patch(monkeypatch)
+
+    with pytest.raises(ValueError, match="context management"):
+        await _drain(
+            protocol.stream(
+                fake,
+                _MODEL,
+                [ai.user_message("Hi")],
+                params=ai.InferenceRequestParams(
+                    context_management=ai.ContextManagementParams(
+                        compaction=ai.TokenThreshold(120_000)
+                    )
+                ),
+                provider="openai",
+            )
+        )
 
 
 async def test_responses_tools_convert_function_and_provider_tools() -> None:
@@ -421,7 +475,7 @@ async def test_system_messages_use_openai_system_role(
     assert captured["messages"][0] == {"role": "system", "content": "rules"}
 
 
-async def test_raw_params_pass_through_to_sdk_kwargs(
+async def test_params_translate_to_sdk_kwargs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fake, captured = _patch(monkeypatch)
@@ -431,27 +485,71 @@ async def test_raw_params_pass_through_to_sdk_kwargs(
             fake,
             _MODEL,
             [ai.user_message("Hi")],
-            params={
-                "logprobs": 3,
-                "verbosity": "low",
-                "max_completion_tokens": 128,
-                "extra_body": {"future_option": True},
-                "extra_headers": {"x-openai-feature": "enabled"},
-                "stream_options": {"include_usage": False, "custom": True},
-            },
+            params=ai.InferenceRequestParams(
+                sampling={
+                    ai.TemperatureSamplerParams: ai.TemperatureSamplerParams(
+                        temperature=0.2
+                    ),
+                    ai.TopPSamplerParams: ai.TopPSamplerParams(top_p=0.9),
+                    ai.SeedSamplerParams: ai.SeedSamplerParams(seed=123),
+                },
+                output=ai.OutputParams(max_tokens=128),
+                provider_service=ai.ProviderServiceParams(service_tier="auto"),
+                extra_body={"future_option": True, "verbosity": "low"},
+                extra_headers={"x-openai-feature": "enabled"},
+            ),
             provider="openai",
         )
     )
 
-    assert captured["logprobs"] == 3
-    assert captured["verbosity"] == "low"
+    assert captured["temperature"] == 0.2
+    assert captured["top_p"] == 0.9
+    assert captured["seed"] == 123
     assert captured["max_completion_tokens"] == 128
-    assert captured["extra_body"] == {"future_option": True}
+    assert captured["service_tier"] == "auto"
+    assert captured["extra_body"] == {"future_option": True, "verbosity": "low"}
     assert captured["extra_headers"] == {"x-openai-feature": "enabled"}
-    assert captured["stream_options"] == {
-        "include_usage": False,
-        "custom": True,
-    }
+
+
+async def test_chat_omits_explicit_random_seed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake, captured = _patch(monkeypatch)
+
+    await _drain(
+        protocol.stream(
+            fake,
+            _MODEL,
+            [ai.user_message("Hi")],
+            params=ai.InferenceRequestParams(
+                sampling={
+                    ai.SeedSamplerParams: ai.SeedSamplerParams(seed=ai.RANDOM)
+                }
+            ),
+            provider="openai",
+        )
+    )
+
+    assert "seed" not in captured
+
+
+async def test_responses_rejects_seed() -> None:
+    fake, _ = _patch_responses()
+
+    with pytest.raises(ValueError, match="seed"):
+        await _drain(
+            protocol.OpenAIResponsesProtocol().stream(
+                fake,
+                _MODEL,
+                [ai.user_message("Hi")],
+                params=ai.InferenceRequestParams(
+                    sampling={
+                        ai.SeedSamplerParams: ai.SeedSamplerParams(seed=123)
+                    }
+                ),
+                provider="openai",
+            )
+        )
 
 
 async def test_strict_json_schema_flows_into_response_format(
@@ -472,7 +570,7 @@ async def test_strict_json_schema_flows_into_response_format(
     assert captured["response_format"]["json_schema"]["strict"] is True
 
 
-async def test_non_dict_params_rejected_by_adapter(
+async def test_non_inference_params_rejected_by_adapter(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fake, _ = _patch(monkeypatch)
@@ -481,11 +579,11 @@ async def test_non_dict_params_rejected_by_adapter(
         fake,
         _MODEL,
         [ai.user_message("Hi")],
-        params=[{"reasoning_effort": "high"}],
+        params=cast(Any, [{"reasoning_effort": "high"}]),
         provider="openai",
     )
 
-    with pytest.raises(TypeError, match="dict"):
+    with pytest.raises(TypeError, match="InferenceRequestParams"):
         await _drain(stream)
 
 

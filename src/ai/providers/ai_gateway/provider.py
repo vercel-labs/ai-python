@@ -84,7 +84,7 @@ class GatewayProvider(base.Provider[gateway_client.GatewayClient]):
         *,
         tools: Sequence[tools_.Tool] | None = None,
         output_type: type[pydantic.BaseModel] | None = None,
-        params: Any = None,
+        params: params_.InferenceRequestParams | None = None,
     ) -> AsyncGenerator[events.Event]:
         """Stream via the AI Gateway v3 protocol."""
         return super().stream(

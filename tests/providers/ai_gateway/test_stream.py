@@ -16,7 +16,7 @@ is covered:
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, cast
 
 import httpx
 import pytest
@@ -24,6 +24,7 @@ import pytest
 import ai
 from ai import models
 from ai.models.core import model as model_
+from ai.providers.ai_gateway import GatewayParams, ProviderTimeoutsParams
 from ai.types import events, messages
 
 from .conftest import mock_client, mock_model, sse, user_msg
@@ -345,22 +346,30 @@ class TestRequest:
             httpx.MockTransport(handler),
             model_id="anthropic/claude-sonnet-4",
         )
-        request_params = {
-            "providerOptions": {
-                "gateway": {
-                    "order": ["bedrock", "anthropic"],
-                    "zeroDataRetention": True,
-                },
-                "anthropic": {
-                    "speed": "fast",
-                    "futureAnthropicField": True,
-                },
-                "google": {
-                    "thinkingConfig": {"budgetTokens": 1024},
-                },
+        request_params = ai.InferenceRequestParams(
+            sampling={ai.SeedSamplerParams: ai.SeedSamplerParams(seed=123)},
+            output=ai.OutputParams(reasoning_summary="detailed"),
+            reasoning=ai.ReasoningParams(effort="high"),
+            context_management=ai.ContextManagementParams(
+                compaction=ai.TokenThreshold(120_000)
+            ),
+            routing=ai.RoutingParams(provider_order=("bedrock", "anthropic")),
+            provider_params={
+                GatewayParams: GatewayParams(zero_data_retention=True)
             },
-            "futureGatewayField": True,
-        }
+            extra_body={
+                "providerOptions": {
+                    "anthropic": {
+                        "speed": "fast",
+                        "futureAnthropicField": True,
+                    },
+                    "google": {
+                        "thinkingConfig": {"budgetTokens": 1024},
+                    },
+                },
+                "futureGatewayField": True,
+            },
+        )
         async with models.stream(
             model,
             [user_msg("Hi")],
@@ -375,14 +384,164 @@ class TestRequest:
                 "zeroDataRetention": True,
             },
             "anthropic": {
+                "effort": "high",
                 "speed": "fast",
                 "futureAnthropicField": True,
+                "contextManagement": {
+                    "edits": [
+                        {
+                            "type": "compact_20260112",
+                            "trigger": {
+                                "type": "input_tokens",
+                                "value": 120_000,
+                            },
+                        }
+                    ]
+                },
+                "thinking": {"type": "adaptive", "display": "detailed"},
             },
             "google": {
                 "thinkingConfig": {"budgetTokens": 1024},
             },
         }
+        assert captured_body["seed"] == 123
         assert captured_body["futureGatewayField"] is True
+
+    async def test_gateway_omits_random_seed(self) -> None:
+        captured_body: dict[str, Any] = {}
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            captured_body.update(json.loads(req.content))
+            return httpx.Response(
+                200,
+                text=sse(
+                    {"type": "finish", "finishReason": "stop", "usage": {}}
+                ),
+            )
+
+        model = mock_model(
+            httpx.MockTransport(handler),
+            model_id="openai/gpt-5.4",
+        )
+        request_params = ai.InferenceRequestParams(
+            sampling={ai.SeedSamplerParams: ai.SeedSamplerParams(seed=-1)}
+        )
+        async with models.stream(
+            model,
+            [user_msg("Hi")],
+            params=request_params,
+        ) as stream:
+            async for _ in stream:
+                pass
+
+        assert "seed" not in captured_body
+
+    async def test_gateway_routing_params_map_to_provider_options(
+        self,
+    ) -> None:
+        captured_body: dict[str, Any] = {}
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            captured_body.update(json.loads(req.content))
+            return httpx.Response(
+                200,
+                text=sse(
+                    {"type": "finish", "finishReason": "stop", "usage": {}}
+                ),
+            )
+
+        model = mock_model(
+            httpx.MockTransport(handler),
+            model_id="anthropic/claude-sonnet-4",
+        )
+        byok: dict[str, list[dict[str, Any]]] = {
+            "anthropic": [{"apiKey": "sk-test"}]
+        }
+        request_params = ai.InferenceRequestParams(
+            cache=ai.CacheParams(mode="auto"),
+            safety_identifier="user_123",
+            tags=frozenset({"team:search", "env:prod"}),
+            routing=ai.RoutingParams(
+                provider_allowlist=frozenset({"anthropic", "bedrock"}),
+                provider_order=("bedrock", "anthropic"),
+                provider_ranking=ai.ProviderRankingStrategy.LATENCY,
+                fallback_models=("openai/gpt-5-mini",),
+                routing_target=ai.CloudRegion("us-east-1"),
+            ),
+            provider_params={
+                GatewayParams: GatewayParams(
+                    quota_entity_id="quota_123",
+                    zero_data_retention=True,
+                    hipaa_compliant=True,
+                    disallow_prompt_training=True,
+                    byok=byok,
+                    provider_timeouts=ProviderTimeoutsParams(
+                        byok={"anthropic": 5000}
+                    ),
+                ),
+            },
+        )
+        async with models.stream(
+            model,
+            [user_msg("Hi")],
+            params=request_params,
+        ) as stream:
+            async for _ in stream:
+                pass
+
+        assert captured_body["providerOptions"]["gateway"] == {
+            "caching": "auto",
+            "only": ["anthropic", "bedrock"],
+            "order": ["bedrock", "anthropic"],
+            "sort": "latency",
+            "models": ["openai/gpt-5-mini"],
+            "user": "user_123",
+            "tags": ["env:prod", "team:search"],
+            "quotaEntityId": "quota_123",
+            "zeroDataRetention": True,
+            "hipaaCompliant": True,
+            "disallowPromptTraining": True,
+            "inferenceRegion": {"providerRegion": "us-east-1"},
+            "byok": {"anthropic": [{"apiKey": "sk-test"}]},
+            "providerTimeouts": {"byok": {"anthropic": 5000}},
+        }
+
+    async def test_gateway_openai_context_management_maps_to_provider_options(
+        self,
+    ) -> None:
+        captured_body: dict[str, Any] = {}
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            captured_body.update(json.loads(req.content))
+            return httpx.Response(
+                200,
+                text=sse(
+                    {"type": "finish", "finishReason": "stop", "usage": {}}
+                ),
+            )
+
+        model = mock_model(
+            httpx.MockTransport(handler),
+            model_id="openai/gpt-5.4",
+        )
+        request_params = ai.InferenceRequestParams(
+            context_management=ai.ContextManagementParams(
+                compaction=ai.TokenThreshold(120_000)
+            )
+        )
+        async with models.stream(
+            model,
+            [user_msg("Hi")],
+            params=request_params,
+        ) as stream:
+            async for _ in stream:
+                pass
+
+        assert captured_body["providerOptions"]["openai"] == {
+            "contextManagement": [
+                {"type": "compaction", "compactThreshold": 120_000}
+            ]
+        }
 
     async def test_gateway_rejects_non_dict_params(self) -> None:
         def handler(req: httpx.Request) -> httpx.Response:
@@ -392,13 +551,14 @@ class TestRequest:
             httpx.MockTransport(handler),
             model_id="openai/gpt-5.4",
         )
-        with pytest.raises(TypeError, match="dict"):
+        with pytest.raises(TypeError, match="InferenceRequestParams"):
             async with models.stream(
                 model,
                 [user_msg("Hi")],
-                params=[
-                    {"providerOptions": {"openai": {"serviceTier": "auto"}}}
-                ],
+                params=cast(
+                    Any,
+                    [{"providerOptions": {"openai": {"serviceTier": "auto"}}}],
+                ),
             ) as stream:
                 async for _ in stream:
                     pass

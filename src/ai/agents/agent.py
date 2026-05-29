@@ -827,7 +827,9 @@ class Context(pydantic.BaseModel):
     output_type: type[pydantic.BaseModel] | None = pydantic.Field(
         default=None, exclude=True, repr=False
     )
-    params: Any = pydantic.Field(default=None, exclude=True, repr=False)
+    params: models.InferenceRequestParams | None = pydantic.Field(
+        default=None, exclude=True, repr=False
+    )
 
     _agent_tools_by_name: dict[str, AgentTool] = pydantic.PrivateAttr(
         default_factory=dict
@@ -1198,7 +1200,7 @@ class Agent:
         model: models.Model,
         messages: list[types.messages.Message],
         *,
-        params: Any = None,
+        params: models.InferenceRequestParams | None = None,
         _middleware: list[middleware_._Middleware] | None = None,
     ) -> AbstractAsyncContextManager[AgentStream[str]]: ...
     @overload
@@ -1208,7 +1210,7 @@ class Agent:
         messages: list[types.messages.Message],
         *,
         output_type: type[T],
-        params: Any = None,
+        params: models.InferenceRequestParams | None = None,
         _middleware: list[middleware_._Middleware] | None = None,
     ) -> AbstractAsyncContextManager[AgentStream[T]]: ...
     def run(
@@ -1217,7 +1219,7 @@ class Agent:
         messages: list[types.messages.Message],
         *,
         output_type: type[pydantic.BaseModel] | None = None,
-        params: Any = None,
+        params: models.InferenceRequestParams | None = None,
         _middleware: list[middleware_._Middleware] | None = None,
     ) -> AbstractAsyncContextManager[AgentStream[Any]]:
         """Run the agent loop, yielding events to the consumer.
@@ -1257,7 +1259,7 @@ class Agent:
         messages: list[types.messages.Message],
         *,
         output_type: type[pydantic.BaseModel] | None,
-        params: Any,
+        params: models.InferenceRequestParams | None,
         _middleware: list[middleware_._Middleware] | None,
     ) -> AsyncIterator[AgentStream[Any]]:
         context = Context(

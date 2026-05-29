@@ -65,7 +65,7 @@ async def test_server_tool_use_emits_builtin_events(
     assert calls[0].tool_call_id == "srvtoolu_1"
     assert calls[0].tool_name == "web_search"
     assert calls[0].tool_args == '{"query":"weather"}'
-    assert calls[0].provider_metadata == {"provider": "anthropic"}
+    assert calls[0].provider_metadata == {"anthropic": {}}
 
 
 async def test_tool_result_block_emits_builtin_result(
@@ -102,8 +102,7 @@ async def test_tool_result_block_emits_builtin_result(
     assert ret.tool_name == "web_search"
     assert ret.result == payload
     assert ret.provider_metadata == {
-        "provider": "anthropic",
-        "resultType": "web_search_tool_result",
+        "anthropic": {"resultType": "web_search_tool_result"},
     }
 
 
@@ -120,10 +119,7 @@ async def test_signature_delta_emits_provider_metadata(
 
     reasoning = s.message.parts[0]
     assert isinstance(reasoning, messages.ReasoningPart)
-    assert reasoning.provider_metadata == {
-        "provider": "anthropic",
-        "signature": "sig",
-    }
+    assert reasoning.provider_metadata == {"anthropic": {"signature": "sig"}}
 
 
 async def test_event_kinds_in_order(monkeypatch: pytest.MonkeyPatch) -> None:
