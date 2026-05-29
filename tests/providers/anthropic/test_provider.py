@@ -165,8 +165,14 @@ def test_get_provider_raises_installation_error_when_anthropic_sdk_missing(
 
     monkeypatch.setattr(importlib, "import_module", _missing_anthropic)
 
+    # The SDK client is constructed lazily on first use (so that building
+    # a provider stays import-free, e.g. inside a Temporal workflow
+    # sandbox), so the missing-SDK error surfaces when the client is
+    # accessed rather than at construction.
+    provider = ai.get_provider("anthropic", api_key="sk-test")
+    assert isinstance(provider, AnthropicCompatibleProvider)
     with pytest.raises(ai.InstallationError) as exc_info:
-        ai.get_provider("anthropic", api_key="sk-test")
+        _ = provider.sdk_client
 
     assert "could not import `anthropic`" in str(exc_info.value)
     assert "required to use the anthropic provider" in str(exc_info.value)
