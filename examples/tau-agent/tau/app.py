@@ -73,7 +73,13 @@ _PROVIDER = _provider_slug(MODEL_ID)
 # the tools not existing.
 _PIN_PROVIDERS = frozenset({"anthropic", "openai"})
 
-# Only send gateway-specific options when routing through the gateway.
+ANT_PARAMS = {
+    "thinking": {
+        "type": "adaptive",
+        "display": "summarized",
+    },
+    "output_config": {"effort": "high"},
+}
 STREAM_PARAMS: dict[str, Any] | None = (
     {
         "providerOptions": {
@@ -83,13 +89,12 @@ STREAM_PARAMS: dict[str, Any] | None = (
                     {"only": [_PROVIDER]} if _PROVIDER in _PIN_PROVIDERS else {}
                 ),
             },
-            "anthropic": {
-                "thinking": {"type": "adaptive"},
-                "output_config": {"effort": "xhigh"},
-            },
+            "anthropic": ANT_PARAMS,
         }
     }
     if MODEL_ID.startswith("gateway:")
+    else ANT_PARAMS
+    if MODEL_ID.startswith("anthropic:")
     else None
 )
 
