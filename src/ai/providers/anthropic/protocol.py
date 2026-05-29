@@ -861,12 +861,15 @@ async def stream(
 
             snapshot = sdk_stream.current_message_snapshot
             sdk_usage = snapshot.usage
+            cache_read = getattr(sdk_usage, "cache_read_input_tokens", None)
             usage = types.usage.Usage(
-                input_tokens=sdk_usage.input_tokens or 0,
-                output_tokens=sdk_usage.output_tokens or 0,
-                cache_read_tokens=getattr(
-                    sdk_usage, "cache_read_input_tokens", None
+                # We combine input_tokens and cache_read_input_tokens,
+                # to match the behavior of other providers.
+                input_tokens=(
+                    (sdk_usage.input_tokens or 0) + (cache_read or 0)
                 ),
+                output_tokens=sdk_usage.output_tokens or 0,
+                cache_read_tokens=cache_read,
                 cache_write_tokens=getattr(
                     sdk_usage, "cache_creation_input_tokens", None
                 ),

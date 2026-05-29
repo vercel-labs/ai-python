@@ -15,6 +15,7 @@ class Usage(pydantic.BaseModel):
 
     model_config = pydantic.ConfigDict(frozen=True)
 
+    # input_tokens includes both cached and uncached input tokens.
     input_tokens: int = 0
     output_tokens: int = 0
 
