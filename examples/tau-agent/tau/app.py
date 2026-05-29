@@ -44,6 +44,8 @@ from tau import session, tools
 _raw_model = os.environ.get("TAU_MODEL", "gateway:anthropic/claude-opus-4.8")
 MODEL_ID = _raw_model if ":" in _raw_model else f"gateway:{_raw_model}"
 
+EFFORT = os.environ.get("TAU_EFFORT", "high")
+
 
 def _provider_slug(model_id: str) -> str:
     """Extract the backend provider slug from a model id.
@@ -58,44 +60,24 @@ def _provider_slug(model_id: str) -> str:
     return mid.split("/")[0].split(":")[0]
 
 
-_PROVIDER = _provider_slug(MODEL_ID)
-
-# Providers whose first-party backend is the model's maker.  For these we pin
-# the gateway to that provider via ``only`` so it never falls back to another
-# backend that also serves the model (e.g. Bedrock/Vertex for Claude).  Other
-# models (open-weight ones, say) are served by many backends where the named
-# provider isn't the maker, so we leave their routing unrestricted.
-#
-# The other providers often don't support all the server side
-# tools. In practice the main way that this becomes a problem is that
-# when there is an error on the main provider, gateway tries falling
-# back to other providers which then fail with unhelpful errors about
-# the tools not existing.
-_PIN_PROVIDERS = frozenset({"anthropic", "openai"})
-
-ANT_PARAMS = {
-    "thinking": {
-        "type": "adaptive",
-        "display": "summarized",
-    },
-    "output_config": {"effort": "high"},
+OUTPUT_PARAMS = dict(
+    anthropic=ai.OutputParams(reasoning_summary="summarized"),
+    openai=ai.OutputParams(reasoning_summary="detailed"),
+)
+# For providers with server side tools that we use, we want to route
+# them only to their actual provider, since the fallbacks don't
+# support the tools.
+ROUTING_PARAMS = {
+    k: ai.RoutingParams(provider_allowlist=frozenset({k}))
+    for k in {"anthropic", "openai"}
 }
-STREAM_PARAMS: dict[str, Any] | None = (
-    {
-        "providerOptions": {
-            "gateway": {
-                "caching": "auto",
-                **(
-                    {"only": [_PROVIDER]} if _PROVIDER in _PIN_PROVIDERS else {}
-                ),
-            },
-            "anthropic": ANT_PARAMS,
-        }
-    }
-    if MODEL_ID.startswith("gateway:")
-    else ANT_PARAMS
-    if MODEL_ID.startswith("anthropic:")
-    else None
+
+PROVIDER = _provider_slug(MODEL_ID)
+PARAMS = ai.InferenceRequestParams(
+    cache=ai.CacheParams(mode="auto"),
+    reasoning=ai.ReasoningParams(effort=EFFORT),
+    output=OUTPUT_PARAMS.get(PROVIDER),
+    routing=ROUTING_PARAMS.get(PROVIDER),
 )
 
 
@@ -323,7 +305,7 @@ async def _run_turn(app: TauApp) -> None:
     """Execute a single agent turn, dispatching events to the app."""
     interrupted = False
     async with app.agent.run(
-        app.model, app.session.messages, params=STREAM_PARAMS
+        app.model, app.session.messages, params=PARAMS
     ) as stream:
         try:
             async for event in stream:
