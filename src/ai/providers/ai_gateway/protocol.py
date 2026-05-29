@@ -557,13 +557,21 @@ def _apply_gateway_reasoning(
                 options["thinking"] = {"type": "disabled"}
             else:
                 options["effort"] = effort
-        if _not_default(summary):
-            if summary is None:
-                options["thinking"] = {"type": "disabled"}
-            else:
+                # The gateway only turns thinking on when a `thinking`
+                # block is present; `effort` alone is a no-op upstream.
                 thinking = dict(options.get("thinking") or {})
                 thinking.setdefault("type", "adaptive")
-                thinking["display"] = summary
+                options["thinking"] = thinking
+        if _not_default(summary):
+            # `reasoning_summary` only controls whether the reasoning summary
+            # is surfaced; it never turns thinking off (use
+            # `reasoning.effort=None` for that). `None` maps to
+            # `display="omitted"` -- think, but don't emit a summary -- and is
+            # ignored when thinking is already disabled.
+            thinking = dict(options.get("thinking") or {})
+            if thinking.get("type") != "disabled":
+                thinking.setdefault("type", "adaptive")
+                thinking["display"] = "omitted" if summary is None else summary
                 options["thinking"] = thinking
         return
     body["reasoning"] = {
