@@ -40,7 +40,14 @@ _TOOL_RESULT_BLOCK_TYPES: frozenset[str] = frozenset(
 
 
 def _provider_metadata(**values: Any) -> dict[str, Any]:
-    return {"provider": PROVIDER_NAME, **values}
+    """Namespace metadata as ``{"anthropic": {...}}``."""
+    return {PROVIDER_NAME: {**values}}
+
+
+def _anthropic_metadata(pm: dict[str, Any] | None) -> dict[str, Any]:
+    """Read back the metadata written by :func:`_provider_metadata`."""
+    meta = (pm or {}).get(PROVIDER_NAME)
+    return meta if isinstance(meta, dict) else {}
 
 
 # ---------------------------------------------------------------------------
@@ -207,9 +214,9 @@ async def _messages_to_anthropic(
                             text=text,
                             provider_metadata=provider_metadata,
                         ):
-                            signature = (provider_metadata or {}).get(
-                                "signature"
-                            )
+                            signature = _anthropic_metadata(
+                                provider_metadata
+                            ).get("signature")
                             if signature:
                                 content.append(
                                     {
@@ -252,7 +259,9 @@ async def _messages_to_anthropic(
                             # Result block type comes from the original wire
                             # event ("web_search_tool_result", etc.); stored in
                             # provider metadata when emitted.
-                            part_metadata = part.provider_metadata or {}
+                            part_metadata = _anthropic_metadata(
+                                part.provider_metadata
+                            )
                             wire_type = (
                                 part_metadata.get("resultType")
                                 or f"{part.tool_name}_tool_result"
