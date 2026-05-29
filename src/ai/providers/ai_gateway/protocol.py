@@ -142,10 +142,22 @@ async def _messages_to_prompt(
                 assistant_content: list[dict[str, Any]] = []
                 for part in msg.parts:
                     match part:
-                        case types.messages.ReasoningPart(text=text):
-                            assistant_content.append(
-                                {"type": "reasoning", "text": text}
-                            )
+                        case types.messages.ReasoningPart(
+                            text=text, provider_metadata=pm
+                        ):
+                            reasoning_entry: dict[str, Any] = {
+                                "type": "reasoning",
+                                "text": text,
+                            }
+                            # Replay the provider's reasoning metadata (e.g.
+                            # the thinking-block signature) verbatim. Without
+                            # it the provider drops the block and the model
+                            # loses access to its prior reasoning. v3 mirrors
+                            # inbound ``providerMetadata`` to outbound
+                            # ``providerOptions``.
+                            if pm:
+                                reasoning_entry["providerOptions"] = pm
+                            assistant_content.append(reasoning_entry)
                         case types.messages.TextPart(text=text):
                             assistant_content.append(
                                 {"type": "text", "text": text}
@@ -818,6 +830,8 @@ def _parse_stream_part(
             return [types.events.TextEnd(block_id=data.get("id", "text"))]
 
         case "reasoning-start":
+            # Metadata on -start is gateway routing info (generationId),
+            # not the provider's reasoning metadata; don't replay it.
             return [
                 types.events.ReasoningStart(
                     block_id=data.get("id", "reasoning")
@@ -829,12 +843,16 @@ def _parse_stream_part(
                 types.events.ReasoningDelta(
                     block_id=data.get("id", "reasoning"),
                     chunk=data.get("delta", ""),
+                    provider_metadata=data.get("providerMetadata"),
                 )
             ]
 
         case "reasoning-end":
             return [
-                types.events.ReasoningEnd(block_id=data.get("id", "reasoning"))
+                types.events.ReasoningEnd(
+                    block_id=data.get("id", "reasoning"),
+                    provider_metadata=data.get("providerMetadata"),
+                )
             ]
 
         case "tool-input-start":

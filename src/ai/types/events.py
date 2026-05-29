@@ -220,7 +220,14 @@ async def replay_message_events(
             yield ReasoningStart(block_id=part.id)
             if part.text:
                 yield ReasoningDelta(block_id=part.id, chunk=part.text)
-            yield ReasoningEnd(block_id=part.id)
+            # Carry the signature (and any other reasoning metadata) on the
+            # end event, mirroring how the real adapters emit it -- otherwise
+            # a replayed-then-rebuilt turn loses its signature and can't be
+            # replayed to the provider.
+            yield ReasoningEnd(
+                block_id=part.id,
+                provider_metadata=part.provider_metadata,
+            )
         elif isinstance(part, messages.ToolCallPart):
             yield ToolStart(
                 tool_call_id=part.tool_call_id,
