@@ -199,3 +199,43 @@ class TestCreateGatewayError:
         assert mapped.body == {"raw": True}
         assert mapped.http_context is not None
         assert mapped.http_context.status_code == 502
+
+    def test_full_body_with_routing_info_is_retained(self) -> None:
+        # Routing/fallback details live alongside the extracted message,
+        # so the whole body must survive parsing and mapping.
+        body = {
+            "error": {
+                "message": "All providers failed",
+                "type": "internal_server_error",
+            },
+            "routing": {
+                "attempts": [
+                    {"provider": "anthropic", "error": "overloaded"},
+                    {"provider": "bedrock", "error": "timeout"},
+                ]
+            },
+        }
+        err = client_errors.create_gateway_error(
+            response_body=json.dumps(body), status_code=500
+        )
+        assert err.response_body == body
+        mapped = errors.map_error(err)
+        assert mapped.body == body
+
+    def test_body_retained_for_every_mapped_error_type(self) -> None:
+        for error_type, status in (
+            ("authentication_error", 401),
+            ("invalid_request_error", 400),
+            ("rate_limit_exceeded", 429),
+            ("model_not_found", 404),
+            ("internal_server_error", 500),
+        ):
+            body = {
+                "error": {"message": "boom", "type": error_type},
+                "routing": {"tried": ["a", "b"]},
+            }
+            err = client_errors.create_gateway_error(
+                response_body=body, status_code=status
+            )
+            assert err.response_body == body, error_type
+            assert errors.map_error(err).body == body, error_type

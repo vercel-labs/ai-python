@@ -33,6 +33,14 @@ class GatewayError(Exception):
     status_code: int
     generation_id: str | None
     is_retryable: bool
+    response_body: Any = None
+    """Full HTTP error response body from the gateway (parsed JSON when
+    possible, else the raw text).
+
+    The gateway includes provider routing/fallback details here -- which
+    backends it tried and how each one failed -- so the whole body is
+    retained rather than just the extracted ``message``/``type``.
+    """
 
     def __init__(
         self,
@@ -41,12 +49,14 @@ class GatewayError(Exception):
         status_code: int = 500,
         generation_id: str | None = None,
         is_retryable: bool | None = None,
+        response_body: Any = None,
     ) -> None:
         display = f"{message} [{generation_id}]" if generation_id else message
         super().__init__(display)
         self.message = display
         self.status_code = status_code
         self.generation_id = generation_id
+        self.response_body = response_body
         self.is_retryable = (
             status_code in {408, 409, 429} or status_code >= 500
             if is_retryable is None
@@ -210,8 +220,8 @@ class GatewayResponseError(GatewayError):
             message,
             status_code=status_code,
             generation_id=generation_id,
+            response_body=response_body,
         )
-        self.response_body = response_body
         self.validation_error = validation_error
 
 
@@ -295,9 +305,10 @@ def create_gateway_error(
     error_type: str | None = error_obj.get("type")
     generation_id: str | None = body.get("generationId")
 
+    err: GatewayError
     match error_type:
         case "authentication_error":
-            return GatewayAuthenticationError.create_contextual(
+            err = GatewayAuthenticationError.create_contextual(
                 api_key_provided=api_key_provided,
                 status_code=status_code,
                 generation_id=generation_id,
@@ -306,7 +317,7 @@ def create_gateway_error(
         case "model_not_found":
             param = error_obj.get("param")
             model_id = param.get("modelId") if isinstance(param, dict) else None
-            return GatewayModelNotFoundError(
+            err = GatewayModelNotFoundError(
                 message=message,
                 status_code=status_code,
                 model_id=model_id,
@@ -315,8 +326,13 @@ def create_gateway_error(
 
         case _:
             cls = _TYPE_MAP.get(error_type or "", GatewayInternalServerError)
-            return cls(
+            err = cls(
                 message=message,
                 status_code=status_code,
                 generation_id=generation_id,
             )
+
+    # Retain the full body (provider routing/fallback details live alongside
+    # the extracted message/type) for surfacing to callers.
+    err.response_body = body
+    return err
