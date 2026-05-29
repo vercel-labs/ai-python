@@ -505,12 +505,14 @@ def _apply_anthropic_params(
         else:
             _apply_output_config(api_kwargs, {"effort": reasoning.effort})
     if _not_default(summary):
-        if summary is None:
-            api_kwargs["thinking"] = {"type": "disabled"}
-        else:
-            thinking = dict(api_kwargs.get("thinking") or {})
+        # `reasoning_summary` only controls whether the reasoning summary is
+        # surfaced; it never turns thinking off (use `reasoning.effort=None`
+        # for that). `None` maps to `display="omitted"` -- think, but don't
+        # emit a summary -- and is ignored when thinking is already disabled.
+        thinking = dict(api_kwargs.get("thinking") or {})
+        if thinking.get("type") != "disabled":
             thinking.setdefault("type", "adaptive")
-            thinking["display"] = summary
+            thinking["display"] = "omitted" if summary is None else summary
             api_kwargs["thinking"] = thinking
 
     if request_params.tool_calling is not None:

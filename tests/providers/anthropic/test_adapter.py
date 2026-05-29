@@ -84,7 +84,8 @@ async def test_params_translate_to_sdk_kwargs(
     )
 
     assert captured["max_tokens"] == 123
-    assert captured["thinking"] == {"type": "disabled"}
+    # reasoning_summary=None omits the summary but keeps thinking on.
+    assert captured["thinking"] == {"type": "adaptive", "display": "omitted"}
     assert captured["output_config"] == {
         "effort": "high",
     }

@@ -239,7 +239,9 @@ class OutputParams:
     reasoning_summary: str | ModelProviderDefault | None = DEFAULT
     """Provider-specific reasoning summary emission level.
 
-    None means "disabled"."""
+    None means the summary is omitted (the model still reasons; it just does
+    not emit a summary). To turn reasoning off entirely, set
+    ``ReasoningParams.effort=None``."""
 
 
 @dataclass(frozen=True, kw_only=True)

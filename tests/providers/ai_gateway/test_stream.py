@@ -407,6 +407,74 @@ class TestRequest:
         assert captured_body["seed"] == 123
         assert captured_body["futureGatewayField"] is True
 
+    async def test_gateway_anthropic_effort_enables_thinking(self) -> None:
+        captured_body: dict[str, Any] = {}
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            captured_body.update(json.loads(req.content))
+            return httpx.Response(
+                200,
+                text=sse(
+                    {"type": "finish", "finishReason": "stop", "usage": {}}
+                ),
+            )
+
+        model = mock_model(
+            httpx.MockTransport(handler),
+            model_id="anthropic/claude-opus-4-8",
+        )
+        request_params = ai.InferenceRequestParams(
+            reasoning=ai.ReasoningParams(effort="high"),
+        )
+        async with models.stream(
+            model,
+            [user_msg("Hi")],
+            params=request_params,
+        ) as stream:
+            async for _ in stream:
+                pass
+
+        # `effort` alone is a no-op upstream; the gateway only turns
+        # thinking on when a `thinking` block is also present.
+        assert captured_body["providerOptions"]["anthropic"] == {
+            "effort": "high",
+            "thinking": {"type": "adaptive"},
+        }
+
+    async def test_gateway_anthropic_summary_none_keeps_thinking(self) -> None:
+        captured_body: dict[str, Any] = {}
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            captured_body.update(json.loads(req.content))
+            return httpx.Response(
+                200,
+                text=sse(
+                    {"type": "finish", "finishReason": "stop", "usage": {}}
+                ),
+            )
+
+        model = mock_model(
+            httpx.MockTransport(handler),
+            model_id="anthropic/claude-opus-4-8",
+        )
+        request_params = ai.InferenceRequestParams(
+            reasoning=ai.ReasoningParams(effort="high"),
+            output=ai.OutputParams(reasoning_summary=None),
+        )
+        async with models.stream(
+            model,
+            [user_msg("Hi")],
+            params=request_params,
+        ) as stream:
+            async for _ in stream:
+                pass
+
+        # reasoning_summary=None omits the summary but keeps thinking on.
+        assert captured_body["providerOptions"]["anthropic"] == {
+            "effort": "high",
+            "thinking": {"type": "adaptive", "display": "omitted"},
+        }
+
     async def test_gateway_omits_random_seed(self) -> None:
         captured_body: dict[str, Any] = {}
 
