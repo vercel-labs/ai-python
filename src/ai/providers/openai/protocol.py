@@ -620,11 +620,15 @@ async def stream(
             choice = chunk.choices[0]
             delta = choice.delta
 
+            # providers expose reasoning in reasoning_content (e.g. deepseek)
+            # or reasoning (some gpt-oss providers)
             reasoning_value = None
             if hasattr(delta, "reasoning") and delta.reasoning:
                 reasoning_value = delta.reasoning
             elif hasattr(delta, "model_extra") and delta.model_extra:
                 reasoning_value = delta.model_extra.get("reasoning")
+                if not reasoning_value:
+                    reasoning_value = delta.model_extra.get("reasoning_content")
 
             if reasoning_value:
                 if not reasoning_started:
