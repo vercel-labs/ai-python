@@ -4,11 +4,11 @@ from typing import Any
 
 import pytest
 
-from ai.agents.agent import MessageBundle
 from ai.agents.ui.ai_sdk import to_messages, to_ui_messages
 from ai.agents.ui.ai_sdk.inbound_messages import _normalize_ui_messages
 from ai.agents.ui.ai_sdk.ui_messages import UIMessage, UIToolPart
 from ai.types import messages as messages_
+from ai.types.messages import MessageBundle
 
 
 def _ui(role: str, *parts: dict[str, Any], id: str = "m1") -> UIMessage:
@@ -152,41 +152,115 @@ def test_to_messages_rejects_empty_user() -> None:
         to_messages(ui)
 
 
-def test_to_messages_decodes_subagent_tool_output() -> None:
-    """A sub-agent tool's wire UIMessage decodes back to MessageBundle.
+def test_subagent_bundle_round_trips_via_metadata() -> None:
+    """A sub-agent MessageBundle survives outbound -> inbound.
 
-    ``result`` carries the rich MessageBundle so a subsequent UI render
-    gets the same shape we sent.  ``model_input`` is left unset here —
-    populating it requires the tool registry, which lives in
+    The transcript rides the UI tool part's ``output`` as a list of
+    UIMessages; the ``toolResultKinds`` adapter metadata carries the
+    ``"messages"`` signal to rebuild the bundle.  ``model_input`` is left
+    unset here -- populating it requires the tool registry, which lives in
     :meth:`Agent.run`.
     """
-    # Wire shape: tool-_research_tool with output = UIMessage{parts=[text]}.
-    ui = [
-        _ui("user", _text("research mars"), id="u1"),
-        _ui(
-            "assistant",
-            _tool(
-                "_research_tool",
-                "tc1",
-                "output-available",
-                input={"topic": "mars"},
-                output={
-                    "id": "sub-1",
-                    "role": "assistant",
-                    "parts": [{"type": "text", "text": "Mars has two moons."}],
-                },
+    turn = "turn-1"
+    bundle = MessageBundle(
+        messages=(
+            messages_.Message(
+                role="assistant",
+                parts=[messages_.TextPart(text="Mars has two moons.")],
             ),
+        )
+    )
+    internal = [
+        messages_.Message(
             id="a1",
+            turn_id=turn,
+            role="assistant",
+            parts=[
+                messages_.ToolCallPart(
+                    tool_call_id="tc1",
+                    tool_name="research",
+                    tool_args="{}",
+                )
+            ],
+        ),
+        messages_.Message(
+            id="t1",
+            turn_id=turn,
+            role="tool",
+            parts=[
+                messages_.ToolResultPart(
+                    tool_call_id="tc1",
+                    tool_name="research",
+                    result=bundle,
+                    result_kind="special",
+                )
+            ],
         ),
     ]
-    messages, _ = to_messages(ui)
 
-    # Find the tool message with the decoded result.
-    tool_msgs = [m for m in messages if m.role == "tool"]
+    ui = to_ui_messages(internal)
+    restored, _ = to_messages(ui)
+
+    tool_msgs = [m for m in restored if m.role == "tool"]
     assert len(tool_msgs) == 1
     result_part = tool_msgs[0].tool_results[0]
+    assert result_part.result_kind == "special"
     assert isinstance(result_part.result, MessageBundle)
+    assert len(result_part.result.messages) == 1
+    inner = result_part.result.messages[0]
+    assert inner.role == "assistant"
+    assert inner.text == "Mars has two moons."
     assert not result_part.has_model_input
+
+
+def test_multi_bubble_subagent_bundle_round_trips_as_list() -> None:
+    """A transcript spanning multiple bubbles round-trips via a list output."""
+    turn = "turn-1"
+    bundle = MessageBundle(
+        messages=(
+            messages_.Message(
+                role="assistant",
+                turn_id="s1",
+                parts=[messages_.TextPart(text="first")],
+            ),
+            messages_.Message(
+                role="assistant",
+                turn_id="s2",
+                parts=[messages_.TextPart(text="second")],
+            ),
+        )
+    )
+    internal = [
+        messages_.Message(
+            id="a1",
+            turn_id=turn,
+            role="assistant",
+            parts=[
+                messages_.ToolCallPart(
+                    tool_call_id="tc1", tool_name="research", tool_args="{}"
+                )
+            ],
+        ),
+        messages_.Message(
+            id="t1",
+            turn_id=turn,
+            role="tool",
+            parts=[
+                messages_.ToolResultPart(
+                    tool_call_id="tc1",
+                    tool_name="research",
+                    result=bundle,
+                    result_kind="special",
+                )
+            ],
+        ),
+    ]
+
+    restored, _ = to_messages(to_ui_messages(internal))
+
+    result_part = next(m for m in restored if m.role == "tool").tool_results[0]
+    assert isinstance(result_part.result, MessageBundle)
+    assert [m.text for m in result_part.result.messages] == ["first", "second"]
 
 
 def test_content_result_round_trips_via_metadata() -> None:
@@ -221,7 +295,7 @@ def test_content_result_round_trips_via_metadata() -> None:
                     result=messages_.ContentOutput(
                         value=[messages_.TextPart(text="desc"), fp]
                     ),
-                    result_kind="content",
+                    result_kind="special",
                 )
             ],
         ),
@@ -233,7 +307,7 @@ def test_content_result_round_trips_via_metadata() -> None:
     tool_msgs = [m for m in restored if m.role == "tool"]
     assert len(tool_msgs) == 1
     part = tool_msgs[0].tool_results[0]
-    assert part.result_kind == "content"
+    assert part.result_kind == "special"
     assert isinstance(part.result, messages_.ContentOutput)
     text_part, file_part = part.result.value
     assert isinstance(text_part, messages_.TextPart)

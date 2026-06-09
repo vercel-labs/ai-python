@@ -413,10 +413,12 @@ async def test_partial_tool_results_emit_preliminary_outputs() -> None:
     assert all(p.tool_call_id == "tc1" for p in prelim)
 
 
-async def test_partial_message_bundle_becomes_ui_message() -> None:
-    """MessageAggregator's snapshot collapses to one UIMessage."""
-    from ai.agents.ui.ai_sdk.ui_messages import UIMessage
+async def test_partial_message_bundle_becomes_single_ui_message() -> None:
+    """A one-bubble MessageAggregator snapshot serializes to one UIMessage.
 
+    Matches the AI SDK sub-agent convention: a single ``UIMessage`` (not a
+    one-element list) for the common case.
+    """
     inner_msg = messages_.Message(
         role="assistant",
         parts=[messages_.TextPart(text="hi from sub-agent")],
@@ -440,9 +442,9 @@ async def test_partial_message_bundle_becomes_ui_message() -> None:
         for p in out
         if isinstance(p, ui_events.UIToolOutputAvailableEvent) and p.preliminary
     ]
-    assert isinstance(prelim.output, UIMessage)
-    assert prelim.output.role == "assistant"
-    assert prelim.output.parts[0].type == "text"
+    assert isinstance(prelim.output, dict)
+    assert prelim.output["role"] == "assistant"
+    assert prelim.output["parts"][0]["type"] == "text"
 
 
 async def test_partial_tool_result_without_factory_is_skipped() -> None:

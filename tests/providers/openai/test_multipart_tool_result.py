@@ -98,7 +98,7 @@ class TestMessagesToOpenaiMultipart:
                                 fp,
                             ]
                         ),
-                        result_kind="content",
+                        result_kind="special",
                     )
                 ],
             ),

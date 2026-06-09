@@ -108,6 +108,23 @@ def dedupe_tool_parts(
     return result
 
 
+def bundle_to_wire_output(bundle: messages_.MessageBundle) -> Any:
+    """Serialize a sub-agent transcript to its UI tool ``output``.
+
+    Follows the AI SDK sub-agent convention of a single ``UIMessage`` for the
+    common case (one bubble), and only falls back to a JSON list when the
+    transcript spans multiple bubbles.  Returns ``None`` for an empty bundle
+    so streaming callers can skip emitting until there's something to show.
+    The inbound side accepts either shape (see ``_build_result_part``).
+    """
+    dumped = [
+        m.model_dump(mode="json") for m in to_ui_messages(list(bundle.messages))
+    ]
+    if not dumped:
+        return None
+    return dumped[0] if len(dumped) == 1 else dumped
+
+
 def _output_view(
     part: messages_.ToolResultPart,
 ) -> tuple[str, dict[str, Any]]:
@@ -116,6 +133,12 @@ def _output_view(
     if isinstance(result, messages_.ContentOutput):
         return "output-available", {
             "output": [item.model_dump(mode="json") for item in result.value]
+        }
+    if isinstance(result, messages_.MessageBundle):
+        # `None` (empty bundle) becomes `[]` so a completed result still
+        # round-trips to an (empty) MessageBundle rather than a null output.
+        return "output-available", {
+            "output": bundle_to_wire_output(result) or []
         }
     if part.is_error:
         text = result if isinstance(result, str) else json.dumps(result)

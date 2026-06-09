@@ -9,10 +9,10 @@ import pydantic
 
 import ai
 from ai import models
-from ai.agents.agent import MessageBundle
 from ai.types import events as agent_events_
 from ai.types import events as events_
 from ai.types import messages as messages_
+from ai.types.messages import MessageBundle
 
 from ..conftest import (
     MOCK_MODEL,

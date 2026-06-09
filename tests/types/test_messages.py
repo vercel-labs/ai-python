@@ -130,7 +130,7 @@ def test_tool_result_content_output_with_file_part_round_trip() -> None:
         result=messages.ContentOutput(
             value=[messages.TextPart(text="label"), fp]
         ),
-        result_kind="content",
+        result_kind="special",
     )
     j = trp.model_dump_json()
     restored = messages.ToolResultPart.model_validate_json(j)
@@ -175,7 +175,7 @@ def test_tool_result_content_in_message_round_trip() -> None:
                 result=messages.ContentOutput(
                     value=[messages.TextPart(text="Read image"), fp]
                 ),
-                result_kind="content",
+                result_kind="special",
             )
         ],
     )
@@ -203,7 +203,7 @@ def test_tool_result_file_part_base64_valid_after_round_trip() -> None:
         result=messages.ContentOutput(
             value=[messages.TextPart(text="label"), fp]
         ),
-        result_kind="content",
+        result_kind="special",
     )
     restored = messages.ToolResultPart.model_validate_json(
         trp.model_dump_json()

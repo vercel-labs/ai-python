@@ -11,7 +11,7 @@ import logging
 from typing import Any
 
 from ....types import messages as messages_
-from ...agent import MessageBundle
+from ....types.messages import MessageBundle
 from . import approvals, id_utils
 from . import ui_messages as ui_messages_
 from .approvals import ApprovalResponse, extract_approvals
@@ -57,27 +57,6 @@ def _error_result(error_text: str | None, output: Any) -> dict[str, Any] | None:
     return normalized
 
 
-def _decode_wire_output(output: Any) -> Any:
-    """Reconstruct the internal snapshot type from a wire tool output.
-
-    Hacky special case: when the wire output looks like a ``UIMessage``
-    (the wire shape we emit for sub-agent / ``MessageAggregator`` tools),
-    decode it back to a ``MessageBundle``.  Other shapes pass through
-    unchanged.  This avoids requiring callers to thread the tool
-    registry into inbound parsing.
-    """
-    if not isinstance(output, dict):
-        return output
-    if output.get("role") != "assistant" or "parts" not in output:
-        return output
-    try:
-        ui_msg = ui_messages_.UIMessage.model_validate(output)
-    except Exception:
-        return output
-    inner = list(_parse([ui_msg]))
-    return MessageBundle(messages=tuple(inner))
-
-
 def _build_result_part(
     *,
     tool_call_id: str,
@@ -89,10 +68,14 @@ def _build_result_part(
     """Reconstruct a tool result from its wire form.
 
     ``kind_hint`` comes from the adapter's ``toolResultKinds`` metadata
-    (see :mod:`id_utils`).  When it marks the result as ``content``, the
-    ``output`` -- a list of dumped content parts -- is rehydrated into a
-    typed :class:`ContentOutput` so providers re-expand it into multimodal
-    blocks; otherwise behaviour matches a plain value round-trip.
+    (see :mod:`id_utils`) and names the :class:`SpecialToolResult` subtype:
+
+    * ``"content"`` rehydrates a :class:`ContentOutput` from the dumped
+      content parts so providers re-expand it into multimodal blocks;
+    * ``"messages"`` rebuilds a :class:`MessageBundle` by parsing the
+      carried sub-agent UIMessage(s).
+
+    Without a hint the output is treated as a plain value round-trip.
     """
     result: Any
     result_kind: messages_.ResultKind
@@ -101,14 +84,19 @@ def _build_result_part(
         result_kind = "error"
     elif kind_hint == "content":
         result = messages_.ContentOutput.model_validate({"value": output})
-        result_kind = "content"
+        result_kind = "special"
+    elif kind_hint == "messages":
+        raw = output if isinstance(output, list) else [output]
+        ui_msgs = [
+            m
+            if isinstance(m, ui_messages_.UIMessage)
+            else ui_messages_.UIMessage.model_validate(m)
+            for m in raw
+        ]
+        result = MessageBundle(messages=tuple(_parse(ui_msgs)))
+        result_kind = "special"
     else:
-        decoded = _decode_wire_output(output)
-        result = (
-            decoded
-            if isinstance(decoded, MessageBundle)
-            else _normalize_tool_result(decoded)
-        )
+        result = _normalize_tool_result(output)
         result_kind = "json"
     return messages_.ToolResultPart(
         tool_call_id=tool_call_id,

@@ -87,15 +87,18 @@ def _restore_message_ids(
 def _tool_result_kinds(
     source_messages: list[messages_.Message],
 ) -> dict[str, str]:
-    """Collect ``{tool_call_id: result_kind}`` for content tool results."""
+    """Collect ``{tool_call_id: subtype}`` for special tool results.
+
+    The recorded value is the :class:`SpecialToolResult` discriminator so the
+    inbound side can rehydrate the typed result without shape-sniffing it.
+    """
     kinds: dict[str, str] = {}
     for message in source_messages:
         for part in message.parts:
-            if (
-                isinstance(part, messages_.ToolResultPart)
-                and part.result_kind == "content"
+            if isinstance(part, messages_.ToolResultPart) and isinstance(
+                part.result, messages_.SpecialToolResult
             ):
-                kinds[part.tool_call_id] = part.result_kind
+                kinds[part.tool_call_id] = part.result.type
     return kinds
 
 

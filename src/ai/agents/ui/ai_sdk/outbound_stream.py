@@ -11,7 +11,7 @@ import pydantic
 from ....types import events as events_
 from ....types import media
 from ....types import messages as messages_
-from ...agent import MessageBundle
+from ....types.messages import MessageBundle
 from . import approvals, outbound_messages, ui_events
 from .tool_utils import normalize_tool_input
 
@@ -35,17 +35,18 @@ def _tool_error_text(part: messages_.ToolResultPart) -> str:
 def _to_wire_output(snapshot: Any) -> Any:
     """Convert an aggregator snapshot to its UI wire representation.
 
-    For ``MessageBundle`` (sub-agent transcripts) this produces a single
-    ``UIMessage`` assistant bubble — the canonical AI SDK shape.  Other
-    snapshot types pass through unchanged.
+    For ``MessageBundle`` (sub-agent transcripts) this follows the AI SDK
+    sub-agent convention -- a single ``UIMessage`` for the common one-bubble
+    case, a JSON list only when the transcript spans multiple bubbles -- and
+    is paired with a ``toolResultKinds`` ``"messages"`` hint so the inbound
+    side can rebuild the bundle.  Other snapshot types pass through unchanged.
 
-    Returns ``None`` if the bundle has no assistant anchor yet (e.g. a
-    streaming sub-agent that has produced no messages); callers should
-    skip emitting in that case.
+    Returns ``None`` if the bundle has no messages yet (e.g. a streaming
+    sub-agent that has produced nothing); callers should skip emitting in
+    that case.
     """
     if isinstance(snapshot, MessageBundle):
-        ui_msgs = outbound_messages.to_ui_messages(list(snapshot.messages))
-        return ui_msgs[-1] if ui_msgs else None
+        return outbound_messages.bundle_to_wire_output(snapshot)
     return snapshot
 
 

@@ -94,7 +94,7 @@ class TestMessagesToAnthropicMultipart:
                                 fp,
                             ]
                         ),
-                        result_kind="content",
+                        result_kind="special",
                     )
                 ],
             ),

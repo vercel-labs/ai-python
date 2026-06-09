@@ -1,3 +1,4 @@
+from ..types.messages import MessageBundle
 from . import mcp, ui
 from .agent import (
     Agent,
@@ -9,7 +10,6 @@ from .agent import (
     GatedToolCall,
     LastAggregator,
     MessageAggregator,
-    MessageBundle,
     SimpleAggregator,
     StreamingStatusTool,
     StreamingTextTool,
