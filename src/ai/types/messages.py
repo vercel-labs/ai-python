@@ -102,7 +102,7 @@ class FilePart(pydantic.BaseModel):
 # ---------------------------------------------------------------------------
 # Multipart tool result -- a tool may return a mix of text and file/image
 # parts so the model sees actual media.  Stored on ``ToolResultPart.result``
-# with ``result_kind="content"``; providers expand it into their multimodal
+# with ``result_kind="special"``; providers expand it into their multimodal
 # wire format.
 # ---------------------------------------------------------------------------
 
@@ -122,13 +122,31 @@ class ContentOutput(pydantic.BaseModel):
     model_config = pydantic.ConfigDict(frozen=True)
 
 
+class MessageBundle(pydantic.BaseModel):
+    type: Literal["messages"] = "messages"
+    messages: tuple["Message", ...]
+
+
+SpecialToolResult = ContentOutput | MessageBundle
+
+_SPECIAL_TOOL_RESULT_ADAPTER: pydantic.TypeAdapter[SpecialToolResult] = (
+    pydantic.TypeAdapter(
+        Annotated[
+            SpecialToolResult,
+            pydantic.Field(discriminator="type"),
+        ]
+    )
+)
+
+
 _MODEL_INPUT_UNSET: Any = object()
 
-# Coarse tag for the shape of ``ToolResultPart.result``.  ``"content"`` means
-# a :class:`ContentOutput`; ``"error"`` flags an error result; ``"json"`` (the
-# default) is any plain value.  Providers decide text-vs-json at the wire
-# boundary (a ``str`` is sent raw, everything else is JSON-encoded).
-ResultKind = Literal["error", "json", "content"]
+# Coarse tag for the shape of ``ToolResultPart.result``.
+# ``"special"`` means a :class:`SpecialToolResult`; ``"error"`` flags
+# an error result; ``"json"`` (the default) is any plain value.
+# Providers decide text-vs-json at the wire boundary (a ``str`` is
+# sent raw, everything else is JSON-encoded).
+ResultKind = Literal["error", "json", "special"]
 
 
 class ToolResultPart(pydantic.BaseModel):
@@ -162,23 +180,35 @@ class ToolResultPart(pydantic.BaseModel):
     @pydantic.model_validator(mode="before")
     @classmethod
     def _restore_content(cls, data: Any) -> Any:
-        """Rebuild a typed :class:`ContentOutput` after a JSON round-trip.
+        """Rebuild a typed :class:`SpecialToolResult` after a JSON round-trip.
 
         ``result`` is ``Any``, so pydantic restores a serialized
-        ``ContentOutput`` as a plain dict.  When ``result_kind`` says the
-        result is content, coerce it back so providers (and the UI adapter)
-        can rely on ``isinstance(result, ContentOutput)``.
+        ``ContentOutput`` / ``MessageBundle`` as a plain dict.  When
+        ``result_kind`` is ``"special"``, coerce it back to the typed result
+        so providers (and the UI adapter) can rely on ``isinstance`` checks.
         """
         if (
             isinstance(data, dict)
-            and data.get("result_kind") == "content"
+            and data.get("result_kind") == "special"
             and isinstance(data.get("result"), dict)
         ):
             data = {
                 **data,
-                "result": ContentOutput.model_validate(data["result"]),
+                "result": _SPECIAL_TOOL_RESULT_ADAPTER.validate_python(
+                    data["result"]
+                ),
             }
         return data
+
+    @staticmethod
+    def kind_for(result: Any) -> ResultKind:
+        """Derive ``result_kind`` for a non-error result value.
+
+        A :data:`SpecialToolResult` is ``"special"``; anything else is
+        ``"json"``.  Error results are tagged ``"error"`` by the
+        caller, independent of the value.
+        """
+        return "special" if isinstance(result, SpecialToolResult) else "json"
 
     @property
     def is_error(self) -> bool:

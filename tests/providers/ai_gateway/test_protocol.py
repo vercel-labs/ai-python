@@ -545,7 +545,7 @@ class TestToolResultOutput:
                 messages.ContentOutput(
                     value=[messages.TextPart(text="desc"), fp]
                 ),
-                result_kind="content",
+                result_kind="special",
             )
         )
         assert result["type"] == "content"

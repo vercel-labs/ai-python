@@ -241,18 +241,15 @@ def tool_result_part(
     """Create a :class:`ToolResultPart`.
 
     ``result`` is stored as-is; ``result_kind`` is derived: ``"error"`` when
-    ``is_error`` is set, ``"content"`` for a :class:`ContentOutput`, else
-    ``"json"`` (a ``str`` is sent raw to the model, anything else is
-    JSON-encoded at the provider boundary).
+    ``is_error`` is set, ``"special"`` for a :class:`ContentOutput` or
+    :class:`MessageBundle`, else ``"json"`` (a ``str`` is sent raw to the
+    model, anything else is JSON-encoded at the provider boundary).
 
     >>> ai.tool_result_part("tc-1", result={"temp": 72}, tool_name="weather")
     """
-    if is_error:
-        result_kind: ResultKind = "error"
-    elif isinstance(result, ContentOutput):
-        result_kind = "content"
-    else:
-        result_kind = "json"
+    result_kind: ResultKind = (
+        "error" if is_error else ToolResultPart.kind_for(result)
+    )
     return ToolResultPart(
         tool_call_id=tool_call_id,
         tool_name=tool_name,

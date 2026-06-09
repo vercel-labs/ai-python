@@ -70,12 +70,13 @@ messages while the model input is the final assistant text.
 ## Rich snapshots
 
 Aggregators can preserve more than text. `MessageAggregator` stores nested
-messages from a subagent:
+messages from a subagent. The rich snapshot type is
+`ai.types.messages.MessageBundle`:
 
 ```python
 if isinstance(event, ai.events.ToolCallResult):
     result = event.results[0].result
-    if isinstance(result, ai.agents.MessageBundle):
+    if isinstance(result, ai.types.messages.MessageBundle):
         print(result.messages[-1].text)
 ```
 

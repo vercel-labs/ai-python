@@ -22,7 +22,6 @@ from typing import (
     Any,
     ClassVar,
     Generic,
-    Literal,
     Protocol,
     Self,
     cast,
@@ -39,6 +38,7 @@ from typing_extensions import TypeVar
 from .. import models, types, util
 from ..types import builders
 from ..types import events as events_
+from ..types.messages import MessageBundle
 from . import _middleware as middleware_
 from . import hooks as hooks_
 from . import runtime
@@ -57,18 +57,6 @@ def _unwrap_singleton_group(exc: BaseException) -> BaseException:
     while isinstance(exc, BaseExceptionGroup) and len(exc.exceptions) == 1:
         exc = exc.exceptions[0]
     return exc
-
-
-def _result_kind(value: Any) -> Literal["json", "content"]:
-    """Tag a successful tool return value for ``ToolResultPart.result_kind``.
-
-    A :class:`ContentOutput` becomes ``"content"`` (expanded into provider
-    multimodal blocks); everything else is ``"json"`` (the encoder sends a
-    ``str`` raw and JSON-encodes anything else).
-    """
-    if isinstance(value, types.messages.ContentOutput):
-        return "content"
-    return "json"
 
 
 def _error_tool_result(
@@ -230,10 +218,6 @@ class LastAggregator[T](SimpleAggregator[T, T | None]):
 
     def snapshot(self) -> T | None:
         return self._val
-
-
-class MessageBundle(pydantic.BaseModel):
-    messages: tuple[types.messages.Message, ...]
 
 
 class MessageAggregator(
@@ -629,7 +613,7 @@ class BoundToolCall:
                 tool_call_id=call.tool_call_id,
                 tool_name=call.tool_name,
                 result=result,
-                result_kind=_result_kind(result),
+                result_kind=types.messages.ToolResultPart.kind_for(result),
             )
             part.set_model_input(model_input)
             return tool_result(part)
