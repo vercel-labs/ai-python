@@ -20,8 +20,25 @@ class FunctionToolArgs(pydantic.BaseModel):
 class Tool(pydantic.BaseModel):
     kind: Literal["function", "provider"]
     name: str
-    args: pydantic.BaseModel
+    args: pydantic.SerializeAsAny[pydantic.BaseModel]
     require_approval: bool = False
+
+    # we're using the same type for regular and provider-side tools.
+    # because of that args can be either FunctionToolArgs or some
+    # provider-specific type.
+    @pydantic.model_validator(mode="before")
+    @classmethod
+    def validate_args_input(cls, data: Any) -> Any:
+        if (
+            isinstance(data, dict)
+            and data.get("kind") == "function"
+            and isinstance(data.get("args"), dict)
+        ):
+            return {
+                **data,
+                "args": FunctionToolArgs.model_validate(data["args"]),
+            }
+        return data
 
     @pydantic.model_validator(mode="after")
     def validate_args_shape(self) -> Self:
