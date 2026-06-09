@@ -3,6 +3,7 @@ import uuid
 from typing import Annotated, Any, Literal, Self, overload
 
 import pydantic
+from pydantic_core import to_jsonable_python
 
 from . import media
 from . import usage as usage_
@@ -139,6 +140,22 @@ _SPECIAL_TOOL_RESULT_ADAPTER: pydantic.TypeAdapter[SpecialToolResult] = (
 )
 
 
+def _jsonify_result(value: Any) -> Any:
+    """Reduce a tool-result value to JSON-y data.
+
+    :class:`ContentOutput` and :class:`MessageBundle` are kept as typed
+    models -- providers and the UI adapter dispatch on ``isinstance``.
+    Everything else, including any other pydantic model, is dumped to plain
+    JSON-y Python so a tool result never carries an arbitrary model and its
+    in-memory shape matches what survives a serialization round-trip.
+    """
+    if isinstance(value, SpecialToolResult):
+        return value
+    # Raise (rather than stringify) on a value that isn't JSON-serializable:
+    # a tool returning such a result is a bug worth surfacing, not hiding.
+    return to_jsonable_python(value)
+
+
 _MODEL_INPUT_UNSET: Any = object()
 
 # Coarse tag for the shape of ``ToolResultPart.result``.
@@ -179,26 +196,24 @@ class ToolResultPart(pydantic.BaseModel):
 
     @pydantic.model_validator(mode="before")
     @classmethod
-    def _restore_content(cls, data: Any) -> Any:
-        """Rebuild a typed :class:`SpecialToolResult` after a JSON round-trip.
+    def _normalize_result(cls, data: Any) -> Any:
+        """Normalize ``result`` to its stored invariant.
 
-        ``result`` is ``Any``, so pydantic restores a serialized
-        ``ContentOutput`` / ``MessageBundle`` as a plain dict.  When
-        ``result_kind`` is ``"special"``, coerce it back to the typed result
-        so providers (and the UI adapter) can rely on ``isinstance`` checks.
+        A serialized special result (a dict tagged ``result_kind="special"``)
+        is rebuilt into its :class:`ContentOutput` / :class:`MessageBundle`
+        model so providers and the UI adapter can rely on ``isinstance``.
+        Any other value is reduced to JSON-y data -- a tool result never
+        stores an arbitrary pydantic model (see :func:`_jsonify_result`).
         """
-        if (
-            isinstance(data, dict)
-            and data.get("result_kind") == "special"
-            and isinstance(data.get("result"), dict)
-        ):
-            data = {
+        if not isinstance(data, dict) or "result" not in data:
+            return data
+        result = data["result"]
+        if data.get("result_kind") == "special" and isinstance(result, dict):
+            return {
                 **data,
-                "result": _SPECIAL_TOOL_RESULT_ADAPTER.validate_python(
-                    data["result"]
-                ),
+                "result": _SPECIAL_TOOL_RESULT_ADAPTER.validate_python(result),
             }
-        return data
+        return {**data, "result": _jsonify_result(result)}
 
     @staticmethod
     def kind_for(result: Any) -> ResultKind:
@@ -222,8 +237,12 @@ class ToolResultPart(pydantic.BaseModel):
         return self._model_input
 
     def set_model_input(self, value: Any) -> None:
-        """Set the model-facing value (overrides the ``result`` fallback)."""
-        self._model_input = value
+        """Set the model-facing value (overrides the ``result`` fallback).
+
+        Reduced to JSON-y data like ``result`` so the model never sees an
+        arbitrary pydantic model (see :func:`_jsonify_result`).
+        """
+        self._model_input = _jsonify_result(value)
 
     @property
     def has_model_input(self) -> bool:

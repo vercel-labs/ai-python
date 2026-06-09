@@ -603,19 +603,22 @@ class BoundToolCall:
                 else:
                     result = await tool.fn(**kwargs)
                     model_input = result
+                # Built inside the try so a non-serializable result (which
+                # ToolResultPart rejects) surfaces as a tool error rather than
+                # crashing the run.
+                part = types.messages.ToolResultPart(
+                    tool_call_id=call.tool_call_id,
+                    tool_name=call.tool_name,
+                    result=result,
+                    result_kind=types.messages.ToolResultPart.kind_for(result),
+                )
+                part.set_model_input(model_input)
             except Exception as exc:
                 return _error_tool_result(
                     exc,
                     tool_call_id=call.tool_call_id,
                     tool_name=call.tool_name,
                 )
-            part = types.messages.ToolResultPart(
-                tool_call_id=call.tool_call_id,
-                tool_name=call.tool_name,
-                result=result,
-                result_kind=types.messages.ToolResultPart.kind_for(result),
-            )
-            part.set_model_input(model_input)
             return tool_result(part)
 
         chain = middleware_._build_tool_chain(_real)
