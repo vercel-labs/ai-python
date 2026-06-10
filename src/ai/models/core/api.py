@@ -20,7 +20,7 @@ import pydantic
 # Use the typing_extensions backport so this works on 3.12 too.
 from typing_extensions import TypeVar
 
-from ... import types
+from ... import errors, types
 from ...types import integrity
 
 if TYPE_CHECKING:
@@ -128,6 +128,12 @@ class Stream(Generic[StreamOutputT]):
         # param for ergonomics; internally we know it's a Pydantic model
         # subclass (or None for the text-default case).
         self._output_type = cast("type[pydantic.BaseModel] | None", output_type)
+        # Whether the provider signalled completion (``StreamEnd``).  A
+        # stream that exhausts without it died mid-response (transport
+        # drop): the message is partial — possibly reasoning-only or a
+        # tool call with truncated args — so exhaustion must raise
+        # rather than look like a normal end of turn.
+        self._ended = False
 
     async def aclose(self) -> None:
         await self._gen.aclose()
@@ -150,9 +156,15 @@ class Stream(Generic[StreamOutputT]):
     async def __anext__(self: Self) -> types.events.Event:
         try:
             event = await self._gen.__anext__()
-        except Exception:
-            # Usually this fires on StopAsyncIteration, but could be a
-            # real exception too
+        except StopAsyncIteration:
+            if not self._ended:
+                raise errors.ProviderIncompleteResponseError(
+                    "provider stream ended without a finish event; "
+                    "the response is incomplete",
+                    # Premature termination is a transient transport or
+                    # provider failure: worth retrying.
+                    is_retryable=True,
+                ) from None
             raise
         updates = self._aggregate_event(event)
         return event.model_copy(update={"message": self._message, **updates})
@@ -189,8 +201,10 @@ class Stream(Generic[StreamOutputT]):
         updates: dict[str, Any] = {}
 
         # Replay events carry no new state — the seeded message already
-        # has everything they would have produced.
+        # has everything they would have produced.  A replayed turn is
+        # complete by construction, so it also counts as ended.
         if event.replay:
+            self._ended = True
             return updates
 
         # grab usage from any event that carries one
@@ -323,6 +337,7 @@ class Stream(Generic[StreamOutputT]):
                 self._parts[fp.id] = fp
 
             case types.events.StreamEnd(provider_metadata=pm):
+                self._ended = True
                 if pm is not None:
                     self._message.provider_metadata = pm
             case _:
@@ -474,6 +489,10 @@ async def _stream(
             seed_message=last.model_copy(deep=True),
             output_type=cast("type[Any] | None", output_type),
         )
+        # The replayed turn is a complete persisted message; don't
+        # demand a finish event from the synthetic replay generator
+        # (it yields nothing when the turn has no tool calls).
+        s._ended = True
     else:
         prepared = integrity.prepare_messages(messages)
         request = StreamRequest(

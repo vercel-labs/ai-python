@@ -483,3 +483,49 @@ async def test_stream_does_not_replay_when_assistant_is_unmarked() -> None:
             pass
 
     assert called is True
+
+
+async def test_stream_raises_when_stream_ends_without_finish() -> None:
+    """A transport drop mid-response must raise, not look like a normal end.
+
+    A completed response always carries a ``StreamEnd``; when the SSE
+    connection dies the provider generator just exhausts, which used to
+    end the iteration silently with a partial message (reasoning-only,
+    or a tool call with truncated args).
+    """
+
+    async def _dying_stream(
+        model: models.Model,
+        messages: list[messages_.Message],
+        *,
+        tools: Sequence[ai.tools.Tool] | None = None,
+        output_type: type[pydantic.BaseModel] | None = None,
+        **kwargs: Any,
+    ) -> AsyncGenerator[events_.Event]:
+        yield events_.StreamStart()
+        yield events_.ReasoningDelta(block_id="r-1", chunk="thinking…")
+        yield events_.ToolStart(tool_call_id="tc-1", tool_name="bash")
+        yield events_.ToolDelta(tool_call_id="tc-1", chunk='{"command": "uv ru')
+        # connection drops: no ToolEnd, no StreamEnd
+
+    MOCK_PROVIDER._stream_impl = _dying_stream
+
+    with pytest.raises(ai.errors.ProviderIncompleteResponseError) as excinfo:
+        async with models.stream(MOCK_MODEL, [ai.user_message("Hi")]) as stream:
+            async for _ in stream:
+                pass
+
+    assert excinfo.value.is_retryable is True
+    # The partial message stays inspectable on the stream object.
+    assert stream.message.usage is None
+    assert stream.message.tool_calls[0].tool_args == '{"command": "uv ru'
+
+
+async def test_stream_does_not_raise_on_early_consumer_exit() -> None:
+    """Breaking out of iteration early is not an incomplete response."""
+    mock_llm([[text_msg("Hello world")]])
+
+    async with models.stream(MOCK_MODEL, [ai.user_message("Hi")]) as stream:
+        async for event in stream:
+            if isinstance(event, events_.TextDelta):
+                break

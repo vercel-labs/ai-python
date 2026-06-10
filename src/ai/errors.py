@@ -162,6 +162,16 @@ class ProviderResponseError(ProviderAPIError):
     """Provider returned a malformed or unexpected response."""
 
 
+class ProviderIncompleteResponseError(ProviderResponseError):
+    """Provider stream ended before the response was complete.
+
+    Raised when a streaming response terminates without the provider's
+    finish event — e.g. the transport connection dropped mid-response —
+    leaving a partial message (reasoning-only output, or a tool call
+    with truncated arguments).
+    """
+
+
 class ProviderStatusError(ProviderAPIError):
     """Provider returned a non-success HTTP status code."""
 
@@ -326,6 +336,7 @@ __all__ = [
     "ProviderConnectionError",
     "ProviderDeadlineExceededError",
     "ProviderError",
+    "ProviderIncompleteResponseError",
     "ProviderInternalServerError",
     "ProviderModelNotFoundError",
     "ProviderNotConfiguredError",
