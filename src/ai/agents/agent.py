@@ -225,6 +225,7 @@ class MessageAggregator(
 ):
     def __init__(self) -> None:
         self._messages: list[types.messages.Message] = []
+        self._index_by_id: dict[str, int] = {}
 
     def feed(self, item: events_.AgentEvent) -> None:
         if isinstance(item, events_.PartialToolCallResult):
@@ -232,10 +233,17 @@ class MessageAggregator(
         msg = item.message
         if msg is None:
             return
-        if self._messages and self._messages[-1].id == msg.id:
-            self._messages[-1] = msg
-        else:
+        # Later snapshots of a message replace earlier ones in place.
+        # Snapshots of the same message are not always consecutive —
+        # e.g. a tool-result message can land between two snapshots of
+        # the assistant message that called it — so dedupe by id, not
+        # by checking the tail.
+        index = self._index_by_id.get(msg.id)
+        if index is None:
+            self._index_by_id[msg.id] = len(self._messages)
             self._messages.append(msg)
+        else:
+            self._messages[index] = msg
 
     def snapshot(self) -> MessageBundle:
         return MessageBundle(messages=tuple(self._messages))
