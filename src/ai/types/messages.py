@@ -401,3 +401,11 @@ class Message(pydantic.BaseModel):
         if output_type is None:
             return self.text
         return output_type.model_validate_json(self.text)
+
+
+# ``MessageBundle`` forward-references ``Message``, which is defined later in
+# this module, so its schema (and the adapter built from it) is incomplete at
+# class-creation time.  Rebuild both once ``Message`` exists so importers never
+# see a half-built model.
+MessageBundle.model_rebuild()
+_SPECIAL_TOOL_RESULT_ADAPTER.rebuild(force=True)

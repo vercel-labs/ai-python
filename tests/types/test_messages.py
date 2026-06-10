@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import subprocess
+import sys
 from typing import Any
 
 import pytest
@@ -119,6 +121,70 @@ def test_from_bytes_unknown_raises() -> None:
 # ---------------------------------------------------------------------------
 # ToolResultPart -- typed result coercion and round-trip
 # ---------------------------------------------------------------------------
+
+
+def test_models_fully_defined_at_import() -> None:
+    """No model may escape ``import ai`` with an unbuilt schema.
+
+    ``MessageBundle`` forward-references ``Message``, which is defined later
+    in the module, so its schema is deferred at class creation and must be
+    completed by the module-end ``model_rebuild()``.  Without that it leaks
+    out of the import incomplete, and whether a downstream consumer works
+    then depends on *when* and *where* the lazy rebuild fires: embedding the
+    class in another model usually heals it, but e.g. a durable-workflow
+    module re-import broke with "``SessionState`` is not fully defined; you
+    should define ``Message``" in the seal backend.
+
+    This must run in a fresh interpreter: pydantic heals an incomplete model
+    on its first direct validation, so any earlier test that builds a
+    ``MessageBundle`` (e.g. the ai_sdk adapter tests, which sort first)
+    silently masks the regression in-process.
+    """
+    code = (
+        "import inspect\n"
+        "import pydantic\n"
+        "import ai\n"
+        "import ai.types.messages as m\n"
+        "bad = [\n"
+        "    name\n"
+        "    for name, obj in vars(m).items()\n"
+        "    if inspect.isclass(obj)\n"
+        "    and issubclass(obj, pydantic.BaseModel)\n"
+        "    and obj.__module__ == m.__name__\n"
+        "    and not obj.__pydantic_complete__\n"
+        "]\n"
+        "assert not bad, f'models escaped import with unbuilt schemas: {bad}'\n"
+    )
+    subprocess.run([sys.executable, "-c", code], check=True)
+
+
+def test_message_bundle_embeddable_without_sys_modules_entry() -> None:
+    """Embedding ``MessageBundle`` must not require a ``sys.modules`` lookup.
+
+    If ``MessageBundle`` escapes import incomplete, a consumer model
+    embedding it makes pydantic re-evaluate the deferred ``"Message"``
+    annotation via ``sys.modules[MessageBundle.__module__]``.  Environments
+    that rebuild ``sys.modules`` break then: the vercel workflow sandbox
+    clears ``sys.modules`` and re-registers only what sandboxed code
+    explicitly imports — a bare ``import ai`` does *not* re-register the
+    ``ai.types.messages`` key — so the lookup misses, the consumer fails
+    with "name 'Message' is not defined", and every model embedding it is
+    poisoned (this took down the seal backend's ``SessionState``).  A
+    complete-at-import ``MessageBundle`` never needs the lookup.
+
+    Runs in a fresh interpreter for the same masking reason as above.
+    """
+    code = (
+        "import sys\n"
+        "import pydantic\n"
+        "import ai\n"
+        "from ai.types import messages\n"
+        "del sys.modules['ai.types.messages']\n"
+        "class Holder(pydantic.BaseModel):\n"
+        "    x: messages.MessageBundle | None = None\n"
+        "Holder(x=messages.MessageBundle(messages=()))\n"
+    )
+    subprocess.run([sys.executable, "-c", code], check=True)
 
 
 def test_tool_result_content_output_with_file_part_round_trip() -> None:
