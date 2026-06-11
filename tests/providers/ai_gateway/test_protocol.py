@@ -620,6 +620,7 @@ class TestReasoningSignatureRoundTrip:
                 "providerMetadata": {"anthropic": {"signature": "ErMJsig=="}},
             },
             {"type": "reasoning-end", "id": "0"},
+            {"type": "finish"},
         ]
 
         async def _gen() -> AsyncGenerator[events_.Event]:
