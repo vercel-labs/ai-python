@@ -20,7 +20,7 @@ def test_simple_types_produce_correct_schema() -> None:
         return f"Hello {name}" * count
 
     assert greet.name == "greet"
-    assert _function_args(greet).description == "Say hello."
+    assert _spec(greet).description == "Say hello."
     props = _schema(greet)["properties"]
     assert props["name"]["type"] == "string"
     assert props["count"]["type"] == "integer"
@@ -226,13 +226,13 @@ def _required(tool: ai.AgentTool) -> list[str]:
 
 
 def _schema(tool: ai.AgentTool) -> dict[str, Any]:
-    return _function_args(tool).params
+    return _spec(tool).params
 
 
-def _function_args(tool: ai.AgentTool) -> ai.tools.FunctionToolArgs:
-    args = tool.tool.args
-    assert isinstance(args, ai.tools.FunctionToolArgs)
-    return args
+def _spec(tool: ai.AgentTool) -> ai.tools.ToolSpec:
+    spec = tool.tool.spec
+    assert spec is not None
+    return spec
 
 
 # Module-level model so get_type_hints() can resolve it when @ai.tool

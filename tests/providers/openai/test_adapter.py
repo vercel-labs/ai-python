@@ -251,7 +251,7 @@ async def test_responses_tools_convert_function_and_provider_tools() -> None:
                 tools.Tool(
                     kind="function",
                     name="weather",
-                    args=tools.FunctionToolArgs(
+                    spec=tools.ToolSpec(
                         description="Get weather",
                         params={
                             "type": "object",

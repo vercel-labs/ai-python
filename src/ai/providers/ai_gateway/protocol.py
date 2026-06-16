@@ -11,17 +11,15 @@ from typing import Any, TypeVar
 
 import httpx
 import pydantic
+from pydantic.alias_generators import to_camel
 
 from ... import types
 from ...models import core
 from ...models.core import params as params_
 from .. import base
-from ..anthropic import tools as anthropic_tools
-from ..openai import tools as openai_tools
 from . import client as gateway_client
 from . import errors
 from . import params as gateway_params
-from . import tools as gateway_tools
 from .client import errors as client_errors
 
 # ---------------------------------------------------------------------------
@@ -276,46 +274,51 @@ async def _messages_to_prompt(
     return result
 
 
+# Free-form payload fields whose keys are data, not config structure —
+# their subtrees must reach the wire verbatim, never camelized.
+_OPAQUE_ARG_KEYS: dict[str, frozenset[str]] = {
+    "openai.mcp": frozenset({"headers", "allowed_tools"}),
+    "openai.file_search": frozenset({"filters"}),
+    "openai.tool_search": frozenset({"parameters", "execution"}),
+}
+
+
+def _camelize(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {to_camel(k): _camelize(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_camelize(v) for v in value]
+    return value
+
+
 def _tool_to_v3(tool: types.tools.Tool) -> dict[str, Any]:
     """Convert a tool schema blob to the v3 wire format."""
     if tool.kind == "provider":
+        cfg = tool.tool_config
+        tool_id = cfg.id if cfg is not None else None
+        if tool_id is None:
+            raise TypeError(
+                f"provider tool {tool.name!r} has no tool_config id"
+            )
+        opaque = _OPAQUE_ARG_KEYS.get(tool_id, frozenset())
         return {
             "type": "provider",
-            "id": _provider_tool_id(tool),
+            "id": tool_id,
             "name": tool.name,
-            "args": tool.args.model_dump(
-                mode="json",
-                by_alias=True,
-                exclude_none=True,
-            ),
+            "args": {
+                to_camel(k): v if k in opaque else _camelize(v)
+                for k, v in (cfg.args if cfg is not None else {}).items()
+            },
         }
-    args = tool.args
-    if not isinstance(args, types.tools.FunctionToolArgs):
-        raise TypeError(f"function tool {tool.name!r} has invalid args")
+    spec = tool.spec
+    if spec is None:
+        raise TypeError(f"function tool {tool.name!r} has no spec")
     return {
         "type": "function",
         "name": tool.name,
-        "description": args.description or "",
-        "inputSchema": args.params,
+        "description": spec.description or "",
+        "inputSchema": spec.params,
     }
-
-
-def _provider_tool_id(tool: types.tools.Tool) -> str:
-    if isinstance(tool.args, anthropic_tools.AnthropicProviderArgs):
-        return f"anthropic.{tool.args.anthropic_type}"
-    if isinstance(tool.args, openai_tools.OpenAIProviderArgs):
-        return tool.args.openai_id
-
-    match tool.args:
-        case gateway_tools.PerplexitySearchArgs():
-            return "gateway.perplexity_search"
-        case gateway_tools.ParallelSearchArgs():
-            return "gateway.parallel_search"
-        case _:
-            raise TypeError(
-                f"provider tool {tool.name!r} has unsupported args "
-                f"{type(tool.args).__name__}"
-            )
 
 
 async def _build_request_body(
