@@ -8,9 +8,20 @@ import dataclasses
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterable, AsyncIterator
+    from collections.abc import (
+        AsyncIterable,
+        AsyncIterator,
+        Collection,
+        Generator,
+    )
 
-_EMPTY: Any = object()
+
+@dataclasses.dataclass
+class _Empty:
+    pass
+
+
+_EMPTY: Any = _Empty()
 
 
 @dataclasses.dataclass
@@ -46,6 +57,63 @@ class AsyncIterableQueue[T](asyncio.Queue[_Stop | T]):
 
     async def astop(self) -> None:
         await self.put(_STOP)
+
+
+class MultiWaiter[T]:
+    """Waiter object for waiting on multiple futures.
+
+    The advantages over using asyncio.wait are:
+      * New futures may be added while the object is already being waited on
+      * Completion order of the tasks is preserved.
+
+    A *potential* downside is:
+      * Batching of future completion is lost
+
+    But that is actually good for our use cases, since that introduces
+    a potential mismatch when using workflows/temporal.
+    """
+
+    def __init__(self, *tasks: asyncio.Future[T]) -> None:
+        self._queue: asyncio.Queue[asyncio.Future[T]] = asyncio.Queue(0)
+        self._tasks: dict[asyncio.Future[T], None] = {}
+
+        # We bind this to an attribute so that the bound method is
+        # always the same and can be passed to remove_done_callback.
+        self._callback = self._queue.put_nowait
+        self.add(*tasks)
+
+    def add(self, *tasks: asyncio.Future[T]) -> None:
+        for task in tasks:
+            self._tasks[task] = None
+            task.add_done_callback(self._callback)
+
+    def clear(self) -> None:
+        for task in self._tasks:
+            task.remove_done_callback(self._callback)
+        self._tasks.clear()
+
+    def tasks(self) -> Collection[asyncio.Future[T]]:
+        return self._tasks.keys()
+
+    async def wait(self) -> asyncio.Future[T]:
+        t = await self._queue.get()
+        self._tasks.pop(t, None)
+        return t
+
+    def __await__(self) -> Generator[Any, Any, asyncio.Future[T]]:
+        return self.wait().__await__()
+
+    async def __aenter__(self) -> MultiWaiter[T]:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: Any | None,
+    ) -> bool:
+        self.clear()
+        return False
 
 
 @contextlib.asynccontextmanager
