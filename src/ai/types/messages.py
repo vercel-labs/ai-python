@@ -242,10 +242,11 @@ class ToolCallPart(pydantic.BaseModel):
     # run completed this tool call but a sibling tool call was suspended
     # on a hook, we fold the completed result onto the ``ToolCallPart``
     # so re-execution short-circuits to the cached value instead of
-    # running the tool body again.  Excluded from JSON; not part of the
-    # wire model.
+    # running the tool body again.
     cached_result: ToolResultPart | None = pydantic.Field(
-        default=None, exclude=True, repr=False
+        default=None,
+        exclude_if=lambda v: v is None,
+        repr=False,
     )
 
     kind: Literal["tool_call"] = "tool_call"
@@ -331,9 +332,12 @@ class Message(pydantic.BaseModel):
     # short-circuiting an existing assistant turn (resume-after-approval
     # flows).  ``Context.add`` skips replay-flagged messages so the loop
     # can call ``context.add(stream.message)`` unconditionally without
-    # producing a duplicate turn.  Excluded from JSON: control flag,
-    # not data.
-    replay: bool = pydantic.Field(default=False, exclude=True, repr=False)
+    # producing a duplicate turn.
+    replay: bool = pydantic.Field(
+        default=False,
+        exclude_if=lambda v: not v,
+        repr=False,
+    )
 
     @property
     def text(self) -> str:
