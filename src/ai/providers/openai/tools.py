@@ -50,17 +50,6 @@ class CodeInterpreterContainer(pydantic.BaseModel):
     file_ids: list[str] | None = None
 
 
-def _provider_tool(name: str, id: str, **args: Any) -> types.tools.Tool:
-    return types.tools.Tool(
-        kind="provider",
-        name=name,
-        tool_config=types.tools.ToolConfig(
-            id=id,
-            args={k: v for k, v in args.items() if v is not None},
-        ),
-    )
-
-
 def _dump(model: pydantic.BaseModel | None) -> dict[str, Any] | None:
     if model is None:
         return None
@@ -74,13 +63,22 @@ def web_search(
     search_context_size: Literal["low", "medium", "high"] | None = None,
     user_location: WebSearchUserLocation | None = None,
 ) -> types.tools.Tool:
-    return _provider_tool(
-        "web_search",
-        "openai.web_search",
-        external_web_access=external_web_access,
-        filters=_dump(filters),
-        search_context_size=search_context_size,
-        user_location=_dump(user_location),
+    return types.tools.Tool(
+        kind="provider",
+        name="web_search",
+        tool_config=types.tools.ToolConfig(
+            id="openai.web_search",
+            args={
+                k: v
+                for k, v in {
+                    "external_web_access": external_web_access,
+                    "filters": _dump(filters),
+                    "search_context_size": search_context_size,
+                    "user_location": _dump(user_location),
+                }.items()
+                if v is not None
+            },
+        ),
     )
 
 
@@ -89,11 +87,20 @@ def web_search_preview(
     search_context_size: Literal["low", "medium", "high"] | None = None,
     user_location: WebSearchUserLocation | None = None,
 ) -> types.tools.Tool:
-    return _provider_tool(
-        "web_search_preview",
-        "openai.web_search_preview",
-        search_context_size=search_context_size,
-        user_location=_dump(user_location),
+    return types.tools.Tool(
+        kind="provider",
+        name="web_search_preview",
+        tool_config=types.tools.ToolConfig(
+            id="openai.web_search_preview",
+            args={
+                k: v
+                for k, v in {
+                    "search_context_size": search_context_size,
+                    "user_location": _dump(user_location),
+                }.items()
+                if v is not None
+            },
+        ),
     )
 
 
@@ -104,13 +111,22 @@ def file_search(
     ranking: FileSearchRanking | None = None,
     filters: dict[str, Any] | None = None,
 ) -> types.tools.Tool:
-    return _provider_tool(
-        "file_search",
-        "openai.file_search",
-        vector_store_ids=vector_store_ids,
-        max_num_results=max_num_results,
-        ranking=_dump(ranking),
-        filters=filters,
+    return types.tools.Tool(
+        kind="provider",
+        name="file_search",
+        tool_config=types.tools.ToolConfig(
+            id="openai.file_search",
+            args={
+                k: v
+                for k, v in {
+                    "vector_store_ids": vector_store_ids,
+                    "max_num_results": max_num_results,
+                    "ranking": _dump(ranking),
+                    "filters": filters,
+                }.items()
+                if v is not None
+            },
+        ),
     )
 
 
@@ -118,12 +134,21 @@ def code_interpreter(
     *,
     container: CodeInterpreterContainer | str | None = None,
 ) -> types.tools.Tool:
-    return _provider_tool(
-        "code_interpreter",
-        "openai.code_interpreter",
-        container=_dump(container)
-        if isinstance(container, CodeInterpreterContainer)
-        else container,
+    return types.tools.Tool(
+        kind="provider",
+        name="code_interpreter",
+        tool_config=types.tools.ToolConfig(
+            id="openai.code_interpreter",
+            args={
+                k: v
+                for k, v in {
+                    "container": _dump(container)
+                    if isinstance(container, CodeInterpreterContainer)
+                    else container,
+                }.items()
+                if v is not None
+            },
+        ),
     )
 
 
@@ -139,31 +164,59 @@ def image_generation(
     quality: Literal["low", "medium", "high", "auto"] | None = None,
     size: str | None = None,
 ) -> types.tools.Tool:
-    return _provider_tool(
-        "image_generation",
-        "openai.image_generation",
-        background=background,
-        input_fidelity=input_fidelity,
-        model=model,
-        moderation=moderation,
-        output_compression=output_compression,
-        output_format=output_format,
-        partial_images=partial_images,
-        quality=quality,
-        size=size,
+    return types.tools.Tool(
+        kind="provider",
+        name="image_generation",
+        tool_config=types.tools.ToolConfig(
+            id="openai.image_generation",
+            args={
+                k: v
+                for k, v in {
+                    "background": background,
+                    "input_fidelity": input_fidelity,
+                    "model": model,
+                    "moderation": moderation,
+                    "output_compression": output_compression,
+                    "output_format": output_format,
+                    "partial_images": partial_images,
+                    "quality": quality,
+                    "size": size,
+                }.items()
+                if v is not None
+            },
+        ),
     )
 
 
 def local_shell() -> types.tools.Tool:
-    return _provider_tool("local_shell", "openai.local_shell")
+    return types.tools.Tool(
+        kind="provider",
+        name="local_shell",
+        tool_config=types.tools.ToolConfig(id="openai.local_shell"),
+    )
 
 
 def shell(*, environment: str | None = None) -> types.tools.Tool:
-    return _provider_tool("shell", "openai.shell", environment=environment)
+    return types.tools.Tool(
+        kind="provider",
+        name="shell",
+        tool_config=types.tools.ToolConfig(
+            id="openai.shell",
+            args={
+                k: v
+                for k, v in {"environment": environment}.items()
+                if v is not None
+            },
+        ),
+    )
 
 
 def apply_patch() -> types.tools.Tool:
-    return _provider_tool("apply_patch", "openai.apply_patch")
+    return types.tools.Tool(
+        kind="provider",
+        name="apply_patch",
+        tool_config=types.tools.ToolConfig(id="openai.apply_patch"),
+    )
 
 
 def mcp(
@@ -176,16 +229,25 @@ def mcp(
     allowed_tools: list[str] | dict[str, Any] | None = None,
     server_description: str | None = None,
 ) -> types.tools.Tool:
-    return _provider_tool(
-        "mcp",
-        "openai.mcp",
-        server_label=server_label,
-        server_url=server_url,
-        connector_id=connector_id,
-        authorization=authorization,
-        headers=headers,
-        allowed_tools=allowed_tools,
-        server_description=server_description,
+    return types.tools.Tool(
+        kind="provider",
+        name="mcp",
+        tool_config=types.tools.ToolConfig(
+            id="openai.mcp",
+            args={
+                k: v
+                for k, v in {
+                    "server_label": server_label,
+                    "server_url": server_url,
+                    "connector_id": connector_id,
+                    "authorization": authorization,
+                    "headers": headers,
+                    "allowed_tools": allowed_tools,
+                    "server_description": server_description,
+                }.items()
+                if v is not None
+            },
+        ),
     )
 
 
@@ -195,12 +257,21 @@ def tool_search(
     parameters: dict[str, Any] | None = None,
     execution: dict[str, Any] | None = None,
 ) -> types.tools.Tool:
-    return _provider_tool(
-        "tool_search",
-        "openai.tool_search",
-        description=description,
-        parameters=parameters,
-        execution=execution,
+    return types.tools.Tool(
+        kind="provider",
+        name="tool_search",
+        tool_config=types.tools.ToolConfig(
+            id="openai.tool_search",
+            args={
+                k: v
+                for k, v in {
+                    "description": description,
+                    "parameters": parameters,
+                    "execution": execution,
+                }.items()
+                if v is not None
+            },
+        ),
     )
 
 

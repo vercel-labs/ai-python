@@ -43,17 +43,6 @@ class FetchPolicy(pydantic.BaseModel):
     max_age_seconds: int | None = None
 
 
-def _provider_tool(name: str, id: str, **args: Any) -> types.tools.Tool:
-    return types.tools.Tool(
-        kind="provider",
-        name=name,
-        tool_config=types.tools.ToolConfig(
-            id=id,
-            args={k: v for k, v in args.items() if v is not None},
-        ),
-    )
-
-
 def _dump[M: pydantic.BaseModel](
     model_type: type[M], value: M | dict[str, object] | None
 ) -> dict[str, Any] | None:
@@ -75,16 +64,25 @@ def perplexity_search(
     search_recency_filter: Literal["day", "week", "month", "year"]
     | None = None,
 ) -> types.tools.Tool:
-    return _provider_tool(
-        "perplexity_search",
-        "gateway.perplexity_search",
-        max_results=max_results,
-        max_tokens_per_page=max_tokens_per_page,
-        max_tokens=max_tokens,
-        country=country,
-        search_domain_filter=search_domain_filter,
-        search_language_filter=search_language_filter,
-        search_recency_filter=search_recency_filter,
+    return types.tools.Tool(
+        kind="provider",
+        name="perplexity_search",
+        tool_config=types.tools.ToolConfig(
+            id="gateway.perplexity_search",
+            args={
+                k: v
+                for k, v in {
+                    "max_results": max_results,
+                    "max_tokens_per_page": max_tokens_per_page,
+                    "max_tokens": max_tokens,
+                    "country": country,
+                    "search_domain_filter": search_domain_filter,
+                    "search_language_filter": search_language_filter,
+                    "search_recency_filter": search_recency_filter,
+                }.items()
+                if v is not None
+            },
+        ),
     )
 
 
@@ -96,14 +94,23 @@ def parallel_search(
     excerpts: Excerpts | dict[str, object] | None = None,
     fetch_policy: FetchPolicy | dict[str, object] | None = None,
 ) -> types.tools.Tool:
-    return _provider_tool(
-        "parallel_search",
-        "gateway.parallel_search",
-        mode=mode,
-        max_results=max_results,
-        source_policy=_dump(SourcePolicy, source_policy),
-        excerpts=_dump(Excerpts, excerpts),
-        fetch_policy=_dump(FetchPolicy, fetch_policy),
+    return types.tools.Tool(
+        kind="provider",
+        name="parallel_search",
+        tool_config=types.tools.ToolConfig(
+            id="gateway.parallel_search",
+            args={
+                k: v
+                for k, v in {
+                    "mode": mode,
+                    "max_results": max_results,
+                    "source_policy": _dump(SourcePolicy, source_policy),
+                    "excerpts": _dump(Excerpts, excerpts),
+                    "fetch_policy": _dump(FetchPolicy, fetch_policy),
+                }.items()
+                if v is not None
+            },
+        ),
     )
 
 

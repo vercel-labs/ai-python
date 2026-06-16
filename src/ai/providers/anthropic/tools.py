@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Literal
 
 import pydantic
 from pydantic.alias_generators import to_camel
@@ -46,17 +46,6 @@ class Citations(pydantic.BaseModel):
     enabled: bool
 
 
-def _provider_tool(name: str, id: str, **args: Any) -> types.tools.Tool:
-    return types.tools.Tool(
-        kind="provider",
-        name=name,
-        tool_config=types.tools.ToolConfig(
-            id=id,
-            args={k: v for k, v in args.items() if v is not None},
-        ),
-    )
-
-
 def _check_domains(
     tool_name: str,
     allowed_domains: list[str] | None,
@@ -77,15 +66,27 @@ def web_search(
     user_location: UserLocation | None = None,
 ) -> types.tools.Tool:
     _check_domains("web_search", allowed_domains, blocked_domains)
-    return _provider_tool(
-        "web_search",
-        "anthropic.web_search_20260209",
-        max_uses=max_uses,
-        allowed_domains=allowed_domains,
-        blocked_domains=blocked_domains,
-        user_location=user_location.model_dump(mode="json", exclude_none=True)
-        if user_location is not None
-        else None,
+    return types.tools.Tool(
+        kind="provider",
+        name="web_search",
+        tool_config=types.tools.ToolConfig(
+            id="anthropic.web_search_20260209",
+            args={
+                k: v
+                for k, v in {
+                    "max_uses": max_uses,
+                    "allowed_domains": allowed_domains,
+                    "blocked_domains": blocked_domains,
+                    "user_location": user_location.model_dump(
+                        mode="json",
+                        exclude_none=True,
+                    )
+                    if user_location is not None
+                    else None,
+                }.items()
+                if v is not None
+            },
+        ),
     )
 
 
@@ -100,21 +101,39 @@ def web_fetch(
     _check_domains("web_fetch", allowed_domains, blocked_domains)
     if isinstance(citations, bool):
         citations = Citations(enabled=citations)
-    return _provider_tool(
-        "web_fetch",
-        "anthropic.web_fetch_20260209",
-        max_uses=max_uses,
-        allowed_domains=allowed_domains,
-        blocked_domains=blocked_domains,
-        citations=citations.model_dump(mode="json", exclude_none=True)
-        if citations is not None
-        else None,
-        max_content_tokens=max_content_tokens,
+    return types.tools.Tool(
+        kind="provider",
+        name="web_fetch",
+        tool_config=types.tools.ToolConfig(
+            id="anthropic.web_fetch_20260209",
+            args={
+                k: v
+                for k, v in {
+                    "max_uses": max_uses,
+                    "allowed_domains": allowed_domains,
+                    "blocked_domains": blocked_domains,
+                    "citations": citations.model_dump(
+                        mode="json",
+                        exclude_none=True,
+                    )
+                    if citations is not None
+                    else None,
+                    "max_content_tokens": max_content_tokens,
+                }.items()
+                if v is not None
+            },
+        ),
     )
 
 
 def code_execution() -> types.tools.Tool:
-    return _provider_tool("code_execution", "anthropic.code_execution_20260120")
+    return types.tools.Tool(
+        kind="provider",
+        name="code_execution",
+        tool_config=types.tools.ToolConfig(
+            id="anthropic.code_execution_20260120"
+        ),
+    )
 
 
 def computer_use(
@@ -124,30 +143,54 @@ def computer_use(
     display_number: int | None = None,
     enable_zoom: bool | None = None,
 ) -> types.tools.Tool:
-    return _provider_tool(
-        "computer",
-        "anthropic.computer_20251124",
-        display_width_px=display_width_px,
-        display_height_px=display_height_px,
-        display_number=display_number,
-        enable_zoom=enable_zoom,
+    return types.tools.Tool(
+        kind="provider",
+        name="computer",
+        tool_config=types.tools.ToolConfig(
+            id="anthropic.computer_20251124",
+            args={
+                k: v
+                for k, v in {
+                    "display_width_px": display_width_px,
+                    "display_height_px": display_height_px,
+                    "display_number": display_number,
+                    "enable_zoom": enable_zoom,
+                }.items()
+                if v is not None
+            },
+        ),
     )
 
 
 def text_editor(*, max_characters: int | None = None) -> types.tools.Tool:
-    return _provider_tool(
-        "str_replace_based_edit_tool",
-        "anthropic.text_editor_20250728",
-        max_characters=max_characters,
+    return types.tools.Tool(
+        kind="provider",
+        name="str_replace_based_edit_tool",
+        tool_config=types.tools.ToolConfig(
+            id="anthropic.text_editor_20250728",
+            args={
+                k: v
+                for k, v in {"max_characters": max_characters}.items()
+                if v is not None
+            },
+        ),
     )
 
 
 def bash() -> types.tools.Tool:
-    return _provider_tool("bash", "anthropic.bash_20250124")
+    return types.tools.Tool(
+        kind="provider",
+        name="bash",
+        tool_config=types.tools.ToolConfig(id="anthropic.bash_20250124"),
+    )
 
 
 def memory() -> types.tools.Tool:
-    return _provider_tool("memory", "anthropic.memory_20250818")
+    return types.tools.Tool(
+        kind="provider",
+        name="memory",
+        tool_config=types.tools.ToolConfig(id="anthropic.memory_20250818"),
+    )
 
 
 __all__ = [
