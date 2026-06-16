@@ -1,15 +1,27 @@
 """models — composable model layer.
 
+A :class:`Model` holds a *recipe* for its provider — a factory callable
+plus its arguments — instead of a live provider object.  The provider and
+its client are built lazily on first use.  When the factory is a named,
+module-level callable and the args are JSON-friendly (everything
+``get_model`` produces), the model serializes: ``model.model_dump()`` /
+``Model.model_validate()`` round-trip.  Any other callable (a lambda, a
+closure over live objects) works normally in-process, but ``model_dump``
+raises and ``model.serializable`` is ``False``.
+
 Usage::
 
     import ai
     model = ai.get_model("openai:gpt-5.4")
-    provider = ai.get_provider("openai", base_url="http://localhost:11434/v1")
-    model = ai.Model("llama3", provider=provider)
     model = ai.get_model("anthropic:claude-sonnet-4-6")
-    provider = ai.get_provider("anthropic", base_url="https://anthropic.example.com")
-    model = ai.Model("claude-sonnet-4-6", provider=provider)
     model = ai.get_model("anthropic/claude-sonnet-4")  # defaults to Gateway
+
+    # custom provider configuration — JSON-friendly args
+    model = ai.Model(
+        "llama3",
+        provider_factory=ai.get_provider,
+        provider_args={"id": "openai", "base_url": "http://localhost:11434/v1"},
+    )
 
     # stream — auto-creates client from env vars
     msgs = [ai.user_message("hello")]
@@ -18,15 +30,21 @@ Usage::
             if isinstance(event, ai.events.TextDelta):
                 print(event.chunk, end="", flush=True)
 
-    # explicit provider for custom auth / transport
-    provider = ai.get_provider(
-        "openai",
-        base_url="https://custom.example.com/v1",
-        api_key="sk-...",
-    )
-    model = ai.Model("gpt-5.4", provider=provider)
-    async with ai.stream(model, msgs) as s:
-        ...
+    # models serialize and rebuild their provider on first use
+    data = model.model_dump(mode="json")
+    model = ai.Model.model_validate(data)
+
+    # anything non-serializable (clients, custom auth) lives inside a
+    # named module-level factory; its import path is what's serialized
+    def my_provider() -> ai.Provider:
+        return ai.get_provider("openai", client=shared_client)
+
+    model = ai.Model("gpt-5.4", provider_factory=my_provider)
+
+    # if the model never crosses a process boundary, any callable works —
+    # the model just isn't serializable (model_dump() raises)
+    model = ai.Model("gpt-5.4", provider_factory=lambda: provider)
+    assert model.serializable is False
 
     # list available models
     ids = await ai.get_provider("openai").list_models()

@@ -279,24 +279,19 @@ class Provider(Generic[ClientT]):
         if modelsdev_provider is None:
             raise ValueError(f"unknown provider id: {known_id!r}")
 
-        for handle in (
-            modelsdev_provider.id,
-            _modelsdev.provider_npm(modelsdev_provider, model_provider_config),
-        ):
-            provider_type = _PROVIDER_REGISTRY.get(handle)
-            if provider_type is not None:
-                return provider_type.from_modelsdev_provider(
-                    modelsdev_provider,
-                    model_provider_config=model_provider_config,
-                    base_url=base_url,
-                    api_key=api_key,
-                    headers=headers,
-                    env=env,
-                    client=client,
-                    protocol=protocol,
-                )
-
-        raise UnsupportedProviderError(modelsdev_provider.id)
+        provider_type = resolve_provider_type(
+            known_id, model_provider_config=model_provider_config
+        )
+        return provider_type.from_modelsdev_provider(
+            modelsdev_provider,
+            model_provider_config=model_provider_config,
+            base_url=base_url,
+            api_key=api_key,
+            headers=headers,
+            env=env,
+            client=client,
+            protocol=protocol,
+        )
 
     @classmethod
     def from_modelsdev_provider(
@@ -316,6 +311,54 @@ class Provider(Generic[ClientT]):
 
 
 _PROVIDER_REGISTRY: dict[str, type[Provider[Any]]] = {}
+
+
+def resolve_provider_type(
+    known_id: str,
+    *,
+    model_provider_config: modelsdotdev.ModelProviderConfig | None = None,
+) -> type[Provider[Any]]:
+    """Return the registered provider class for a models.dev provider ID.
+
+    Performs the same lookup as :meth:`Provider.from_id` without building
+    a provider (or its client).
+
+    Raises ``ValueError`` for unknown provider IDs and
+    :class:`ai.UnsupportedProviderError` for known providers without a
+    registered implementation.
+    """
+    modelsdev_provider = _modelsdev.get_provider_by_id(known_id)
+    if modelsdev_provider is None:
+        raise ValueError(f"unknown provider id: {known_id!r}")
+
+    for handle in (
+        modelsdev_provider.id,
+        _modelsdev.provider_npm(modelsdev_provider, model_provider_config),
+    ):
+        provider_type = _PROVIDER_REGISTRY.get(handle)
+        if provider_type is not None:
+            return provider_type
+
+    raise UnsupportedProviderError(modelsdev_provider.id)
+
+
+def provider_for_model(
+    provider_id: str, model_id: str | None = None
+) -> Provider[Any]:
+    """Build the provider serving *model_id* on *provider_id*.
+
+    This is the default provider factory stored by :func:`ai.get_model`.
+    It looks up models.dev metadata at build time, so its arguments stay
+    plain JSON and models that reference it serialize cleanly.
+    """
+    model_provider_config = None
+    if model_id is not None:
+        model_info = _modelsdev.get_model_by_id(f"{provider_id}:{model_id}")
+        if model_info is not None:
+            model_provider_config = model_info.provider_config
+    return Provider.from_id(
+        provider_id, model_provider_config=model_provider_config
+    )
 
 
 def get_provider(

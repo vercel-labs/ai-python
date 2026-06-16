@@ -6,8 +6,14 @@ Usage::
     from ai.providers.anthropic import tools as anthropic_tools
 
     model = ai.get_model("anthropic:claude-sonnet-4-6")
-    provider = ai.get_provider("anthropic", base_url="https://anthropic.example.com")
-    model = ai.Model("claude-sonnet-4-6", provider=provider)
+    model = ai.Model(
+        "claude-sonnet-4-6",
+        provider_factory=ai.get_provider,
+        provider_args={
+            "id": "anthropic",
+            "base_url": "https://anthropic.example.com",
+        },
+    )
     ids = await ai.get_provider("anthropic").list_models()
 
     # built-in tools
