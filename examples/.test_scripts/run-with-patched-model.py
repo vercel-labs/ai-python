@@ -88,36 +88,31 @@ def main() -> None:
     original_stream = _api.stream
     original_generate = _api.generate
 
-    def selected_protocol() -> ai.ProviderProtocol[Any] | None:
-        if protocol_factory is None:
-            return None
-        return protocol_factory()
-
     def selected_protocol_for_provider(
         provider: ai.Provider[Any],
-    ) -> ai.ProviderProtocol[Any] | None:
-        if args.protocol is None:
+    ) -> Callable[[], ai.ProviderProtocol[Any]] | None:
+        if args.protocol is None or protocol_factory is None:
             return None
         if args.protocol in ("chat", "responses") and isinstance(
             provider, OpenAICompatibleProvider
         ):
-            return selected_protocol()
+            return protocol_factory
         if args.protocol == "messages" and isinstance(
             provider, AnthropicCompatibleProvider
         ):
-            return selected_protocol()
+            return protocol_factory
         return None
 
     def selected_protocol_for_model(
         model: ai.Model,
-    ) -> ai.ProviderProtocol[Any] | None:
+    ) -> Callable[[], ai.ProviderProtocol[Any]] | None:
         return selected_protocol_for_provider(model.provider)
 
     def with_selected_protocol(model: ModelT) -> ModelT:
-        protocol = selected_protocol_for_model(model)
-        if protocol is None:
+        factory = selected_protocol_for_model(model)
+        if factory is None:
             return model
-        return model.with_protocol(protocol)
+        return model.with_protocol(factory)
 
     class PatchedContext:
         def __init__(self, context: Any) -> None:
@@ -174,18 +169,12 @@ def main() -> None:
         return await original_generate(*call_args, **kwargs)
 
     class PatchedModel(_model.Model):
-        def __init__(
-            self,
-            id: str,
-            *,
-            provider: ai.Provider[Any],
-            protocol: ai.ProviderProtocol[Any] | None = None,
-        ) -> None:
-            super().__init__(
-                id,
-                provider=provider,
-                protocol=selected_protocol_for_provider(provider) or protocol,
-            )
+        def __init__(self, id: str, **kwargs: Any) -> None:
+            super().__init__(id, **kwargs)
+            override = selected_protocol_for_provider(self.provider)
+            if override is not None:
+                self.protocol_factory = override
+                self.protocol_args = {}
 
     cast("Any", ai).get_model = patched_get_model
     cast("Any", models).get_model = patched_get_model

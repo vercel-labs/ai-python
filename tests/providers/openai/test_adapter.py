@@ -111,10 +111,7 @@ class _RaisingOpenAIClient:
         self.closed = True
 
 
-_MODEL = ai.Model(
-    "gpt-5.4",
-    provider=ai.get_provider("openai", api_key="sk-test"),
-)
+_MODEL = ai.get_model("openai:gpt-5.4")
 
 
 def _patch(

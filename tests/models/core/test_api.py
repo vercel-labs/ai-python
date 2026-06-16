@@ -271,32 +271,34 @@ async def test_stream_requires_model_messages_or_context() -> None:
             pass
 
 
+# Module-level so ``with_protocol`` can serialize a reference to it.
+class _StreamOverrideProtocol(models.ProviderProtocol[Any]):
+    def stream(
+        self,
+        client: Any,
+        model: models.Model,
+        messages: list[messages_.Message],
+        *,
+        tools: Sequence[ai.tools.Tool] | None = None,
+        output_type: type[pydantic.BaseModel] | None = None,
+        params: models.InferenceRequestParams | None = None,
+        provider: str,
+    ) -> AsyncGenerator[events_.Event]:
+        _ = client, model, messages, tools, output_type, params, provider
+
+        async def _stream() -> AsyncGenerator[events_.Event]:
+            yield events_.StreamStart()
+            yield events_.TextStart(block_id="text")
+            yield events_.TextDelta(block_id="text", chunk="override")
+            yield events_.TextEnd(block_id="text")
+            yield events_.StreamEnd()
+
+        return _stream()
+
+
 async def test_stream_uses_model_protocol() -> None:
-    class OverrideProtocol(models.ProviderProtocol[Any]):
-        def stream(
-            self,
-            client: Any,
-            model: models.Model,
-            messages: list[messages_.Message],
-            *,
-            tools: Sequence[ai.tools.Tool] | None = None,
-            output_type: type[pydantic.BaseModel] | None = None,
-            params: models.InferenceRequestParams | None = None,
-            provider: str,
-        ) -> AsyncGenerator[events_.Event]:
-            _ = client, model, messages, tools, output_type, params, provider
-
-            async def _stream() -> AsyncGenerator[events_.Event]:
-                yield events_.StreamStart()
-                yield events_.TextStart(block_id="text")
-                yield events_.TextDelta(block_id="text", chunk="override")
-                yield events_.TextEnd(block_id="text")
-                yield events_.StreamEnd()
-
-            return _stream()
-
     async with models.stream(
-        MOCK_MODEL.with_protocol(OverrideProtocol()),
+        MOCK_MODEL.with_protocol(_StreamOverrideProtocol),
         [ai.user_message("Hi")],
     ) as stream:
         async for _ in stream:
@@ -306,11 +308,10 @@ async def test_stream_uses_model_protocol() -> None:
 
 
 async def test_generate_dispatches_to_provider() -> None:
-    provider = MockProvider()
-    model = models.Model(
-        id="generate-model",
-        provider=provider,
-    )
+    # A provider class is itself a valid model factory.
+    model = models.Model("generate-model", provider_factory=MockProvider)
+    provider = model.provider
+    assert isinstance(provider, MockProvider)
     sentinel = messages_.Message(
         role="assistant",
         parts=[messages_.FilePart(data=b"\x89PNG", media_type="image/png")],
@@ -338,32 +339,35 @@ async def test_generate_dispatches_to_provider() -> None:
     assert result is sentinel
 
 
+# Module-level so ``with_protocol`` can serialize a reference to it.
+_GENERATED_IMAGE = messages_.Message(
+    role="assistant",
+    parts=[messages_.FilePart(data=b"\x89PNG", media_type="image/png")],
+)
+
+
+class _GenerateOverrideProtocol(models.ProviderProtocol[Any]):
+    async def generate(
+        self,
+        client: Any,
+        model: models.Model,
+        messages: list[messages_.Message],
+        params: models.GenerateParams,
+        *,
+        provider: str,
+    ) -> messages_.Message:
+        _ = client, model, messages, params, provider
+        return _GENERATED_IMAGE
+
+
 async def test_generate_uses_model_protocol() -> None:
-    sentinel = messages_.Message(
-        role="assistant",
-        parts=[messages_.FilePart(data=b"\x89PNG", media_type="image/png")],
-    )
-
-    class OverrideProtocol(models.ProviderProtocol[Any]):
-        async def generate(
-            self,
-            client: Any,
-            model: models.Model,
-            messages: list[messages_.Message],
-            params: models.GenerateParams,
-            *,
-            provider: str,
-        ) -> messages_.Message:
-            _ = client, model, messages, params, provider
-            return sentinel
-
     result = await models.generate(
-        MOCK_MODEL.with_protocol(OverrideProtocol()),
+        MOCK_MODEL.with_protocol(_GenerateOverrideProtocol),
         [ai.user_message("A cat")],
         models.ImageParams(n=1),
     )
 
-    assert result is sentinel
+    assert result is _GENERATED_IMAGE
 
 
 class _CheckProvider(MockProvider):
@@ -376,11 +380,12 @@ class _CheckProvider(MockProvider):
 
 
 async def test_probe_delegates_to_model_provider() -> None:
-    provider = _CheckProvider()
-    model = models.Model("mock-model", provider=provider)
+    model = models.Model("mock-model", provider_factory=_CheckProvider)
 
     await models.probe(model)
 
+    provider = model.provider
+    assert isinstance(provider, _CheckProvider)
     assert provider.checked_model is model
 
 

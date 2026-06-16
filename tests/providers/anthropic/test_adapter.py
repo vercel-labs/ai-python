@@ -45,7 +45,7 @@ def _patch_client(
     return cast("anthropic.AsyncAnthropic", fake), captured
 
 
-_MODEL = ai.Model("claude-sonnet-4-6", provider=ai.get_provider("anthropic"))
+_MODEL = ai.get_model("anthropic:claude-sonnet-4-6")
 
 
 async def _drain(stream: Any) -> None:

@@ -23,7 +23,7 @@ from ai.providers.anthropic import tools as anthropic_tools
 
 from .conftest import FakeAnthropicClient
 
-_MODEL = ai.Model("claude-sonnet-4-6", provider=ai.get_provider("anthropic"))
+_MODEL = ai.get_model("anthropic:claude-sonnet-4-6")
 
 
 async def _capture_tools(

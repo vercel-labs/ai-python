@@ -14,16 +14,12 @@ messages = [
 
 
 async def main() -> None:
-    provider = ai.get_provider("openai")
-    if not provider.is_configured():
-        print(f"[SKIP] {provider.name} provider is not configured")
-        return
-
-    model = ai.Model(
-        "gpt-5.5",
-        provider=provider,
-        protocol=OpenAIChatCompletionsProtocol(),
+    model = ai.get_model("openai:gpt-5.5").with_protocol(
+        OpenAIChatCompletionsProtocol
     )
+    if not model.provider.is_configured():
+        print(f"[SKIP] {model.provider.name} provider is not configured")
+        return
 
     try:
         async with ai.stream(model, messages) as stream:
@@ -32,7 +28,7 @@ async def main() -> None:
                     print(event.chunk, end="", flush=True)
         print()
     finally:
-        await provider.aclose()
+        await model.aclose()
 
 
 if __name__ == "__main__":

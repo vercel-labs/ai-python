@@ -98,10 +98,16 @@ class MockProvider(models.Provider):
 
 MOCK_PROVIDER = MockProvider()
 
+
+def mock_provider() -> MockProvider:
+    """Provider factory returning the shared mock provider."""
+    return MOCK_PROVIDER
+
+
 # A fixed Model used in tests.
 MOCK_MODEL: models.Model = models.Model(
-    id="mock-model",
-    provider=MOCK_PROVIDER,
+    "mock-model",
+    provider_factory=mock_provider,
 )
 
 

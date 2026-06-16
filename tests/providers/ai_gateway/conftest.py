@@ -10,6 +10,8 @@ import httpx
 import ai
 from ai.types import messages
 
+_BASE_URL = "https://gw.test/v3/ai"
+
 
 def sse(*events: dict[str, Any]) -> str:
     """Build SSE response text from event dicts."""
@@ -22,14 +24,19 @@ def mock_model(
     model_id: str = "test-provider/test-model",
     api_key: str = "test-key",
 ) -> ai.Model:
-    """Create a Gateway model wired to a mock transport."""
+    """Create a Gateway model wired to a mock transport.
+
+    Per-test handlers are live objects, so the factory is a closure and
+    the model is deliberately not serializable (it never crosses a JSON
+    boundary in these tests; ``model_dump`` would raise).
+    """
     provider = ai.get_provider(
         "vercel",
-        base_url="https://gw.test/v3/ai",
+        base_url=_BASE_URL,
         api_key=api_key,
         client=httpx.AsyncClient(transport=handler),
     )
-    return ai.Model(model_id, provider=provider)
+    return ai.Model(model_id, provider_factory=lambda: provider)
 
 
 mock_client = mock_model

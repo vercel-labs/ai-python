@@ -10,18 +10,16 @@ messages = [ai.user_message("Hello!")]
 
 async def main() -> None:
     # Example for local OpenAI-compatible servers like LM Studio.
-    provider = ai.get_provider(
-        "openai",
-        base_url=os.environ.get(
-            "LOCAL_OPENAI_BASE_URL", "http://localhost:1234/v1"
-        ),
-        api_key=os.environ.get("LOCAL_OPENAI_API_KEY", "some-key"),
-        headers={"X-Custom-Header": "example"},
-    )
-
     model = ai.Model(
         os.environ.get("LOCAL_OPENAI_MODEL", "local-model"),
-        provider=provider,
+        provider_factory=lambda: ai.get_provider(
+            "openai",
+            base_url=os.environ.get(
+                "LOCAL_OPENAI_BASE_URL", "http://localhost:1234/v1"
+            ),
+            api_key=os.environ.get("LOCAL_OPENAI_API_KEY", "some-key"),
+            headers={"X-Custom-Header": "example"},
+        ),
     )
 
     try:
@@ -39,8 +37,8 @@ async def main() -> None:
                     print(event.chunk, end="", flush=True)
         print()
     finally:
-        # Explicit providers need explicit cleanup.
-        await provider.aclose()
+        # Explicitly configured providers need explicit cleanup.
+        await model.aclose()
 
 
 if __name__ == "__main__":

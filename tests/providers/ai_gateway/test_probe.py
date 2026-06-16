@@ -12,13 +12,13 @@ from ai.providers.ai_gateway.client import errors
 _MODEL_ID = "anthropic/claude-opus-4-6"
 
 
-def _gateway_client(
-    *,
+def probe_provider(
     credits_status: int = 200,
     config_status: int = 200,
     config_body: dict[str, Any] | None = None,
     api_key: str | None = "sk-test-key",
-) -> ai.Model:
+) -> ai.Provider[Any]:
+    """Gateway provider whose mock responses are built from JSON args."""
     credits_body = json.dumps({"balance": "10.00", "totalUsed": "5.00"})
     config_bytes = json.dumps(config_body or {"models": []}).encode()
 
@@ -27,13 +27,31 @@ def _gateway_client(
             return httpx.Response(credits_status, content=credits_body.encode())
         return httpx.Response(config_status, content=config_bytes)
 
-    provider = ai.get_provider(
+    return ai.get_provider(
         "vercel",
         base_url="https://gateway.test/v3/ai",
         api_key=api_key,
         client=httpx.AsyncClient(transport=httpx.MockTransport(_handler)),
     )
-    return ai.Model(_MODEL_ID, provider=provider)
+
+
+def _gateway_client(
+    *,
+    credits_status: int = 200,
+    config_status: int = 200,
+    config_body: dict[str, Any] | None = None,
+    api_key: str | None = "sk-test-key",
+) -> ai.Model:
+    return ai.Model(
+        _MODEL_ID,
+        provider_factory=probe_provider,
+        provider_args={
+            "credits_status": credits_status,
+            "config_status": config_status,
+            "config_body": config_body,
+            "api_key": api_key,
+        },
+    )
 
 
 async def test_auth_ok_model_present_succeeds() -> None:

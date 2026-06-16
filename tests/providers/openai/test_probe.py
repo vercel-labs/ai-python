@@ -9,16 +9,18 @@ import pytest
 import ai
 
 
-def _client_with_mock(
+def probe_provider(
     status_code: int = 200,
-    json_body: Any = None,
+    json_body: dict[str, Any] | None = None,
     base_url: str = "https://openai.test/v1",
-) -> ai.Model:
+) -> ai.Provider[Any]:
+    """OpenAI provider whose mock response is built from JSON args."""
+
     def _handler(request: httpx.Request) -> httpx.Response:
         body = json.dumps(json_body or {}).encode()
         return httpx.Response(status_code, content=body)
 
-    provider = ai.get_provider(
+    return ai.get_provider(
         "openai",
         base_url=base_url,
         api_key="sk-test-key",
@@ -27,7 +29,22 @@ def _client_with_mock(
             transport=httpx.MockTransport(_handler),
         ),
     )
-    return ai.Model("gpt-5.4", provider=provider)
+
+
+def _client_with_mock(
+    status_code: int = 200,
+    json_body: dict[str, Any] | None = None,
+    base_url: str = "https://openai.test/v1",
+) -> ai.Model:
+    return ai.Model(
+        "gpt-5.4",
+        provider_factory=probe_provider,
+        provider_args={
+            "status_code": status_code,
+            "json_body": json_body,
+            "base_url": base_url,
+        },
+    )
 
 
 async def test_200_succeeds() -> None:
@@ -63,7 +80,6 @@ async def test_no_api_key_raises_not_configured(
 ) -> None:
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
-    provider = ai.get_provider("openai", base_url="https://openai.test/v1")
-    model = ai.Model("gpt-5.4", provider=provider)
+    model = ai.get_model("openai:gpt-5.4")
     with pytest.raises(ai.ProviderNotConfiguredError):
-        await provider.probe(model)
+        await model.provider.probe(model)

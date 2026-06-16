@@ -181,15 +181,12 @@ def test_get_provider_accepts_base_url_and_api_key() -> None:
         headers={"X-Custom-Header": "example"},
     )
 
-    model = ai.Model("custom-model", provider=provider)
     assert repr(provider) == "anthropic"
     assert isinstance(provider.protocol, AnthropicMessagesProtocol)
     assert provider.base_url == "https://custom.example.com"
     assert provider.api_key == "sk-custom"
     assert provider.headers == {"X-Custom-Header": "example"}
     assert provider.is_configured() is True
-    assert model.id == "custom-model"
-    assert model.provider is provider
 
 
 def test_get_provider_env_overrides_base_url_env() -> None:

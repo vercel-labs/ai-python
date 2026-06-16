@@ -210,15 +210,12 @@ def test_get_provider_accepts_base_url_and_api_key() -> None:
         headers={"X-Custom-Header": "example"},
     )
 
-    model = ai.Model("custom-model", provider=provider)
     assert repr(provider) == "openai"
     assert isinstance(provider.protocol, OpenAIResponsesProtocol)
     assert provider.base_url == "https://custom.example.com/v1"
     assert provider.api_key == "sk-custom"
     assert provider.headers == {"X-Custom-Header": "example"}
     assert provider.is_configured() is True
-    assert model.id == "custom-model"
-    assert model.provider is provider
     assert isinstance(provider, ai.Provider)
 
 

@@ -171,10 +171,12 @@ def test_get_rejects_empty_model_id() -> None:
 
 
 def test_get_model_accepts_model_protocol_override() -> None:
-    protocol = OpenAIChatCompletionsProtocol()
-    model = models.get_model("openai:gpt-5", protocol=protocol)
+    model = models.get_model(
+        "openai:gpt-5", protocol_factory=OpenAIChatCompletionsProtocol
+    )
 
-    assert model.protocol is protocol
+    assert isinstance(model.protocol, OpenAIChatCompletionsProtocol)
+    assert model.protocol is model.protocol  # built once, cached
     assert isinstance(model.provider.protocol, OpenAIResponsesProtocol)
 
 

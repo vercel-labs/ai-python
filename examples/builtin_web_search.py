@@ -45,12 +45,10 @@ def format(value: object) -> str:
 
 
 async def main() -> None:
-    provider = ai.get_provider("anthropic")
-    if not provider.is_configured():
-        print(f"[SKIP] {provider.name} provider is not configured")
+    model = ai.get_model("anthropic:claude-sonnet-4-6")
+    if not model.provider.is_configured():
+        print(f"[SKIP] {model.provider.name} provider is not configured")
         return
-
-    model = ai.Model("claude-sonnet-4-6", provider=provider)
 
     async with ai.stream(model, messages, tools=tools) as s:
         async for event in s:
