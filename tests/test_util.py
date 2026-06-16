@@ -465,8 +465,8 @@ async def test_merge_restarts_restartable_iterable() -> None:
 
     result = await _collect(util.merge(driver(), src))
     assert sorted(result) == ["d1", "d2", "d3", "r1", "r2", "r3", "r4"]
-    # __aiter__ called once initially + once after each driver yield.
-    assert src.iter_count == 4
+    # __aiter__ called once initially, and once more at the end.
+    assert src.iter_count == 5
 
 
 async def test_merge_does_not_restart_async_generator() -> None:
@@ -520,8 +520,8 @@ async def test_merge_restart_with_no_new_items_terminates() -> None:
 
     result = await _collect(util.merge(driver(), src))
     assert sorted(result) == ["d1", "d2", "only"]
-    # Still re-iterated once per driver yield, even though nothing new arrived.
-    assert src.iter_count == 3
+    # Still re-iterated once per driver yield, and once more at the end.
+    assert src.iter_count == 4
 
 
 async def test_merge_restart_with_multiple_restartables() -> None:
@@ -539,8 +539,8 @@ async def test_merge_restart_with_multiple_restartables() -> None:
 
     result = await _collect(util.merge(driver(), a, b))
     assert sorted(result) == ["a1", "a2", "b1", "b2", "d1"]
-    assert a.iter_count == 2
-    assert b.iter_count == 2
+    assert a.iter_count == 3
+    assert b.iter_count == 3
 
 
 async def test_merge_restart_only_after_other_iterable_yields() -> None:
@@ -549,10 +549,10 @@ async def test_merge_restart_only_after_other_iterable_yields() -> None:
     src.push("r1")
 
     # Single-iterable merge: src exhausts itself and merge ends without
-    # __aiter__ being called again.
+    # __aiter__ being called again, and once more at the end.
     result = await _collect(util.merge(src))
     assert result == ["r1"]
-    assert src.iter_count == 1
+    assert src.iter_count == 2
 
 
 async def test_merge_restart_when_yield_and_stop_collide() -> None:

@@ -8,9 +8,20 @@ import dataclasses
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterable, AsyncIterator
+    from collections.abc import (
+        AsyncIterable,
+        AsyncIterator,
+        Collection,
+        Generator,
+    )
 
-_EMPTY: Any = object()
+
+@dataclasses.dataclass
+class _Empty:
+    pass
+
+
+_EMPTY: Any = _Empty()
 
 
 @dataclasses.dataclass
@@ -46,6 +57,63 @@ class AsyncIterableQueue[T](asyncio.Queue[_Stop | T]):
 
     async def astop(self) -> None:
         await self.put(_STOP)
+
+
+class MultiWaiter[T]:
+    """Waiter object for waiting on multiple futures.
+
+    The advantages over using asyncio.wait are:
+      * New futures may be added while the object is already being waited on
+      * Completion order of the tasks is preserved.
+
+    A *potential* downside is:
+      * Batching of future completion is lost
+
+    But that is actually good for our use cases, since that introduces
+    a potential mismatch when using workflows/temporal.
+    """
+
+    def __init__(self, *tasks: asyncio.Future[T]) -> None:
+        self._queue: asyncio.Queue[asyncio.Future[T]] = asyncio.Queue(0)
+        self._tasks: dict[asyncio.Future[T], None] = {}
+
+        # We bind this to an attribute so that the bound method is
+        # always the same and can be passed to remove_done_callback.
+        self._callback = self._queue.put_nowait
+        self.add(*tasks)
+
+    def add(self, *tasks: asyncio.Future[T]) -> None:
+        for task in tasks:
+            self._tasks[task] = None
+            task.add_done_callback(self._callback)
+
+    def clear(self) -> None:
+        for task in self._tasks:
+            task.remove_done_callback(self._callback)
+        self._tasks.clear()
+
+    def tasks(self) -> Collection[asyncio.Future[T]]:
+        return self._tasks.keys()
+
+    async def wait(self) -> asyncio.Future[T]:
+        t = await self._queue.get()
+        self._tasks.pop(t, None)
+        return t
+
+    def __await__(self) -> Generator[Any, Any, asyncio.Future[T]]:
+        return self.wait().__await__()
+
+    async def __aenter__(self) -> MultiWaiter[T]:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: Any | None,
+    ) -> bool:
+        self.clear()
+        return False
 
 
 @contextlib.asynccontextmanager
@@ -159,7 +227,11 @@ async def merge[T](
     # We use unwrap_generator_exit() to keep a GeneratorExit that gets
     # packaged in an ExceptionGroup from causing grief. But maybe we
     # ought to not use a TaskGroup?
-    async with unwrap_generator_exit(), asyncio.TaskGroup() as tg:
+    async with (
+        unwrap_generator_exit(),
+        asyncio.TaskGroup() as tg,
+        MultiWaiter[T]() as mw,
+    ):
         raw_aiters = [aiter(iter) for iter in aiterables]
         aiters = [decouple(iter, task_group=tg) for iter in raw_aiters]
         # We consider anything that doesn't __aiter__ to itself to be
@@ -173,37 +245,42 @@ async def merge[T](
         tasks: list[asyncio.Future[T] | None] = [
             tg.create_task(anext(iter, _EMPTY)) for iter in aiters
         ]
+        mw.add(*[t for t in tasks if t])
 
-        while any(tasks):
-            done, _ = await asyncio.wait(
-                [t for t in tasks if t],
-                return_when=asyncio.FIRST_COMPLETED,
-            )
+        top_fired = False
+        while mw.tasks():
+            t = await mw
 
-            fired = []
-            for t in done:
-                idx = tasks.index(t)
-                val = t.result()
-                if val is _EMPTY:
-                    tasks[idx] = None
-                else:
-                    # Fire off a new task for the relevant iterator
-                    fired.append(idx)
-                    iter = aiters[idx]
-                    tasks[idx] = tg.create_task(anext(iter, _EMPTY))
-                    yield val
+            idx = tasks.index(t)
+            val = t.result()
+            if val is _EMPTY:
+                tasks[idx] = None
+            else:
+                # Fire off a new task for the relevant iterator
+                top_fired = True
+                iter = aiters[idx]
+                tasks[idx] = nt = tg.create_task(anext(iter, _EMPTY))
+                mw.add(nt)
+                yield val
 
-            if restart and fired:
+            if restart and (
+                val is not _EMPTY or (not mw.tasks() and top_fired)
+            ):
+                if not mw.tasks():
+                    top_fired = False
                 # Also, we try *restarting* other stopped streams
                 # that may have more to do now.
+                #
                 # N.B: We do this *after* the values are yielded, so
-                # they've had a chance to trigger things, and we do it
-                # after *all* tasks have been handled, so that if a
-                # task *just* finished, we still restart it.
+                # they've had a chance to trigger things, and we also
+                # do it if we would otherwise terminate and we have
+                # seen any elements since the start or the last time
+                # we may have been exhausted.
                 for idx, (ok, otask) in enumerate(
                     zip(restartable, tasks, strict=True)
                 ):
-                    if ok and otask is None and idx not in fired:
+                    if ok and otask is None:
                         niter = decouple(aiterables[idx], task_group=tg)
                         aiters[idx] = niter
-                        tasks[idx] = tg.create_task(anext(niter, _EMPTY))
+                        tasks[idx] = nt = tg.create_task(anext(niter, _EMPTY))
+                        mw.add(nt)
