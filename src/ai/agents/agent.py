@@ -726,26 +726,19 @@ class _RestartableToolStream:
 
 class ToolRunner:
     def __init__(self) -> None:
-        # A future that gets signalled when we add a new tool, so that
-        # asyncio.wait gets woken up and cycles around in the loop to
-        # wait on the new thing as well.
-        # Also used when add_result is called, to signal that
-        self._sched_waiter: asyncio.Future[None] = (
-            asyncio.get_running_loop().create_future()
-        )
-        self._active: set[
-            asyncio.Future[events_.ToolCallResult] | asyncio.Future[None]
-        ] = set()
-
         self._new_results: list[events_.ToolCallResult] = []
         self._tool_results: list[events_.ToolCallResult] = []
         self._tg_base = asyncio.TaskGroup()
+        self._waiter: util.MultiWaiter[events_.ToolCallResult] = (
+            util.MultiWaiter()
+        )
 
     async def __aenter__(self) -> Self:
         self._tg = await self._tg_base.__aenter__()
         return self
 
     async def __aexit__(self, *args: Any) -> None:
+        self._waiter.clear()
         return await self._tg_base.__aexit__(*args)
 
     def events(self) -> _RestartableToolStream:
@@ -760,17 +753,13 @@ class ToolRunner:
         in custom logic (e.g. an approval hook await) and still ride the
         runner's merge-and-iterate flow.
         """
-        self._active.add(self._tg.create_task(tc()))
-        if not self._sched_waiter.done():
-            self._sched_waiter.set_result(None)
+        self._waiter.add(self._tg.create_task(tc()))
 
     def add_result(self, res: events_.ToolCallResult) -> None:
-        self._tool_results.append(res)
+        async def _feed() -> events_.ToolCallResult:
+            return res
 
-        # Also add to _new_results and signal sched_waiter to return them
-        self._new_results.append(res)
-        if not self._sched_waiter.done():
-            self._sched_waiter.set_result(None)
+        self._waiter.add(self._tg.create_task(_feed()))
 
     def get_tool_message(self) -> types.messages.Message | None:
         if self._tool_results:
@@ -780,34 +769,18 @@ class ToolRunner:
         return None
 
     async def _iterate(self) -> AsyncGenerator[events_.ToolCallResult]:
-        while self._active:
-            done, _ = await asyncio.wait(
-                [*self._active, self._sched_waiter],
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-            for t in done:
-                self._active.discard(t)
-                if t is self._sched_waiter:
-                    t.result()
+        while self._waiter.tasks():
+            t = await self._waiter
+            try:
+                res = t.result()
+            except asyncio.CancelledError:
+                # If a task got cancelled, that's fine.
+                # Need to catch it or the whole runner gets zapped.
+                continue
 
-                    new = self._new_results
-                    self._new_results = []
-                    for n in new:
-                        yield n
-                    self._sched_waiter = (
-                        asyncio.get_running_loop().create_future()
-                    )
-                else:
-                    try:
-                        res = t.result()
-                    except asyncio.CancelledError:
-                        # If a task got cancelled, that's fine.
-                        # Need to catch it or the whole runner gets zapped.
-                        continue
-
-                    assert res is not None
-                    self._tool_results.append(res)
-                    yield res
+            assert res is not None
+            self._tool_results.append(res)
+            yield res
 
 
 class Context(pydantic.BaseModel):
