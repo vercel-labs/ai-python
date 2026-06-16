@@ -7,8 +7,10 @@ Usage::
     model = ai.get_model("openai:gpt-5.4")
     model = ai.Model(
         "llama3",
-        provider_factory=ai.get_provider,
-        provider_args={"id": "openai", "base_url": "http://localhost:11434/v1"},
+        provider=ai.ProviderRef(
+            "openai",
+            base_url="http://localhost:11434/v1",
+        ),
     )
     ids = await ai.get_provider("openai").list_models()
 

@@ -12,7 +12,7 @@ async def main() -> None:
     # Example for local OpenAI-compatible servers like LM Studio.
     model = ai.Model(
         os.environ.get("LOCAL_OPENAI_MODEL", "local-model"),
-        provider_factory=lambda: ai.get_provider(
+        provider=ai.ProviderRef(
             "openai",
             base_url=os.environ.get(
                 "LOCAL_OPENAI_BASE_URL", "http://localhost:1234/v1"

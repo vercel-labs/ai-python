@@ -39,7 +39,7 @@ _ANTHROPIC_VERSION = "2023-06-01"
 
 
 class AnthropicCompatibleProvider(base.Provider[AnthropicSDKClient]):
-    """Callable provider for Anthropic-compatible APIs."""
+    """Provider for Anthropic-compatible APIs."""
 
     handles: ClassVar[tuple[str, ...]] = ("anthropic", "@ai-sdk/anthropic")
 

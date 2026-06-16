@@ -1,13 +1,9 @@
 """models — composable model layer.
 
-A :class:`Model` holds a *recipe* for its provider — a factory callable
-plus its arguments — instead of a live provider object.  The provider and
-its client are built lazily on first use.  When the factory is a named,
-module-level callable and the args are JSON-friendly (everything
-``get_model`` produces), the model serializes: ``model.model_dump()`` /
-``Model.model_validate()`` round-trip.  Any other callable (a lambda, a
-closure over live objects) works normally in-process, but ``model_dump``
-raises and ``model.serializable`` is ``False``.
+A :class:`Model` holds JSON-safe provider settings instead of a live
+provider object.  The provider and its client are built lazily on first
+use.  Models produced by ``get_model`` round-trip through
+``model.model_dump(mode="json")`` / ``Model.model_validate()``.
 
 Usage::
 
@@ -19,8 +15,10 @@ Usage::
     # custom provider configuration — JSON-friendly args
     model = ai.Model(
         "llama3",
-        provider_factory=ai.get_provider,
-        provider_args={"id": "openai", "base_url": "http://localhost:11434/v1"},
+        provider=ai.ProviderRef(
+            "openai",
+            base_url="http://localhost:11434/v1",
+        ),
     )
 
     # stream — auto-creates client from env vars
@@ -33,18 +31,6 @@ Usage::
     # models serialize and rebuild their provider on first use
     data = model.model_dump(mode="json")
     model = ai.Model.model_validate(data)
-
-    # anything non-serializable (clients, custom auth) lives inside a
-    # named module-level factory; its import path is what's serialized
-    def my_provider() -> ai.Provider:
-        return ai.get_provider("openai", client=shared_client)
-
-    model = ai.Model("gpt-5.4", provider_factory=my_provider)
-
-    # if the model never crosses a process boundary, any callable works —
-    # the model just isn't serializable (model_dump() raises)
-    model = ai.Model("gpt-5.4", provider_factory=lambda: provider)
-    assert model.serializable is False
 
     # list available models
     ids = await ai.get_provider("openai").list_models()
@@ -62,7 +48,7 @@ from .core.api import (
     probe,
     stream,
 )
-from .core.model import Model, get_model
+from .core.model import Model, ProtocolRef, ProviderRef, get_model
 from .core.params import (
     DEFAULT,
     GLOBAL,
@@ -118,9 +104,11 @@ __all__ = [
     "Model",
     "ModelProviderDefault",
     "OutputParams",
+    "ProtocolRef",
     "Provider",
     "ProviderProtocol",
     "ProviderRankingStrategy",
+    "ProviderRef",
     "ProviderServiceParams",
     "RandomSeed",
     "ReasoningParams",

@@ -9,26 +9,39 @@ import pytest
 import ai
 
 
-def probe_provider(
-    status_code: int = 200,
-    json_body: dict[str, Any] | None = None,
-    base_url: str = "https://openai.test/v1",
-) -> ai.Provider[Any]:
-    """OpenAI provider whose mock response is built from JSON args."""
+class _ProbeProviderRef(ai.ProviderRef):
+    status_code: int = 200
+    json_body: dict[str, Any] | None = None
 
-    def _handler(request: httpx.Request) -> httpx.Response:
-        body = json.dumps(json_body or {}).encode()
-        return httpx.Response(status_code, content=body)
-
-    return ai.get_provider(
-        "openai",
-        base_url=base_url,
-        api_key="sk-test-key",
-        client=httpx.AsyncClient(
+    def __init__(
+        self,
+        status_code: int = 200,
+        json_body: dict[str, Any] | None = None,
+        base_url: str = "https://openai.test/v1",
+    ) -> None:
+        super().__init__(
+            "openai",
+            status_code=status_code,
+            json_body=json_body,
             base_url=base_url,
-            transport=httpx.MockTransport(_handler),
-        ),
-    )
+        )
+
+    def build(self) -> ai.Provider[Any]:
+        def _handler(request: httpx.Request) -> httpx.Response:
+            _ = request
+            body = json.dumps(self.json_body or {}).encode()
+            return httpx.Response(self.status_code, content=body)
+
+        assert self.base_url is not None
+        return ai.get_provider(
+            "openai",
+            base_url=self.base_url,
+            api_key="sk-test-key",
+            client=httpx.AsyncClient(
+                base_url=self.base_url,
+                transport=httpx.MockTransport(_handler),
+            ),
+        )
 
 
 def _client_with_mock(
@@ -38,12 +51,7 @@ def _client_with_mock(
 ) -> ai.Model:
     return ai.Model(
         "gpt-5.4",
-        provider_factory=probe_provider,
-        provider_args={
-            "status_code": status_code,
-            "json_body": json_body,
-            "base_url": base_url,
-        },
+        provider_ref=_ProbeProviderRef(status_code, json_body, base_url),
     )
 
 

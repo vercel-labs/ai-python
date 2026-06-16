@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator, AsyncIterable, Sequence
+from collections.abc import AsyncGenerator, AsyncIterable, Mapping, Sequence
 from typing import Any, cast
 
 import pydantic
@@ -20,6 +20,8 @@ class MockProvider(models.Provider):
     Carries just enough state so that ``Model`` objects can be constructed.
     """
 
+    handles = ("mock",)
+
     def __init__(
         self,
         *,
@@ -34,6 +36,21 @@ class MockProvider(models.Provider):
         )
         self._stream_impl: Any | None = None
         self._generate_impl: Any | None = None
+
+    @classmethod
+    def from_provider_id(
+        cls,
+        known_id: str,
+        *,
+        base_url: str | None = None,
+        api_key: str | None = None,
+        headers: Mapping[str, str] | None = None,
+        env: Mapping[str, str] | None = None,
+        client: Any | None = None,
+        protocol: models.ProviderProtocol[Any] | None = None,
+    ) -> models.Provider[Any]:
+        _ = known_id, base_url, api_key, headers, env, client, protocol
+        return MOCK_PROVIDER
 
     async def list_models(self) -> list[str]:
         return []
@@ -99,15 +116,10 @@ class MockProvider(models.Provider):
 MOCK_PROVIDER = MockProvider()
 
 
-def mock_provider() -> MockProvider:
-    """Provider factory returning the shared mock provider."""
-    return MOCK_PROVIDER
-
-
 # A fixed Model used in tests.
 MOCK_MODEL: models.Model = models.Model(
     "mock-model",
-    provider_factory=mock_provider,
+    provider="mock",
 )
 
 

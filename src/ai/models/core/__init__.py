@@ -13,7 +13,7 @@ from .api import (
     probe,
     stream,
 )
-from .model import Model, get_model
+from .model import Model, ProtocolRef, ProviderRef, get_model
 from .params import (
     DEFAULT,
     GLOBAL,
@@ -69,8 +69,10 @@ __all__ = [
     "Model",
     "ModelProviderDefault",
     "OutputParams",
+    "ProtocolRef",
     "Provider",
     "ProviderRankingStrategy",
+    "ProviderRef",
     "ProviderServiceParams",
     "RandomSeed",
     "ReasoningParams",

@@ -12,27 +12,45 @@ from ai.providers.ai_gateway.client import errors
 _MODEL_ID = "anthropic/claude-opus-4-6"
 
 
-def probe_provider(
-    credits_status: int = 200,
-    config_status: int = 200,
-    config_body: dict[str, Any] | None = None,
-    api_key: str | None = "sk-test-key",
-) -> ai.Provider[Any]:
-    """Gateway provider whose mock responses are built from JSON args."""
-    credits_body = json.dumps({"balance": "10.00", "totalUsed": "5.00"})
-    config_bytes = json.dumps(config_body or {"models": []}).encode()
+class _ProbeProviderRef(ai.ProviderRef):
+    credits_status: int = 200
+    config_status: int = 200
+    config_body: dict[str, Any] | None = None
+    api_key: str | None = "sk-test-key"
 
-    def _handler(request: httpx.Request) -> httpx.Response:
-        if "/v1/credits" in str(request.url):
-            return httpx.Response(credits_status, content=credits_body.encode())
-        return httpx.Response(config_status, content=config_bytes)
+    def __init__(
+        self,
+        *,
+        credits_status: int = 200,
+        config_status: int = 200,
+        config_body: dict[str, Any] | None = None,
+        api_key: str | None = "sk-test-key",
+    ) -> None:
+        super().__init__(
+            "vercel",
+            credits_status=credits_status,
+            config_status=config_status,
+            config_body=config_body,
+            api_key=api_key,
+        )
 
-    return ai.get_provider(
-        "vercel",
-        base_url="https://gateway.test/v3/ai",
-        api_key=api_key,
-        client=httpx.AsyncClient(transport=httpx.MockTransport(_handler)),
-    )
+    def build(self) -> ai.Provider[Any]:
+        credits_body = json.dumps({"balance": "10.00", "totalUsed": "5.00"})
+        config_bytes = json.dumps(self.config_body or {"models": []}).encode()
+
+        def _handler(request: httpx.Request) -> httpx.Response:
+            if "/v1/credits" in str(request.url):
+                return httpx.Response(
+                    self.credits_status, content=credits_body.encode()
+                )
+            return httpx.Response(self.config_status, content=config_bytes)
+
+        return ai.get_provider(
+            "vercel",
+            base_url="https://gateway.test/v3/ai",
+            api_key=self.api_key,
+            client=httpx.AsyncClient(transport=httpx.MockTransport(_handler)),
+        )
 
 
 def _gateway_client(
@@ -44,13 +62,12 @@ def _gateway_client(
 ) -> ai.Model:
     return ai.Model(
         _MODEL_ID,
-        provider_factory=probe_provider,
-        provider_args={
-            "credits_status": credits_status,
-            "config_status": config_status,
-            "config_body": config_body,
-            "api_key": api_key,
-        },
+        provider_ref=_ProbeProviderRef(
+            credits_status=credits_status,
+            config_status=config_status,
+            config_body=config_body,
+            api_key=api_key,
+        ),
     )
 
 

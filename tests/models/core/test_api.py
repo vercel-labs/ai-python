@@ -33,6 +33,17 @@ def _provider_metadata_marker(
     return marker
 
 
+class _StaticProviderRef(models.ProviderRef):
+    _provider: models.Provider[Any] = pydantic.PrivateAttr()
+
+    def __init__(self, provider: models.Provider[Any]) -> None:
+        super().__init__("mock")
+        self._provider = provider
+
+    def build(self) -> models.Provider[Any]:
+        return self._provider
+
+
 def test_inference_request_params_with_provider_params() -> None:
     class GatewayParams:
         pass
@@ -271,7 +282,6 @@ async def test_stream_requires_model_messages_or_context() -> None:
             pass
 
 
-# Module-level so ``with_protocol`` can serialize a reference to it.
 class _StreamOverrideProtocol(models.ProviderProtocol[Any]):
     def stream(
         self,
@@ -296,9 +306,17 @@ class _StreamOverrideProtocol(models.ProviderProtocol[Any]):
         return _stream()
 
 
+class _StreamOverrideProtocolRef(models.ProtocolRef):
+    def __init__(self) -> None:
+        super().__init__("test.stream")
+
+    def build(self) -> models.ProviderProtocol[Any]:
+        return _StreamOverrideProtocol()
+
+
 async def test_stream_uses_model_protocol() -> None:
     async with models.stream(
-        MOCK_MODEL.with_protocol(_StreamOverrideProtocol),
+        MOCK_MODEL.with_protocol(_StreamOverrideProtocolRef()),
         [ai.user_message("Hi")],
     ) as stream:
         async for _ in stream:
@@ -308,10 +326,10 @@ async def test_stream_uses_model_protocol() -> None:
 
 
 async def test_generate_dispatches_to_provider() -> None:
-    # A provider class is itself a valid model factory.
-    model = models.Model("generate-model", provider_factory=MockProvider)
-    provider = model.provider
-    assert isinstance(provider, MockProvider)
+    provider = MockProvider()
+    model = models.Model(
+        "generate-model", provider_ref=_StaticProviderRef(provider)
+    )
     sentinel = messages_.Message(
         role="assistant",
         parts=[messages_.FilePart(data=b"\x89PNG", media_type="image/png")],
@@ -339,7 +357,6 @@ async def test_generate_dispatches_to_provider() -> None:
     assert result is sentinel
 
 
-# Module-level so ``with_protocol`` can serialize a reference to it.
 _GENERATED_IMAGE = messages_.Message(
     role="assistant",
     parts=[messages_.FilePart(data=b"\x89PNG", media_type="image/png")],
@@ -360,9 +377,17 @@ class _GenerateOverrideProtocol(models.ProviderProtocol[Any]):
         return _GENERATED_IMAGE
 
 
+class _GenerateOverrideProtocolRef(models.ProtocolRef):
+    def __init__(self) -> None:
+        super().__init__("test.generate")
+
+    def build(self) -> models.ProviderProtocol[Any]:
+        return _GenerateOverrideProtocol()
+
+
 async def test_generate_uses_model_protocol() -> None:
     result = await models.generate(
-        MOCK_MODEL.with_protocol(_GenerateOverrideProtocol),
+        MOCK_MODEL.with_protocol(_GenerateOverrideProtocolRef()),
         [ai.user_message("A cat")],
         models.ImageParams(n=1),
     )
@@ -380,12 +405,13 @@ class _CheckProvider(MockProvider):
 
 
 async def test_probe_delegates_to_model_provider() -> None:
-    model = models.Model("mock-model", provider_factory=_CheckProvider)
+    provider = _CheckProvider()
+    model = models.Model(
+        "mock-model", provider_ref=_StaticProviderRef(provider)
+    )
 
     await models.probe(model)
 
-    provider = model.provider
-    assert isinstance(provider, _CheckProvider)
     assert provider.checked_model is model
 
 

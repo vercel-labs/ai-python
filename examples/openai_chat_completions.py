@@ -3,7 +3,6 @@
 import asyncio
 
 import ai
-from ai.providers.openai import OpenAIChatCompletionsProtocol
 
 messages = [
     ai.system_message("Be concise."),
@@ -15,7 +14,7 @@ messages = [
 
 async def main() -> None:
     model = ai.get_model("openai:gpt-5.5").with_protocol(
-        OpenAIChatCompletionsProtocol
+        "openai.chat_completions"
     )
     if not model.provider.is_configured():
         print(f"[SKIP] {model.provider.name} provider is not configured")

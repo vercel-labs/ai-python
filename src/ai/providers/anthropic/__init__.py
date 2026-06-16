@@ -8,11 +8,10 @@ Usage::
     model = ai.get_model("anthropic:claude-sonnet-4-6")
     model = ai.Model(
         "claude-sonnet-4-6",
-        provider_factory=ai.get_provider,
-        provider_args={
-            "id": "anthropic",
-            "base_url": "https://anthropic.example.com",
-        },
+        provider=ai.ProviderRef(
+            "anthropic",
+            base_url="https://anthropic.example.com",
+        ),
     )
     ids = await ai.get_provider("anthropic").list_models()
 

@@ -6,11 +6,23 @@ import json
 from typing import Any
 
 import httpx
+import pydantic
 
 import ai
 from ai.types import messages
 
 _BASE_URL = "https://gw.test/v3/ai"
+
+
+class _GatewayProviderRef(ai.ProviderRef):
+    _provider: ai.Provider[Any] = pydantic.PrivateAttr()
+
+    def __init__(self, provider: ai.Provider[Any]) -> None:
+        super().__init__("vercel")
+        self._provider = provider
+
+    def build(self) -> ai.Provider[Any]:
+        return self._provider
 
 
 def sse(*events: dict[str, Any]) -> str:
@@ -26,9 +38,8 @@ def mock_model(
 ) -> ai.Model:
     """Create a Gateway model wired to a mock transport.
 
-    Per-test handlers are live objects, so the factory is a closure and
-    the model is deliberately not serializable (it never crosses a JSON
-    boundary in these tests; ``model_dump`` would raise).
+    Per-test handlers are live objects, so this uses a test-only provider
+    ref. It never crosses a JSON boundary in these tests.
     """
     provider = ai.get_provider(
         "vercel",
@@ -36,7 +47,7 @@ def mock_model(
         api_key=api_key,
         client=httpx.AsyncClient(transport=handler),
     )
-    return ai.Model(model_id, provider_factory=lambda: provider)
+    return ai.Model(model_id, provider_ref=_GatewayProviderRef(provider))
 
 
 mock_client = mock_model

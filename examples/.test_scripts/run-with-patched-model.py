@@ -20,7 +20,6 @@ Example:
 import argparse
 import runpy
 import sys
-from collections.abc import Callable
 from typing import Any, TypeVar, cast
 
 import ai
@@ -30,12 +29,9 @@ from ai.models.core import api as _api
 from ai.models.core import model as _model
 from ai.providers.anthropic import (
     AnthropicCompatibleProvider,
-    AnthropicMessagesProtocol,
 )
 from ai.providers.openai import (
-    OpenAIChatCompletionsProtocol,
     OpenAICompatibleProvider,
-    OpenAIResponsesProtocol,
 )
 
 PROTOCOLS = ("chat", "messages", "responses")
@@ -43,18 +39,16 @@ PROTOCOLS = ("chat", "messages", "responses")
 ModelT = TypeVar("ModelT", bound=ai.Model)
 
 
-def _protocol_factory(
-    name: str | None,
-) -> Callable[[], ai.ProviderProtocol[Any]] | None:
+def _protocol_ref(name: str | None) -> ai.ProtocolRef | None:
     if name is None:
         return None
 
     if name == "chat":
-        return OpenAIChatCompletionsProtocol
+        return ai.ProtocolRef("openai.chat_completions")
     if name == "messages":
-        return AnthropicMessagesProtocol
+        return ai.ProtocolRef("anthropic.messages")
     if name == "responses":
-        return OpenAIResponsesProtocol
+        return ai.ProtocolRef("openai.responses")
 
     raise ValueError(f"unsupported protocol: {name}")
 
@@ -82,7 +76,7 @@ def _parse_args() -> argparse.Namespace:
 def main() -> None:
     args = _parse_args()
 
-    protocol_factory = _protocol_factory(args.protocol)
+    protocol_ref = _protocol_ref(args.protocol)
 
     original_get_model = _model.get_model
     original_stream = _api.stream
@@ -90,29 +84,29 @@ def main() -> None:
 
     def selected_protocol_for_provider(
         provider: ai.Provider[Any],
-    ) -> Callable[[], ai.ProviderProtocol[Any]] | None:
-        if args.protocol is None or protocol_factory is None:
+    ) -> ai.ProtocolRef | None:
+        if args.protocol is None or protocol_ref is None:
             return None
         if args.protocol in ("chat", "responses") and isinstance(
             provider, OpenAICompatibleProvider
         ):
-            return protocol_factory
+            return protocol_ref
         if args.protocol == "messages" and isinstance(
             provider, AnthropicCompatibleProvider
         ):
-            return protocol_factory
+            return protocol_ref
         return None
 
     def selected_protocol_for_model(
         model: ai.Model,
-    ) -> Callable[[], ai.ProviderProtocol[Any]] | None:
+    ) -> ai.ProtocolRef | None:
         return selected_protocol_for_provider(model.provider)
 
     def with_selected_protocol(model: ModelT) -> ModelT:
-        factory = selected_protocol_for_model(model)
-        if factory is None:
+        selected = selected_protocol_for_model(model)
+        if selected is None:
             return model
-        return model.with_protocol(factory)
+        return model.with_protocol(selected)
 
     class PatchedContext:
         def __init__(self, context: Any) -> None:
@@ -173,8 +167,7 @@ def main() -> None:
             super().__init__(id, **kwargs)
             override = selected_protocol_for_provider(self.provider)
             if override is not None:
-                self.protocol_factory = override
-                self.protocol_args = {}
+                self.protocol_ref = override
 
     cast("Any", ai).get_model = patched_get_model
     cast("Any", models).get_model = patched_get_model
