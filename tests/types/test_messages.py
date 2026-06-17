@@ -6,6 +6,7 @@ import subprocess
 import sys
 from typing import Any
 
+import pydantic
 import pytest
 
 from ai.types import messages, usage
@@ -207,6 +208,62 @@ def test_tool_result_content_output_with_file_part_round_trip() -> None:
     assert text_part.text == "label"
     assert isinstance(file_part, messages.FilePart)
     assert file_part.media_type == "image/png"
+
+
+class _Widget(pydantic.BaseModel):
+    a: int
+    b: str
+
+
+def test_tool_result_dumps_non_special_pydantic_models() -> None:
+    """A returned pydantic model is stored as JSON-y data, never the model.
+
+    Only the special results (:class:`ContentOutput`, :class:`MessageBundle`)
+    stay typed; everything else is dumped so the in-memory shape matches what
+    survives a round-trip.
+    """
+    trp = messages.ToolResultPart(
+        tool_call_id="tc", tool_name="t", result=_Widget(a=1, b="hi")
+    )
+    assert trp.result == {"a": 1, "b": "hi"}
+    assert not isinstance(trp.result, pydantic.BaseModel)
+    assert trp.result_kind == "json"
+
+    # Models nested inside a container are dumped recursively.
+    nested = messages.ToolResultPart(
+        tool_call_id="tc",
+        tool_name="t",
+        result={"w": _Widget(a=2, b="x"), "n": [_Widget(a=3, b="y")]},
+    )
+    assert nested.result == {"w": {"a": 2, "b": "x"}, "n": [{"a": 3, "b": "y"}]}
+
+
+def test_tool_result_model_input_is_dumped() -> None:
+    """The model-facing value is dumped too, so the LLM never sees a model."""
+    trp = messages.ToolResultPart(tool_call_id="tc", tool_name="t")
+    trp.set_model_input(_Widget(a=7, b="z"))
+    assert trp.get_model_input() == {"a": 7, "b": "z"}
+
+
+def test_tool_result_special_values_kept_typed() -> None:
+    """ContentOutput / MessageBundle results are not dumped."""
+    co = messages.ContentOutput(value=[messages.TextPart(text="hi")])
+    trp = messages.ToolResultPart(
+        tool_call_id="tc", tool_name="t", result=co, result_kind="special"
+    )
+    assert isinstance(trp.result, messages.ContentOutput)
+
+
+def test_tool_result_rejects_unserializable_result() -> None:
+    """A non-JSON-able, non-special result is rejected, not stringified."""
+
+    class Weird:
+        pass
+
+    with pytest.raises(pydantic.ValidationError):
+        messages.ToolResultPart(
+            tool_call_id="tc", tool_name="t", result=Weird()
+        )
 
 
 def test_tool_result_plain_values_stored_raw() -> None:

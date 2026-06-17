@@ -128,6 +128,25 @@ async def test_tool_call_catches_errors() -> None:
     assert str(result.exception) == "boom"
 
 
+async def test_tool_call_unserializable_result_becomes_error() -> None:
+    """A tool returning a non-JSON-able value yields a tool error, not crash."""
+
+    @ai.tool
+    async def make_widget() -> object:
+        """Returns something that can't be serialized."""
+        return object()
+
+    part = ai.messages.ToolCallPart(
+        tool_call_id="tc-widget",
+        tool_name="make_widget",
+        tool_args="{}",
+    )
+    tc = ai.agents.BoundToolCall(part=part, tool=make_widget)
+    result = await tc()
+
+    assert result.results[0].is_error
+
+
 async def test_tool_call_unwraps_singleton_exceptiongroup() -> None:
     """When a tool's body raises an ExceptionGroup wrapping a single
     exception (typical when it runs an asyncio TaskGroup internally),
