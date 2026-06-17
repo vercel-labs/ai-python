@@ -139,7 +139,11 @@ _SPECIAL_TOOL_RESULT_ADAPTER: pydantic.TypeAdapter[SpecialToolResult] = (
 )
 
 
-_MODEL_INPUT_UNSET: Any = object()
+class _ModelInputUnset:
+    pass
+
+
+_MODEL_INPUT_UNSET: Any = _ModelInputUnset()
 
 # Coarse tag for the shape of ``ToolResultPart.result``.
 # ``"special"`` means a :class:`SpecialToolResult`; ``"error"`` flags
@@ -174,7 +178,7 @@ class ToolResultPart(pydantic.BaseModel):
     # again, though.
     model_input: Any = pydantic.Field(
         default_factory=lambda: _MODEL_INPUT_UNSET,
-        exclude_if=lambda v: v is _MODEL_INPUT_UNSET,
+        exclude_if=lambda v: isinstance(v, _ModelInputUnset),
         repr=False,
     )
 
