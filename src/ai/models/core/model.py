@@ -140,6 +140,17 @@ class Model(pydantic.BaseModel):
         """Whether this model can be serialized as durable JSON data."""
         return self._is_serializable
 
+    @pydantic.field_validator("provider_args", mode="after")
+    @classmethod
+    def _normalize_provider_args(
+        cls, provider_args: dict[str, Any]
+    ) -> dict[str, Any]:
+        return {
+            key: value
+            for key, value in provider_args.items()
+            if value is not None
+        }
+
     @property
     def provider(self) -> base.Provider[Any]:
         """Provider for this model, lazily rebuilt for durable models."""
@@ -178,16 +189,6 @@ class Model(pydantic.BaseModel):
             f"{self.provider_name}:{self.id}"
         )
         return None if model_info is None else model_info.provider_config
-
-    @pydantic.field_serializer("provider_args")
-    def _serialize_provider_args(
-        self, provider_args: dict[str, Any]
-    ) -> dict[str, Any]:
-        return {
-            key: value
-            for key, value in provider_args.items()
-            if value is not None
-        }
 
     @pydantic.model_serializer(mode="wrap")
     def _serialize_model(
