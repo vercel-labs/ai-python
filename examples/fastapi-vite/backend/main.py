@@ -17,6 +17,7 @@ import ai
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
+
 app = fastapi.FastAPI(
     title="py-ai-fastapi-chat",
     description="Chat demo using Python Vercel AI SDK",

@@ -5,12 +5,12 @@ Defines the callable :data:`ai_gateway` provider.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, ClassVar, Literal
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, Protocol, cast
 
 import pydantic
 
 from ... import errors as ai_errors
-from .. import base
+from .. import _optional, base
 from . import client as gateway_client
 from . import errors
 from . import protocol as protocol_module
@@ -31,6 +31,32 @@ if TYPE_CHECKING:
 
 _BASE_URL = "https://ai-gateway.vercel.sh/v3/ai"
 _API_KEY_ENV = "AI_GATEWAY_API_KEY"
+_VERCEL_ENV = "VERCEL"
+_OIDC_TOKEN_ENV = "VERCEL_OIDC_TOKEN"
+
+
+class _VercelOidc(Protocol):
+    def get_vercel_oidc_token(self) -> str: ...
+
+
+def _get_vercel_oidc_token() -> str:
+    try:
+        oidc = cast(
+            "_VercelOidc",
+            _optional.import_optional_sdk(
+                "vercel.oidc",
+                provider="AI Gateway OIDC",
+                extra="vercel",
+            ),
+        )
+    except ai_errors.InstallationError as exc:
+        raise ai_errors.InstallationError(
+            "AI Gateway OIDC authentication requires the optional `vercel` "
+            'package. Install it with `pip install "ai[vercel]"` or '
+            '`uv add "ai[vercel]"`, or set `AI_GATEWAY_API_KEY` to use '
+            "API key authentication."
+        ) from exc
+    return oidc.get_vercel_oidc_token()
 
 
 class GatewayProvider(base.Provider[gateway_client.GatewayClient]):
@@ -54,12 +80,17 @@ class GatewayProvider(base.Provider[gateway_client.GatewayClient]):
             self._set_client(
                 gateway_client.GatewayClient(
                     base_url=self.base_url,
-                    api_key=self.api_key,
                     headers=self.headers,
                     client=self._http_client,
                 )
             )
-        return super().client  # same return value, no None in the type
+        client = super().client
+        auth_token, auth_method = self._gateway_auth()
+        client.base_url = self.base_url
+        client.auth_token = auth_token
+        client.auth_method = auth_method
+        client.headers = dict(self.headers)
+        return client
 
     def default_protocol(
         self,
@@ -67,10 +98,30 @@ class GatewayProvider(base.Provider[gateway_client.GatewayClient]):
         """Return the default Gateway protocol."""
         return protocol_module.GatewayV3Protocol()
 
+    def _gateway_auth(
+        self,
+    ) -> tuple[str | None, gateway_client.AuthMethod | None]:
+        api_key = self.api_key
+        if api_key:
+            return api_key, "api-key"
+        if self._config_value(_VERCEL_ENV) == "1" or self._config_value(
+            _OIDC_TOKEN_ENV
+        ):
+            return _get_vercel_oidc_token(), "oidc"
+        return None, None
+
+    def is_configured(self) -> bool:
+        """Return ``True`` when Gateway auth can be attempted."""
+        return (
+            bool(self.api_key)
+            or self._config_value(_VERCEL_ENV) == "1"
+            or bool(self._config_value(_OIDC_TOKEN_ENV))
+        )
+
     async def aclose(self) -> None:
         """Close the provider-owned Gateway client, if any."""
         if self._client is not None:
-            await self.client.aclose()
+            await self._client.aclose()
 
     def stream(
         self,

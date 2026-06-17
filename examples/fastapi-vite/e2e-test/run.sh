@@ -38,7 +38,7 @@ trap cleanup EXIT
 echo "Starting backend on :$BACKEND_PORT..."
 (
     cd "$ROOT/backend"
-    uv run --frozen --with-editable ~/src/py-ai/ fastapi dev main.py --port "$BACKEND_PORT"
+    uv run --frozen --with-editable "$ROOT/../.." fastapi dev main.py --port "$BACKEND_PORT"
 ) > "$LOGS/backend.log" 2>&1 &
 BACKEND_PID=$!
 
