@@ -1,3 +1,5 @@
+from typing import Any, cast
+
 import pytest
 
 import ai
@@ -9,11 +11,99 @@ from ai.providers.openai import (
     OpenAIResponsesProtocol,
 )
 
+from ..conftest import MockProvider
+
+
+def test_model_durable_json_roundtrips() -> None:
+    model = ai.Model(
+        "gpt-5",
+        provider_name="openai",
+        provider_args={
+            "api_key": None,
+            "base_url": None,
+            "headers": None,
+            "env": None,
+        },
+    )
+
+    dumped = model.model_dump(mode="json")
+
+    assert dumped == {
+        "id": "gpt-5",
+        "provider_name": "openai",
+        "provider_args": {},
+    }
+    assert model.is_serializable is True
+    assert ai.Model.model_validate(dumped).model_dump(mode="json") == dumped
+
+
+def test_model_durable_provider_args_serialize_without_none() -> None:
+    model = ai.Model(
+        "gpt-5",
+        provider_name="openai",
+        provider_args={
+            "api_key": None,
+            "base_url": "https://example.test/v1",
+            "headers": {"x-test": "yes"},
+        },
+    )
+
+    assert model.model_dump(mode="json") == {
+        "id": "gpt-5",
+        "provider_name": "openai",
+        "provider_args": {
+            "base_url": "https://example.test/v1",
+            "headers": {"x-test": "yes"},
+        },
+    }
+
+
+def test_model_live_provider_rejects_json_serialization() -> None:
+    model = ai.Model("mock-model", provider=MockProvider())
+
+    assert model.is_serializable is False
+    with pytest.raises(ConfigurationError, match="live provider/protocol"):
+        model.model_dump(mode="json")
+    with pytest.raises(ConfigurationError, match="live provider/protocol"):
+        model.model_dump_json()
+
+
+def test_model_rejects_invalid_constructor_pairs() -> None:
+    provider = MockProvider()
+    model = cast("Any", ai.Model)
+
+    with pytest.raises(ConfigurationError, match="exactly one"):
+        model("mock-model")
+    with pytest.raises(ConfigurationError, match="exactly one"):
+        model("mock-model", provider=provider, provider_name="mock")
+    with pytest.raises(ConfigurationError, match="provider_args"):
+        model("mock-model", provider=provider, provider_args={})
+    with pytest.raises(ConfigurationError, match="protocol objects"):
+        model(
+            "mock-model",
+            provider_name="mock",
+            protocol=OpenAIChatCompletionsProtocol(),
+        )
+
+
+def test_model_durable_provider_is_cached() -> None:
+    model = ai.Model("gpt-5", provider_name="openai")
+
+    provider = model.provider
+
+    assert model.provider is provider
+
 
 def test_get_resolves_provider_qualified_model_id() -> None:
     model = ai.get_model("openai:gpt-5")
 
     assert model.id == "gpt-5"
+    assert model.model_dump(mode="json") == {
+        "id": "gpt-5",
+        "provider_name": "openai",
+        "provider_args": {},
+    }
+    assert model.is_serializable is True
     assert model.provider.name == "openai"
     assert isinstance(model.provider.protocol, OpenAIResponsesProtocol)
 
@@ -161,8 +251,10 @@ def test_provider_from_id_rejects_unsupported_provider_package() -> None:
 
 
 def test_get_rejects_unsupported_provider_package() -> None:
+    model = models.get_model("google:gemini-2.5-pro")
+
     with pytest.raises(ai.errors.UnsupportedProviderError):
-        models.get_model("google:gemini-2.5-pro")
+        _ = model.provider
 
 
 def test_get_rejects_empty_model_id() -> None:
@@ -170,12 +262,11 @@ def test_get_rejects_empty_model_id() -> None:
         models.get_model("")
 
 
-def test_get_model_accepts_model_protocol_override() -> None:
+def test_get_model_rejects_model_protocol_override() -> None:
     protocol = OpenAIChatCompletionsProtocol()
-    model = models.get_model("openai:gpt-5", protocol=protocol)
 
-    assert model.protocol is protocol
-    assert isinstance(model.provider.protocol, OpenAIResponsesProtocol)
+    with pytest.raises(ConfigurationError, match="protocol objects"):
+        models.get_model("openai:gpt-5", protocol=protocol)
 
 
 def test_get_provider_accepts_provider_protocol_override() -> None:
