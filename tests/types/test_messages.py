@@ -288,12 +288,12 @@ def test_tool_result_file_part_base64_valid_after_round_trip() -> None:
 def test_tool_result_without_model_input_serializes_after_deep_copy() -> None:
     """A deep-copied ToolResultPart with no model_input still serializes.
 
-    ``model_input`` defaults to the ``_MODEL_INPUT_UNSET`` singleton and is
-    dropped from output via ``exclude_if=lambda v: v is _MODEL_INPUT_UNSET``,
-    an identity check.  ``model_copy(deep=True)`` rebuilds the sentinel into a
-    *new* instance, so the identity check fails, the field is no longer
-    excluded, and pydantic tries to serialize the bare sentinel.  Client apps
-    that deep-copy messages hit this on serialize.
+    ``model_input`` defaults to the ``_MODEL_INPUT_UNSET`` singleton, and
+    the sentinel checks (``exclude_if``, ``has_model_input``,
+    ``get_model_input``) test for it by type.  ``model_copy(deep=True)``
+    rebuilds the sentinel into a *new* instance: an identity (``is``) check
+    would miss it, leave the field un-excluded, and make pydantic choke on
+    the bare sentinel.  Client apps that deep-copy messages hit this.
     """
     msg = messages.Message(
         role="tool",
@@ -308,6 +308,13 @@ def test_tool_result_without_model_input_serializes_after_deep_copy() -> None:
     assert not part.has_model_input
 
     cloned = msg.model_copy(deep=True)
+
+    # The clone's sentinel is a fresh instance; the type-based checks must
+    # still treat it as unset.
+    cpart = cloned.parts[0]
+    assert isinstance(cpart, messages.ToolResultPart)
+    assert not cpart.has_model_input
+    assert cpart.get_model_input() == {"ok": 1}
 
     j = cloned.model_dump_json()
     restored = messages.Message.model_validate_json(j)

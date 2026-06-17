@@ -225,7 +225,7 @@ class ToolResultPart(pydantic.BaseModel):
 
     def get_model_input(self) -> Any:
         """Return the value the LLM should see, falling back to ``result``."""
-        if self.model_input is _MODEL_INPUT_UNSET:
+        if isinstance(self.model_input, _ModelInputUnset):
             return self.result
         return self.model_input
 
@@ -236,7 +236,7 @@ class ToolResultPart(pydantic.BaseModel):
     @property
     def has_model_input(self) -> bool:
         """Whether ``set_model_input`` has been called on this part."""
-        return self.model_input is not _MODEL_INPUT_UNSET
+        return not isinstance(self.model_input, _ModelInputUnset)
 
 
 class ToolCallPart(pydantic.BaseModel):
