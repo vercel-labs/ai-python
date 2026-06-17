@@ -32,6 +32,7 @@ dependencies = [
     "modelsdotdev==0.*",
     "pydantic>=2.12.5",
     "typing-extensions>=4.15.0",
+    "vercel>=0.5.9",
 ]
 
 [project.optional-dependencies]

@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, ClassVar
 
+from vercel import oidc
+
 from ... import errors as ai_errors
 from .. import base
 from . import client as gateway_client
@@ -30,6 +32,8 @@ if TYPE_CHECKING:
 
 _BASE_URL = "https://ai-gateway.vercel.sh/v3/ai"
 _API_KEY_ENV = "AI_GATEWAY_API_KEY"
+_VERCEL_ENV = "VERCEL"
+_OIDC_TOKEN_ENV = "VERCEL_OIDC_TOKEN"
 
 
 class GatewayProvider(base.Provider[gateway_client.GatewayClient]):
@@ -59,7 +63,6 @@ class GatewayProvider(base.Provider[gateway_client.GatewayClient]):
         self._set_client(
             gateway_client.GatewayClient(
                 base_url=self.base_url,
-                api_key=self.api_key,
                 headers=self.headers,
                 client=client,
             )
@@ -68,14 +71,36 @@ class GatewayProvider(base.Provider[gateway_client.GatewayClient]):
     @property
     def client(self) -> gateway_client.GatewayClient:
         client = super().client
+        auth_token, auth_method = self._gateway_auth()
         client.base_url = self.base_url
-        client.api_key = self.api_key
+        client.auth_token = auth_token
+        client.auth_method = auth_method
         client.headers = self.headers
         return client
 
+    def _gateway_auth(
+        self,
+    ) -> tuple[str | None, gateway_client.AuthMethod | None]:
+        api_key = self.api_key
+        if api_key:
+            return api_key, "api-key"
+        if self._config_value(_VERCEL_ENV) == "1" or self._config_value(
+            _OIDC_TOKEN_ENV
+        ):
+            return oidc.get_vercel_oidc_token(), "oidc"
+        return None, None
+
+    def is_configured(self) -> bool:
+        """Return ``True`` when Gateway auth can be attempted."""
+        return (
+            bool(self.api_key)
+            or self._config_value(_VERCEL_ENV) == "1"
+            or bool(self._config_value(_OIDC_TOKEN_ENV))
+        )
+
     async def aclose(self) -> None:
         """Close the provider-owned Gateway client, if any."""
-        await self.client.aclose()
+        await super().client.aclose()
 
     def stream(
         self,
