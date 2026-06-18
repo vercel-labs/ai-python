@@ -21,9 +21,9 @@ class Model(pydantic.BaseModel):
     """
 
     id: str
-    provider: pydantic.SerializeAsAny[base.Provider[Any]]
-    protocol: pydantic.SerializeAsAny[base.ProviderProtocol[Any] | None] = (
-        pydantic.Field(default=None, exclude_if=lambda v: v is None)
+    provider: base.Provider[Any]
+    protocol: base.ProviderProtocol[Any] | None = pydantic.Field(
+        default=None, exclude_if=lambda v: v is None
     )
 
     def __init__(self, id: str | None = None, **data: Any) -> None:

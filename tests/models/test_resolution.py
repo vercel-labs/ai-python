@@ -253,29 +253,36 @@ def test_model_json_roundtrip_supports_registered_custom_provider() -> None:
         protocol_class_id: Literal["test-custom-protocol"] = (
             "test-custom-protocol"
         )
+        mode: str
 
     class CustomProvider(models.Provider[Any]):
         provider_class_id: Literal["test-custom-provider"] = (
             "test-custom-provider"
         )
+        region: str
 
         def default_protocol(self) -> models.ProviderProtocol[Any]:
-            return CustomProtocol()
+            return CustomProtocol(mode="default")
 
     model = ai.Model(
         "custom-model",
         provider=CustomProvider(
             name="custom",
             default_base_url="https://custom.example.com",
+            protocol_override=CustomProtocol(mode="provider"),
+            region="test-region",
         ),
-        protocol=CustomProtocol(),
+        protocol=CustomProtocol(mode="model"),
     )
 
     restored = ai.Model.model_validate_json(model.model_dump_json())
 
     assert isinstance(restored.provider, CustomProvider)
+    assert restored.provider.region == "test-region"
     assert isinstance(restored.provider.protocol, CustomProtocol)
+    assert restored.provider.protocol.mode == "provider"
     assert isinstance(restored.protocol, CustomProtocol)
+    assert restored.protocol.mode == "model"
 
 
 def test_model_json_roundtrip_rejects_provider_without_class_id() -> None:

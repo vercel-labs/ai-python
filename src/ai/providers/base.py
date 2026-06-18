@@ -64,7 +64,10 @@ class ProviderProtocol(pydantic.BaseModel, Generic[ClientT]):
 
     protocol_class_id: str  # used to restore the concrete protocol class
 
-    model_config = pydantic.ConfigDict(frozen=True)
+    model_config = pydantic.ConfigDict(
+        frozen=True,
+        polymorphic_serialization=True,
+    )
 
     def __init__(self, **data: Any) -> None:
         if _generic_origin(type(self)) is ProviderProtocol:
@@ -143,15 +146,11 @@ class ProviderProtocol(pydantic.BaseModel, Generic[ClientT]):
 
 
 class Provider(pydantic.BaseModel, Generic[ClientT]):
-    """Serializable provider configuration and base runtime interface.
+    """Base class for model providers.
 
-    A provider carries provider-specific configuration: API endpoint,
-    authentication, headers, environment overrides, and protocol selection.
-    Model objects hold metadata plus a back-reference to their provider.
-
-    Concrete provider subclasses add runtime behavior such as client creation,
-    model listing, probing, generation, and streaming. Direct ``Provider(...)``
-    construction is not allowed; define a subclass for custom providers.
+    A provider carries provider-specific configuration and a shared upstream
+    client: API endpoint, authentication, and model enumeration. Model objects
+    hold metadata plus a back-reference to their provider.
     """
 
     handles: ClassVar[tuple[str, ...]] = ()
@@ -159,8 +158,8 @@ class Provider(pydantic.BaseModel, Generic[ClientT]):
     provider_class_id: str  # used to restore the concrete provider class.
     name: str  # models.dev identity
     default_base_url: str
-    protocol_override: pydantic.SerializeAsAny[ProviderProtocol[Any] | None] = (
-        pydantic.Field(default=None, exclude_if=lambda v: v is None)
+    protocol_override: ProviderProtocol[Any] | None = pydantic.Field(
+        default=None, exclude_if=lambda v: v is None
     )
     api_key_value: str | None = pydantic.Field(
         default=None, exclude_if=lambda v: v is None
@@ -176,6 +175,7 @@ class Provider(pydantic.BaseModel, Generic[ClientT]):
     model_config = pydantic.ConfigDict(
         extra="allow",
         populate_by_name=True,
+        polymorphic_serialization=True,
     )
 
     def __init__(self, **data: Any) -> None:
