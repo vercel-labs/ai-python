@@ -62,13 +62,15 @@ async def test_custom_anthropic_version_header() -> None:
     provider = AnthropicCompatibleProvider(
         name="custom-anthropic",
         default_base_url="https://anthropic.test",
-        api_key="sk-test-key",
+        api_key_value="sk-test-key",
         anthropic_version="2024-01-01",
         headers={"X-Custom-Header": "example"},
-        client=httpx.AsyncClient(
+    )
+    provider._set_runtime_client(
+        httpx.AsyncClient(
             base_url="https://anthropic.test",
             transport=httpx.MockTransport(_handler),
-        ),
+        )
     )
 
     model = ai.Model("custom-model", provider=provider)

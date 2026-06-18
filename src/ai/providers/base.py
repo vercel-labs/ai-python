@@ -35,45 +35,52 @@ def _generic_origin(cls: type[Any]) -> type[Any]:
     )
 
 
-def _kind_default(cls: type[pydantic.BaseModel]) -> str | None:
-    # read the default value of kind
-    field = cls.model_fields.get("kind")
-    if field is None or not isinstance(field.default, str):
+def _class_id_default(
+    cls: type[pydantic.BaseModel],
+    field_name: str,
+) -> str | None:
+    if field_name not in getattr(cls, "__annotations__", {}):
         return None
-    if field.default == "custom":
+    field = cls.model_fields.get(field_name)
+    if field is None or not isinstance(field.default, str):
         return None
     return field.default
 
 
-def _register_kind[T](
+def _register_class_id[T](
     registry: dict[str, type[T]],
-    kind: str,
+    class_id: str,
     cls: type[T],
     label: str,
 ) -> None:
-    existing = registry.get(kind)
+    existing = registry.get(class_id)
     if existing is not None and existing is not cls:
-        raise RuntimeError(f"duplicate {label} kind: {kind!r}")
-    registry[kind] = cls
+        raise RuntimeError(f"duplicate {label} class id: {class_id!r}")
+    registry[class_id] = cls
 
 
 class ProviderProtocol(pydantic.BaseModel, Generic[ClientT]):
     """Interface implemented by provider wire protocols."""
 
-    kind: str = "custom"
+    protocol_class_id: str  # used to restore the concrete protocol class
 
     model_config = pydantic.ConfigDict(frozen=True)
+
+    def __init__(self, **data: Any) -> None:
+        if _generic_origin(type(self)) is ProviderProtocol:
+            raise TypeError("ProviderProtocol must be subclassed")
+        super().__init__(**data)
 
     @classmethod
     def __pydantic_init_subclass__(cls, **kwargs: Any) -> None:  # noqa: PLW3201
         super().__pydantic_init_subclass__(**kwargs)
         if _generic_origin(cls) is not cls:
             return
-        kind = _kind_default(cls)
-        if kind is not None:
-            _register_kind(
+        protocol_class_id = _class_id_default(cls, "protocol_class_id")
+        if protocol_class_id is not None:
+            _register_class_id(
                 _PROTOCOL_REGISTRY,
-                kind,
+                protocol_class_id,
                 cls,
                 "provider protocol",
             )
@@ -92,12 +99,16 @@ class ProviderProtocol(pydantic.BaseModel, Generic[ClientT]):
         if not isinstance(value, Mapping):
             return handler(value)
 
-        kind = value.get("kind")
-        if not isinstance(kind, str):
-            raise ValueError("provider protocol data must include kind")
-        protocol_type = _PROTOCOL_REGISTRY.get(kind)
+        protocol_class_id = value.get("protocol_class_id")
+        if not isinstance(protocol_class_id, str):
+            raise ValueError(
+                "provider protocol data must include protocol_class_id"
+            )
+        protocol_type = _PROTOCOL_REGISTRY.get(protocol_class_id)
         if protocol_type is None:
-            raise ValueError(f"unknown provider protocol kind: {kind!r}")
+            raise ValueError(
+                f"unknown provider protocol_class_id: {protocol_class_id!r}"
+            )
         return protocol_type.model_validate(value)
 
     def stream(
@@ -132,35 +143,27 @@ class ProviderProtocol(pydantic.BaseModel, Generic[ClientT]):
 
 
 class Provider(pydantic.BaseModel, Generic[ClientT]):
-    """Base class for model providers.
+    """Serializable provider configuration and base runtime interface.
 
-    A provider carries provider-specific configuration and a shared upstream
-    client: API endpoint, authentication, and model enumeration. Model objects
-    hold metadata plus a back-reference to their provider.
+    A provider carries provider-specific configuration: API endpoint,
+    authentication, headers, environment overrides, and protocol selection.
+    Model objects hold metadata plus a back-reference to their provider.
+
+    Concrete provider subclasses add runtime behavior such as client creation,
+    model listing, probing, generation, and streaming. Direct ``Provider(...)``
+    construction is not allowed; define a subclass for custom providers.
     """
 
     handles: ClassVar[tuple[str, ...]] = ()
 
-    kind: str = "custom"
-    name: str
-    default_base_url: str = pydantic.Field(
-        validation_alias=pydantic.AliasChoices("default_base_url", "base_url")
-    )
+    provider_class_id: str  # used to restore the concrete provider class.
+    name: str  # models.dev identity
+    default_base_url: str
     protocol_override: pydantic.SerializeAsAny[ProviderProtocol[Any] | None] = (
-        pydantic.Field(
-            default=None,
-            validation_alias=pydantic.AliasChoices(
-                "protocol", "protocol_override"
-            ),
-            serialization_alias="protocol",
-            exclude_if=lambda v: v is None,
-        )
+        pydantic.Field(default=None, exclude_if=lambda v: v is None)
     )
     api_key_value: str | None = pydantic.Field(
-        default=None,
-        validation_alias=pydantic.AliasChoices("api_key", "api_key_value"),
-        serialization_alias="api_key",
-        exclude_if=lambda v: v is None,
+        default=None, exclude_if=lambda v: v is None
     )
     api_key_env: str | None = None
     base_url_env: str | None = None
@@ -173,8 +176,12 @@ class Provider(pydantic.BaseModel, Generic[ClientT]):
     model_config = pydantic.ConfigDict(
         extra="allow",
         populate_by_name=True,
-        serialize_by_alias=True,
     )
+
+    def __init__(self, **data: Any) -> None:
+        if _generic_origin(type(self)) is Provider:
+            raise TypeError("Provider must be subclassed")
+        super().__init__(**data)
 
     @classmethod
     def __pydantic_init_subclass__(cls, **kwargs: Any) -> None:  # noqa: PLW3201
@@ -182,11 +189,11 @@ class Provider(pydantic.BaseModel, Generic[ClientT]):
         if _generic_origin(cls) is not cls:
             return
 
-        kind = _kind_default(cls)
-        if kind is not None:
-            _register_kind(
-                _PROVIDER_KIND_REGISTRY,
-                kind,
+        provider_class_id = _class_id_default(cls, "provider_class_id")
+        if provider_class_id is not None:
+            _register_class_id(
+                _PROVIDER_CLASS_REGISTRY,
+                provider_class_id,
                 cls,
                 "provider",
             )
@@ -196,13 +203,6 @@ class Provider(pydantic.BaseModel, Generic[ClientT]):
             if existing is not None and existing is not cls:
                 raise RuntimeError(f"duplicate provider handle: {handle!r}")
             _PROVIDER_REGISTRY[handle] = cls
-
-    def __init__(self, **data: Any) -> None:
-        if type(self) is Provider:
-            raise TypeError(
-                "Provider is a base class; implement a subclass instead"
-            )
-        super().__init__(**data)
 
     @pydantic.model_validator(mode="before")
     @classmethod
@@ -232,12 +232,14 @@ class Provider(pydantic.BaseModel, Generic[ClientT]):
         if not isinstance(value, Mapping):
             return handler(value)
 
-        kind = value.get("kind")
-        if not isinstance(kind, str):
-            raise ValueError("provider data must include kind")
-        provider_type = _PROVIDER_KIND_REGISTRY.get(kind)
+        provider_class_id = value.get("provider_class_id")
+        if not isinstance(provider_class_id, str):
+            raise ValueError("provider data must include provider_class_id")
+        provider_type = _PROVIDER_CLASS_REGISTRY.get(provider_class_id)
         if provider_type is None:
-            raise ValueError(f"unknown provider kind: {kind!r}")
+            raise ValueError(
+                f"unknown provider_class_id: {provider_class_id!r}"
+            )
         return provider_type.model_validate(value)
 
     @property
@@ -420,7 +422,7 @@ class Provider(pydantic.BaseModel, Generic[ClientT]):
 
 
 _PROVIDER_REGISTRY: dict[str, type[Provider[Any]]] = {}
-_PROVIDER_KIND_REGISTRY: dict[str, type[Provider[Any]]] = {}
+_PROVIDER_CLASS_REGISTRY: dict[str, type[Provider[Any]]] = {}
 _PROTOCOL_REGISTRY: dict[str, type[ProviderProtocol[Any]]] = {}
 
 

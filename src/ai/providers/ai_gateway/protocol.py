@@ -1179,7 +1179,7 @@ async def generate(
 class GatewayV3Protocol(base.ProviderProtocol[gateway_client.GatewayClient]):
     """AI Gateway v3 wire protocol."""
 
-    kind: Literal["gateway_v3"] = "gateway_v3"
+    protocol_class_id: Literal["gateway_v3"] = "gateway_v3"
 
     def stream(
         self,

@@ -709,7 +709,9 @@ async def stream(
 class OpenAIChatCompletionsProtocol(base.ProviderProtocol[Any]):
     """OpenAI Chat Completions protocol."""
 
-    kind: Literal["openai_chat_completions"] = "openai_chat_completions"
+    protocol_class_id: Literal["openai_chat_completions"] = (
+        "openai_chat_completions"
+    )
 
     def stream(
         self,
@@ -1807,7 +1809,7 @@ async def _stream_responses(
 class OpenAIResponsesProtocol(base.ProviderProtocol[Any]):
     """OpenAI Responses API protocol."""
 
-    kind: Literal["openai_responses"] = "openai_responses"
+    protocol_class_id: Literal["openai_responses"] = "openai_responses"
 
     def stream(
         self,

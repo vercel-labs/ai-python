@@ -78,8 +78,13 @@ def test_provider_from_id_resolves_openai_compatible_provider() -> None:
 
 
 def test_provider_base_class_cannot_be_constructed_directly() -> None:
-    with pytest.raises(TypeError, match="base class"):
-        ai.Provider(name="custom", base_url="https://example.com")
+    with pytest.raises(TypeError, match="must be subclassed"):
+        ai.Provider(name="custom", default_base_url="https://example.com")
+
+
+def test_provider_protocol_base_class_cannot_be_constructed_directly() -> None:
+    with pytest.raises(TypeError, match="must be subclassed"):
+        ai.ProviderProtocol()
 
 
 def test_provider_from_id_uses_template_envs_for_base_url() -> None:
@@ -245,10 +250,14 @@ def test_model_json_roundtrip_preserves_provider_protocol_override() -> None:
 
 def test_model_json_roundtrip_supports_registered_custom_provider() -> None:
     class CustomProtocol(models.ProviderProtocol[Any]):
-        kind: Literal["test-custom-protocol"] = "test-custom-protocol"
+        protocol_class_id: Literal["test-custom-protocol"] = (
+            "test-custom-protocol"
+        )
 
     class CustomProvider(models.Provider[Any]):
-        kind: Literal["test-custom-provider"] = "test-custom-provider"
+        provider_class_id: Literal["test-custom-provider"] = (
+            "test-custom-provider"
+        )
 
         def default_protocol(self) -> models.ProviderProtocol[Any]:
             return CustomProtocol()
@@ -269,8 +278,11 @@ def test_model_json_roundtrip_supports_registered_custom_provider() -> None:
     assert isinstance(restored.protocol, CustomProtocol)
 
 
-def test_model_json_roundtrip_rejects_provider_without_kind() -> None:
-    with pytest.raises(pydantic.ValidationError, match="provider data must"):
+def test_model_json_roundtrip_rejects_provider_without_class_id() -> None:
+    with pytest.raises(
+        pydantic.ValidationError,
+        match="provider data must include provider_class_id",
+    ):
         ai.Model.model_validate(
             {
                 "id": "custom-model",
@@ -282,13 +294,16 @@ def test_model_json_roundtrip_rejects_provider_without_kind() -> None:
         )
 
 
-def test_model_json_roundtrip_rejects_unknown_provider_kind() -> None:
-    with pytest.raises(pydantic.ValidationError, match="unknown provider kind"):
+def test_model_json_roundtrip_rejects_unknown_provider_class_id() -> None:
+    with pytest.raises(
+        pydantic.ValidationError,
+        match="unknown provider_class_id",
+    ):
         ai.Model.model_validate(
             {
                 "id": "custom-model",
                 "provider": {
-                    "kind": "missing-provider",
+                    "provider_class_id": "missing-provider",
                     "name": "custom",
                     "default_base_url": "https://custom.example.com",
                 },
@@ -296,28 +311,43 @@ def test_model_json_roundtrip_rejects_unknown_provider_kind() -> None:
         )
 
 
-def test_model_json_roundtrip_rejects_unknown_protocol_kind() -> None:
+def test_model_json_roundtrip_rejects_unknown_protocol_class_id() -> None:
     data = ai.get_model("openai:gpt-5").model_dump()
-    data["protocol"] = {"kind": "missing-protocol"}
+    data["protocol"] = {"protocol_class_id": "missing-protocol"}
 
     with pytest.raises(
         pydantic.ValidationError,
-        match="unknown provider protocol kind",
+        match="unknown provider protocol_class_id",
     ):
         ai.Model.model_validate(data)
 
 
-def test_model_json_roundtrip_rejects_unknown_provider_protocol_kind() -> None:
+def test_model_json_roundtrip_rejects_protocol_without_class_id() -> None:
+    data = ai.get_model("openai:gpt-5").model_dump()
+    data["protocol"] = {}
+
+    with pytest.raises(
+        pydantic.ValidationError,
+        match="provider protocol data must include protocol_class_id",
+    ):
+        ai.Model.model_validate(data)
+
+
+def test_model_json_roundtrip_rejects_unknown_provider_protocol_class_id() -> (
+    None
+):
     provider = ai.get_provider(
         "openai",
         protocol=OpenAIChatCompletionsProtocol(),
     )
     data = ai.Model("gpt-5", provider=provider).model_dump()
     assert isinstance(data["provider"], dict)
-    data["provider"]["protocol"] = {"kind": "missing-protocol"}
+    data["provider"]["protocol_override"] = {
+        "protocol_class_id": "missing-protocol"
+    }
 
     with pytest.raises(
         pydantic.ValidationError,
-        match="unknown provider protocol kind",
+        match="unknown provider protocol_class_id",
     ):
         ai.Model.model_validate(data)

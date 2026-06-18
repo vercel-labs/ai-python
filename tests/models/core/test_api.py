@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator, Sequence
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import pydantic
 import pytest
@@ -286,6 +286,10 @@ async def test_stream_requires_model_messages_or_context() -> None:
 
 async def test_stream_uses_model_protocol() -> None:
     class OverrideProtocol(models.ProviderProtocol[Any]):
+        protocol_class_id: Literal["test-override-stream-protocol"] = (
+            "test-override-stream-protocol"
+        )
+
         def stream(
             self,
             client: Any,
@@ -358,6 +362,10 @@ async def test_generate_uses_model_protocol() -> None:
     )
 
     class OverrideProtocol(models.ProviderProtocol[Any]):
+        protocol_class_id: Literal["test-override-generate-protocol"] = (
+            "test-override-generate-protocol"
+        )
+
         async def generate(
             self,
             client: Any,

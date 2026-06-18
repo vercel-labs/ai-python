@@ -889,7 +889,7 @@ async def stream(
 class AnthropicMessagesProtocol(base.ProviderProtocol[Any]):
     """Anthropic Messages API protocol."""
 
-    kind: Literal["anthropic_messages"] = "anthropic_messages"
+    protocol_class_id: Literal["anthropic_messages"] = "anthropic_messages"
 
     def stream(
         self,

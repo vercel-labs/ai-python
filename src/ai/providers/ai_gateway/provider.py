@@ -38,46 +38,14 @@ class GatewayProvider(base.Provider[gateway_client.GatewayClient]):
 
     handles: ClassVar[tuple[str, ...]] = ("vercel", "@ai-sdk/gateway")
 
-    kind: Literal["gateway"] = "gateway"
+    provider_class_id: Literal["gateway"] = "gateway"
+    name: Literal["ai-gateway"] = "ai-gateway"
+    default_base_url: str = _BASE_URL
+    api_key_env: str | None = _API_KEY_ENV
 
     _http_client: httpx.AsyncClient | None = pydantic.PrivateAttr(default=None)
 
-    def __init__(
-        self,
-        *,
-        api_key: str | None = None,
-        base_url: str = _BASE_URL,
-        headers: Mapping[str, str] | None = None,
-        env: Mapping[str, str] | None = None,
-        client: httpx.AsyncClient | None = None,
-        protocol: base.ProviderProtocol[Any] | None = None,
-        **data: Any,
-    ) -> None:
-        if data:
-            restore_data: dict[str, Any] = {
-                **data,
-                "headers": headers,
-                "env": env,
-            }
-            if "default_base_url" not in restore_data:
-                restore_data["default_base_url"] = base_url
-            if api_key is not None:
-                restore_data["api_key"] = api_key
-            if protocol is not None:
-                restore_data["protocol"] = protocol
-            super().__init__(**restore_data)
-            self._http_client = client
-            return
-
-        super().__init__(
-            name="ai-gateway",
-            default_base_url=base_url,
-            protocol=protocol,
-            api_key=api_key,
-            api_key_env=_API_KEY_ENV,
-            headers=headers,
-            env=env,
-        )
+    def _set_http_client(self, client: httpx.AsyncClient | None) -> None:
         self._http_client = client
 
     @property
@@ -148,14 +116,15 @@ class GatewayProvider(base.Provider[gateway_client.GatewayClient]):
         client: httpx.AsyncClient | None = None,
         protocol: base.ProviderProtocol[Any] | None = None,
     ) -> base.Provider[gateway_client.GatewayClient]:
-        return cls(
-            api_key=api_key,
-            base_url=base_url or _BASE_URL,
-            headers=headers,
-            env=env,
-            client=client,
-            protocol=protocol,
+        provider_instance = cls(
+            default_base_url=base_url or _BASE_URL,
+            protocol_override=protocol,
+            api_key_value=api_key,
+            headers=dict(headers or {}),
+            env=dict(env or {}),
         )
+        provider_instance._set_http_client(client)
+        return provider_instance
 
     @property
     def tools(self) -> ModuleType:
