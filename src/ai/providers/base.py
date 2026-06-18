@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import os
-from typing import TYPE_CHECKING, Any, ClassVar, Generic
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, Self, cast
 
+import pydantic
 from typing_extensions import (
     TypeVar,
 )
@@ -13,10 +15,9 @@ from .. import _modelsdev
 from ..errors import UnsupportedProviderError
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Iterable, Mapping, Sequence
+    from collections.abc import AsyncGenerator, Sequence
 
     import modelsdotdev
-    import pydantic
 
     from ..models.core import model as model_
     from ..models.core import params as params_
@@ -27,8 +28,77 @@ if TYPE_CHECKING:
 ClientT = TypeVar("ClientT", default=Any)
 
 
-class ProviderProtocol(Generic[ClientT]):
+def _generic_origin(cls: type[Any]) -> type[Any]:
+    # if this is a generic class, return the original class
+    return (
+        getattr(cls, "__pydantic_generic_metadata__", {}).get("origin") or cls
+    )
+
+
+def _kind_default(cls: type[pydantic.BaseModel]) -> str | None:
+    # read the default value of kind
+    field = cls.model_fields.get("kind")
+    if field is None or not isinstance(field.default, str):
+        return None
+    if field.default == "custom":
+        return None
+    return field.default
+
+
+def _register_kind[T](
+    registry: dict[str, type[T]],
+    kind: str,
+    cls: type[T],
+    label: str,
+) -> None:
+    existing = registry.get(kind)
+    if existing is not None and existing is not cls:
+        raise RuntimeError(f"duplicate {label} kind: {kind!r}")
+    registry[kind] = cls
+
+
+class ProviderProtocol(pydantic.BaseModel, Generic[ClientT]):
     """Interface implemented by provider wire protocols."""
+
+    kind: str = "custom"
+
+    model_config = pydantic.ConfigDict(frozen=True)
+
+    @classmethod
+    def __pydantic_init_subclass__(cls, **kwargs: Any) -> None:  # noqa: PLW3201
+        super().__pydantic_init_subclass__(**kwargs)
+        if _generic_origin(cls) is not cls:
+            return
+        kind = _kind_default(cls)
+        if kind is not None:
+            _register_kind(
+                _PROTOCOL_REGISTRY,
+                kind,
+                cls,
+                "provider protocol",
+            )
+
+    @pydantic.model_validator(mode="wrap")
+    @classmethod
+    def _load_registered_protocol(
+        cls,
+        value: Any,
+        handler: pydantic.ModelWrapValidatorHandler[Self],
+    ) -> Any:
+        if isinstance(value, ProviderProtocol):
+            return value
+        if _generic_origin(cls) is not ProviderProtocol:
+            return handler(value)
+        if not isinstance(value, Mapping):
+            return handler(value)
+
+        kind = value.get("kind")
+        if not isinstance(kind, str):
+            raise ValueError("provider protocol data must include kind")
+        protocol_type = _PROTOCOL_REGISTRY.get(kind)
+        if protocol_type is None:
+            raise ValueError(f"unknown provider protocol kind: {kind!r}")
+        return protocol_type.model_validate(value)
 
     def stream(
         self,
@@ -61,7 +131,7 @@ class ProviderProtocol(Generic[ClientT]):
         )
 
 
-class Provider(Generic[ClientT]):
+class Provider(pydantic.BaseModel, Generic[ClientT]):
     """Base class for model providers.
 
     A provider carries provider-specific configuration and a shared upstream
@@ -71,73 +141,120 @@ class Provider(Generic[ClientT]):
 
     handles: ClassVar[tuple[str, ...]] = ()
 
-    def __init_subclass__(cls, **kwargs: Any) -> None:
-        super().__init_subclass__(**kwargs)
+    kind: str = "custom"
+    name: str
+    default_base_url: str = pydantic.Field(
+        validation_alias=pydantic.AliasChoices("default_base_url", "base_url")
+    )
+    protocol_override: pydantic.SerializeAsAny[ProviderProtocol[Any] | None] = (
+        pydantic.Field(
+            default=None,
+            validation_alias=pydantic.AliasChoices(
+                "protocol", "protocol_override"
+            ),
+            serialization_alias="protocol",
+            exclude_if=lambda v: v is None,
+        )
+    )
+    api_key_value: str | None = pydantic.Field(
+        default=None,
+        validation_alias=pydantic.AliasChoices("api_key", "api_key_value"),
+        serialization_alias="api_key",
+        exclude_if=lambda v: v is None,
+    )
+    api_key_env: str | None = None
+    base_url_env: str | None = None
+    config_envs: tuple[str, ...] = ()
+    headers: dict[str, str] = pydantic.Field(default_factory=dict)
+    env: dict[str, str] = pydantic.Field(default_factory=dict)
+
+    _client: ClientT | None = pydantic.PrivateAttr(default=None)
+
+    model_config = pydantic.ConfigDict(
+        extra="allow",
+        populate_by_name=True,
+        serialize_by_alias=True,
+    )
+
+    @classmethod
+    def __pydantic_init_subclass__(cls, **kwargs: Any) -> None:  # noqa: PLW3201
+        super().__pydantic_init_subclass__(**kwargs)
+        if _generic_origin(cls) is not cls:
+            return
+
+        kind = _kind_default(cls)
+        if kind is not None:
+            _register_kind(
+                _PROVIDER_KIND_REGISTRY,
+                kind,
+                cls,
+                "provider",
+            )
+
         for handle in cls.handles:
             existing = _PROVIDER_REGISTRY.get(handle)
             if existing is not None and existing is not cls:
                 raise RuntimeError(f"duplicate provider handle: {handle!r}")
             _PROVIDER_REGISTRY[handle] = cls
 
-    def __init__(
-        self,
-        *,
-        name: str,
-        base_url: str,
-        protocol: ProviderProtocol[ClientT] | None = None,
-        api_key: str | None = None,
-        api_key_env: str | None = None,
-        base_url_env: str | None = None,
-        config_envs: Iterable[str] | None = None,
-        headers: Mapping[str, str] | None = None,
-        env: Mapping[str, str] | None = None,
-        client: ClientT | None = None,
-    ) -> None:
+    def __init__(self, **data: Any) -> None:
         if type(self) is Provider:
             raise TypeError(
                 "Provider is a base class; implement a subclass instead"
             )
-        self._name = name
-        self._base_url = base_url
-        self._protocol = protocol
-        self._api_key = api_key
-        self._api_key_env = api_key_env
-        self._base_url_env = base_url_env
-        self._config_envs = tuple(config_envs or ())
-        self._headers = dict(headers or {})
-        self._env = dict(env or {})
-        self._client = client
+        super().__init__(**data)
 
-    @property
-    def api_key_env(self) -> str | None:
-        """Env var name that holds the API key (e.g. ``"OPENAI_API_KEY"``)."""
-        return self._api_key_env
+    @pydantic.model_validator(mode="before")
+    @classmethod
+    def _normalize_config_data(cls, data: Any) -> Any:
+        if not isinstance(data, Mapping):
+            return data
+        data = dict(data)
+        if data.get("headers") is None:
+            data["headers"] = {}
+        if data.get("env") is None:
+            data["env"] = {}
+        if data.get("config_envs") is None:
+            data["config_envs"] = ()
+        return data
 
-    @property
-    def base_url_env(self) -> str | None:
-        """Env var name that can override the default base URL."""
-        return self._base_url_env
+    @pydantic.model_validator(mode="wrap")
+    @classmethod
+    def _load_registered_provider(
+        cls,
+        value: Any,
+        handler: pydantic.ModelWrapValidatorHandler[Self],
+    ) -> Any:
+        if isinstance(value, Provider):
+            return value
+        if _generic_origin(cls) is not Provider:
+            return handler(value)
+        if not isinstance(value, Mapping):
+            return handler(value)
 
-    @property
-    def default_base_url(self) -> str:
-        """Base URL configured on the provider before env overrides."""
-        return self._base_url
+        kind = value.get("kind")
+        if not isinstance(kind, str):
+            raise ValueError("provider data must include kind")
+        provider_type = _PROVIDER_KIND_REGISTRY.get(kind)
+        if provider_type is None:
+            raise ValueError(f"unknown provider kind: {kind!r}")
+        return provider_type.model_validate(value)
 
     @property
     def base_url(self) -> str:
         """Default base URL for the provider API."""
-        if self._base_url_env:
+        if self.base_url_env:
             base_url = (
-                self._env.get(self._base_url_env)
+                self.env.get(self.base_url_env)
                 or os.environ.get(
-                    self._base_url_env,
+                    self.base_url_env,
                 )
-                or self._base_url
+                or self.default_base_url
             )
         else:
-            base_url = self._base_url
-        for env in self._config_envs:
-            value = self._env.get(env) or os.environ.get(env)
+            base_url = self.default_base_url
+        for env in self.config_envs:
+            value = self.env.get(env) or os.environ.get(env)
             if value is not None:
                 base_url = base_url.replace(f"${{{env}}}", value)
                 base_url = base_url.replace(f"${env}", value)
@@ -146,11 +263,11 @@ class Provider(Generic[ClientT]):
     @property
     def api_key(self) -> str | None:
         """API key configured directly or via the provider's env var."""
-        if self._api_key is not None:
-            return self._api_key
+        if self.api_key_value is not None:
+            return self.api_key_value
         if self.api_key_env is None:
             return None
-        return self._env.get(self.api_key_env) or os.environ.get(
+        return self.env.get(self.api_key_env) or os.environ.get(
             self.api_key_env
         )
 
@@ -160,13 +277,8 @@ class Provider(Generic[ClientT]):
             return False
         return all(self._config_value(env) for env in self.config_envs)
 
-    @property
-    def headers(self) -> dict[str, str]:
-        """Custom headers sent with provider API requests."""
-        return dict(self._headers)
-
     def _config_value(self, env: str) -> str | None:
-        return self._env.get(env) or os.environ.get(env)
+        return self.env.get(env) or os.environ.get(env)
 
     @property
     def client(self) -> ClientT:
@@ -183,23 +295,15 @@ class Provider(Generic[ClientT]):
         return None
 
     @property
-    def config_envs(self) -> tuple[str, ...]:
-        """Additional env vars used to configure the provider client."""
-        return self._config_envs
-
-    @property
-    def name(self) -> str:
-        """Human-readable provider name (for repr, error messages)."""
-        return self._name
-
-    @property
     def protocol(self) -> ProviderProtocol[ClientT]:
         """Default wire protocol used by this provider."""
-        if self._protocol is None:
-            raise RuntimeError(
-                f"provider {self.name!r} does not have a protocol"
-            )
-        return self._protocol
+        if self.protocol_override is not None:
+            return cast("ProviderProtocol[ClientT]", self.protocol_override)
+        return self.default_protocol()
+
+    def default_protocol(self) -> ProviderProtocol[ClientT]:
+        """Return this provider's default wire protocol."""
+        raise RuntimeError(f"provider {self.name!r} does not have a protocol")
 
     async def list_models(self) -> list[str]:
         """List available model IDs from the provider API."""
@@ -316,6 +420,8 @@ class Provider(Generic[ClientT]):
 
 
 _PROVIDER_REGISTRY: dict[str, type[Provider[Any]]] = {}
+_PROVIDER_KIND_REGISTRY: dict[str, type[Provider[Any]]] = {}
+_PROTOCOL_REGISTRY: dict[str, type[ProviderProtocol[Any]]] = {}
 
 
 def get_provider(

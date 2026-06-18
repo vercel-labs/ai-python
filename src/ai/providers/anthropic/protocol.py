@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import base64
 import json
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 import pydantic
 
@@ -888,6 +888,8 @@ async def stream(
 
 class AnthropicMessagesProtocol(base.ProviderProtocol[Any]):
     """Anthropic Messages API protocol."""
+
+    kind: Literal["anthropic_messages"] = "anthropic_messages"
 
     def stream(
         self,

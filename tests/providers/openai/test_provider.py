@@ -168,8 +168,10 @@ def test_get_provider_raises_installation_error_when_openai_sdk_missing(
 
     monkeypatch.setattr(importlib, "import_module", _missing_openai)
 
+    provider = ai.get_provider("openai", api_key="sk-test")
+
     with pytest.raises(ai.InstallationError) as exc_info:
-        ai.get_provider("openai", api_key="sk-test")
+        _ = provider.client
 
     assert "could not import `openai`" in str(exc_info.value)
     assert "required to use the openai provider" in str(exc_info.value)
@@ -188,14 +190,16 @@ def test_installation_error_uses_modelsdev_provider_id(
 
     monkeypatch.setattr(importlib, "import_module", _missing_openai)
 
+    provider = ai.get_provider(
+        "cloudflare-workers-ai",
+        env={
+            "CLOUDFLARE_ACCOUNT_ID": "account-123",
+            "CLOUDFLARE_API_KEY": "sk-test",
+        },
+    )
+
     with pytest.raises(ai.InstallationError) as exc_info:
-        ai.get_provider(
-            "cloudflare-workers-ai",
-            env={
-                "CLOUDFLARE_ACCOUNT_ID": "account-123",
-                "CLOUDFLARE_API_KEY": "sk-test",
-            },
-        )
+        _ = provider.client
 
     assert "required to use the cloudflare-workers-ai provider" in str(
         exc_info.value

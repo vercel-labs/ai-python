@@ -57,6 +57,19 @@ def test_inference_request_params_with_provider_params() -> None:
     }
 
 
+def test_context_json_roundtrip_includes_model() -> None:
+    context = ai.Context(
+        model=ai.get_model("gateway:anthropic/claude-sonnet-4.6"),
+        messages=[ai.user_message("Hi")],
+        tools=[],
+    )
+
+    restored = ai.Context.model_validate_json(context.model_dump_json())
+
+    assert restored.model.id == "anthropic/claude-sonnet-4.6"
+    assert isinstance(restored.model.provider, ai.providers.GatewayProvider)
+
+
 async def test_stream_aggregates_registered_adapter_events() -> None:
     mock = mock_llm([[text_msg("Hello world")]])
 

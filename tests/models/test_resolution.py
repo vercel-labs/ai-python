@@ -1,3 +1,6 @@
+from typing import Any, Literal
+
+import pydantic
 import pytest
 
 import ai
@@ -183,3 +186,138 @@ def test_get_provider_accepts_provider_protocol_override() -> None:
     provider = ai.get_provider("openai", protocol=protocol)
 
     assert provider.protocol is protocol
+
+
+def test_model_json_roundtrip_restores_gateway_provider() -> None:
+    model = models.get_model("gateway:anthropic/claude-sonnet-4.6")
+
+    restored = ai.Model.model_validate_json(model.model_dump_json())
+
+    assert restored.id == "anthropic/claude-sonnet-4.6"
+    assert restored.provider.name == "ai-gateway"
+    assert isinstance(restored.provider, ai.providers.GatewayProvider)
+    assert isinstance(restored.provider.protocol, GatewayV3Protocol)
+
+
+def test_model_json_roundtrip_preserves_explicit_provider_config() -> None:
+    provider = ai.get_provider(
+        "openai",
+        base_url="https://custom.example.com/v1",
+        api_key="sk-custom",
+        headers={"X-Custom-Header": "example"},
+    )
+    model = ai.Model("custom-model", provider=provider)
+
+    restored = ai.Model.model_validate_json(model.model_dump_json())
+
+    assert isinstance(restored.provider, ai.providers.OpenAICompatibleProvider)
+    assert restored.provider.name == "openai"
+    assert restored.provider.default_base_url == "https://custom.example.com/v1"
+    assert restored.provider.base_url == "https://custom.example.com/v1"
+    assert restored.provider.api_key == "sk-custom"
+    assert restored.provider.headers == {"X-Custom-Header": "example"}
+
+
+def test_model_json_roundtrip_preserves_model_protocol_override() -> None:
+    model = models.get_model(
+        "openai:gpt-5",
+        protocol=OpenAIChatCompletionsProtocol(),
+    )
+
+    restored = ai.Model.model_validate_json(model.model_dump_json())
+
+    assert isinstance(restored.protocol, OpenAIChatCompletionsProtocol)
+    assert isinstance(restored.provider.protocol, OpenAIResponsesProtocol)
+
+
+def test_model_json_roundtrip_preserves_provider_protocol_override() -> None:
+    provider = ai.get_provider(
+        "openai",
+        protocol=OpenAIChatCompletionsProtocol(),
+    )
+    model = ai.Model("gpt-5", provider=provider)
+
+    restored = ai.Model.model_validate_json(model.model_dump_json())
+
+    assert isinstance(restored.provider.protocol, OpenAIChatCompletionsProtocol)
+    assert restored.protocol is None
+
+
+def test_model_json_roundtrip_supports_registered_custom_provider() -> None:
+    class CustomProtocol(models.ProviderProtocol[Any]):
+        kind: Literal["test-custom-protocol"] = "test-custom-protocol"
+
+    class CustomProvider(models.Provider[Any]):
+        kind: Literal["test-custom-provider"] = "test-custom-provider"
+
+        def default_protocol(self) -> models.ProviderProtocol[Any]:
+            return CustomProtocol()
+
+    model = ai.Model(
+        "custom-model",
+        provider=CustomProvider(
+            name="custom",
+            default_base_url="https://custom.example.com",
+        ),
+        protocol=CustomProtocol(),
+    )
+
+    restored = ai.Model.model_validate_json(model.model_dump_json())
+
+    assert isinstance(restored.provider, CustomProvider)
+    assert isinstance(restored.provider.protocol, CustomProtocol)
+    assert isinstance(restored.protocol, CustomProtocol)
+
+
+def test_model_json_roundtrip_rejects_provider_without_kind() -> None:
+    with pytest.raises(pydantic.ValidationError, match="provider data must"):
+        ai.Model.model_validate(
+            {
+                "id": "custom-model",
+                "provider": {
+                    "name": "custom",
+                    "default_base_url": "https://custom.example.com",
+                },
+            }
+        )
+
+
+def test_model_json_roundtrip_rejects_unknown_provider_kind() -> None:
+    with pytest.raises(pydantic.ValidationError, match="unknown provider kind"):
+        ai.Model.model_validate(
+            {
+                "id": "custom-model",
+                "provider": {
+                    "kind": "missing-provider",
+                    "name": "custom",
+                    "default_base_url": "https://custom.example.com",
+                },
+            }
+        )
+
+
+def test_model_json_roundtrip_rejects_unknown_protocol_kind() -> None:
+    data = ai.get_model("openai:gpt-5").model_dump()
+    data["protocol"] = {"kind": "missing-protocol"}
+
+    with pytest.raises(
+        pydantic.ValidationError,
+        match="unknown provider protocol kind",
+    ):
+        ai.Model.model_validate(data)
+
+
+def test_model_json_roundtrip_rejects_unknown_provider_protocol_kind() -> None:
+    provider = ai.get_provider(
+        "openai",
+        protocol=OpenAIChatCompletionsProtocol(),
+    )
+    data = ai.Model("gpt-5", provider=provider).model_dump()
+    assert isinstance(data["provider"], dict)
+    data["provider"]["protocol"] = {"kind": "missing-protocol"}
+
+    with pytest.raises(
+        pydantic.ValidationError,
+        match="unknown provider protocol kind",
+    ):
+        ai.Model.model_validate(data)
