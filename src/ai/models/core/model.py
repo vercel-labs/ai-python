@@ -30,10 +30,7 @@ class Model(pydantic.BaseModel):
         return f"Model(id={self.id!r}, provider={self.provider!r})"
 
     def __hash__(self) -> int:
-        protocol = (
-            None if self.protocol is None else self.protocol.model_dump_json()
-        )
-        return hash((self.id, self.provider.model_dump_json(), protocol))
+        return hash((self.id, self.provider, self.protocol))
 
     def with_protocol(self, protocol: base.ProviderProtocol[Any]) -> Self:
         return self.model_copy(update={"protocol": protocol})

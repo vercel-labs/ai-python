@@ -1,4 +1,4 @@
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import pydantic
 import pytest
@@ -85,6 +85,54 @@ def test_provider_base_class_cannot_be_constructed_directly() -> None:
 def test_provider_protocol_base_class_cannot_be_constructed_directly() -> None:
     with pytest.raises(TypeError, match="must be subclassed"):
         ai.ProviderProtocol()
+
+
+def test_provider_config_is_frozen() -> None:
+    provider = ai.get_provider(
+        "openai",
+        headers={"X-Test": "1"},
+        env={"OPENAI_API_KEY": "sk-test"},
+    )
+
+    field_name = "name"
+    with pytest.raises(pydantic.ValidationError, match="frozen_instance"):
+        setattr(provider, field_name, "other")
+
+    with pytest.raises(TypeError):
+        cast("dict[str, str]", provider.headers)["X-Test"] = "2"
+
+    with pytest.raises(TypeError):
+        cast("dict[str, str]", provider.env)["OPENAI_API_KEY"] = "sk-other"
+
+
+def test_provider_protocol_and_model_hashes_are_content_based() -> None:
+    class HashProtocol(models.ProviderProtocol[Any]):
+        protocol_class_id: Literal["test-hash-protocol"] = "test-hash-protocol"
+        settings: dict[str, str]
+
+    provider_a = ai.get_provider(
+        "openai",
+        api_key="sk-test",
+        headers={"A": "1", "B": "2"},
+    )
+    provider_b = ai.get_provider(
+        "openai",
+        api_key="sk-test",
+        headers={"B": "2", "A": "1"},
+    )
+    protocol_a = HashProtocol(settings={"A": "1", "B": "2"})
+    protocol_b = HashProtocol(settings={"B": "2", "A": "1"})
+
+    assert provider_a == provider_b
+    assert hash(provider_a) == hash(provider_b)
+    assert protocol_a == protocol_b
+    assert hash(protocol_a) == hash(protocol_b)
+    assert hash(ai.Model(id="gpt-5", provider=provider_a)) == hash(
+        ai.Model(id="gpt-5", provider=provider_b)
+    )
+    assert hash(
+        ai.Model(id="gpt-5", provider=provider_a, protocol=protocol_a)
+    ) == hash(ai.Model(id="gpt-5", provider=provider_b, protocol=protocol_b))
 
 
 def test_provider_from_id_uses_template_envs_for_base_url() -> None:

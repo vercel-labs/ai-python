@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Generic, Self, cast
 
 import pydantic
@@ -73,6 +75,11 @@ class ProviderProtocol(pydantic.BaseModel, Generic[ClientT]):
         if _generic_origin(type(self)) is ProviderProtocol:
             raise TypeError("ProviderProtocol must be subclassed")
         super().__init__(**data)
+
+    def __hash__(self) -> int:
+        data = self.model_dump(mode="json")
+        serialized = json.dumps(data, sort_keys=True, separators=(",", ":"))
+        return hash(serialized)
 
     @classmethod
     def __pydantic_init_subclass__(cls, **kwargs: Any) -> None:  # noqa: PLW3201
@@ -167,13 +174,14 @@ class Provider(pydantic.BaseModel, Generic[ClientT]):
     api_key_env: str | None = None
     base_url_env: str | None = None
     config_envs: tuple[str, ...] = ()
-    headers: dict[str, str] = pydantic.Field(default_factory=dict)
-    env: dict[str, str] = pydantic.Field(default_factory=dict)
+    headers: Mapping[str, str] = pydantic.Field(default_factory=dict)
+    env: Mapping[str, str] = pydantic.Field(default_factory=dict)
 
     _client: ClientT | None = pydantic.PrivateAttr(default=None)
 
     model_config = pydantic.ConfigDict(
         extra="allow",
+        frozen=True,
         populate_by_name=True,
         polymorphic_serialization=True,
     )
@@ -182,6 +190,11 @@ class Provider(pydantic.BaseModel, Generic[ClientT]):
         if _generic_origin(type(self)) is Provider:
             raise TypeError("Provider must be subclassed")
         super().__init__(**data)
+
+    def __hash__(self) -> int:
+        data = self.model_dump(mode="json")
+        serialized = json.dumps(data, sort_keys=True, separators=(",", ":"))
+        return hash(serialized)
 
     @classmethod
     def __pydantic_init_subclass__(cls, **kwargs: Any) -> None:  # noqa: PLW3201
@@ -217,6 +230,21 @@ class Provider(pydantic.BaseModel, Generic[ClientT]):
         if data.get("config_envs") is None:
             data["config_envs"] = ()
         return data
+
+    @pydantic.field_validator("headers", "env", mode="after")
+    @classmethod
+    def _freeze_config_mapping(
+        cls,
+        value: Mapping[str, str],
+    ) -> Mapping[str, str]:
+        return MappingProxyType(dict(value))
+
+    @pydantic.field_serializer("headers", "env")
+    def _serialize_config_mapping(
+        self,
+        value: Mapping[str, str],
+    ) -> dict[str, str]:
+        return dict(value)
 
     @pydantic.model_validator(mode="wrap")
     @classmethod

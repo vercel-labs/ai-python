@@ -388,12 +388,14 @@ async def test_generate_uses_model_protocol() -> None:
 
 
 class _CheckProvider(MockProvider):
-    def __init__(self) -> None:
-        super().__init__()
-        self.checked_model: models.Model | None = None
+    _checked_model: models.Model | None = pydantic.PrivateAttr(default=None)
+
+    @property
+    def checked_model(self) -> models.Model | None:
+        return self._checked_model
 
     async def probe(self, model: models.Model) -> None:
-        self.checked_model = model
+        self._checked_model = model
 
 
 async def test_probe_delegates_to_model_provider() -> None:

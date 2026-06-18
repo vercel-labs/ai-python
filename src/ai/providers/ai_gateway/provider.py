@@ -62,7 +62,7 @@ class GatewayProvider(base.Provider[gateway_client.GatewayClient]):
         client = super().client
         client.base_url = self.base_url
         client.api_key = self.api_key
-        client.headers = self.headers
+        client.headers = dict(self.headers)
         return client
 
     def default_protocol(
