@@ -14,6 +14,7 @@ if TYPE_CHECKING:
         Collection,
         Generator,
     )
+    from types import TracebackType
 
 
 @dataclasses.dataclass
@@ -116,25 +117,36 @@ class MultiWaiter[T]:
         return False
 
 
-@contextlib.asynccontextmanager
-async def unwrap_generator_exit() -> AsyncIterator[None]:
-    """Unwrap ``BaseExceptionGroup`` containing only ``GeneratorExit``.
+class TaskGroup(asyncio.TaskGroup):
+    """asyncio.TaskGroup that directly propagates GeneratorExit.
 
-    ``asyncio.TaskGroup``'s ``__aexit__`` wraps any body exception (including
-    ``GeneratorExit``) into a ``BaseExceptionGroup``. Inside an async
-    generator that means ``aclose()`` propagates an ``ExceptionGroup`` instead
-    of the bare ``GeneratorExit`` the protocol expects, and the aclose-task
-    ends up with an unretrieved exception. Wrapping the ``async with
-    TaskGroup(...)`` block in this manager unwraps the group back to a plain
-    ``GeneratorExit`` so the close path stays clean.
+    If the context body raises a GeneratorExit, we don't want to wrap
+    it in an ExceptionGroup because that will do the wrong thing when
+    it bubbles up.
+
+    So if a GeneratorExit is raised inside the context and that is the
+    *only* exception reported, then unwrap it and raise it by itself.
+
+    If there are multiple exceptions, keep them packaged so as to not
+    lose anything.
     """
-    try:
-        yield
-    except BaseExceptionGroup as eg:
-        matched, rest = eg.split(GeneratorExit)
-        if matched is not None and rest is None:
-            raise GeneratorExit from None
-        raise
+
+    async def __aexit__(
+        self,
+        et: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        try:
+            await super().__aexit__(et, exc, tb)
+        except BaseExceptionGroup as eg:
+            if (
+                isinstance(exc, GeneratorExit)
+                and len(eg.exceptions) == 1
+                and eg.exceptions[0] is exc
+            ):
+                raise exc from None
+            raise
 
 
 @contextlib.asynccontextmanager
@@ -224,12 +236,8 @@ async def merge[T](
     iterators (importantly, this means that async generators are not
     restarted).
     """
-    # We use unwrap_generator_exit() to keep a GeneratorExit that gets
-    # packaged in an ExceptionGroup from causing grief. But maybe we
-    # ought to not use a TaskGroup?
     async with (
-        unwrap_generator_exit(),
-        asyncio.TaskGroup() as tg,
+        TaskGroup() as tg,
         MultiWaiter[T]() as mw,
     ):
         raw_aiters = [aiter(iter) for iter in aiterables]

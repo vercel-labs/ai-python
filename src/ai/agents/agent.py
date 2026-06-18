@@ -728,7 +728,7 @@ class ToolRunner:
     def __init__(self) -> None:
         self._new_results: list[events_.ToolCallResult] = []
         self._tool_results: list[events_.ToolCallResult] = []
-        self._tg_base = asyncio.TaskGroup()
+        self._tg_base = util.TaskGroup()
         self._waiter: util.MultiWaiter[events_.ToolCallResult] = (
             util.MultiWaiter()
         )

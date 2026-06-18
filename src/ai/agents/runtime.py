@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import contextvars
 from typing import TYPE_CHECKING, Any
 
@@ -92,7 +91,7 @@ async def run(
 
             _runtime.reset(token)
 
-    async with asyncio.TaskGroup() as tg:
+    async with util.TaskGroup() as tg:
         tg.create_task(_stop_when_done(rt, _drain()))
 
         async for item in rt._event_queue:
