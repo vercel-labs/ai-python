@@ -83,6 +83,9 @@ class ProviderProtocol(pydantic.BaseModel, Generic[ClientT]):
 
     @classmethod
     def __pydantic_init_subclass__(cls, **kwargs: Any) -> None:  # noqa: PLW3201
+        # register in a global registry by protocol_class_id
+        # this will allow deserialization into a concrete subclass
+        # without discriminated union
         super().__pydantic_init_subclass__(**kwargs)
         if _generic_origin(cls) is not cls:
             return
@@ -198,6 +201,9 @@ class Provider(pydantic.BaseModel, Generic[ClientT]):
 
     @classmethod
     def __pydantic_init_subclass__(cls, **kwargs: Any) -> None:  # noqa: PLW3201
+        # register in a global registry by provider_class_id
+        # this will allow deserialization into a concrete subclass
+        # without discriminated union
         super().__pydantic_init_subclass__(**kwargs)
         if _generic_origin(cls) is not cls:
             return
