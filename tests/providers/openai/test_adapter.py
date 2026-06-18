@@ -112,7 +112,7 @@ class _RaisingOpenAIClient:
 
 
 _MODEL = ai.Model(
-    "gpt-5.4",
+    id="gpt-5.4",
     provider=ai.get_provider("openai", api_key="sk-test"),
 )
 

@@ -211,7 +211,7 @@ def test_model_json_roundtrip_preserves_explicit_provider_config() -> None:
         api_key="sk-custom",
         headers={"X-Custom-Header": "example"},
     )
-    model = ai.Model("custom-model", provider=provider)
+    model = ai.Model(id="custom-model", provider=provider)
 
     restored = ai.Model.model_validate_json(model.model_dump_json())
 
@@ -240,7 +240,7 @@ def test_model_json_roundtrip_preserves_provider_protocol_override() -> None:
         "openai",
         protocol=OpenAIChatCompletionsProtocol(),
     )
-    model = ai.Model("gpt-5", provider=provider)
+    model = ai.Model(id="gpt-5", provider=provider)
 
     restored = ai.Model.model_validate_json(model.model_dump_json())
 
@@ -265,7 +265,7 @@ def test_model_json_roundtrip_supports_registered_custom_provider() -> None:
             return CustomProtocol(mode="default")
 
     model = ai.Model(
-        "custom-model",
+        id="custom-model",
         provider=CustomProvider(
             name="custom",
             default_base_url="https://custom.example.com",
@@ -347,7 +347,7 @@ def test_model_json_roundtrip_rejects_unknown_provider_protocol_class_id() -> (
         "openai",
         protocol=OpenAIChatCompletionsProtocol(),
     )
-    data = ai.Model("gpt-5", provider=provider).model_dump()
+    data = ai.Model(id="gpt-5", provider=provider).model_dump()
     assert isinstance(data["provider"], dict)
     data["provider"]["protocol_override"] = {
         "protocol_class_id": "missing-protocol"

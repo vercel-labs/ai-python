@@ -35,7 +35,7 @@ def _client_with_mock(
             transport=httpx.MockTransport(_handler),
         ),
     )
-    return ai.Model("claude-opus-4-6", provider=provider)
+    return ai.Model(id="claude-opus-4-6", provider=provider)
 
 
 async def test_200_succeeds() -> None:
@@ -73,7 +73,7 @@ async def test_custom_anthropic_version_header() -> None:
         )
     )
 
-    model = ai.Model("custom-model", provider=provider)
+    model = ai.Model(id="custom-model", provider=provider)
     await provider.probe(model)
     assert captured_headers["anthropic-version"] == "2024-01-01"
     assert captured_headers["x-custom-header"] == "example"

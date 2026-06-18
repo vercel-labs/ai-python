@@ -7,7 +7,7 @@ Usage::
 
     model = ai.get_model("anthropic:claude-sonnet-4-6")
     provider = ai.get_provider("anthropic", base_url="https://anthropic.example.com")
-    model = ai.Model("claude-sonnet-4-6", provider=provider)
+    model = ai.Model(id="claude-sonnet-4-6", provider=provider)
     ids = await ai.get_provider("anthropic").list_models()
 
     # built-in tools

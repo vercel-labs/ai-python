@@ -398,7 +398,7 @@ class _CheckProvider(MockProvider):
 
 async def test_probe_delegates_to_model_provider() -> None:
     provider = _CheckProvider()
-    model = models.Model("mock-model", provider=provider)
+    model = models.Model(id="mock-model", provider=provider)
 
     await models.probe(model)
 

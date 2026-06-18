@@ -26,13 +26,6 @@ class Model(pydantic.BaseModel):
         default=None, exclude_if=lambda v: v is None
     )
 
-    def __init__(self, id: str | None = None, **data: Any) -> None:
-        if id is not None:
-            if "id" in data:
-                raise TypeError("Model() got multiple values for argument 'id'")
-            data["id"] = id
-        super().__init__(**data)
-
     def __repr__(self) -> str:
         return f"Model(id={self.id!r}, provider={self.provider!r})"
 
@@ -102,4 +95,4 @@ def get_model(
         model_provider_config=model_provider_config,
     )
 
-    return Model(provider_model_id, provider=provider, protocol=protocol)
+    return Model(id=provider_model_id, provider=provider, protocol=protocol)

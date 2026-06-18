@@ -29,7 +29,7 @@ def mock_model(
         api_key=api_key,
         client=httpx.AsyncClient(transport=handler),
     )
-    return ai.Model(model_id, provider=provider)
+    return ai.Model(id=model_id, provider=provider)
 
 
 mock_client = mock_model

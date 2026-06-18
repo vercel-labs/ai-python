@@ -27,7 +27,7 @@ def _client_with_mock(
             transport=httpx.MockTransport(_handler),
         ),
     )
-    return ai.Model("gpt-5.4", provider=provider)
+    return ai.Model(id="gpt-5.4", provider=provider)
 
 
 async def test_200_succeeds() -> None:
@@ -64,6 +64,6 @@ async def test_no_api_key_raises_not_configured(
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     provider = ai.get_provider("openai", base_url="https://openai.test/v1")
-    model = ai.Model("gpt-5.4", provider=provider)
+    model = ai.Model(id="gpt-5.4", provider=provider)
     with pytest.raises(ai.ProviderNotConfiguredError):
         await provider.probe(model)

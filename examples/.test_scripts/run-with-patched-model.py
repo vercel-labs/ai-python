@@ -182,7 +182,7 @@ def main() -> None:
             protocol: ai.ProviderProtocol[Any] | None = None,
         ) -> None:
             super().__init__(
-                id,
+                id=id,
                 provider=provider,
                 protocol=selected_protocol_for_provider(provider) or protocol,
             )

@@ -5,10 +5,10 @@ Usage::
     import ai
     model = ai.get_model("openai:gpt-5.4")
     provider = ai.get_provider("openai", base_url="http://localhost:11434/v1")
-    model = ai.Model("llama3", provider=provider)
+    model = ai.Model(id="llama3", provider=provider)
     model = ai.get_model("anthropic:claude-sonnet-4-6")
     provider = ai.get_provider("anthropic", base_url="https://anthropic.example.com")
-    model = ai.Model("claude-sonnet-4-6", provider=provider)
+    model = ai.Model(id="claude-sonnet-4-6", provider=provider)
     model = ai.get_model("anthropic/claude-sonnet-4")  # defaults to Gateway
 
     # stream — auto-creates client from env vars
@@ -24,7 +24,7 @@ Usage::
         base_url="https://custom.example.com/v1",
         api_key="sk-...",
     )
-    model = ai.Model("gpt-5.4", provider=provider)
+    model = ai.Model(id="gpt-5.4", provider=provider)
     async with ai.stream(model, msgs) as s:
         ...
 
