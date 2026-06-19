@@ -53,6 +53,10 @@ def _dump[M: pydantic.BaseModel](
     return value.model_dump(mode="json", exclude_none=True)
 
 
+def _dict_filter_none(**args: Any) -> dict[str, Any]:
+    return {k: v for k, v in args.items() if v is not None}
+
+
 def perplexity_search(
     *,
     max_results: int | None = None,
@@ -69,19 +73,15 @@ def perplexity_search(
         name="perplexity_search",
         tool_config=types.tools.ToolConfig(
             id="gateway.perplexity_search",
-            args={
-                k: v
-                for k, v in {
-                    "max_results": max_results,
-                    "max_tokens_per_page": max_tokens_per_page,
-                    "max_tokens": max_tokens,
-                    "country": country,
-                    "search_domain_filter": search_domain_filter,
-                    "search_language_filter": search_language_filter,
-                    "search_recency_filter": search_recency_filter,
-                }.items()
-                if v is not None
-            },
+            args=_dict_filter_none(
+                max_results=max_results,
+                max_tokens_per_page=max_tokens_per_page,
+                max_tokens=max_tokens,
+                country=country,
+                search_domain_filter=search_domain_filter,
+                search_language_filter=search_language_filter,
+                search_recency_filter=search_recency_filter,
+            ),
         ),
     )
 
@@ -99,17 +99,13 @@ def parallel_search(
         name="parallel_search",
         tool_config=types.tools.ToolConfig(
             id="gateway.parallel_search",
-            args={
-                k: v
-                for k, v in {
-                    "mode": mode,
-                    "max_results": max_results,
-                    "source_policy": _dump(SourcePolicy, source_policy),
-                    "excerpts": _dump(Excerpts, excerpts),
-                    "fetch_policy": _dump(FetchPolicy, fetch_policy),
-                }.items()
-                if v is not None
-            },
+            args=_dict_filter_none(
+                mode=mode,
+                max_results=max_results,
+                source_policy=_dump(SourcePolicy, source_policy),
+                excerpts=_dump(Excerpts, excerpts),
+                fetch_policy=_dump(FetchPolicy, fetch_policy),
+            ),
         ),
     )
 

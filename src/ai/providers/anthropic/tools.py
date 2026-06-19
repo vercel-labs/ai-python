@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 import pydantic
 from pydantic.alias_generators import to_camel
@@ -58,6 +58,10 @@ def _check_domains(
         )
 
 
+def _dict_filter_none(**args: Any) -> dict[str, Any]:
+    return {k: v for k, v in args.items() if v is not None}
+
+
 def web_search(
     *,
     max_uses: int | None = None,
@@ -71,21 +75,17 @@ def web_search(
         name="web_search",
         tool_config=types.tools.ToolConfig(
             id="anthropic.web_search_20260209",
-            args={
-                k: v
-                for k, v in {
-                    "max_uses": max_uses,
-                    "allowed_domains": allowed_domains,
-                    "blocked_domains": blocked_domains,
-                    "user_location": user_location.model_dump(
-                        mode="json",
-                        exclude_none=True,
-                    )
-                    if user_location is not None
-                    else None,
-                }.items()
-                if v is not None
-            },
+            args=_dict_filter_none(
+                max_uses=max_uses,
+                allowed_domains=allowed_domains,
+                blocked_domains=blocked_domains,
+                user_location=user_location.model_dump(
+                    mode="json",
+                    exclude_none=True,
+                )
+                if user_location is not None
+                else None,
+            ),
         ),
     )
 
@@ -106,22 +106,18 @@ def web_fetch(
         name="web_fetch",
         tool_config=types.tools.ToolConfig(
             id="anthropic.web_fetch_20260209",
-            args={
-                k: v
-                for k, v in {
-                    "max_uses": max_uses,
-                    "allowed_domains": allowed_domains,
-                    "blocked_domains": blocked_domains,
-                    "citations": citations.model_dump(
-                        mode="json",
-                        exclude_none=True,
-                    )
-                    if citations is not None
-                    else None,
-                    "max_content_tokens": max_content_tokens,
-                }.items()
-                if v is not None
-            },
+            args=_dict_filter_none(
+                max_uses=max_uses,
+                allowed_domains=allowed_domains,
+                blocked_domains=blocked_domains,
+                citations=citations.model_dump(
+                    mode="json",
+                    exclude_none=True,
+                )
+                if citations is not None
+                else None,
+                max_content_tokens=max_content_tokens,
+            ),
         ),
     )
 
@@ -148,16 +144,12 @@ def computer_use(
         name="computer",
         tool_config=types.tools.ToolConfig(
             id="anthropic.computer_20251124",
-            args={
-                k: v
-                for k, v in {
-                    "display_width_px": display_width_px,
-                    "display_height_px": display_height_px,
-                    "display_number": display_number,
-                    "enable_zoom": enable_zoom,
-                }.items()
-                if v is not None
-            },
+            args=_dict_filter_none(
+                display_width_px=display_width_px,
+                display_height_px=display_height_px,
+                display_number=display_number,
+                enable_zoom=enable_zoom,
+            ),
         ),
     )
 
@@ -168,11 +160,7 @@ def text_editor(*, max_characters: int | None = None) -> types.tools.Tool:
         name="str_replace_based_edit_tool",
         tool_config=types.tools.ToolConfig(
             id="anthropic.text_editor_20250728",
-            args={
-                k: v
-                for k, v in {"max_characters": max_characters}.items()
-                if v is not None
-            },
+            args=_dict_filter_none(max_characters=max_characters),
         ),
     )
 

@@ -56,6 +56,10 @@ def _dump(model: pydantic.BaseModel | None) -> dict[str, Any] | None:
     return model.model_dump(mode="json", exclude_none=True)
 
 
+def _dict_filter_none(**args: Any) -> dict[str, Any]:
+    return {k: v for k, v in args.items() if v is not None}
+
+
 def web_search(
     *,
     external_web_access: bool | None = None,
@@ -68,16 +72,12 @@ def web_search(
         name="web_search",
         tool_config=types.tools.ToolConfig(
             id="openai.web_search",
-            args={
-                k: v
-                for k, v in {
-                    "external_web_access": external_web_access,
-                    "filters": _dump(filters),
-                    "search_context_size": search_context_size,
-                    "user_location": _dump(user_location),
-                }.items()
-                if v is not None
-            },
+            args=_dict_filter_none(
+                external_web_access=external_web_access,
+                filters=_dump(filters),
+                search_context_size=search_context_size,
+                user_location=_dump(user_location),
+            ),
         ),
     )
 
@@ -92,14 +92,10 @@ def web_search_preview(
         name="web_search_preview",
         tool_config=types.tools.ToolConfig(
             id="openai.web_search_preview",
-            args={
-                k: v
-                for k, v in {
-                    "search_context_size": search_context_size,
-                    "user_location": _dump(user_location),
-                }.items()
-                if v is not None
-            },
+            args=_dict_filter_none(
+                search_context_size=search_context_size,
+                user_location=_dump(user_location),
+            ),
         ),
     )
 
@@ -116,16 +112,12 @@ def file_search(
         name="file_search",
         tool_config=types.tools.ToolConfig(
             id="openai.file_search",
-            args={
-                k: v
-                for k, v in {
-                    "vector_store_ids": vector_store_ids,
-                    "max_num_results": max_num_results,
-                    "ranking": _dump(ranking),
-                    "filters": filters,
-                }.items()
-                if v is not None
-            },
+            args=_dict_filter_none(
+                vector_store_ids=vector_store_ids,
+                max_num_results=max_num_results,
+                ranking=_dump(ranking),
+                filters=filters,
+            ),
         ),
     )
 
@@ -139,15 +131,11 @@ def code_interpreter(
         name="code_interpreter",
         tool_config=types.tools.ToolConfig(
             id="openai.code_interpreter",
-            args={
-                k: v
-                for k, v in {
-                    "container": _dump(container)
-                    if isinstance(container, CodeInterpreterContainer)
-                    else container,
-                }.items()
-                if v is not None
-            },
+            args=_dict_filter_none(
+                container=_dump(container)
+                if isinstance(container, CodeInterpreterContainer)
+                else container,
+            ),
         ),
     )
 
@@ -169,21 +157,17 @@ def image_generation(
         name="image_generation",
         tool_config=types.tools.ToolConfig(
             id="openai.image_generation",
-            args={
-                k: v
-                for k, v in {
-                    "background": background,
-                    "input_fidelity": input_fidelity,
-                    "model": model,
-                    "moderation": moderation,
-                    "output_compression": output_compression,
-                    "output_format": output_format,
-                    "partial_images": partial_images,
-                    "quality": quality,
-                    "size": size,
-                }.items()
-                if v is not None
-            },
+            args=_dict_filter_none(
+                background=background,
+                input_fidelity=input_fidelity,
+                model=model,
+                moderation=moderation,
+                output_compression=output_compression,
+                output_format=output_format,
+                partial_images=partial_images,
+                quality=quality,
+                size=size,
+            ),
         ),
     )
 
@@ -202,11 +186,7 @@ def shell(*, environment: str | None = None) -> types.tools.Tool:
         name="shell",
         tool_config=types.tools.ToolConfig(
             id="openai.shell",
-            args={
-                k: v
-                for k, v in {"environment": environment}.items()
-                if v is not None
-            },
+            args=_dict_filter_none(environment=environment),
         ),
     )
 
@@ -234,19 +214,15 @@ def mcp(
         name="mcp",
         tool_config=types.tools.ToolConfig(
             id="openai.mcp",
-            args={
-                k: v
-                for k, v in {
-                    "server_label": server_label,
-                    "server_url": server_url,
-                    "connector_id": connector_id,
-                    "authorization": authorization,
-                    "headers": headers,
-                    "allowed_tools": allowed_tools,
-                    "server_description": server_description,
-                }.items()
-                if v is not None
-            },
+            args=_dict_filter_none(
+                server_label=server_label,
+                server_url=server_url,
+                connector_id=connector_id,
+                authorization=authorization,
+                headers=headers,
+                allowed_tools=allowed_tools,
+                server_description=server_description,
+            ),
         ),
     )
 
@@ -262,15 +238,11 @@ def tool_search(
         name="tool_search",
         tool_config=types.tools.ToolConfig(
             id="openai.tool_search",
-            args={
-                k: v
-                for k, v in {
-                    "description": description,
-                    "parameters": parameters,
-                    "execution": execution,
-                }.items()
-                if v is not None
-            },
+            args=_dict_filter_none(
+                description=description,
+                parameters=parameters,
+                execution=execution,
+            ),
         ),
     )
 
