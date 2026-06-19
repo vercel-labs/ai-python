@@ -301,7 +301,7 @@ def _mcp_tool_to_native(
     tool = Tool(
         kind="function",
         name=name,
-        args=types.tools.FunctionToolArgs(
+        spec=types.tools.ToolSpec(
             description=mcp_tool.description or "",
             params=mcp_tool.inputSchema,
         ),

@@ -495,7 +495,7 @@ def tool[**P, T, R](
         tool_decl = Tool(
             kind="function",
             name=fn.__name__,
-            args=types.tools.FunctionToolArgs(
+            spec=types.tools.ToolSpec(
                 description=inspect.getdoc(fn) or "",
                 params=validator.model_json_schema(),
             ),

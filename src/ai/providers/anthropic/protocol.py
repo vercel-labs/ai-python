@@ -77,14 +77,14 @@ def _custom_tools_to_anthropic(
     """Convert host-executed tools to Anthropic tool schema format."""
     result: list[dict[str, Any]] = []
     for tool in tools:
-        args = tool.args
-        if not isinstance(args, types.tools.FunctionToolArgs):
-            raise TypeError(f"function tool {tool.name!r} has invalid args")
+        spec = tool.spec
+        if spec is None:
+            raise TypeError(f"function tool {tool.name!r} has no spec")
         result.append(
             {
                 "name": tool.name,
-                "description": args.description or "",
-                "input_schema": args.params,
+                "description": spec.description or "",
+                "input_schema": spec.params,
             }
         )
     return result
@@ -98,27 +98,33 @@ def _builtin_tools_to_anthropic(
     Returns ``(wire_tools, beta_headers)``. Beta headers are merged into
     the ``anthropic-beta`` request header by the caller.
 
-    Provider tool schemas keep args in the snake_case shape the native
+    Provider tool configs keep args in the snake_case shape the native
     Anthropic API expects.
     """
     wire: list[dict[str, Any]] = []
     betas: set[str] = set()
     for tool in builtin:
-        args_model = tool.args
-        if not isinstance(args_model, anthropic_tools.AnthropicProviderArgs):
+        cfg = tool.tool_config
+        tool_id = cfg.id if cfg is not None else None
+        if (
+            cfg is None
+            or tool_id is None
+            or not tool_id.startswith("anthropic.")
+        ):
             raise ValueError(
-                "AnthropicModel does not support provider args "
-                f"{type(args_model).__name__}"
+                "AnthropicModel does not support provider tool "
+                f"{tool_id or tool.name!r}"
             )
-        args = args_model.model_dump(mode="json", exclude_none=True)
-        block: dict[str, Any] = {
-            "type": args_model.anthropic_type,
-            "name": tool.name,
-            **args,
-        }
-        wire.append(block)
-        if args_model.anthropic_beta is not None:
-            betas.add(args_model.anthropic_beta)
+        wire.append(
+            {
+                "type": tool_id.removeprefix("anthropic."),
+                "name": tool.name,
+                **cfg.args,
+            }
+        )
+        beta = anthropic_tools.BETA_HEADERS.get(tool_id)
+        if beta is not None:
+            betas.add(beta)
 
     return wire, betas
 

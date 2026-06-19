@@ -53,7 +53,7 @@ def test_mcp_tool_to_native_basic() -> None:
     )
 
     assert native.name == "mcp_basic_test"
-    assert _function_args(native).description == "Echo input"
+    assert _spec(native).description == "Echo input"
 
 
 def test_mcp_tool_to_native_with_prefix() -> None:
@@ -73,8 +73,8 @@ def test_mcp_tool_to_native_schema_preserved() -> None:
         mcp_tool, "test:key", _noop_transport_factory, None
     )
 
-    assert _function_args(native).params == mcp_tool.inputSchema
-    assert _function_args(native).description == "Echo input"
+    assert _spec(native).params == mcp_tool.inputSchema
+    assert _spec(native).description == "Echo input"
 
 
 async def test_get_http_tools_raises_installation_error_without_mcp(
@@ -144,7 +144,7 @@ async def test_mcp_tool_executes_through_agent() -> None:
     assert llm.call_count == 2
 
 
-def _function_args(tool: ai.AgentTool) -> ai.tools.FunctionToolArgs:
-    args = tool.tool.args
-    assert isinstance(args, ai.tools.FunctionToolArgs)
-    return args
+def _spec(tool: ai.AgentTool) -> ai.tools.ToolSpec:
+    spec = tool.tool.spec
+    assert spec is not None
+    return spec

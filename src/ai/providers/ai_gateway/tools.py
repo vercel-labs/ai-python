@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 import pydantic
 from pydantic.alias_generators import to_camel
@@ -43,26 +43,18 @@ class FetchPolicy(pydantic.BaseModel):
     max_age_seconds: int | None = None
 
 
-class PerplexitySearchArgs(pydantic.BaseModel):
-    model_config = _CONFIG_MODEL
-
-    max_results: int | None = None
-    max_tokens_per_page: int | None = None
-    max_tokens: int | None = None
-    country: str | None = None
-    search_domain_filter: list[str] | None = None
-    search_language_filter: list[str] | None = None
-    search_recency_filter: Literal["day", "week", "month", "year"] | None = None
+def _dump[M: pydantic.BaseModel](
+    model_type: type[M], value: M | dict[str, object] | None
+) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        value = model_type.model_validate(value)
+    return value.model_dump(mode="json", exclude_none=True)
 
 
-class ParallelSearchArgs(pydantic.BaseModel):
-    model_config = _CONFIG_MODEL
-
-    mode: Literal["one-shot", "agentic"] | None = None
-    max_results: int | None = None
-    source_policy: SourcePolicy | None = None
-    excerpts: Excerpts | None = None
-    fetch_policy: FetchPolicy | None = None
+def _dict_filter_none(**args: Any) -> dict[str, Any]:
+    return {k: v for k, v in args.items() if v is not None}
 
 
 def perplexity_search(
@@ -79,14 +71,17 @@ def perplexity_search(
     return types.tools.Tool(
         kind="provider",
         name="perplexity_search",
-        args=PerplexitySearchArgs(
-            max_results=max_results,
-            max_tokens_per_page=max_tokens_per_page,
-            max_tokens=max_tokens,
-            country=country,
-            search_domain_filter=search_domain_filter,
-            search_language_filter=search_language_filter,
-            search_recency_filter=search_recency_filter,
+        tool_config=types.tools.ToolConfig(
+            id="gateway.perplexity_search",
+            args=_dict_filter_none(
+                max_results=max_results,
+                max_tokens_per_page=max_tokens_per_page,
+                max_tokens=max_tokens,
+                country=country,
+                search_domain_filter=search_domain_filter,
+                search_language_filter=search_language_filter,
+                search_recency_filter=search_recency_filter,
+            ),
         ),
     )
 
@@ -102,18 +97,15 @@ def parallel_search(
     return types.tools.Tool(
         kind="provider",
         name="parallel_search",
-        args=ParallelSearchArgs(
-            mode=mode,
-            max_results=max_results,
-            source_policy=SourcePolicy.model_validate(source_policy)
-            if isinstance(source_policy, dict)
-            else source_policy,
-            excerpts=Excerpts.model_validate(excerpts)
-            if isinstance(excerpts, dict)
-            else excerpts,
-            fetch_policy=FetchPolicy.model_validate(fetch_policy)
-            if isinstance(fetch_policy, dict)
-            else fetch_policy,
+        tool_config=types.tools.ToolConfig(
+            id="gateway.parallel_search",
+            args=_dict_filter_none(
+                mode=mode,
+                max_results=max_results,
+                source_policy=_dump(SourcePolicy, source_policy),
+                excerpts=_dump(Excerpts, excerpts),
+                fetch_policy=_dump(FetchPolicy, fetch_policy),
+            ),
         ),
     )
 
@@ -121,8 +113,6 @@ def parallel_search(
 __all__ = [
     "Excerpts",
     "FetchPolicy",
-    "ParallelSearchArgs",
-    "PerplexitySearchArgs",
     "SourcePolicy",
     "parallel_search",
     "perplexity_search",

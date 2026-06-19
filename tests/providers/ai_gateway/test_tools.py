@@ -11,8 +11,6 @@ import json
 from typing import Any
 
 import httpx
-import pydantic
-import pytest
 
 from ai import types
 from ai.providers.ai_gateway import tools as gateway_tools
@@ -140,28 +138,67 @@ class TestGatewayBuiltins:
             }
         ]
 
-    async def test_unknown_provider_args_rejected(self) -> None:
-        """Provider-executed tools need a registered args type."""
+    async def test_openai_mcp_opaque_payloads_not_camelized(self) -> None:
+        """Free-form payloads (headers, allowed_tools) reach the wire
+        verbatim while structured config keys are camelized."""
+        captured: dict[str, Any] = {}
+        model = mock_model(httpx.MockTransport(_capture_body_handler(captured)))
 
-        class UnknownArgs(pydantic.BaseModel):
-            value: str
+        async for _ in model.provider.stream(
+            model,
+            [user_msg("hi")],
+            tools=[
+                openai_tools.mcp(
+                    server_label="my-server",
+                    server_url="https://mcp.example.com",
+                    headers={"x_api_key": "secret"},
+                    allowed_tools={"tool_names": ["my_tool"]},
+                ),
+            ],
+        ):
+            pass
 
-        def handler(req: httpx.Request) -> httpx.Response:
-            raise AssertionError("request should not be sent")
+        assert captured["tools"] == [
+            {
+                "type": "provider",
+                "id": "openai.mcp",
+                "name": "mcp",
+                "args": {
+                    "serverLabel": "my-server",
+                    "serverUrl": "https://mcp.example.com",
+                    "headers": {"x_api_key": "secret"},
+                    "allowedTools": {"tool_names": ["my_tool"]},
+                },
+            }
+        ]
 
-        model = mock_model(httpx.MockTransport(handler))
-        stream = model.provider.stream(
+    async def test_unknown_provider_id_passes_through(self) -> None:
+        """Ids without a local factory are forwarded verbatim — the
+        gateway, not this adapter, owns the set of supported tools."""
+        captured: dict[str, Any] = {}
+        model = mock_model(httpx.MockTransport(_capture_body_handler(captured)))
+
+        async for _ in model.provider.stream(
             model,
             [user_msg("hi")],
             tools=[
                 types.tools.Tool(
                     kind="provider",
-                    name="bad",
-                    args=UnknownArgs(value="x"),
+                    name="frobnicate",
+                    tool_config=types.tools.ToolConfig(
+                        id="gateway.frobnicate",
+                        args={"max_uses": 1},
+                    ),
                 )
             ],
-        )
+        ):
+            pass
 
-        with pytest.raises(TypeError, match="unsupported args"):
-            async for _ in stream:
-                pass
+        assert captured["tools"] == [
+            {
+                "type": "provider",
+                "id": "gateway.frobnicate",
+                "name": "frobnicate",
+                "args": {"maxUses": 1},
+            }
+        ]

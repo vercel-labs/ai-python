@@ -131,14 +131,7 @@ async def llm_call_activity(params: LLMParams) -> LLMResult:
     """Call the LLM, drain the stream, return the final message."""
     model = ai.get_model(params.model_id)
     messages = [ai.messages.Message.model_validate(m) for m in params.messages]
-    tools = [
-        ai.Tool(
-            kind="function",
-            name=t["name"],
-            args=ai.tools.FunctionToolArgs.model_validate(t["args"]),
-        )
-        for t in params.tool_schemas
-    ]
+    tools = [ai.Tool.model_validate(t) for t in params.tool_schemas]
 
     async with ai.stream(model, messages, tools=tools) as s:
         async for _event in s:
@@ -162,10 +155,7 @@ class WeatherAgent(ai.Agent):
     async def loop(
         self, context: ai.Context
     ) -> AsyncGenerator[ai.events.AgentEvent]:
-        tool_schemas = [
-            {"name": t.name, "args": t.args.model_dump(mode="json")}
-            for t in context.tools
-        ]
+        tool_schemas = [t.model_dump(mode="json") for t in context.tools]
 
         while context.keep_running():
             # 1. LLM call via activity → complete message

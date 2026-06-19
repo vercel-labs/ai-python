@@ -17,7 +17,6 @@ from ...models import core
 from ...models.core import params as params_
 from .. import base
 from . import _sdk, errors
-from . import tools as openai_tools
 
 if TYPE_CHECKING:
     import openai
@@ -40,16 +39,16 @@ def _tools_to_openai(
     for tool in tools:
         if tool.kind == "provider":
             continue
-        args = tool.args
-        if not isinstance(args, types.tools.FunctionToolArgs):
-            raise TypeError(f"function tool {tool.name!r} has invalid args")
+        spec = tool.spec
+        if spec is None:
+            raise TypeError(f"function tool {tool.name!r} has no spec")
         result.append(
             {
                 "type": "function",
                 "function": {
                     "name": tool.name,
-                    "description": args.description or "",
-                    "parameters": args.params,
+                    "description": spec.description or "",
+                    "parameters": spec.params,
                 },
             }
         )
@@ -777,10 +776,6 @@ def _json_dumps(value: Any) -> str:
     return json.dumps(value, separators=(",", ":"), default=str)
 
 
-def _model_dump(value: pydantic.BaseModel) -> dict[str, Any]:
-    return value.model_dump(exclude_none=True)
-
-
 def _openai_metadata(part: Any) -> dict[str, Any]:
     metadata = getattr(part, "provider_metadata", None)
     if not isinstance(metadata, Mapping):
@@ -1040,56 +1035,53 @@ def _tools_to_responses(
 
     for tool in tools:
         if tool.kind == "function":
-            args = tool.args
-            if not isinstance(args, types.tools.FunctionToolArgs):
-                raise TypeError(f"function tool {tool.name!r} has invalid args")
+            spec = tool.spec
+            if spec is None:
+                raise TypeError(f"function tool {tool.name!r} has no spec")
             result.append(
                 {
                     "type": "function",
                     "name": tool.name,
-                    "description": args.description or "",
-                    "parameters": args.params,
+                    "description": spec.description or "",
+                    "parameters": spec.params,
                 }
             )
             continue
 
-        args = tool.args
-        tool_id = getattr(type(args), "openai_id", None)
-        if not isinstance(args, openai_tools.OpenAIProviderArgs):
+        cfg = tool.tool_config
+        tool_id = cfg.id if cfg is not None else None
+        if tool_id is None or not tool_id.startswith("openai."):
             raise TypeError(
                 f"provider tool {tool.name!r} is not an OpenAI tool"
             )
+        args = dict(cfg.args) if cfg is not None else {}
 
         match tool_id:
             case "openai.web_search":
-                result.append({"type": "web_search", **_model_dump(args)})
+                result.append({"type": "web_search", **args})
             case "openai.web_search_preview":
-                result.append(
-                    {"type": "web_search_preview", **_model_dump(args)}
-                )
+                result.append({"type": "web_search_preview", **args})
             case "openai.file_search":
-                data = _model_dump(args)
-                ranking = data.pop("ranking", None)
+                ranking = args.pop("ranking", None)
                 if ranking is not None:
-                    data["ranking_options"] = ranking
-                result.append({"type": "file_search", **data})
+                    args["ranking_options"] = ranking
+                result.append({"type": "file_search", **args})
             case "openai.code_interpreter":
-                data = _model_dump(args)
-                if "container" not in data:
-                    data["container"] = {"type": "auto"}
-                result.append({"type": "code_interpreter", **data})
+                if "container" not in args:
+                    args["container"] = {"type": "auto"}
+                result.append({"type": "code_interpreter", **args})
             case "openai.image_generation":
-                result.append({"type": "image_generation", **_model_dump(args)})
+                result.append({"type": "image_generation", **args})
             case "openai.local_shell":
                 result.append({"type": "local_shell"})
             case "openai.shell":
-                result.append({"type": "shell", **_model_dump(args)})
+                result.append({"type": "shell", **args})
             case "openai.apply_patch":
                 result.append({"type": "apply_patch"})
             case "openai.mcp":
-                result.append({"type": "mcp", **_model_dump(args)})
+                result.append({"type": "mcp", **args})
             case "openai.tool_search":
-                result.append({"type": "tool_search", **_model_dump(args)})
+                result.append({"type": "tool_search", **args})
             case _:
                 raise NotImplementedError(
                     f"unsupported OpenAI provider tool {tool_id}"
@@ -1143,8 +1135,9 @@ def _image_media_type(
     tools: Sequence[types.tools.Tool],
 ) -> str:
     for tool in tools:
-        if isinstance(tool.args, openai_tools.ImageGenerationArgs):
-            fmt = str(tool.args.output_format or "png")
+        cfg = tool.tool_config
+        if cfg is not None and cfg.id == "openai.image_generation":
+            fmt = str(cfg.args.get("output_format") or "png")
             return "image/jpeg" if fmt == "jpeg" else f"image/{fmt}"
     text = params.get("text")
     if isinstance(text, Mapping):

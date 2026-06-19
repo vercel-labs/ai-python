@@ -10,7 +10,7 @@ model = ai.get_model("gateway:anthropic/claude-sonnet-4.6")
 get_weather = ai.Tool(
     kind="function",
     name="get_weather",
-    args=ai.tools.FunctionToolArgs(
+    spec=ai.tools.ToolSpec(
         description="Get the current weather for a city.",
         params={
             "type": "object",

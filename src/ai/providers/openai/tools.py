@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, ClassVar, Literal
+from typing import Any, Literal
 
 import pydantic
 from pydantic.alias_generators import to_camel
@@ -50,111 +50,14 @@ class CodeInterpreterContainer(pydantic.BaseModel):
     file_ids: list[str] | None = None
 
 
-class OpenAIProviderArgs(pydantic.BaseModel):
-    """Base for OpenAI provider-executed tool args."""
-
-    model_config = _CONFIG_MODEL
-
-    openai_id: ClassVar[str]
+def _dump(model: pydantic.BaseModel | None) -> dict[str, Any] | None:
+    if model is None:
+        return None
+    return model.model_dump(mode="json", exclude_none=True)
 
 
-class WebSearchArgs(OpenAIProviderArgs):
-    openai_id: ClassVar[str] = "openai.web_search"
-
-    model_config = _CONFIG_MODEL
-
-    external_web_access: bool | None = None
-    filters: WebSearchFilters | None = None
-    search_context_size: Literal["low", "medium", "high"] | None = None
-    user_location: WebSearchUserLocation | None = None
-
-
-class WebSearchPreviewArgs(OpenAIProviderArgs):
-    openai_id: ClassVar[str] = "openai.web_search_preview"
-
-    model_config = _CONFIG_MODEL
-
-    search_context_size: Literal["low", "medium", "high"] | None = None
-    user_location: WebSearchUserLocation | None = None
-
-
-class FileSearchArgs(OpenAIProviderArgs):
-    openai_id: ClassVar[str] = "openai.file_search"
-
-    model_config = _CONFIG_MODEL
-
-    vector_store_ids: list[str]
-    max_num_results: int | None = None
-    ranking: FileSearchRanking | None = None
-    filters: dict[str, Any] | None = None
-
-
-class CodeInterpreterArgs(OpenAIProviderArgs):
-    openai_id: ClassVar[str] = "openai.code_interpreter"
-
-    model_config = _CONFIG_MODEL
-
-    container: CodeInterpreterContainer | str | None = None
-
-
-class ImageGenerationArgs(OpenAIProviderArgs):
-    openai_id: ClassVar[str] = "openai.image_generation"
-
-    model_config = _CONFIG_MODEL
-
-    background: Literal["transparent", "opaque", "auto"] | None = None
-    input_fidelity: Literal["high", "low"] | None = None
-    model: str | None = None
-    moderation: Literal["auto", "low"] | None = None
-    output_compression: int | None = None
-    output_format: Literal["png", "webp", "jpeg"] | None = None
-    partial_images: int | None = None
-    quality: Literal["low", "medium", "high", "auto"] | None = None
-    size: str | None = None
-
-
-class LocalShellArgs(OpenAIProviderArgs):
-    openai_id: ClassVar[str] = "openai.local_shell"
-
-    model_config = _CONFIG_MODEL
-
-
-class ShellArgs(OpenAIProviderArgs):
-    openai_id: ClassVar[str] = "openai.shell"
-
-    model_config = _CONFIG_MODEL
-
-    environment: str | None = None
-
-
-class ApplyPatchArgs(OpenAIProviderArgs):
-    openai_id: ClassVar[str] = "openai.apply_patch"
-
-    model_config = _CONFIG_MODEL
-
-
-class McpArgs(OpenAIProviderArgs):
-    openai_id: ClassVar[str] = "openai.mcp"
-
-    model_config = _CONFIG_MODEL
-
-    server_label: str
-    server_url: str | None = None
-    connector_id: str | None = None
-    authorization: str | None = None
-    headers: dict[str, str] | None = None
-    allowed_tools: list[str] | dict[str, Any] | None = None
-    server_description: str | None = None
-
-
-class ToolSearchArgs(OpenAIProviderArgs):
-    openai_id: ClassVar[str] = "openai.tool_search"
-
-    model_config = _CONFIG_MODEL
-
-    description: str | None = None
-    parameters: dict[str, Any] | None = None
-    execution: dict[str, Any] | None = None
+def _dict_filter_none(**args: Any) -> dict[str, Any]:
+    return {k: v for k, v in args.items() if v is not None}
 
 
 def web_search(
@@ -167,11 +70,14 @@ def web_search(
     return types.tools.Tool(
         kind="provider",
         name="web_search",
-        args=WebSearchArgs(
-            external_web_access=external_web_access,
-            filters=filters,
-            search_context_size=search_context_size,
-            user_location=user_location,
+        tool_config=types.tools.ToolConfig(
+            id="openai.web_search",
+            args=_dict_filter_none(
+                external_web_access=external_web_access,
+                filters=_dump(filters),
+                search_context_size=search_context_size,
+                user_location=_dump(user_location),
+            ),
         ),
     )
 
@@ -184,9 +90,12 @@ def web_search_preview(
     return types.tools.Tool(
         kind="provider",
         name="web_search_preview",
-        args=WebSearchPreviewArgs(
-            search_context_size=search_context_size,
-            user_location=user_location,
+        tool_config=types.tools.ToolConfig(
+            id="openai.web_search_preview",
+            args=_dict_filter_none(
+                search_context_size=search_context_size,
+                user_location=_dump(user_location),
+            ),
         ),
     )
 
@@ -201,11 +110,14 @@ def file_search(
     return types.tools.Tool(
         kind="provider",
         name="file_search",
-        args=FileSearchArgs(
-            vector_store_ids=vector_store_ids,
-            max_num_results=max_num_results,
-            ranking=ranking,
-            filters=filters,
+        tool_config=types.tools.ToolConfig(
+            id="openai.file_search",
+            args=_dict_filter_none(
+                vector_store_ids=vector_store_ids,
+                max_num_results=max_num_results,
+                ranking=_dump(ranking),
+                filters=filters,
+            ),
         ),
     )
 
@@ -217,7 +129,14 @@ def code_interpreter(
     return types.tools.Tool(
         kind="provider",
         name="code_interpreter",
-        args=CodeInterpreterArgs(container=container),
+        tool_config=types.tools.ToolConfig(
+            id="openai.code_interpreter",
+            args=_dict_filter_none(
+                container=_dump(container)
+                if isinstance(container, CodeInterpreterContainer)
+                else container,
+            ),
+        ),
     )
 
 
@@ -236,23 +155,28 @@ def image_generation(
     return types.tools.Tool(
         kind="provider",
         name="image_generation",
-        args=ImageGenerationArgs(
-            background=background,
-            input_fidelity=input_fidelity,
-            model=model,
-            moderation=moderation,
-            output_compression=output_compression,
-            output_format=output_format,
-            partial_images=partial_images,
-            quality=quality,
-            size=size,
+        tool_config=types.tools.ToolConfig(
+            id="openai.image_generation",
+            args=_dict_filter_none(
+                background=background,
+                input_fidelity=input_fidelity,
+                model=model,
+                moderation=moderation,
+                output_compression=output_compression,
+                output_format=output_format,
+                partial_images=partial_images,
+                quality=quality,
+                size=size,
+            ),
         ),
     )
 
 
 def local_shell() -> types.tools.Tool:
     return types.tools.Tool(
-        kind="provider", name="local_shell", args=LocalShellArgs()
+        kind="provider",
+        name="local_shell",
+        tool_config=types.tools.ToolConfig(id="openai.local_shell"),
     )
 
 
@@ -260,7 +184,10 @@ def shell(*, environment: str | None = None) -> types.tools.Tool:
     return types.tools.Tool(
         kind="provider",
         name="shell",
-        args=ShellArgs(environment=environment),
+        tool_config=types.tools.ToolConfig(
+            id="openai.shell",
+            args=_dict_filter_none(environment=environment),
+        ),
     )
 
 
@@ -268,7 +195,7 @@ def apply_patch() -> types.tools.Tool:
     return types.tools.Tool(
         kind="provider",
         name="apply_patch",
-        args=ApplyPatchArgs(),
+        tool_config=types.tools.ToolConfig(id="openai.apply_patch"),
     )
 
 
@@ -285,14 +212,17 @@ def mcp(
     return types.tools.Tool(
         kind="provider",
         name="mcp",
-        args=McpArgs(
-            server_label=server_label,
-            server_url=server_url,
-            connector_id=connector_id,
-            authorization=authorization,
-            headers=headers,
-            allowed_tools=allowed_tools,
-            server_description=server_description,
+        tool_config=types.tools.ToolConfig(
+            id="openai.mcp",
+            args=_dict_filter_none(
+                server_label=server_label,
+                server_url=server_url,
+                connector_id=connector_id,
+                authorization=authorization,
+                headers=headers,
+                allowed_tools=allowed_tools,
+                server_description=server_description,
+            ),
         ),
     )
 
@@ -306,29 +236,21 @@ def tool_search(
     return types.tools.Tool(
         kind="provider",
         name="tool_search",
-        args=ToolSearchArgs(
-            description=description,
-            parameters=parameters,
-            execution=execution,
+        tool_config=types.tools.ToolConfig(
+            id="openai.tool_search",
+            args=_dict_filter_none(
+                description=description,
+                parameters=parameters,
+                execution=execution,
+            ),
         ),
     )
 
 
 __all__ = [
-    "ApplyPatchArgs",
-    "CodeInterpreterArgs",
     "CodeInterpreterContainer",
-    "FileSearchArgs",
     "FileSearchRanking",
-    "ImageGenerationArgs",
-    "LocalShellArgs",
-    "McpArgs",
-    "OpenAIProviderArgs",
-    "ShellArgs",
-    "ToolSearchArgs",
-    "WebSearchArgs",
     "WebSearchFilters",
-    "WebSearchPreviewArgs",
     "WebSearchUserLocation",
     "apply_patch",
     "code_interpreter",
