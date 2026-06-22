@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
-from collections.abc import AsyncIterable, AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator
 from typing import Any, cast
 
 import async_solipsism  # type: ignore[import-untyped]
@@ -196,10 +196,52 @@ async def test_cleanup_with_non_generator_iterable() -> None:
 
 
 async def test_taskgroup_unwraps_lone_generator_exit() -> None:
-    """A GeneratorExit in the body unwraps from the group it gets wrapped in."""
-    with pytest.raises(GeneratorExit):
+    """A lone GeneratorExit comes back out as a GeneratorExit (aclose-safe)."""
+    with pytest.raises(GeneratorExit) as exc_info:
         async with util.TaskGroup():
             raise GeneratorExit
+    # It is *also* the group, so it stays honest about its origin.
+    assert isinstance(exc_info.value, util.TaskGroupGenExit)
+    assert isinstance(exc_info.value, BaseExceptionGroup)
+
+
+async def test_taskgroup_aclose_swallows_generator_exit() -> None:
+    """aclose() on a gen suspended inside the TaskGroup completes cleanly.
+
+    This is the whole point: a plain ExceptionGroup out of __aexit__ would
+    make aclose() raise instead of treating the close as successful.
+    """
+
+    async def gen() -> AsyncGenerator[int]:
+        async with util.TaskGroup():
+            yield 1
+            yield 2
+
+    g = gen()
+    assert await g.__anext__() == 1
+    # No exception -> the GeneratorExit was accepted as a clean close.
+    await g.aclose()
+
+
+async def test_taskgroup_aclose_still_propagates_task_error() -> None:
+    """A task that fails during aclose() is not swallowed."""
+
+    async def gen() -> AsyncGenerator[int]:
+        async with util.TaskGroup() as tg:
+
+            async def boom() -> None:
+                raise ValueError("x")
+
+            tg.create_task(boom())
+            await asyncio.sleep(0)
+            yield 1
+            yield 2
+
+    g = gen()
+    assert await g.__anext__() == 1
+    with pytest.raises(BaseExceptionGroup) as exc_info:
+        await g.aclose()
+    assert exc_info.group_contains(ValueError, match="x")
 
 
 async def test_taskgroup_generator_exit_with_task_error_propagates() -> None:

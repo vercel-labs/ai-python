@@ -117,18 +117,31 @@ class MultiWaiter[T]:
         return False
 
 
+class TaskGroupGenExit(GeneratorExit, BaseExceptionGroup[BaseException]):
+    """A ``BaseExceptionGroup`` that is *also* a ``GeneratorExit``.
+
+    Async generator ``aclose()`` only accepts a ``GeneratorExit`` (or
+    subclass) propagating out of the generator; a plain
+    ``BaseExceptionGroup`` makes it complain and leaves the exception
+    unretrieved. By being both, this lets the group satisfy the close
+    protocol while still being catchable as the group it really is.
+    """
+
+
 class TaskGroup(asyncio.TaskGroup):
     """asyncio.TaskGroup that directly propagates GeneratorExit.
 
-    If the context body raises a GeneratorExit, we don't want to wrap
-    it in an ExceptionGroup because that will do the wrong thing when
-    it bubbles up.
+    If the context body raises a GeneratorExit, we don't want to leave
+    it wrapped in a plain ExceptionGroup, because that does the wrong
+    thing when it bubbles out through an async generator's aclose().
 
     So if a GeneratorExit is raised inside the context and that is the
-    *only* exception reported, then unwrap it and raise it by itself.
+    *only* exception reported, re-raise the group as a TaskGroupGenExit,
+    which is *also* a GeneratorExit so aclose() is happy.
 
-    If there are multiple exceptions, keep them packaged so as to not
-    lose anything.
+    If there are multiple exceptions, keep them packaged in the plain
+    group so as to not lose anything (a TaskGroupGenExit would be
+    swallowed by aclose(), silently dropping the other exceptions).
     """
 
     async def __aexit__(
@@ -145,7 +158,9 @@ class TaskGroup(asyncio.TaskGroup):
                 and len(eg.exceptions) == 1
                 and eg.exceptions[0] is exc
             ):
-                raise exc from None
+                raise TaskGroupGenExit(
+                    eg.message, list(eg.exceptions)
+                ) from None
             raise
 
 
