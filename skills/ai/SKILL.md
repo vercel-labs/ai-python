@@ -149,6 +149,10 @@ stream.tool_calls   # function tool calls from ai.stream
 stream.usage        # latest reported usage
 ```
 
+If a provider stream ends before its finish event, iteration raises
+`ai.errors.ProviderIncompleteResponseError`. The partial message is still on
+the stream object.
+
 Serialize and restore history with Pydantic JSON:
 
 ```python
@@ -208,7 +212,7 @@ Use schema-only tools with `ai.stream` when the SDK should not execute them:
 tool = ai.Tool(
     kind="function",
     name="get_weather",
-    args=ai.tools.FunctionToolArgs(
+    spec=ai.tools.ToolSpec(
         description="Get current weather for a city.",
         params={
             "type": "object",

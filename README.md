@@ -105,7 +105,7 @@ Built-in tools execute on the provider side and arrive as part of the stream:
 async with ai.stream(
     model,
     [ai.user_message("Latest Formula 1 results?")],
-    tools=[ai.anthropic.tools.web_search(max_uses=3)],
+    tools=[ai.providers.anthropic.tools.web_search(max_uses=3)],
 ) as s:
     async for event in s:
         if isinstance(event, ai.events.TextDelta):
