@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import importlib
 import sys
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol, cast
 
 import agent as agent_
 import fastapi
@@ -17,10 +18,66 @@ import ai
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
+    import starlette.types
+
+
+class _VercelHeaders(Protocol):
+    def set_headers(self, headers: dict[str, str] | None) -> None: ...
+
+
+class VercelOIDCHeadersMiddleware:
+    def __init__(self, app: starlette.types.ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(
+        self,
+        scope: starlette.types.Scope,
+        receive: starlette.types.Receive,
+        send: starlette.types.Send,
+    ) -> None:
+        headers = _vercel_headers()
+        if scope.get("type") != "http" or headers is None:
+            await self.app(scope, receive, send)
+            return
+
+        headers.set_headers(_scope_headers(scope))
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            headers.set_headers(None)
+
+
+def _vercel_headers() -> _VercelHeaders | None:
+    try:
+        return cast(
+            "_VercelHeaders",
+            importlib.import_module("vercel.headers"),
+        )
+    except ModuleNotFoundError as exc:
+        if exc.name not in {"vercel", "vercel.headers"}:
+            raise
+        return None
+
+
+def _scope_headers(scope: starlette.types.Scope) -> dict[str, str]:
+    return {
+        _header_text(key): _header_text(value)
+        for key, value in scope.get("headers", [])
+    }
+
+
+def _header_text(value: object) -> str:
+    if isinstance(value, bytes | bytearray):
+        return bytes(value).decode("latin1")
+    return str(value)
+
+
 app = fastapi.FastAPI(
     title="py-ai-fastapi-chat",
     description="Chat demo using Python Vercel AI SDK",
 )
+
+app.add_middleware(VercelOIDCHeadersMiddleware)
 
 app.add_middleware(
     fastapi.middleware.cors.CORSMiddleware,

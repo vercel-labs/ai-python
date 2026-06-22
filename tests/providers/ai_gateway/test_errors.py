@@ -88,6 +88,21 @@ class TestCreateGatewayError:
         # contextual message includes the key URL
         assert "vercel.com/d?to=" in str(err)
 
+    def test_authentication_error_from_oidc(self) -> None:
+        body = {
+            "error": {
+                "message": "Invalid OIDC token",
+                "type": "authentication_error",
+            }
+        }
+        err = client_errors.create_gateway_error(
+            response_body=body,
+            status_code=401,
+            oidc_token_provided=True,
+        )
+        assert isinstance(err, client_errors.GatewayAuthenticationError)
+        assert "OIDC token" in str(err)
+
     def test_invalid_request_error(self) -> None:
         body = {
             "error": {
