@@ -14,16 +14,14 @@ messages = [
 
 
 async def main() -> None:
-    provider = ai.get_provider("openai")
+    model = ai.get_model(
+        "openai:gpt-5.5",
+        protocol=OpenAIChatCompletionsProtocol(),
+    )
+    provider = model.provider
     if not provider.is_configured():
         print(f"[SKIP] {provider.name} provider is not configured")
         return
-
-    model = ai.Model(
-        "gpt-5.5",
-        provider=provider,
-        protocol=OpenAIChatCompletionsProtocol(),
-    )
 
     try:
         async with ai.stream(model, messages) as stream:

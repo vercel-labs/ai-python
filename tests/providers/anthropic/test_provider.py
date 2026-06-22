@@ -165,8 +165,10 @@ def test_get_provider_raises_installation_error_when_anthropic_sdk_missing(
 
     monkeypatch.setattr(importlib, "import_module", _missing_anthropic)
 
+    provider = ai.get_provider("anthropic", api_key="sk-test")
+
     with pytest.raises(ai.InstallationError) as exc_info:
-        ai.get_provider("anthropic", api_key="sk-test")
+        _ = provider.client
 
     assert "could not import `anthropic`" in str(exc_info.value)
     assert "required to use the anthropic provider" in str(exc_info.value)
@@ -181,7 +183,7 @@ def test_get_provider_accepts_base_url_and_api_key() -> None:
         headers={"X-Custom-Header": "example"},
     )
 
-    model = ai.Model("custom-model", provider=provider)
+    model = ai.Model(id="custom-model", provider=provider)
     assert repr(provider) == "anthropic"
     assert isinstance(provider.protocol, AnthropicMessagesProtocol)
     assert provider.base_url == "https://custom.example.com"

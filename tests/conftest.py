@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator, AsyncIterable, Sequence
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import pydantic
 
@@ -20,20 +20,13 @@ class MockProvider(models.Provider):
     Carries just enough state so that ``Model`` objects can be constructed.
     """
 
-    def __init__(
-        self,
-        *,
-        name: str = "mock",
-        base_url: str = "http://mock.test",
-        api_key_env: str | None = "MOCK_API_KEY",
-    ) -> None:
-        super().__init__(
-            name=name,
-            base_url=base_url,
-            api_key_env=api_key_env,
-        )
-        self._stream_impl: Any | None = None
-        self._generate_impl: Any | None = None
+    provider_class_id: Literal["test-mock-provider"] = "test-mock-provider"
+    name: str = "mock"
+    default_base_url: str = "http://mock.test"
+    api_key_env: str | None = "MOCK_API_KEY"
+
+    _stream_impl: Any | None = pydantic.PrivateAttr(default=None)
+    _generate_impl: Any | None = pydantic.PrivateAttr(default=None)
 
     async def list_models(self) -> list[str]:
         return []

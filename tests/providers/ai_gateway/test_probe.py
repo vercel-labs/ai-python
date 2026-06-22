@@ -33,7 +33,7 @@ def _gateway_client(
         api_key=api_key,
         client=httpx.AsyncClient(transport=httpx.MockTransport(_handler)),
     )
-    return ai.Model(_MODEL_ID, provider=provider)
+    return ai.Model(id=_MODEL_ID, provider=provider)
 
 
 async def test_auth_ok_model_present_succeeds() -> None:

@@ -20,7 +20,7 @@ async def main() -> None:
     )
 
     model = ai.Model(
-        os.environ.get("LOCAL_OPENAI_MODEL", "local-model"),
+        id=os.environ.get("LOCAL_OPENAI_MODEL", "local-model"),
         provider=provider,
     )
 

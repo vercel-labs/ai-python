@@ -7,7 +7,7 @@ responses back to public event/message types.
 import base64
 import json
 from collections.abc import AsyncGenerator, Iterable, Mapping, Sequence
-from typing import Any, TypeVar
+from typing import Any, Literal, TypeVar
 
 import httpx
 import pydantic
@@ -1181,6 +1181,8 @@ async def generate(
 
 class GatewayV3Protocol(base.ProviderProtocol[gateway_client.GatewayClient]):
     """AI Gateway v3 wire protocol."""
+
+    protocol_class_id: Literal["gateway_v3"] = "gateway_v3"
 
     def stream(
         self,

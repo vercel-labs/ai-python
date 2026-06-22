@@ -3,6 +3,8 @@
 import os
 from typing import Any, Self
 
+import pydantic
+
 from ... import _modelsdev
 from ...errors import ConfigurationError
 from ...providers import base
@@ -10,7 +12,7 @@ from ...providers import base
 _DEFAULT_MODEL_ENV = "AI_SDK_DEFAULT_MODEL"
 
 
-class Model:
+class Model(pydantic.BaseModel):
     """Lightweight reference to a model on a specific provider.
 
     * ``id`` — identifier sent to the provider (e.g. ``"claude-sonnet-4-6"``).
@@ -18,37 +20,20 @@ class Model:
     * ``protocol`` — optional wire-protocol override for this model.
     """
 
-    def __init__(
-        self,
-        id: str,
-        *,
-        provider: base.Provider,
-        protocol: base.ProviderProtocol[Any] | None = None,
-    ) -> None:
-        self.id = id
-        self.provider = provider
-        self.protocol = protocol
-
-    def __eq__(self, other: object) -> bool:
-        return (
-            isinstance(other, Model)
-            and self.id == other.id
-            and self.provider is other.provider
-            and self.protocol is other.protocol
-        )
+    id: str
+    provider: base.Provider[Any]
+    protocol: base.ProviderProtocol[Any] | None = pydantic.Field(
+        default=None, exclude_if=lambda v: v is None
+    )
 
     def __repr__(self) -> str:
         return f"Model(id={self.id!r}, provider={self.provider!r})"
 
     def __hash__(self) -> int:
-        return hash((self.id, id(self.provider), id(self.protocol)))
+        return hash((self.id, self.provider, self.protocol))
 
     def with_protocol(self, protocol: base.ProviderProtocol[Any]) -> Self:
-        return self.__class__(
-            id=self.id,
-            provider=self.provider,
-            protocol=protocol,
-        )
+        return self.model_copy(update={"protocol": protocol})
 
 
 def get_model(
@@ -107,4 +92,4 @@ def get_model(
         model_provider_config=model_provider_config,
     )
 
-    return Model(provider_model_id, provider=provider, protocol=protocol)
+    return Model(id=provider_model_id, provider=provider, protocol=protocol)

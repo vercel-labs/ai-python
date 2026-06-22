@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
 import httpx
+import pydantic
 
 from ... import errors as ai_errors
 from .. import base
@@ -13,12 +14,11 @@ from . import protocol as protocol_module
 from . import tools as tools_module
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Iterable, Mapping, Sequence
+    from collections.abc import AsyncGenerator, Mapping, Sequence
     from types import ModuleType
 
     import modelsdotdev
     import openai
-    import pydantic
 
     from ...models.core import model as model_
     from ...models.core import params as params_
@@ -46,23 +46,19 @@ class OpenAICompatibleProvider(base.Provider[OpenAISDKClient]):
         "@ai-sdk/openai-compatible",
     )
 
-    def __init__(
-        self,
-        *,
-        name: str,
-        default_base_url: str,
-        api_key: str | None = None,
-        api_key_env: str | None = None,
-        base_url_env: str | None = None,
-        config_envs: Iterable[str] | None = None,
-        headers: Mapping[str, str] | None = None,
-        env: Mapping[str, str] | None = None,
-        client: OpenAIClient | None = None,
-        protocol: base.ProviderProtocol[Any] | None = None,
-    ) -> None:
+    provider_class_id: Literal["openai-compatible"] = "openai-compatible"
+
+    _http_client: httpx.AsyncClient | None = pydantic.PrivateAttr(default=None)
+    _close_client_on_aclose: bool = pydantic.PrivateAttr(default=False)
+    _has_user_sdk_client: bool = pydantic.PrivateAttr(default=False)
+
+    def model_post_init(self, __context: Any) -> None:
+        self._close_client_on_aclose = True
+
+    def _set_runtime_client(self, client: OpenAIClient | None) -> None:
         openai_sdk = None
         if client is not None and not isinstance(client, httpx.AsyncClient):
-            openai_sdk = _sdk.import_sdk(provider=name)
+            openai_sdk = _sdk.import_sdk(provider=self.name)
 
         if openai_sdk is not None and isinstance(
             client, openai_sdk.AsyncOpenAI
@@ -70,33 +66,21 @@ class OpenAICompatibleProvider(base.Provider[OpenAISDKClient]):
             sdk_client = client
             http_client = None
             self._has_user_sdk_client = True
+            self._close_client_on_aclose = False
         elif isinstance(client, httpx.AsyncClient) or client is None:
             sdk_client = None
             http_client = client
             self._has_user_sdk_client = False
+            self._close_client_on_aclose = client is None
         else:
             raise TypeError(
                 "OpenAI providers require an httpx.AsyncClient or "
                 "openai.AsyncOpenAI"
             )
 
-        super().__init__(
-            name=name,
-            base_url=default_base_url,
-            protocol=protocol or protocol_module.default_protocol(name),
-            api_key=api_key,
-            api_key_env=api_key_env,
-            base_url_env=base_url_env,
-            config_envs=config_envs,
-            headers=headers,
-            env=env,
-        )
-        self._close_client_on_aclose = (
-            sdk_client is None and http_client is None
-        )
-        if sdk_client is None:
-            sdk_client = self._make_sdk_client(http_client=http_client)
-        self._set_client(sdk_client)
+        self._http_client = http_client
+        if sdk_client is not None:
+            self._set_client(sdk_client)
 
     def _make_sdk_client(
         self,
@@ -117,6 +101,19 @@ class OpenAICompatibleProvider(base.Provider[OpenAISDKClient]):
         """Provider SDK client used for OpenAI-compatible API requests."""
         return self.client
 
+    @property
+    def client(self) -> OpenAISDKClient:
+        """Lazily-created SDK client for OpenAI-compatible requests."""
+        if self._client is None:
+            self._set_client(
+                self._make_sdk_client(http_client=self._http_client)
+            )
+        return super().client
+
+    def default_protocol(self) -> base.ProviderProtocol[OpenAISDKClient]:
+        """Return the default OpenAI-compatible protocol."""
+        return protocol_module.default_protocol(self.name)
+
     def is_configured(self) -> bool:
         if self._has_user_sdk_client:
             return True
@@ -126,7 +123,7 @@ class OpenAICompatibleProvider(base.Provider[OpenAISDKClient]):
 
     async def aclose(self) -> None:
         """Close the provider-owned SDK client, if any."""
-        if self._close_client_on_aclose:
+        if self._close_client_on_aclose and self._client is not None:
             await self.client.close()
 
     def stream(
@@ -173,20 +170,21 @@ class OpenAICompatibleProvider(base.Provider[OpenAISDKClient]):
         api_key_env, config_envs = base.provider_config(
             provider, model_provider_config
         )
-        return cls(
+        provider_instance = cls(
             name=provider.id,
             default_base_url=resolved_base_url,
-            api_key=api_key,
+            api_key_value=api_key,
             api_key_env=api_key_env,
             base_url_env=_BASE_URL_ENV
             if provider.id == "openai" and base_url is None
             else None,
             config_envs=config_envs,
-            headers=headers,
-            env=env,
-            client=client,
-            protocol=protocol,
+            headers=dict(headers or {}),
+            env=dict(env or {}),
+            protocol_override=protocol,
         )
+        provider_instance._set_runtime_client(client)
+        return provider_instance
 
     @property
     def tools(self) -> ModuleType:

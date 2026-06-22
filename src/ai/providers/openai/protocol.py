@@ -9,7 +9,7 @@ from __future__ import annotations
 import base64
 import json
 from collections.abc import AsyncGenerator, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from ... import errors as ai_errors
 from ... import types
@@ -707,6 +707,10 @@ async def stream(
 
 class OpenAIChatCompletionsProtocol(base.ProviderProtocol[Any]):
     """OpenAI Chat Completions protocol."""
+
+    protocol_class_id: Literal["openai_chat_completions"] = (
+        "openai_chat_completions"
+    )
 
     def stream(
         self,
@@ -1797,6 +1801,8 @@ async def _stream_responses(
 
 class OpenAIResponsesProtocol(base.ProviderProtocol[Any]):
     """OpenAI Responses API protocol."""
+
+    protocol_class_id: Literal["openai_responses"] = "openai_responses"
 
     def stream(
         self,

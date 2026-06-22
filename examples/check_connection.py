@@ -24,7 +24,7 @@ async def _check(name: str, provider: ai.Provider, model_id: str) -> None:
     if not provider.is_configured():
         print(f"  [SKIP]  {provider.name} provider is not configured")
         return
-    model = ai.Model(model_id, provider=provider)
+    model = ai.Model(id=model_id, provider=provider)
     try:
         await ai.probe(model)
         print(f"  [OK]    {name}/{model_id}")

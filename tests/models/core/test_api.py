@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator, Sequence
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import pydantic
 import pytest
@@ -55,6 +55,19 @@ def test_inference_request_params_with_provider_params() -> None:
         GatewayParams: replacement_gateway,
         OpenAIParams: openai,
     }
+
+
+def test_context_json_roundtrip_includes_model() -> None:
+    context = ai.Context(
+        model=ai.get_model("gateway:anthropic/claude-sonnet-4.6"),
+        messages=[ai.user_message("Hi")],
+        tools=[],
+    )
+
+    restored = ai.Context.model_validate_json(context.model_dump_json())
+
+    assert restored.model.id == "anthropic/claude-sonnet-4.6"
+    assert isinstance(restored.model.provider, ai.providers.GatewayProvider)
 
 
 async def test_stream_aggregates_registered_adapter_events() -> None:
@@ -273,6 +286,10 @@ async def test_stream_requires_model_messages_or_context() -> None:
 
 async def test_stream_uses_model_protocol() -> None:
     class OverrideProtocol(models.ProviderProtocol[Any]):
+        protocol_class_id: Literal["test-override-stream-protocol"] = (
+            "test-override-stream-protocol"
+        )
+
         def stream(
             self,
             client: Any,
@@ -345,6 +362,10 @@ async def test_generate_uses_model_protocol() -> None:
     )
 
     class OverrideProtocol(models.ProviderProtocol[Any]):
+        protocol_class_id: Literal["test-override-generate-protocol"] = (
+            "test-override-generate-protocol"
+        )
+
         async def generate(
             self,
             client: Any,
@@ -367,17 +388,19 @@ async def test_generate_uses_model_protocol() -> None:
 
 
 class _CheckProvider(MockProvider):
-    def __init__(self) -> None:
-        super().__init__()
-        self.checked_model: models.Model | None = None
+    _checked_model: models.Model | None = pydantic.PrivateAttr(default=None)
+
+    @property
+    def checked_model(self) -> models.Model | None:
+        return self._checked_model
 
     async def probe(self, model: models.Model) -> None:
-        self.checked_model = model
+        self._checked_model = model
 
 
 async def test_probe_delegates_to_model_provider() -> None:
     provider = _CheckProvider()
-    model = models.Model("mock-model", provider=provider)
+    model = models.Model(id="mock-model", provider=provider)
 
     await models.probe(model)
 

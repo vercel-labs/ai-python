@@ -5,7 +5,9 @@ Defines the callable :data:`ai_gateway` provider.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, Literal
+
+import pydantic
 
 from ... import errors as ai_errors
 from .. import base
@@ -20,7 +22,6 @@ if TYPE_CHECKING:
 
     import httpx
     import modelsdotdev
-    import pydantic
 
     from ...models.core import model as model_
     from ...models.core import params as params_
@@ -37,45 +38,39 @@ class GatewayProvider(base.Provider[gateway_client.GatewayClient]):
 
     handles: ClassVar[tuple[str, ...]] = ("vercel", "@ai-sdk/gateway")
 
-    def __init__(
-        self,
-        *,
-        api_key: str | None = None,
-        base_url: str = _BASE_URL,
-        headers: Mapping[str, str] | None = None,
-        env: Mapping[str, str] | None = None,
-        client: httpx.AsyncClient | None = None,
-        protocol: base.ProviderProtocol[Any] | None = None,
-    ) -> None:
-        super().__init__(
-            name="ai-gateway",
-            base_url=base_url,
-            protocol=protocol or protocol_module.GatewayV3Protocol(),
-            api_key=api_key,
-            api_key_env=_API_KEY_ENV,
-            headers=headers,
-            env=env,
-        )
-        self._set_client(
-            gateway_client.GatewayClient(
-                base_url=self.base_url,
-                api_key=self.api_key,
-                headers=self.headers,
-                client=client,
-            )
-        )
+    provider_class_id: Literal["gateway"] = "gateway"
+    name: Literal["ai-gateway"] = "ai-gateway"
+    default_base_url: str = _BASE_URL
+    api_key_env: str | None = _API_KEY_ENV
+
+    _http_client: httpx.AsyncClient | None = pydantic.PrivateAttr(default=None)
+
+    def _set_http_client(self, client: httpx.AsyncClient | None) -> None:
+        self._http_client = client
 
     @property
     def client(self) -> gateway_client.GatewayClient:
-        client = super().client
-        client.base_url = self.base_url
-        client.api_key = self.api_key
-        client.headers = self.headers
-        return client
+        if self._client is None:
+            self._set_client(
+                gateway_client.GatewayClient(
+                    base_url=self.base_url,
+                    api_key=self.api_key,
+                    headers=self.headers,
+                    client=self._http_client,
+                )
+            )
+        return super().client  # same return value, no None in the type
+
+    def default_protocol(
+        self,
+    ) -> base.ProviderProtocol[gateway_client.GatewayClient]:
+        """Return the default Gateway protocol."""
+        return protocol_module.GatewayV3Protocol()
 
     async def aclose(self) -> None:
         """Close the provider-owned Gateway client, if any."""
-        await self.client.aclose()
+        if self._client is not None:
+            await self.client.aclose()
 
     def stream(
         self,
@@ -117,14 +112,15 @@ class GatewayProvider(base.Provider[gateway_client.GatewayClient]):
         client: httpx.AsyncClient | None = None,
         protocol: base.ProviderProtocol[Any] | None = None,
     ) -> base.Provider[gateway_client.GatewayClient]:
-        return cls(
-            api_key=api_key,
-            base_url=base_url or _BASE_URL,
-            headers=headers,
-            env=env,
-            client=client,
-            protocol=protocol,
+        provider_instance = cls(
+            default_base_url=base_url or _BASE_URL,
+            protocol_override=protocol,
+            api_key_value=api_key,
+            headers=dict(headers or {}),
+            env=dict(env or {}),
         )
+        provider_instance._set_http_client(client)
+        return provider_instance
 
     @property
     def tools(self) -> ModuleType:

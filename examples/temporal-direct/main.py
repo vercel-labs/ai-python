@@ -49,26 +49,6 @@ with temporalio.workflow.unsafe.imports_passed_through():
 MODEL_ID = "gateway:anthropic/claude-sonnet-4.6"
 
 
-# ── Workflow-safe model placeholder ──────────────────────────────
-#
-# ``agent.run`` requires a ``Model``, but a real one can't be built
-# inside the workflow: ``ai.get_model("gateway:...")`` constructs an
-# ``httpx.AsyncClient`` at provider-init time, which imports
-# httpcore/anyio and trips the Temporal sandbox (``threading.local``
-# at module load). Our loop never calls the model directly anyway --
-# every LLM call is delegated to ``llm_call_activity``, which runs
-# outside the sandbox and resolves the real model by id there.
-#
-# So hand the workflow a placeholder ``Model`` whose provider builds
-# no client. It carries the real model id (so the activity can
-# resolve it) but is safe to construct inside the sandbox.
-class WorkflowModelProvider(ai.Provider[Any]):
-    """A clientless provider, safe to construct in a workflow sandbox."""
-
-    def __init__(self) -> None:
-        super().__init__(name="workflow-placeholder", base_url="")
-
-
 # ── Tool definitions ─────────────────────────────────────────────
 #
 # Declared with @ai.tool so the framework can extract JSON schemas
@@ -228,7 +208,7 @@ def _activity_tool_call(
 class WeatherWorkflow:
     @temporalio.workflow.run
     async def run(self, user_query: str) -> str:
-        model = ai.Model(MODEL_ID, provider=WorkflowModelProvider())
+        model = ai.get_model(MODEL_ID)
         messages: list[ai.messages.Message] = [
             ai.system_message(
                 "Answer questions using the weather and population tools."
