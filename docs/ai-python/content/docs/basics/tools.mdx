@@ -80,7 +80,7 @@ tool calls but you do not want the SDK to execute them:
 tool = ai.Tool(
     kind="function",
     name="contact_mothership",
-    args=ai.tools.FunctionToolArgs(
+    spec=ai.tools.ToolSpec(
         description="Contact the mothership.",
         params={
             "type": "object",

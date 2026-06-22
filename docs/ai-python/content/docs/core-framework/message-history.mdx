@@ -67,7 +67,7 @@ integrity.prepare_messages(messages, mode="strict")
 
 ## Replay markers
 
-Replay markers are runtime-only flags on assistant messages. They let a resumed
+Replay markers are internal flags on assistant messages. They let a resumed
 agent dispatch existing tool calls without another model request:
 
 ```python
@@ -76,7 +76,7 @@ if messages[-1].replay:
         ...
 ```
 
-Replay flags are excluded from JSON serialization.
+Replay flags are serialized when true and omitted when false.
 
 ## Persisted history
 
@@ -88,4 +88,6 @@ restored = [ai.messages.Message.model_validate(item) for item in encoded]
 ```
 
 Persist messages after each completed or suspended run. Recreate live runtime
-objects, providers, and hooks on the next request.
+objects, providers, and hooks on the next request. Resume state such as replay
+markers, cached tool results, and model-facing tool input is included when
+present.

@@ -54,6 +54,10 @@ usage = stream.usage
 Use `stream.message` when you need to append the assistant turn to your own
 history. Use `stream.text` when you only need the final text.
 
+If a provider stream ends before its finish event, iteration raises
+`ai.errors.ProviderIncompleteResponseError`. The partial message is still
+available on `stream.message`.
+
 ## Use structured output
 
 Pass a Pydantic model as `output_type` when you want the final text parsed as
