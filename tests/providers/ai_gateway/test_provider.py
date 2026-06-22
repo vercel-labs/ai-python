@@ -1,11 +1,41 @@
 from __future__ import annotations
 
+import importlib
+from collections.abc import Callable
+from types import ModuleType
+
 import httpx
 import pytest
-from vercel import oidc as vercel_oidc
 
 import ai
 from ai.providers.ai_gateway.client import errors
+
+
+def _set_oidc_token(
+    monkeypatch: pytest.MonkeyPatch,
+    get_token: Callable[[], str],
+) -> None:
+    real_import_module = importlib.import_module
+    oidc = ModuleType("vercel.oidc")
+    oidc.__dict__["get_vercel_oidc_token"] = get_token
+
+    def _import_module(name: str, package: str | None = None) -> ModuleType:
+        if name == "vercel.oidc":
+            return oidc
+        return real_import_module(name, package)
+
+    monkeypatch.setattr(importlib, "import_module", _import_module)
+
+
+def _fail_oidc_import(monkeypatch: pytest.MonkeyPatch) -> None:
+    real_import_module = importlib.import_module
+
+    def _import_module(name: str, package: str | None = None) -> ModuleType:
+        if name == "vercel.oidc":
+            pytest.fail("OIDC should not be imported when an API key is set")
+        return real_import_module(name, package)
+
+    monkeypatch.setattr(importlib, "import_module", _import_module)
 
 
 async def test_list_models_gets_config_with_gateway_headers_and_sorts_ids() -> (
@@ -79,11 +109,7 @@ async def test_list_models_uses_oidc_on_vercel_when_no_api_key(
 ) -> None:
     monkeypatch.delenv("AI_GATEWAY_API_KEY", raising=False)
     monkeypatch.setenv("VERCEL", "1")
-    monkeypatch.setattr(
-        vercel_oidc,
-        "get_vercel_oidc_token",
-        lambda: "oidc-test-token",
-    )
+    _set_oidc_token(monkeypatch, lambda: "oidc-test-token")
     captured_headers: dict[str, str] = {}
 
     def _handler(request: httpx.Request) -> httpx.Response:
@@ -115,11 +141,7 @@ async def test_list_models_uses_oidc_token_env_without_vercel_flag(
     monkeypatch.delenv("AI_GATEWAY_API_KEY", raising=False)
     monkeypatch.delenv("VERCEL", raising=False)
     monkeypatch.setenv("VERCEL_OIDC_TOKEN", "pulled-oidc-token")
-    monkeypatch.setattr(
-        vercel_oidc,
-        "get_vercel_oidc_token",
-        lambda: "pulled-oidc-token",
-    )
+    _set_oidc_token(monkeypatch, lambda: "pulled-oidc-token")
     captured_headers: dict[str, str] = {}
 
     def _handler(request: httpx.Request) -> httpx.Response:
@@ -141,20 +163,45 @@ async def test_list_models_uses_oidc_token_env_without_vercel_flag(
     assert captured_headers["ai-gateway-auth-method"] == "oidc"
 
 
+async def test_oidc_expected_without_vercel_extra_raises_installation_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("AI_GATEWAY_API_KEY", raising=False)
+    monkeypatch.setenv("VERCEL", "1")
+    real_import_module = importlib.import_module
+
+    def _import_module(name: str, package: str | None = None) -> ModuleType:
+        if name == "vercel.oidc":
+            raise ModuleNotFoundError(name="vercel")
+        return real_import_module(name, package)
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        pytest.fail("Gateway should not be called without the OIDC helper")
+
+    monkeypatch.setattr(importlib, "import_module", _import_module)
+    provider = ai.get_provider(
+        "vercel",
+        base_url="https://gateway.test/v3/ai",
+        client=httpx.AsyncClient(transport=httpx.MockTransport(_handler)),
+    )
+
+    try:
+        with pytest.raises(ai.InstallationError) as exc_info:
+            await provider.list_models()
+    finally:
+        await provider.aclose()
+
+    assert "AI Gateway OIDC authentication requires" in str(exc_info.value)
+    assert "ai[vercel]" in str(exc_info.value)
+    assert "AI_GATEWAY_API_KEY" in str(exc_info.value)
+
+
 async def test_api_key_env_takes_precedence_over_oidc(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("AI_GATEWAY_API_KEY", "env-test-key")
     monkeypatch.setenv("VERCEL", "1")
-
-    def _fail_oidc() -> str:
-        pytest.fail("OIDC should not be fetched when an API key is set")
-
-    monkeypatch.setattr(
-        vercel_oidc,
-        "get_vercel_oidc_token",
-        _fail_oidc,
-    )
+    _fail_oidc_import(monkeypatch)
     captured_headers: dict[str, str] = {}
 
     def _handler(request: httpx.Request) -> httpx.Response:
@@ -181,15 +228,7 @@ async def test_explicit_api_key_takes_precedence_over_oidc(
 ) -> None:
     monkeypatch.setenv("AI_GATEWAY_API_KEY", "env-test-key")
     monkeypatch.setenv("VERCEL", "1")
-
-    def _fail_oidc() -> str:
-        pytest.fail("OIDC should not be fetched when an API key is set")
-
-    monkeypatch.setattr(
-        vercel_oidc,
-        "get_vercel_oidc_token",
-        _fail_oidc,
-    )
+    _fail_oidc_import(monkeypatch)
     captured_headers: dict[str, str] = {}
 
     def _handler(request: httpx.Request) -> httpx.Response:

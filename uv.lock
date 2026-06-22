@@ -19,7 +19,6 @@ dependencies = [
     { name = "modelsdotdev" },
     { name = "pydantic" },
     { name = "typing-extensions" },
-    { name = "vercel" },
 ]
 
 [package.optional-dependencies]
@@ -31,6 +30,9 @@ mcp = [
 ]
 openai = [
     { name = "openai" },
+]
+vercel = [
+    { name = "vercel" },
 ]
 
 [package.dev-dependencies]
@@ -63,9 +65,9 @@ requires-dist = [
     { name = "openai", marker = "extra == 'openai'", specifier = ">=2.14.0" },
     { name = "pydantic", specifier = ">=2.12.5" },
     { name = "typing-extensions", specifier = ">=4.15.0" },
-    { name = "vercel", specifier = ">=0.5.9" },
+    { name = "vercel", marker = "extra == 'vercel'", specifier = ">=0.5.9" },
 ]
-provides-extras = ["anthropic", "mcp", "openai"]
+provides-extras = ["anthropic", "mcp", "openai", "vercel"]
 
 [package.metadata.requires-dev]
 dev = [

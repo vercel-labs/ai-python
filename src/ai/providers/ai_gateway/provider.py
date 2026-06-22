@@ -5,12 +5,10 @@ Defines the callable :data:`ai_gateway` provider.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, ClassVar
-
-from vercel import oidc
+from typing import TYPE_CHECKING, Any, ClassVar, Protocol, cast
 
 from ... import errors as ai_errors
-from .. import base
+from .. import _optional, base
 from . import client as gateway_client
 from . import errors
 from . import protocol as protocol_module
@@ -34,6 +32,30 @@ _BASE_URL = "https://ai-gateway.vercel.sh/v3/ai"
 _API_KEY_ENV = "AI_GATEWAY_API_KEY"
 _VERCEL_ENV = "VERCEL"
 _OIDC_TOKEN_ENV = "VERCEL_OIDC_TOKEN"
+
+
+class _VercelOidc(Protocol):
+    def get_vercel_oidc_token(self) -> str: ...
+
+
+def _get_vercel_oidc_token() -> str:
+    try:
+        oidc = cast(
+            "_VercelOidc",
+            _optional.import_optional_sdk(
+                "vercel.oidc",
+                provider="AI Gateway OIDC",
+                extra="vercel",
+            ),
+        )
+    except ai_errors.InstallationError as exc:
+        raise ai_errors.InstallationError(
+            "AI Gateway OIDC authentication requires the optional `vercel` "
+            'package. Install it with `pip install "ai[vercel]"` or '
+            '`uv add "ai[vercel]"`, or set `AI_GATEWAY_API_KEY` to use '
+            "API key authentication."
+        ) from exc
+    return oidc.get_vercel_oidc_token()
 
 
 class GatewayProvider(base.Provider[gateway_client.GatewayClient]):
@@ -87,7 +109,7 @@ class GatewayProvider(base.Provider[gateway_client.GatewayClient]):
         if self._config_value(_VERCEL_ENV) == "1" or self._config_value(
             _OIDC_TOKEN_ENV
         ):
-            return oidc.get_vercel_oidc_token(), "oidc"
+            return _get_vercel_oidc_token(), "oidc"
         return None, None
 
     def is_configured(self) -> bool:

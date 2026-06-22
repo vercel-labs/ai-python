@@ -32,13 +32,15 @@ dependencies = [
     "modelsdotdev==0.*",
     "pydantic>=2.12.5",
     "typing-extensions>=4.15.0",
-    "vercel>=0.5.9",
 ]
 
 [project.optional-dependencies]
 anthropic = ["anthropic>=0.83.0"]
 mcp = ["mcp>=1.18.0"]
 openai = ["openai>=2.14.0"]
+vercel = [
+    "vercel>=0.5.9",
+]
 
 [build-system]
 requires = ["hatchling", "uv-dynamic-versioning>=0.7.0"]
