@@ -1,0 +1,21 @@
+---
+title: "ai.messages tool parts"
+description: "Reference for tool-related message parts."
+type: reference
+summary: "Reference for tool call, tool result, built-in tool, and hook parts."
+---
+
+Tool parts store tool calls, results, built-in provider tool activity, and
+hook suspensions inside `ai.messages.Message` values.
+
+## Parts
+
+- `ToolCallPart`
+- `ToolResultPart`
+- `BuiltinToolCallPart`
+- `BuiltinToolReturnPart`
+- `HookPart`
+
+`ToolResultPart.get_model_input()` returns the value sent back to the model.
+Aggregator-backed tools can keep a rich `result` while sending a simpler
+model-facing value.

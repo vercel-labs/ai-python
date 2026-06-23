@@ -1,0 +1,28 @@
+---
+title: "ai"
+description: "Reference for top-level ai exports."
+type: reference
+summary: "Reference for names imported directly from ai."
+---
+
+Import `ai` for application code.
+
+```python
+import ai
+
+model = ai.get_model("anthropic/claude-sonnet-4")
+messages = [ai.user_message("Hello")]
+```
+
+This section covers names imported directly from `ai`: model calls, model
+objects and params, message builders, agent primitives, tool primitives,
+provider lookup, and provider base types.
+
+Use sibling module sections for public submodule APIs:
+
+- `ai.events`
+- `ai.messages`
+- `ai.tools`
+- `ai.providers`
+- `ai.agents`
+- `ai.types`

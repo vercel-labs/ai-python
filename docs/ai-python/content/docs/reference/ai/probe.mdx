@@ -1,0 +1,15 @@
+---
+title: "ai.probe"
+description: Check whether a provider can reach a model.
+type: reference
+summary: Reference for ai.probe.
+---
+
+`probe` asks the model provider to verify that a model exists and is reachable.
+
+```python
+await ai.probe(model)
+```
+
+It raises a provider error unless the provider is configured, reachable, and
+able to find the model.

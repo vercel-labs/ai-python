@@ -1,0 +1,21 @@
+---
+title: "ai.errors provider errors"
+description: Reference for provider API errors.
+type: reference
+summary: Reference for ProviderError and ProviderAPIError subclasses.
+---
+
+Provider errors represent failures raised by model providers.
+
+## Types
+
+- `ProviderError`
+- `ProviderNotConfiguredError`
+- `ProviderAPIError`
+- `ProviderConnectionError`
+- `ProviderTimeoutError`
+- `ProviderResponseError`
+- `ProviderIncompleteResponseError`
+
+`ProviderAPIError` includes `request_id`, `http_context`, `body`, `code`,
+`param`, `type`, and `is_retryable`.

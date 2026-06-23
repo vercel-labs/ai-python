@@ -1,0 +1,21 @@
+---
+title: "ai.agent"
+description: Create an Agent with the default loop.
+type: reference
+summary: Reference for ai.agent.
+---
+
+`agent` creates an `Agent`.
+
+```python
+agent = ai.agent(tools=[contact_mothership])
+```
+
+## Arguments
+
+- `tools`: Optional `AgentTool` values from `@ai.tool` and schema-only `ai.Tool`
+  declarations for provider-executed tools.
+
+## Return value
+
+Returns `ai.Agent`.

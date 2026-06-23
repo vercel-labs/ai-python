@@ -1,0 +1,24 @@
+---
+title: "ai.errors helpers"
+description: Reference for error helper types and functions.
+type: reference
+summary: Reference for HTTPErrorContext and http_status_to_provider_status_error_class.
+---
+
+Error helpers expose normalized HTTP context and status-code mapping.
+
+## HTTPErrorContext
+
+```python
+context.status_code
+context.request
+context.response
+```
+
+## http_status_to_provider_status_error_class
+
+```python
+error_cls = ai.errors.http_status_to_provider_status_error_class(429)
+```
+
+Returns the provider status error class for an HTTP status code.

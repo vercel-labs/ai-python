@@ -1,0 +1,9 @@
+{
+  "title": "ai.mcp",
+  "description": "Reference for MCP tool loading APIs.",
+  "pages": [
+    "stdio-tools",
+    "http-tools",
+    "close-connections"
+  ]
+}

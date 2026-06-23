@@ -1,0 +1,13 @@
+---
+title: "ai.tools.ToolApproval"
+description: "Payload model for human tool approvals."
+type: reference
+summary: "Reference for ai.tools.ToolApproval."
+---
+
+`ToolApproval` is a Pydantic model used with hooks and UI adapters when a
+tool call needs external approval.
+
+```python
+approval = await ai.hook("approve_tool", payload=ai.tools.ToolApproval)
+```

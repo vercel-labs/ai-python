@@ -1,0 +1,32 @@
+---
+title: "ai.Provider"
+description: Reference for provider instances.
+type: reference
+summary: Reference for ai.Provider.
+---
+
+Provider instances own credentials, clients, endpoints, model listing, and wire
+translation.
+
+```python
+provider.name
+provider.base_url
+provider.default_base_url
+provider.api_key
+provider.api_key_env
+provider.base_url_env
+provider.headers
+provider.client
+provider.is_configured()
+await provider.list_models()
+await provider.probe(model)
+await provider.aclose()
+```
+
+`provider.stream(...)` and `provider.generate(...)` are usually called through
+`ai.stream` and `ai.generate`.
+
+## Custom providers
+
+Add a provider by subclassing `ai.Provider`, setting `handles`, and
+implementing provider-specific behavior.

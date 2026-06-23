@@ -1,0 +1,24 @@
+---
+title: "ai.ToolRunner"
+description: Schedule and collect tool calls in custom loops.
+type: reference
+summary: Reference for ai.ToolRunner.
+---
+
+Custom loops use `Context` to resolve model tool calls and `ToolRunner` to run
+them.
+
+```python
+async with ai.ToolRunner() as runner:
+    runner.schedule(tool_call)
+    async for result in runner.events():
+        ...
+    message = runner.get_tool_message()
+```
+
+`schedule` starts the call in the runner's task group. `events()` yields
+`ToolCallResult` values as calls finish. `get_tool_message()` merges collected
+results into one `role="tool"` message.
+
+Use `add_result(result)` when a custom loop executes a tool itself but still
+wants the runner to aggregate the result message.

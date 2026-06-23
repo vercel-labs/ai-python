@@ -1,0 +1,17 @@
+---
+title: "ai.providers.anthropic"
+description: Reference for Anthropic-compatible provider APIs.
+type: reference
+summary: Reference for ai.providers.anthropic.
+---
+
+`ai.providers.anthropic` contains the Anthropic-compatible provider, protocol,
+and provider-executed tools.
+
+```python
+provider = ai.get_provider("anthropic")
+model = ai.Model("claude-sonnet-4-6", provider=provider)
+```
+
+The optional upstream Anthropic SDK loads lazily when the provider creates or
+uses an SDK client.

@@ -1,0 +1,35 @@
+---
+title: "ai.models"
+description: "Reference for the model namespace."
+type: reference
+summary: "Namespace mirror for model calls, model objects, and model params."
+---
+
+`ai.models` reexports the model APIs that are also available from `ai`.
+Prefer top-level imports in application code:
+
+```python
+import ai
+
+model = ai.get_model("anthropic/claude-sonnet-4")
+async with ai.stream(model, [ai.user_message("Hello")]) as stream:
+    ...
+```
+
+Use `ai.models` when a namespace import makes code clearer, especially in
+library code that groups model-layer types separately.
+
+## Public APIs
+
+- `stream`
+- `generate`
+- `probe`
+- `get_model`
+- `Model`
+- `Stream`
+- `InferenceRequestParams`
+- model, sampler, routing, output, and media generation params
+- executor and request protocols
+
+The deeper `ai.models.core` package is an implementation layout. Public docs
+should usually point users at `ai` or `ai.models`.
