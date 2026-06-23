@@ -1,9 +1,11 @@
 ---
-name: streaming_tools
+name: ai-python-streaming-tools
 description: Use for Python ai SDK tools that stream partial output, nested agent events, MessageBundle values, or preliminary UI output.
+metadata:
+  sdk-version: "0.2.1"
 ---
 
-# streaming_tools
+# ai-python-streaming-tools
 
 Make a streaming tool an async generator.
 

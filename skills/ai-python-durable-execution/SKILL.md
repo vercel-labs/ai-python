@@ -1,9 +1,11 @@
 ---
-name: durable_execution
+name: ai-python-durable-execution
 description: Use for Python ai SDK durable execution, serialization boundaries, replay, and workflow engines such as Temporal.
+metadata:
+  sdk-version: "0.2.1"
 ---
 
-# durable_execution
+# ai-python-durable-execution
 
 Durability belongs at I/O boundaries. Keep the framework pieces when possible:
 `Agent`, `Context`, messages, `ai.stream`, `ToolRunner`, and `@ai.tool`.

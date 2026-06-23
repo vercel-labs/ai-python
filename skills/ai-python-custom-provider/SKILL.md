@@ -1,9 +1,11 @@
 ---
-name: custom_provider
+name: ai-python-custom-provider
 description: Use for writing custom Python ai SDK providers and protocols.
+metadata:
+  sdk-version: "0.2.1"
 ---
 
-# custom_provider
+# ai-python-custom-provider
 
 Providers emit model events. They do not run Python tools. `ai.stream` collects
 events into a `Message`. `ai.Agent` adds tool execution, hooks, and replay.

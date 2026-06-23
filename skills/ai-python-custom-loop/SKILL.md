@@ -1,9 +1,11 @@
 ---
-name: custom_loop
+name: ai-python-custom-loop
 description: Use when changing a Python ai SDK agent loop for custom tool order, routing, logging, hooks, replay, or scheduling.
+metadata:
+  sdk-version: "0.2.1"
 ---
 
-# custom_loop
+# ai-python-custom-loop
 
 Keep the default shape unless you must change control flow:
 
@@ -37,5 +39,5 @@ Rules:
 - If you make a result yourself, use `runner.add_result(ai.tool_result(...))`.
 - Add `stream.message`, then `runner.get_tool_message()`. `context.add(...)` skips replay messages.
 - Every tool call must get one tool result.
-- For hooks, let `context.resolve(...)` build the gated call. Use `serverless_execution` for request boundaries.
-- For durable calls, keep this shape and wrap only model or tool I/O. Use `durable_execution`.
+- For hooks, let `context.resolve(...)` build the gated call. Use `ai-python-serverless-execution` for request boundaries.
+- For durable calls, keep this shape and wrap only model or tool I/O. Use `ai-python-durable-execution`.
