@@ -1,6 +1,6 @@
 ---
 name: ai-python-durable-execution
-description: Use for Python ai SDK durable execution, serialization boundaries, replay, and workflow engines such as Temporal.
+description: Use when adding durable execution to AI SDK for Python or serializing messages.
 metadata:
   sdk-version: "0.2.1"
 ---

@@ -1,6 +1,6 @@
 ---
 name: ai-python-subagents
-description: Use for the subagent-as-a-tool pattern and other Python ai SDK multi-agent handoffs.
+description: Use for the subagent-as-a-tool pattern.
 metadata:
   sdk-version: "0.2.1"
 ---

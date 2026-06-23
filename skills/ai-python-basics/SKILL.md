@@ -1,11 +1,11 @@
 ---
 name: ai-python-basics
-description: Use for Python ai SDK basics: models, messages, streaming, tools, agents, and the minimal happy path.
+description: Use for AI SDK for Python basics. Configure a model, make messages, stream, declare tools, build a basic agent.
 metadata:
   sdk-version: "0.2.1"
 ---
 
-# ai-python
+# ai-python-basics
 
 Install with `uv add ai`.
 
