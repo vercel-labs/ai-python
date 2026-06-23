@@ -1,0 +1,51 @@
+---
+title: "ai.mcp"
+description: Reference for MCP tool loading APIs.
+type: reference
+summary: Reference for ai.mcp.
+---
+
+`ai.mcp` loads MCP server tools as `AgentTool` values.
+
+## get_stdio_tools
+
+`get_stdio_tools` starts an MCP server subprocess and returns `AgentTool`
+values that can be passed to `ai.agent`.
+
+```python
+tools = await ai.mcp.get_stdio_tools(
+    "npx", "-y", "@modelcontextprotocol/server-filesystem", "/tmp"
+)
+```
+
+Arguments:
+
+- `command`: Subprocess command.
+- `*args`: Subprocess arguments.
+- `env`: Optional environment variables.
+- `cwd`: Optional working directory.
+- `tool_prefix`: Optional prefix for tool names.
+
+## get_http_tools
+
+`get_http_tools` connects to an MCP HTTP server and returns `AgentTool` values
+that can be passed to `ai.agent`.
+
+```python
+tools = await ai.mcp.get_http_tools("https://example.com/mcp")
+```
+
+Arguments:
+
+- `url`: MCP server endpoint.
+- `headers`: Optional HTTP headers.
+- `tool_prefix`: Optional prefix for tool names.
+
+Use `tool_prefix` when multiple servers expose overlapping tool names.
+
+## close_connections
+
+`close_connections` closes pooled MCP connections for the active context.
+
+Agent runs clean up MCP connections automatically. Call this helper only when
+you manage MCP tool lifetimes manually.

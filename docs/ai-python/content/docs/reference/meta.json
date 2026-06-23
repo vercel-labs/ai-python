@@ -5,12 +5,12 @@
     "ai",
     "ai.providers",
     "ai.agents",
-    "ai.tools",
-    "ai.messages",
-    "ai.events",
-    "ai.errors",
-    "ai.mcp",
-    "ai.types",
-    "ai.util"
+    "tools",
+    "messages",
+    "events",
+    "errors",
+    "mcp",
+    "types",
+    "util"
   ]
 }
