@@ -1,0 +1,38 @@
+---
+title: "ai media generation params"
+description: Reference for media generation params.
+type: reference
+summary: Reference for ImageParams, VideoParams, and GenerateParams.
+---
+
+Media params configure non-streaming generation with `ai.generate`.
+
+## ImageParams
+
+```python
+ai.ImageParams(
+    n=1,
+    size=None,
+    aspect_ratio=None,
+    seed=None,
+    provider_options={},
+)
+```
+
+## VideoParams
+
+```python
+ai.VideoParams(
+    n=1,
+    aspect_ratio=None,
+    resolution=None,
+    duration=None,
+    fps=None,
+    seed=None,
+    provider_options={},
+)
+```
+
+## GenerateParams
+
+`GenerateParams` is the accepted media params union for `ai.generate`.

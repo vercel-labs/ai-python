@@ -1,0 +1,16 @@
+---
+title: "ai part builders"
+description: Reference for message part builders.
+type: reference
+summary: Reference for text_part, file_part, thinking, content_output, and tool_result_part.
+---
+
+Part builders create message part values.
+
+```python
+ai.text_part("hello")
+ai.file_part(data, media_type="image/png", filename="image.png")
+ai.thinking("reasoning text")
+ai.content_output("caption", ai.file_part(png_bytes, media_type="image/png"))
+ai.tool_result_part("tc_1", result={"ok": True}, tool_name="lookup")
+```

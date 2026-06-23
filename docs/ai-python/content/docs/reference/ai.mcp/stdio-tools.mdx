@@ -1,0 +1,23 @@
+---
+title: "ai.mcp.get_stdio_tools"
+description: "Load tools from an MCP stdio server."
+type: reference
+summary: "Reference for ai.mcp.get_stdio_tools."
+---
+
+`get_stdio_tools` starts an MCP server subprocess and returns `AgentTool`
+values that can be passed to `ai.agent`.
+
+```python
+tools = await ai.mcp.get_stdio_tools(
+    "npx", "-y", "@modelcontextprotocol/server-filesystem", "/tmp"
+)
+```
+
+Arguments:
+
+- `command`: subprocess command.
+- `*args`: subprocess arguments.
+- `env`: optional environment variables.
+- `cwd`: optional working directory.
+- `tool_prefix`: optional prefix for tool names.

@@ -1,0 +1,16 @@
+---
+title: "ai.events.replay_message_events"
+description: Replay a completed message as stream events.
+type: reference
+summary: Reference for ai.events.replay_message_events.
+---
+
+`replay_message_events` synthesizes stream events from a complete `Message`.
+
+```python
+async for event in ai.events.replay_message_events(message):
+    ...
+```
+
+Use it when cached, durable, or test messages need to flow through code that
+expects stream events.

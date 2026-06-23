@@ -1,0 +1,10 @@
+{
+  "title": "ai.providers.ai_gateway",
+  "description": "Reference for AI Gateway provider APIs.",
+  "pages": [
+    "provider",
+    "protocol",
+    "params",
+    "tools"
+  ]
+}

@@ -1,0 +1,23 @@
+---
+title: "ai.messages parts"
+description: Reference for message part types.
+type: reference
+summary: Reference for message part types.
+---
+
+Message parts store typed content inside a `Message`.
+
+## Common parts
+
+- `TextPart`
+- `FilePart`
+- `ReasoningPart`
+- `ToolCallPart`
+- `ToolResultPart`
+- `BuiltinToolCallPart`
+- `BuiltinToolReturnPart`
+- `HookPart`
+
+`ToolResultPart.get_model_input()` returns the value sent back to the model. For
+most tools this is the same as `result`. Aggregator-backed tools can store a
+rich `result` while sending a simpler model-facing value.

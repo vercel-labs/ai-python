@@ -1,0 +1,21 @@
+---
+title: "ai.events.Aggregator"
+description: Reference for the streaming tool aggregator protocol.
+type: reference
+summary: Reference for ai.events.Aggregator.
+---
+
+`Aggregator[Item, Result, ModelInput]` is the interface used by streaming tools
+and `yield_from`.
+
+```python
+class MyAggregator(ai.events.Aggregator[Item, Result, ModelInput]):
+    def feed(self, item: Item) -> None: ...
+    def snapshot(self) -> Result: ...
+
+    @classmethod
+    def to_model_input(cls, snapshot: Result) -> ModelInput: ...
+```
+
+`snapshot()` is the rich value stored in tool results. `get_model_input()` is
+the value sent back to the model.

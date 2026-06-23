@@ -1,0 +1,16 @@
+---
+title: "ai.yield_from"
+description: "Forward events from nested async generators."
+type: reference
+summary: "Reference for ai.yield_from."
+---
+
+`yield_from` forwards events from a nested async generator and returns the
+nested generator result.
+
+It is useful in custom agent loops and streaming tools that compose another
+async generator.
+
+```python
+result = await ai.yield_from(generator)
+```

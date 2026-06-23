@@ -1,0 +1,35 @@
+---
+title: "ai.generate"
+description: Generate non-streaming media responses.
+type: reference
+summary: Reference for ai.generate.
+---
+
+`ai.generate` calls non-streaming generation APIs, such as image and
+video models, and returns a `Message`.
+
+```python
+result = await ai.generate(
+    model,
+    [ai.user_message("A watercolor mothership over a quiet city.")],
+    ai.ImageParams(n=1, aspect_ratio="16:9"),
+)
+```
+
+## Function
+
+```python
+await ai.generate(model, messages, params)
+```
+
+## Arguments
+
+- `model`: `ai.Model`.
+- `messages`: list of `ai.messages.Message`.
+- `params`: `ai.ImageParams` or `ai.VideoParams`.
+
+## Return value
+
+`ai.generate` returns an assistant `Message`. Read generated files through
+`message.files` or use the normal message helpers for text, reasoning, and
+metadata.

@@ -1,0 +1,9 @@
+{
+  "title": "ai.providers.openai",
+  "description": "Reference for OpenAI-compatible provider APIs.",
+  "pages": [
+    "provider",
+    "protocols",
+    "tools"
+  ]
+}

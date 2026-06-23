@@ -2,15 +2,16 @@
   "title": "Reference",
   "description": "API reference for public AI SDK for Python APIs.",
   "pages": [
-    "stream",
-    "generate",
-    "agent",
-    "tool",
-    "tool-runner",
-    "hooks",
-    "messages",
-    "events",
-    "models-and-providers",
-    "ai-sdk-ui"
+    "ai",
+    "ai.models",
+    "ai.events",
+    "ai.messages",
+    "ai.tools",
+    "ai.providers",
+    "ai.errors",
+    "ai.mcp",
+    "ai.agents",
+    "ai.types",
+    "ai.util"
   ]
 }

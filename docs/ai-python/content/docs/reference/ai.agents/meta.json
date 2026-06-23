@@ -1,0 +1,9 @@
+{
+  "title": "ai.agents",
+  "description": "Reference for advanced agent namespace APIs.",
+  "pages": [
+    "aggregators",
+    "gated-tool-call",
+    "ui"
+  ]
+}

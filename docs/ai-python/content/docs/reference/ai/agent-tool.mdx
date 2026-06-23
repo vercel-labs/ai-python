@@ -1,0 +1,19 @@
+---
+title: "ai.AgentTool"
+description: Reference for executable agent tools.
+type: reference
+summary: Reference for ai.AgentTool.
+---
+
+`AgentTool` binds a model-facing `Tool` declaration to an executable Python
+function.
+
+```python
+tool.name
+tool.tool
+tool.fn
+tool.validator
+tool.require_approval
+```
+
+Pass `AgentTool` values to `ai.agent(tools=[...])`.

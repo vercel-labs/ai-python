@@ -1,0 +1,10 @@
+{
+  "title": "ai.events",
+  "description": "Reference for event classes and event helpers.",
+  "pages": [
+    "stream-events",
+    "agent-events",
+    "aggregators",
+    "replay-message-events"
+  ]
+}

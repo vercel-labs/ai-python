@@ -1,0 +1,20 @@
+---
+title: "ai.agents aggregators"
+description: Reference for streaming tool aggregation helpers.
+type: reference
+summary: Reference for Aggregate, yield_from, and built-in aggregators.
+---
+
+Aggregators collect yielded values from streaming tools and decide what value is
+stored and what value is sent back to the model.
+
+## APIs
+
+- `Aggregate`
+- `yield_from`
+- `SimpleAggregator`
+- `ConcatAggregator`
+- `LastAggregator`
+- `MessageAggregator`
+
+Custom aggregators implement `ai.events.Aggregator`.

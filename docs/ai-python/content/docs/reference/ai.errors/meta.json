@@ -1,0 +1,10 @@
+{
+  "title": "ai.errors",
+  "description": "Reference for SDK error types.",
+  "pages": [
+    "base-errors",
+    "provider-errors",
+    "status-errors",
+    "helpers"
+  ]
+}

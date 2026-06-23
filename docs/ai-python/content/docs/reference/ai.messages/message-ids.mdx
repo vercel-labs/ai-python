@@ -1,0 +1,15 @@
+---
+title: "ai.messages message IDs"
+description: "Reference for message ID helpers."
+type: reference
+summary: "Reference for ai.messages.generate_id."
+---
+
+`generate_id` creates SDK-style IDs for messages and parts.
+
+```python
+message_id = ai.messages.generate_id("msg")
+```
+
+Pass a prefix to control the ID family. If no prefix is supplied, the helper
+returns an unprefixed generated ID.

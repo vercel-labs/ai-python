@@ -1,0 +1,17 @@
+---
+title: "ai.providers.openai"
+description: Reference for OpenAI-compatible provider APIs.
+type: reference
+summary: Reference for ai.providers.openai.
+---
+
+`ai.providers.openai` contains the OpenAI-compatible provider, protocols, and
+provider-executed tools.
+
+```python
+provider = ai.get_provider("openai")
+model = ai.Model("gpt-5", provider=provider)
+```
+
+The optional upstream OpenAI SDK loads lazily when the provider creates or uses
+an SDK client.

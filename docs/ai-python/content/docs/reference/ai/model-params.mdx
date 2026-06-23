@@ -1,0 +1,46 @@
+---
+title: "ai model params"
+description: "Reference for model request parameter types."
+type: reference
+summary: "Reference for parameter objects passed to ai.stream, ai.generate, and Agent.run."
+---
+
+Model params are top-level `ai` types.
+
+Use `InferenceRequestParams` with `ai.stream` and `Agent.run`. Use
+`ImageParams` and `VideoParams` with `ai.generate`.
+
+## Request params
+
+- `InferenceRequestParams`
+- `ProviderServiceParams`
+- `ReasoningParams`
+- `OutputParams`
+- `CacheParams`
+- `ContextManagementParams`
+
+## Sampling params
+
+- `TemperatureSamplerParams`
+- `TopKSamplerParams`
+- `TopPSamplerParams`
+- `MinPSamplerParams`
+- `RepetitionPenaltyParams`
+- `SeedSamplerParams`
+- `RandomSeed`
+- `RANDOM`
+- `DEFAULT`
+- `UNSET`
+
+## Tool calling params
+
+- `ToolCallingParams`
+- `ToolChoiceMode`
+- `ToolSelection`
+- `ToolRef`
+
+```python
+params = ai.InferenceRequestParams().with_temperature(0)
+async with ai.stream(model, messages, params=params) as stream:
+    ...
+```

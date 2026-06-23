@@ -1,0 +1,20 @@
+---
+title: "ai.agents.ui.ai_sdk approvals"
+description: Apply AI SDK UI approval responses.
+type: reference
+summary: Reference for ApprovalResponse, extract_approvals, and apply_approvals.
+---
+
+Approval helpers bridge AI SDK UI tool approval responses into the hook
+registry.
+
+## APIs
+
+- `ApprovalResponse`
+- `extract_approvals`
+- `apply_approvals`
+
+```python
+approvals = ai.agents.ui.ai_sdk.extract_approvals(ui_messages)
+ai.agents.ui.ai_sdk.apply_approvals(approvals)
+```

@@ -1,0 +1,9 @@
+{
+  "title": "ai.tools",
+  "description": "Reference for schema tool types and approval payloads.",
+  "pages": [
+    "tool-spec",
+    "tool-config",
+    "tool-approval"
+  ]
+}
