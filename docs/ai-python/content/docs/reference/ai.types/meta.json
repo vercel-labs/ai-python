@@ -1,9 +1,0 @@
-{
-  "title": "ai.types",
-  "description": "Reference for lower-level public type helper modules.",
-  "pages": [
-    "media",
-    "integrity",
-    "usage"
-  ]
-}

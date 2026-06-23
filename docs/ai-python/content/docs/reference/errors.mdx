@@ -1,0 +1,70 @@
+---
+title: "ai.errors"
+description: Reference for SDK error types.
+type: reference
+summary: Reference for ai.errors.
+---
+
+`ai.errors` contains the framework and provider error hierarchy.
+
+## Base Errors
+
+Base errors are not tied to a provider HTTP response.
+
+- `AIError`
+- `ConfigurationError`
+- `InstallationError`
+- `UnsupportedProviderError`
+
+## Provider Errors
+
+Provider errors represent failures raised by model providers.
+
+- `ProviderError`
+- `ProviderNotConfiguredError`
+- `ProviderAPIError`
+- `ProviderConnectionError`
+- `ProviderTimeoutError`
+- `ProviderResponseError`
+- `ProviderIncompleteResponseError`
+
+`ProviderAPIError` includes `request_id`, `http_context`, `body`, `code`,
+`param`, `type`, and `is_retryable`.
+
+## Provider Status Errors
+
+Status errors represent provider responses with non-success HTTP status codes.
+
+- `ProviderStatusError`
+- `ProviderBadRequestError`
+- `ProviderAuthenticationError`
+- `ProviderPermissionDeniedError`
+- `ProviderNotFoundError`
+- `ProviderModelNotFoundError`
+- `ProviderConflictError`
+- `ProviderRequestTooLargeError`
+- `ProviderUnprocessableEntityError`
+- `ProviderRateLimitError`
+- `ProviderInternalServerError`
+- `ProviderServiceUnavailableError`
+- `ProviderDeadlineExceededError`
+- `ProviderOverloadedError`
+
+## HTTPErrorContext
+
+`HTTPErrorContext` exposes normalized HTTP context from provider errors.
+
+```python
+context.status_code
+context.request
+context.response
+```
+
+## http_status_to_provider_status_error_class
+
+`http_status_to_provider_status_error_class` returns the provider status error
+class for an HTTP status code.
+
+```python
+error_cls = ai.errors.http_status_to_provider_status_error_class(429)
+```

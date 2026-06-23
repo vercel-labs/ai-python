@@ -35,15 +35,15 @@ These top-level exports have their own pages under `ai`.
 
 These module aliases are also re-exported from `ai`.
 
-- [`errors`](/docs/reference/ai.errors): Error classes and HTTP error helpers.
-- [`events`](/docs/reference/ai.events): Stream, agent, tool, and hook events.
-- [`messages`](/docs/reference/ai.messages): Message and message part models.
+- [`errors`](/docs/reference/errors): Error classes and HTTP error helpers.
+- [`events`](/docs/reference/events): Stream, agent, tool, and hook events.
+- [`messages`](/docs/reference/messages): Message and message part models.
 - `models`: Model namespace used by the top-level model exports on this page.
-- [`mcp`](/docs/reference/ai.mcp): MCP tool loading helpers.
+- [`mcp`](/docs/reference/mcp): MCP tool loading helpers.
 - [`providers`](/docs/reference/ai.providers): Provider classes and
   provider-specific namespaces.
-- [`tools`](/docs/reference/ai.tools): Model-facing tool schema types.
-- [`util`](/docs/reference/ai.util): Async utility helpers.
+- [`tools`](/docs/reference/tools): Model-facing tool schema types.
+- [`util`](/docs/reference/util): Async utility helpers.
 
 ## Models
 
@@ -377,7 +377,7 @@ result = await ai.yield_from(generator)
 
 ## Errors
 
-Top-level error exports are re-exported from [`ai.errors`](/docs/reference/ai.errors).
+Top-level error exports are re-exported from [`ai.errors`](/docs/reference/errors).
 
 Base errors:
 
