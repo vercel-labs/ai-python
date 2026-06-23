@@ -1,0 +1,68 @@
+---
+title: "ai.agents.ui.ai_sdk"
+description: Reference for AI SDK UI message and SSE adapters.
+type: reference
+summary: Reference for to_messages, to_sse, to_stream, to_ui_messages, approvals, headers, and UIMessage.
+---
+
+`ai.agents.ui.ai_sdk` converts between AI SDK UI message streams and the Python
+runtime.
+
+## UIMessage
+
+```python
+class ChatRequest(pydantic.BaseModel):
+    messages: list[ai.agents.ui.ai_sdk.UIMessage]
+```
+
+Use `UIMessage` as the request model for AI SDK UI clients.
+
+## to_messages
+
+```python
+messages, approvals = ai.agents.ui.ai_sdk.to_messages(ui_messages)
+```
+
+Converts UI messages into runtime messages and extracts approval responses.
+
+## apply_approvals
+
+```python
+ai.agents.ui.ai_sdk.apply_approvals(approvals)
+```
+
+Registers extracted approval responses before an agent run resumes.
+
+## to_sse
+
+```python
+async for chunk in ai.agents.ui.ai_sdk.to_sse(agent_stream):
+    yield chunk
+```
+
+Converts agent events to Server-Sent Events for AI SDK UI.
+
+## to_stream
+
+```python
+async for part in ai.agents.ui.ai_sdk.to_stream(agent_stream):
+    yield part
+```
+
+Converts agent events to UI stream parts without SSE framing.
+
+## to_ui_messages
+
+```python
+ui_messages = ai.agents.ui.ai_sdk.to_ui_messages(messages)
+```
+
+Converts stored runtime messages back to AI SDK UI messages.
+
+## Headers
+
+```python
+headers = ai.agents.ui.ai_sdk.UI_MESSAGE_STREAM_HEADERS
+```
+
+Return these headers on streamed AI SDK UI responses.

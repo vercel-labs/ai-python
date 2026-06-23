@@ -1,0 +1,16 @@
+{
+  "title": "Reference",
+  "description": "API reference for public AI SDK for Python APIs.",
+  "pages": [
+    "stream",
+    "generate",
+    "agent",
+    "tool",
+    "tool-runner",
+    "hooks",
+    "messages",
+    "events",
+    "models-and-providers",
+    "ai-sdk-ui"
+  ]
+}
