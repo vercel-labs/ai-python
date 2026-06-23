@@ -15,3 +15,43 @@ model = ai.Model("gpt-5", provider=provider)
 
 The optional upstream OpenAI SDK loads lazily when the provider creates or uses
 an SDK client.
+
+## OpenAICompatibleProvider
+
+`OpenAICompatibleProvider` implements `Provider` for OpenAI-compatible APIs.
+
+Default configuration for the `openai` provider uses:
+
+- `OPENAI_API_KEY`
+- `OPENAI_BASE_URL`
+
+Pass `base_url`, `api_key`, or a custom client through `get_provider` when you
+need explicit configuration.
+
+```python
+provider = ai.get_provider(
+    "openai",
+    base_url="http://localhost:11434/v1",
+)
+model = ai.Model("llama3", provider=provider)
+```
+
+The provider supports model listing, probing, streaming, provider-executed
+tools, and custom OpenAI-compatible clients.
+
+## Protocols
+
+OpenAI-compatible protocols translate SDK messages and params to OpenAI wire
+formats.
+
+Types:
+
+- `OpenAIResponsesProtocol`
+- `OpenAIChatCompletionsProtocol`
+
+The provider chooses a default protocol for the configured provider. Use these
+classes directly only when you need a protocol override.
+
+## Tools
+
+Provider-executed OpenAI tools are documented on the child `tools` page.

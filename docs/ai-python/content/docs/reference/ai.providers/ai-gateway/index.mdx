@@ -12,3 +12,52 @@ params, tools, and error mapping.
 model = ai.get_model("gateway:anthropic/claude-sonnet-4")
 ids = await ai.get_provider("vercel").list_models()
 ```
+
+## GatewayProvider
+
+`GatewayProvider` implements `Provider` for Vercel AI Gateway.
+
+Default configuration uses `AI_GATEWAY_API_KEY`.
+
+```python
+provider = ai.get_provider("vercel")
+model = ai.Model("anthropic/claude-sonnet-4", provider=provider)
+```
+
+The provider uses the Gateway v3 protocol by default, owns the Gateway client,
+and supports model listing, probing, streaming, and media generation.
+
+## GatewayV3Protocol
+
+`GatewayV3Protocol` translates SDK messages, tools, params, and generated files
+to the AI Gateway v3 wire format.
+
+Use it directly only when you need a protocol override. Most code should let
+`GatewayProvider` choose the default protocol.
+
+## GatewayParams
+
+AI Gateway params configure gateway-specific request behavior.
+
+Fields:
+
+- `quota_entity_id`
+- `zero_data_retention`
+- `hipaa_compliant`
+- `disallow_prompt_training`
+- `byok`
+- `provider_timeouts`
+
+Pass `GatewayParams` through `InferenceRequestParams.provider_params`.
+
+## ProviderTimeoutsParams
+
+`ProviderTimeoutsParams` configures per-provider timeout behavior.
+
+Fields:
+
+- `byok`: Per-provider BYOK attempt timeouts in milliseconds.
+
+## Tools
+
+Provider-executed AI Gateway tools are documented on the child `tools` page.

@@ -1,9 +1,7 @@
 {
-  "title": "ai.providers.anthropic",
+  "title": "anthropic",
   "description": "Reference for Anthropic-compatible provider APIs.",
   "pages": [
-    "provider",
-    "protocol",
     "tools"
   ]
 }
