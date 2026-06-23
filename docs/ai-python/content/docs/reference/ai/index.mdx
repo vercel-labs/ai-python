@@ -27,8 +27,8 @@ These top-level exports have their own pages under `ai`.
   `Model`.
 - [`get_provider`](/docs/reference/ai/get-provider): Resolve and configure a
   provider.
-- [`tool`](/docs/reference/ai/tool): Define executable tools from Python
-  functions.
+- [`@ai.tool`](/docs/reference/ai/tool-decorator): Define executable tools from
+  Python functions.
 - [`Agent`](/docs/reference/ai/agent): Run the default agent loop.
 
 ## Module aliases
@@ -229,25 +229,6 @@ Part builder exports:
 
 ## Tools and Agents
 
-### Tool
-
-`Tool` is the model-facing tool declaration used by providers.
-
-```python
-tool = ai.Tool(
-    kind="function",
-    name="lookup",
-    spec=ai.tools.ToolSpec(
-        description="Look up a value.",
-        params={"type": "object", "properties": {}},
-    ),
-)
-```
-
-Pass `Tool` values to `stream(..., tools=[...])` or to an agent when the
-provider should receive the declaration directly. For Python callables, use
-`tool` instead.
-
 ### agent
 
 `agent` creates an `Agent`.
@@ -366,52 +347,6 @@ Hook exports:
 - `abort_pending_hook`: Mark a serialized pending hook as aborted.
 - `cancel_hook`: Cancel a live hook by label.
 
-### yield_from
-
-`yield_from` forwards events from a nested async generator and returns the
-nested generator result.
-
-```python
-result = await ai.yield_from(generator)
-```
-
 ## Errors
 
-Top-level error exports are re-exported from [`ai.errors`](/docs/reference/errors).
-
-Base errors:
-
-- `AIError`
-- `ConfigurationError`
-- `InstallationError`
-- `UnsupportedProviderError`
-
-HTTP context:
-
-- `HTTPErrorContext`
-
-Provider errors:
-
-- `ProviderError`
-- `ProviderNotConfiguredError`
-- `ProviderAPIError`
-- `ProviderConnectionError`
-- `ProviderTimeoutError`
-- `ProviderResponseError`
-
-Provider status errors:
-
-- `ProviderStatusError`
-- `ProviderBadRequestError`
-- `ProviderAuthenticationError`
-- `ProviderPermissionDeniedError`
-- `ProviderNotFoundError`
-- `ProviderModelNotFoundError`
-- `ProviderConflictError`
-- `ProviderRequestTooLargeError`
-- `ProviderUnprocessableEntityError`
-- `ProviderRateLimitError`
-- `ProviderInternalServerError`
-- `ProviderServiceUnavailableError`
-- `ProviderDeadlineExceededError`
-- `ProviderOverloadedError`
+Top-level error exports are documented in [`ai.errors`](/docs/reference/errors).

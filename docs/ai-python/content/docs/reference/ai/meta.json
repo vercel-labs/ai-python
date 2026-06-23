@@ -6,7 +6,7 @@
     "generate",
     "get-model",
     "get-provider",
-    "tool",
+    "tool-decorator",
     "agent"
   ]
 }
