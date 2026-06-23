@@ -9,13 +9,38 @@ Most agent APIs are documented as top-level `ai` exports. Use `ai.agents`
 for advanced agent namespace APIs and types that are not promoted to the
 top-level namespace.
 
-Public advanced APIs:
+## Aggregators
+
+Aggregators collect yielded values from streaming tools and decide what value is
+stored and what value is sent back to the model.
+
+APIs:
 
 - `Aggregate`
+- `yield_from`
 - `SimpleAggregator`
 - `ConcatAggregator`
 - `LastAggregator`
 - `MessageAggregator`
+
+Custom aggregators implement `ai.events.Aggregator`.
+
+`yield_from` forwards events from a nested async generator and returns the
+nested generator result.
+
+```python
+result = await ai.agents.yield_from(generator)
+```
+
+## Tool Calls
+
 - `BoundToolCall`
-- `GatedToolCall`
 - `ToolCallCallable`
+
+## GatedToolCall
+
+`GatedToolCall` wraps a tool call that requires approval or another gate before
+execution.
+
+Use it in custom agent loops when you need to delay or externally approve a
+scheduled tool call.
