@@ -1,6 +1,6 @@
 ---
 name: ai-python-custom-provider
-description: Use for writing custom Python ai SDK providers and protocols.
+description: Use for implementing custom providers in AI SDK for Python.
 metadata:
   sdk-version: "0.2.1"
 ---

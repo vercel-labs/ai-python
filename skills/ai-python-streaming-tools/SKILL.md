@@ -1,6 +1,6 @@
 ---
 name: ai-python-streaming-tools
-description: Use for Python ai SDK tools that stream partial output, nested agent events, MessageBundle values, or preliminary UI output.
+description: Use for AI SDK for Python tools that stream output, or contain subagents. Handle interleaved streaming and nested events.
 metadata:
   sdk-version: "0.2.1"
 ---

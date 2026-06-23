@@ -1,11 +1,11 @@
 ---
-name: ai-python-ai-sdk-ui-adapter
-description: Use when connecting Python ai SDK agents to AI SDK UI useChat clients, UIMessage history, streamed responses, and approvals.
+name: ai-python-ui-adapter
+description: Use when connecting AI SDK for Python streams to AI SDK UI useChat clients.
 metadata:
   sdk-version: "0.2.1"
 ---
 
-# ai-python-ai-sdk-ui-adapter
+# ai-python-ui-adapter
 
 Frontend:
 

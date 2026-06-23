@@ -1,6 +1,6 @@
 ---
 name: ai-python-serverless-execution
-description: Use for Python ai SDK hook interruptions, approvals, replay, and resume across stateless requests.
+description: Use when building with AI SDK for Python in serverless. Correctly do tool approvals, utilize built-in replay and resume.
 metadata:
   sdk-version: "0.2.1"
 ---

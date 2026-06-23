@@ -1,6 +1,6 @@
 ---
 name: ai-python-custom-loop
-description: Use when changing a Python ai SDK agent loop for custom tool order, routing, logging, hooks, replay, or scheduling.
+description: Use when building custom agent loops. Modify tool dispatch, history management, hooks, control flow.
 metadata:
   sdk-version: "0.2.1"
 ---
