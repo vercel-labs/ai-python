@@ -1,9 +1,11 @@
 ---
-name: ai
+name: ai-python-basics
 description: Use for Python ai SDK basics: models, messages, streaming, tools, agents, and the minimal happy path.
+metadata:
+  sdk-version: "0.2.1"
 ---
 
-# ai
+# ai-python
 
 Install with `uv add ai`.
 
@@ -62,6 +64,7 @@ answer = run.output
 history = run.messages
 ```
 
-Use `custom_loop`, `subagents`, `streaming_tools`, `serverless_execution`,
-`durable_execution`, `ai_sdk_ui_adapter`, and `custom_provider` for advanced
-patterns.
+Use `ai-python-custom-loop`, `ai-python-subagents`,
+`ai-python-streaming-tools`, `ai-python-serverless-execution`,
+`ai-python-durable-execution`, `ai-python-ai-sdk-ui-adapter`, and
+`ai-python-custom-provider` for advanced patterns.

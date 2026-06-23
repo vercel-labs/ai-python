@@ -1,9 +1,11 @@
 ---
-name: subagents
+name: ai-python-subagents
 description: Use for the subagent-as-a-tool pattern and other Python ai SDK multi-agent handoffs.
+metadata:
+  sdk-version: "0.2.1"
 ---
 
-# subagents
+# ai-python-subagents
 
 Use a subagent tool when the parent model should choose when to call another
 agent.
@@ -37,4 +39,4 @@ Do not append child messages to the parent history yourself. The tool result
 stores the child transcript as a `MessageBundle`.
 
 For `MessageBundle`, preliminary output, and streaming tool details, use
-`streaming_tools`.
+`ai-python-streaming-tools`.
