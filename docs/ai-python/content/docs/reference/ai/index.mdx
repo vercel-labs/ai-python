@@ -2,10 +2,11 @@
 title: "ai"
 description: "Reference for top-level ai exports."
 type: reference
-summary: "Reference for names imported directly from ai."
+summary: "Full record of names imported directly from ai."
 ---
 
-Import `ai` for application code.
+`ai` is the application-facing namespace. This page mirrors the public names
+re-exported from `ai.__all__`.
 
 ```python
 import ai
@@ -14,15 +15,403 @@ model = ai.get_model("anthropic/claude-sonnet-4")
 messages = [ai.user_message("Hello")]
 ```
 
-This section covers names imported directly from `ai`: model calls, model
-objects and params, message builders, agent primitives, tool primitives,
-provider lookup, and provider base types.
+## Linked pages
 
-Use sibling module sections for public submodule APIs:
+These top-level exports have their own pages under `ai`.
 
-- `ai.events`
-- `ai.messages`
-- `ai.tools`
-- `ai.providers`
-- `ai.agents`
-- `ai.types`
+- [`stream`](/docs/reference/ai/stream): Call a model and iterate response
+  events. The same page documents `Stream`.
+- [`generate`](/docs/reference/ai/generate): Call non-streaming media
+  generation models.
+- [`get_model`](/docs/reference/ai/get-model): Resolve a model id into a
+  `Model`.
+- [`get_provider`](/docs/reference/ai/get-provider): Resolve and configure a
+  provider.
+- [`tool`](/docs/reference/ai/tool): Define executable tools from Python
+  functions.
+- [`Agent`](/docs/reference/ai/agent): Run the default agent loop.
+
+## Module aliases
+
+These module aliases are also re-exported from `ai`.
+
+- [`errors`](/docs/reference/ai.errors): Error classes and HTTP error helpers.
+- [`events`](/docs/reference/ai.events): Stream, agent, tool, and hook events.
+- [`messages`](/docs/reference/ai.messages): Message and message part models.
+- `models`: Model namespace used by the top-level model exports on this page.
+- [`mcp`](/docs/reference/ai.mcp): MCP tool loading helpers.
+- [`providers`](/docs/reference/ai.providers): Provider classes and
+  provider-specific namespaces.
+- [`tools`](/docs/reference/ai.tools): Model-facing tool schema types.
+- [`util`](/docs/reference/ai.util): Async utility helpers.
+
+## Models
+
+### Model
+
+`Model` identifies what to call. Providers own credentials, clients,
+endpoints, model listing, and wire translation.
+
+```python
+model = ai.Model("gpt-5", provider=provider)
+model.id
+model.provider
+model.protocol
+model.with_protocol(protocol)
+```
+
+`Model` is a lightweight reference. It does not own network state.
+
+Fields:
+
+- `id`: Provider model id.
+- `provider`: Provider instance or provider id.
+- `protocol`: Optional provider protocol override.
+
+Methods:
+
+- `with_protocol(protocol)`: Return a copy that uses a specific provider
+  protocol.
+
+### probe
+
+`probe` asks the model provider to verify that a model exists and is reachable.
+
+```python
+await ai.probe(model)
+```
+
+## Providers
+
+### Provider
+
+`Provider` is the base class for provider instances. Providers own credentials,
+clients, endpoints, model listing, and wire translation.
+
+```python
+provider.name
+provider.base_url
+provider.api_key
+provider.headers
+provider.protocol
+await provider.list_models()
+await provider.probe(model)
+```
+
+Subclasses implement provider-specific configuration and clients. Application
+code usually gets a provider with `get_provider`.
+
+### ProviderProtocol
+
+`ProviderProtocol` translates messages, tools, params, and generated files to
+provider wire formats.
+
+Provider instances use a protocol for `stream` and `generate` calls.
+
+```python
+protocol.stream(client, model, messages, tools=tools, params=params)
+await protocol.generate(client, model, messages, params)
+```
+
+## Request Params
+
+Model params are top-level `ai` types.
+
+Use `InferenceRequestParams` with `stream` and `Agent.run`. Use `ImageParams`
+and `VideoParams` with `generate`.
+
+```python
+params = ai.InferenceRequestParams().with_temperature(0)
+async with ai.stream(model, messages, params=params) as stream:
+    ...
+```
+
+Request params:
+
+- `InferenceRequestParams`: Inference request options.
+- `ProviderServiceParams`: Provider service tier options.
+- `ReasoningParams`: Provider reasoning or thinking options.
+- `OutputParams`: Output token, include, verbosity, and reasoning summary
+  options.
+- `CacheParams`: Prompt cache options.
+- `ContextManagementParams`: Server-side context management options.
+- `TokenThreshold`: Token count used as a trigger threshold.
+
+Sampling params:
+
+- `TemperatureSamplerParams`
+- `TopKSamplerParams`
+- `TopPSamplerParams`
+- `MinPSamplerParams`
+- `RepetitionPenaltyParams`
+- `SeedSamplerParams`
+- `RandomSeed`
+- `RANDOM`
+- `DEFAULT`
+- `UNSET`
+- `ModelProviderDefault`
+- `Unset`
+
+Tool calling params:
+
+- `ToolCallingParams`
+- `ToolChoiceMode`
+- `ToolSelection`
+- `ToolRef`
+
+Routing params:
+
+- `RoutingParams`
+- `RoutingTarget`
+- `RoutingTargetChain`
+- `GeoRegion`
+- `CloudRegion`
+- `ProviderRankingStrategy`
+- `GLOBAL`
+
+Media generation params:
+
+```python
+ai.ImageParams(
+    n=1,
+    size=None,
+    aspect_ratio=None,
+    seed=None,
+    provider_options={},
+)
+
+ai.VideoParams(
+    n=1,
+    aspect_ratio=None,
+    resolution=None,
+    duration=None,
+    fps=None,
+    seed=None,
+    provider_options={},
+)
+```
+
+## Messages
+
+Message builders create `Message` values.
+
+```python
+ai.system_message("You are concise.")
+ai.user_message("Hello", ai.file_part(data, media_type="image/png"))
+ai.assistant_message("Hi")
+ai.tool_message(tool_call_id="tc_1", result="done", tool_name="lookup")
+```
+
+Message builder exports:
+
+- `system_message`
+- `user_message`
+- `assistant_message`
+- `tool_message`
+
+Part builders create message part values.
+
+```python
+ai.text_part("hello")
+ai.file_part(data, media_type="image/png", filename="image.png")
+ai.thinking("reasoning text")
+ai.content_output("caption", ai.file_part(png_bytes, media_type="image/png"))
+ai.tool_result_part("tc_1", result={"ok": True}, tool_name="lookup")
+```
+
+Part builder exports:
+
+- `text_part`
+- `file_part`
+- `thinking`
+- `content_output`
+- `tool_result_part`
+
+## Tools and Agents
+
+### Tool
+
+`Tool` is the model-facing tool declaration used by providers.
+
+```python
+tool = ai.Tool(
+    kind="function",
+    name="lookup",
+    spec=ai.tools.ToolSpec(
+        description="Look up a value.",
+        params={"type": "object", "properties": {}},
+    ),
+)
+```
+
+Pass `Tool` values to `stream(..., tools=[...])` or to an agent when the
+provider should receive the declaration directly. For Python callables, use
+`tool` instead.
+
+### agent
+
+`agent` creates an `Agent`.
+
+```python
+agent = ai.agent(tools=[contact_mothership])
+```
+
+Arguments:
+
+- `tools`: Optional `AgentTool` values from `tool` and schema-only `Tool`
+  declarations for provider-executed tools.
+
+Returns `Agent`.
+
+### AgentTool
+
+`AgentTool` binds a model-facing `Tool` declaration to an executable Python
+function.
+
+```python
+tool.name
+tool.tool
+tool.fn
+tool.validator
+tool.require_approval
+```
+
+Pass `AgentTool` values to `agent(tools=[...])`.
+
+### Context
+
+Custom loops use `Context` to resolve model tool calls and `ToolRunner` to run
+them.
+
+```python
+context.model
+context.messages
+context.tools
+context.output_type
+context.params
+```
+
+Useful methods:
+
+- `keep_running()`: Return `True` while the last message still needs work.
+- `resolve(tool_call)`: Convert model tool call parts into executable
+  `ToolCall` objects.
+- `add(message)`: Append messages to history.
+
+### ToolCall
+
+`ToolCall` is the executable runtime object produced by `Context.resolve`.
+
+```python
+tool_call.id
+tool_call.name
+tool_call.fn
+tool_call.kwargs
+result = await tool_call()
+```
+
+### ToolRunner
+
+`ToolRunner` schedules tool calls and collects their result messages.
+
+```python
+async with ai.ToolRunner() as runner:
+    runner.schedule(tool_call)
+    async for result in runner.events():
+        ...
+    message = runner.get_tool_message()
+```
+
+Use `add_result(result)` when a custom loop executes a tool itself but still
+wants the runner to aggregate the result message.
+
+### Streaming tool aliases
+
+Async-generator tools can yield partial output while they run.
+
+- `StreamingTextTool`: Concatenate yielded strings.
+- `StreamingStatusTool[T]`: Treat intermediate yields as status updates and
+  the last yielded value as the final result.
+- `SubAgentTool`: Forward nested agent events and use the nested final text as
+  model input.
+
+### Tool result helpers
+
+```python
+ai.tool_result(tool_call_id="tc_1", tool_name="lookup", result={"ok": True})
+ai.pending_tool_result(hook_part, tool_call_id="tc_1", tool_name="lookup")
+```
+
+Exports:
+
+- `tool_result`: Create a `ToolCallResult`.
+- `pending_tool_result`: Create a pending hook placeholder result.
+
+### Hooks
+
+Hooks let an agent pause while another process or UI supplies a decision.
+
+```python
+approval = await ai.hook(
+    "approve_contact_mothership",
+    payload=ai.tools.ToolApproval,
+    metadata={"tool": "contact_mothership"},
+)
+```
+
+Hook exports:
+
+- `hook`: Emit a pending hook event and wait for a matching resolution.
+- `resolve_hook`: Resolve a live or future hook.
+- `abort_pending_hook`: Mark a serialized pending hook as aborted.
+- `cancel_hook`: Cancel a live hook by label.
+
+### yield_from
+
+`yield_from` forwards events from a nested async generator and returns the
+nested generator result.
+
+```python
+result = await ai.yield_from(generator)
+```
+
+## Errors
+
+Top-level error exports are re-exported from [`ai.errors`](/docs/reference/ai.errors).
+
+Base errors:
+
+- `AIError`
+- `ConfigurationError`
+- `InstallationError`
+- `UnsupportedProviderError`
+
+HTTP context:
+
+- `HTTPErrorContext`
+
+Provider errors:
+
+- `ProviderError`
+- `ProviderNotConfiguredError`
+- `ProviderAPIError`
+- `ProviderConnectionError`
+- `ProviderTimeoutError`
+- `ProviderResponseError`
+
+Provider status errors:
+
+- `ProviderStatusError`
+- `ProviderBadRequestError`
+- `ProviderAuthenticationError`
+- `ProviderPermissionDeniedError`
+- `ProviderNotFoundError`
+- `ProviderModelNotFoundError`
+- `ProviderConflictError`
+- `ProviderRequestTooLargeError`
+- `ProviderUnprocessableEntityError`
+- `ProviderRateLimitError`
+- `ProviderInternalServerError`
+- `ProviderServiceUnavailableError`
+- `ProviderDeadlineExceededError`
+- `ProviderOverloadedError`

@@ -3,14 +3,13 @@
   "description": "API reference for public AI SDK for Python APIs.",
   "pages": [
     "ai",
-    "ai.models",
-    "ai.events",
-    "ai.messages",
-    "ai.tools",
     "ai.providers",
+    "ai.agents",
+    "ai.tools",
+    "ai.messages",
+    "ai.events",
     "ai.errors",
     "ai.mcp",
-    "ai.agents",
     "ai.types",
     "ai.util"
   ]

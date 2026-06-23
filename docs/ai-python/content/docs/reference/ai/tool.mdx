@@ -1,22 +1,33 @@
 ---
-title: "ai.Tool"
-description: "Declare a schema-only or provider-executed tool."
+title: "tool"
+description: Define executable tools from Python functions.
 type: reference
-summary: "Reference for ai.Tool."
+summary: Reference for ai.tool.
 ---
 
-`Tool` is the model-facing tool declaration used by providers.
+`@ai.tool` turns an async Python function into an executable `AgentTool` plus a
+model-facing `ai.Tool` declaration.
 
 ```python
-tool = ai.Tool(
-    spec=ai.tools.ToolSpec(
-        name="lookup",
-        description="Look up a value.",
-        input_schema={"type": "object", "properties": {}},
-    )
-)
+@ai.tool
+async def contact_mothership(query: str) -> str:
+    """Contact the mothership."""
+    return "Soon."
 ```
 
-Pass `Tool` values to `ai.stream(..., tools=[...])` or to an agent when the
-provider should receive the declaration directly. For Python callables, use
-`@ai.tool` instead.
+## Forms
+
+```python
+@ai.tool
+async def name(...) -> Result: ...
+
+@ai.tool(require_approval=True)
+async def name(...) -> Result: ...
+
+@ai.tool(aggregator=...)
+async def name(...) -> AsyncGenerator[Item]: ...
+```
+
+The function name becomes the tool name. The docstring becomes the tool
+description. The function signature becomes a Pydantic validator and JSON
+schema.
