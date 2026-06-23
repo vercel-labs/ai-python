@@ -135,3 +135,23 @@ async with ai.stream(model, messages, params=params) as stream:
 
 Provider options pass through to the selected provider. Check the provider
 documentation for supported fields.
+
+## Add a provider
+
+Custom providers subclass `ai.Provider`. A provider owns configuration,
+clients, model listing, connection checks, and wire translation through its
+protocol:
+
+```python
+class AcmeProvider(ai.Provider[AcmeClient]):
+    handles = ("acme",)
+
+    async def list_models(self) -> list[str]:
+        ...
+
+    async def probe(self, model: ai.Model) -> None:
+        ...
+```
+
+Most applications only need `ai.get_provider` and `ai.Model`. Add a provider
+when you need a new upstream API or custom wire protocol.

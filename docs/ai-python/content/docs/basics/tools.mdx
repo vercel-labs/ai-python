@@ -71,6 +71,27 @@ async with agent.run(model, messages) as stream:
 
 The original exception is available on `event.exception` for logging.
 
+## Stream tool output
+
+Async-generator tools can yield partial output while they run. The agent emits
+`PartialToolCallResult` events for those values, then sends the aggregated
+result back to the model on the next turn.
+
+Use `ai.StreamingTextTool` when yielded strings should concatenate into the
+tool result:
+
+```python
+@ai.tool
+async def draft_reply(topic: str) -> ai.StreamingTextTool:
+    """Draft a reply."""
+    yield "Checking "
+    yield "records for "
+    yield topic
+```
+
+Use `ai.StreamingStatusTool[T]` when intermediate yields are progress updates
+and the last yielded value is the final result.
+
 ## Use schema-only tools
 
 Pass `ai.Tool` objects directly to `ai.stream` when you want the model to emit

@@ -58,6 +58,11 @@ If a provider stream ends before its finish event, iteration raises
 `ai.errors.ProviderIncompleteResponseError`. The partial message is still
 available on `stream.message`.
 
+The stream updates `stream.message` as events arrive. Text and reasoning use
+start, delta, and end events. Tool calls use `ToolStart`, `ToolDelta`, and
+`ToolEnd`. Generated files arrive as `FileEvent` and are added to the final
+message.
+
 ## Use structured output
 
 Pass a Pydantic model as `output_type` when you want the final text parsed as
@@ -153,3 +158,9 @@ result = await ai.generate(
 
 image = result.images[0]
 ```
+
+## Replay an existing assistant turn
+
+When the last message has `replay=True`, `ai.stream` does not call the
+provider. It emits replay events from the existing assistant message so resume
+flows can dispatch the same tool calls again.

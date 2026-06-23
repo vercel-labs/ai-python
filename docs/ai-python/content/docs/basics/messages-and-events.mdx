@@ -65,6 +65,18 @@ restored = [ai.messages.Message.model_validate(item) for item in encoded]
 Persist `stream.messages` after an agent run when you want to continue the
 conversation later.
 
+Before provider calls, the SDK prepares message history by stripping internal
+messages, removing non-model parts, repairing invalid tool args to `{}`, and
+inserting error results for missing tool calls when possible. Use strict
+validation in tests or import pipelines:
+
+```python
+from ai.types import integrity
+
+
+integrity.prepare_messages(messages, mode="strict")
+```
+
 ## Handle stream events
 
 Streams and agents both yield event objects from `ai.events`. Most applications

@@ -102,7 +102,7 @@ You can also route specific tools through custom wrappers:
 
 ```python
 if tool_call.name == "contact_mothership":
-    tool_runner.schedule(GatedToolCall(tool_call))
+    tool_runner.schedule(ai.agents.GatedToolCall(tool_call))
 else:
     tool_runner.schedule(tool_call)
 ```

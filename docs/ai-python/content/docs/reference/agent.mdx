@@ -1,0 +1,80 @@
+---
+title: "ai.agent and Agent"
+description: Create agents and run the default agent loop.
+type: reference
+summary: Reference for ai.agent, Agent, Agent.run, Agent.loop, and AgentStream.
+---
+
+`ai.agent` creates an `Agent`. An agent streams model output, dispatches Python
+tools, appends tool results to history, and repeats until the model returns a
+final assistant message.
+
+```python
+agent = ai.agent(tools=[contact_mothership])
+```
+
+## Function
+
+```python
+ai.agent(*, tools=None) -> ai.Agent
+```
+
+`tools` accepts `AgentTool` values from `@ai.tool` and schema-only `ai.Tool`
+values for provider-executed tools.
+
+## Agent
+
+```python
+agent = ai.Agent(tools=[...])
+agent.tools
+```
+
+`agent.tools` returns a copy of registered executable tools.
+
+## Agent.run
+
+```python
+async with agent.run(
+    model,
+    messages,
+    output_type=None,
+    params=None,
+) as stream:
+    async for event in stream:
+        ...
+```
+
+Arguments:
+
+- `model`: `ai.Model`.
+- `messages`: initial list of `ai.messages.Message`.
+- `output_type`: optional Pydantic model for final JSON output.
+- `params`: optional `ai.InferenceRequestParams`.
+
+## AgentStream
+
+`Agent.run` yields an `AgentStream`.
+
+```python
+stream.context
+stream.messages
+stream.output
+```
+
+`stream.messages` is the updated message history. `stream.output` reads the
+final assistant message. With no `output_type`, it returns text.
+
+## Agent.loop
+
+Override `Agent.loop(context)` to customize control flow. The default loop uses
+`ai.stream`, `ToolRunner`, `Context.resolve`, and `Context.add`.
+
+```python
+class CustomAgent(ai.Agent):
+    async def loop(self, context: ai.Context):
+        while context.keep_running():
+            ...
+```
+
+Keep messages as the durable boundary. Streams, tool runners, hook futures, and
+provider clients are runtime state.
