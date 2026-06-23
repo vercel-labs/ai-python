@@ -4,28 +4,9 @@
   "pages": [
     "stream",
     "generate",
-    "probe",
     "get-model",
-    "model",
-    "model-params",
-    "routing-params",
-    "media-generation-params",
-    "message-builders",
-    "part-builders",
-    "tool",
-    "tool-decorator",
-    "tool-results",
-    "agent",
-    "agent-factory",
-    "context",
-    "agent-tool",
-    "tool-call",
-    "tool-runner",
-    "streaming-tools",
-    "hooks",
-    "yield-from",
     "get-provider",
-    "provider",
-    "provider-protocol"
+    "tool",
+    "agent"
   ]
 }
