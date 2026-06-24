@@ -22,6 +22,7 @@ be brief, use simple language
    - UNLESS it's `typing` — then `from typing import Foo` (there are too many of them).
    - if the module name shadows a local variable in the same file, add a trailing underscore to the import: `from ..types import messages as messages_`. do not add trailing underscores preemptively, only when there is an actual collision.
 3. minimize the number of helper functions, prioritize locality of behavior.
+4. in any async generator, use `util.TaskGroup()` instead of `asyncio.TaskGroup()`. the stdlib version wraps a `GeneratorExit` into a `BaseExceptionGroup`, which breaks the `aclose()` path; `util.TaskGroup` unwraps a lone `GeneratorExit` back out.
 
 ## design principles
 

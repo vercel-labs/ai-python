@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
-from collections.abc import AsyncIterable, AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator
 from typing import Any, cast
 
 import async_solipsism  # type: ignore[import-untyped]
@@ -192,47 +192,93 @@ async def test_cleanup_with_non_generator_iterable() -> None:
     assert exc_info.group_contains(RuntimeError, match="boom")
 
 
-# -- unwrap_generator_exit --------------------------------------------------
+# -- TaskGroup --------------------------------------------------------------
 
 
-async def test_unwrap_generator_exit_pure_generator_exit() -> None:
-    """A group containing only GeneratorExit unwraps to GeneratorExit."""
-    with pytest.raises(GeneratorExit):
-        async with util.unwrap_generator_exit():
-            raise BaseExceptionGroup("group", [GeneratorExit()])
+async def test_taskgroup_unwraps_lone_generator_exit() -> None:
+    """A lone GeneratorExit comes back out as a GeneratorExit (aclose-safe)."""
+    with pytest.raises(GeneratorExit) as exc_info:
+        async with util.TaskGroup():
+            raise GeneratorExit
+    # It is *also* the group, so it stays honest about its origin.
+    assert isinstance(exc_info.value, util.TaskGroupGenExit)
+    assert isinstance(exc_info.value, BaseExceptionGroup)
 
 
-async def test_unwrap_generator_exit_nested_generator_exits() -> None:
-    """Nested groups containing only GeneratorExits also unwrap."""
-    with pytest.raises(GeneratorExit):
-        async with util.unwrap_generator_exit():
-            raise BaseExceptionGroup(
-                "outer",
-                [BaseExceptionGroup("inner", [GeneratorExit()])],
-            )
+async def test_taskgroup_aclose_swallows_generator_exit() -> None:
+    """aclose() on a gen suspended inside the TaskGroup completes cleanly.
+
+    This is the whole point: a plain ExceptionGroup out of __aexit__ would
+    make aclose() raise instead of treating the close as successful.
+    """
+
+    async def gen() -> AsyncGenerator[int]:
+        async with util.TaskGroup():
+            yield 1
+            yield 2
+
+    g = gen()
+    assert await g.__anext__() == 1
+    # No exception -> the GeneratorExit was accepted as a clean close.
+    await g.aclose()
 
 
-async def test_unwrap_generator_exit_mixed_propagates() -> None:
-    """A group with non-GeneratorExit exceptions propagates as-is."""
+async def test_taskgroup_aclose_still_propagates_task_error() -> None:
+    """A task that fails during aclose() is not swallowed."""
+
+    async def gen() -> AsyncGenerator[int]:
+        async with util.TaskGroup() as tg:
+
+            async def boom() -> None:
+                raise ValueError("x")
+
+            tg.create_task(boom())
+            await asyncio.sleep(0)
+            yield 1
+            yield 2
+
+    g = gen()
+    assert await g.__anext__() == 1
     with pytest.raises(BaseExceptionGroup) as exc_info:
-        async with util.unwrap_generator_exit():
-            raise BaseExceptionGroup(
-                "group", [GeneratorExit(), ValueError("x")]
-            )
+        await g.aclose()
     assert exc_info.group_contains(ValueError, match="x")
 
 
-async def test_unwrap_generator_exit_non_group_passes_through() -> None:
-    """Non-group exceptions pass through unchanged."""
-    with pytest.raises(ValueError, match="x"):
-        async with util.unwrap_generator_exit():
+async def test_taskgroup_generator_exit_with_task_error_propagates() -> None:
+    """A GeneratorExit alongside a task failure stays packaged in the group."""
+    with pytest.raises(BaseExceptionGroup) as exc_info:
+        async with util.TaskGroup() as tg:
+
+            async def boom() -> None:
+                raise ValueError("x")
+
+            tg.create_task(boom())
+            await asyncio.sleep(0)
+            raise GeneratorExit
+    assert exc_info.group_contains(ValueError, match="x")
+    assert exc_info.group_contains(GeneratorExit)
+
+
+async def test_taskgroup_non_generator_exit_propagates() -> None:
+    """A non-GeneratorExit body exception propagates as the usual group."""
+    with pytest.raises(BaseExceptionGroup) as exc_info:
+        async with util.TaskGroup():
             raise ValueError("x")
+    assert exc_info.group_contains(ValueError, match="x")
 
 
-async def test_unwrap_generator_exit_no_exception() -> None:
-    """No exception → context manager returns normally."""
-    async with util.unwrap_generator_exit():
-        pass
+async def test_taskgroup_no_exception() -> None:
+    """No exception: behaves like a normal TaskGroup."""
+    ran = False
+
+    async with util.TaskGroup() as tg:
+
+        async def work() -> None:
+            nonlocal ran
+            ran = True
+
+        tg.create_task(work())
+    assert ran
 
 
 # -- maybe_aclosing --------------------------------------------------------
