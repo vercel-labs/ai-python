@@ -10,9 +10,8 @@ Models are lightweight references that point at a provider.
 
 ## Create a model
 
-A model is a lightweight reference to a provider model. Create one with
-`ai.get_model`. If you omit the provider prefix, the model routes through AI
-Gateway:
+Use `ai.get_model` to create a model. If you omit the provider prefix, the model 
+will use AI Gateway as a provider:
 
 ```python
 model = ai.get_model("anthropic/claude-sonnet-4")
@@ -36,22 +35,18 @@ model = ai.get_model("openai:gpt-5")
 
 ## Configure credentials
 
-The default gateway route reads `AI_GATEWAY_API_KEY`:
+Providers read their provider-specific keys:
 
 ```bash title="Terminal"
 export AI_GATEWAY_API_KEY="your_access_token_here"
-```
-
-Direct providers read their provider-specific keys:
-
-```bash title="Terminal"
 export OPENAI_API_KEY="your_access_token_here"
 export ANTHROPIC_API_KEY="your_access_token_here"
 ```
 
-## Override base URLs
+## Use an explicit provider
 
-Pass `base_url` when you create an explicit provider:
+If your application requires a provider with custom configuration,
+use `get_provider` to get a `Provider` instance:
 
 ```python
 provider = ai.get_provider(
@@ -63,12 +58,7 @@ provider = ai.get_provider(
 model = ai.Model("local-model", provider=provider)
 ```
 
-OpenAI and Anthropic direct providers also read `OPENAI_BASE_URL` and
-`ANTHROPIC_BASE_URL`.
-
-## Use an explicit client
-
-Pass an upstream client when your app owns transport configuration:
+You can pass an upstream client to the provider:
 
 ```python
 import httpx

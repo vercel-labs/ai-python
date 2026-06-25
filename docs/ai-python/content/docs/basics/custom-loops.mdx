@@ -5,104 +5,51 @@ type: guide
 summary: Override the agent loop to customize scheduling, routing, history updates, logging, and tool execution.
 ---
 
-Custom loops use the same primitives as the default loop. Override `Agent.loop`
-when you need to change scheduling, logging, routing, or persistence.
+Override `loop` when you need custom tool dispatch, logging, durability, or
+branching. While the SDK is doing it's best to define the loop as a Python 
+async generator, it's still using *some* special components. Be sure to reuse 
+those to retain certain framework-controlled behavior.
 
-## When to customize the loop
+## Explore the standard loop shape
 
-Override `loop` when you need custom scheduling, logging, durability, or
-branching. Keep the same pattern when you still want SDK-managed history and
-tool resolution.
-
-## Use the standard loop shape
-
-The default loop keeps running while the last message needs more work. On each
+The default loop keeps running while there is more work to do. On each
 turn, it streams the model response and schedules tool calls:
 
 ```python
 class CustomAgent(ai.Agent):
-    async def loop(self, context: ai.Context):
+    # ai.Context keeps track of message history, run inputs, and other per-run data
+    async def loop(self, context: ai.Context) -> AsyncGenerator[ai.Event]:  
         while context.keep_running():
+            # call ai.stream with whatever model, tools, and messages the user has
+            # passed to agent.run
             async with (
                 ai.stream(context=context) as stream,
-                ai.ToolRunner() as tool_runner,
+                # ai.ToolRunner is responsible for concurrent tool scheduling and
+                # streaming, as well as graceful handling of hook interruptions
+                ai.ToolRunner() as tool_runner,  
+                
             ):
+                # ai.util.merge interleaves two streams together, so the agent
+                # can fire off tools as they arrive in the stream rather than
+                # waiting for the model to stop streaming; and also start streaming
+                # the streaming tools.
                 async for event in ai.util.merge(stream, tool_runner.events()):
                     yield event
 
                     if isinstance(event, ai.events.ToolEnd):
+                        # context.resolve looks up the Python function for the
+                        # tool name in the model's tool call
                         tool_call = context.resolve(event.tool_call)
+                        # schedule the tool for concurrent execution
+                        # using the tool runner
                         tool_runner.schedule(tool_call)
 
+                # add new messages to message history stored in the context.
+                # this works with internal replay machinery to enable serverless
+                # execution.
                 context.add(stream.message)
                 context.add(tool_runner.get_tool_message())
 ```
 
-## Resolve and schedule tool calls
-
-`ToolEnd` means the model finished emitting a tool call. Resolve it through the
-context, then schedule it with `ToolRunner`:
-
-```python
-if isinstance(event, ai.events.ToolEnd):
-    tool_call = context.resolve(event.tool_call)
-    tool_runner.schedule(tool_call)
-```
-
-`context.resolve` validates that the agent has an executable tool registered
-for the model's `tool_name`.
-
-## Add messages to history
-
-After a stream turn finishes, add the assistant message and any tool-result
-message:
-
-```python
-context.add(stream.message)
-context.add(tool_runner.get_tool_message())
-```
-
-`context.add` skips replayed assistant messages, so resume flows can call it
-without duplicating history.
-
-## Run tools sequentially
-
-`ToolRunner.schedule` runs active tools concurrently. To run tools one at a
-time, collect the calls during the model stream, then execute them in order:
-
-```python
-pending: list[ai.ToolCall] = []
-
-async for event in stream:
-    yield event
-    if isinstance(event, ai.events.ToolEnd):
-        pending.append(context.resolve(event.tool_call))
-
-for tool_call in pending:
-    result = await tool_call()
-    yield result
-    tool_runner.add_result(result)
-```
-
-This keeps the same tool-message aggregation path while preserving execution
-order.
-
-## Add logging or routing
-
-Custom loops can inspect events before yielding or scheduling:
-
-```python
-if isinstance(event, ai.events.ToolEnd):
-    call = event.tool_call
-    print(f"tool: {call.tool_name}({call.tool_args})")
-    tool_runner.schedule(context.resolve(call))
-```
-
-You can also route specific tools through custom wrappers:
-
-```python
-if tool_call.name == "contact_mothership":
-    tool_runner.schedule(ai.agents.GatedToolCall(tool_call))
-else:
-    tool_runner.schedule(tool_call)
-```
+You can modify most of the loop and extend `CustomAgent` to fit your application's needs, 
+and the SDK will keep working as long as the loop is still an async generator of events.
