@@ -48,10 +48,13 @@ from collections import Counter
 from typing import Any
 
 import main as ex
+import pydantic
 import temporalio.client
 import temporalio.testing
 import temporalio.worker
 from _durability_worker import LOGGED_ACTIVITIES  # noqa: PLC2701
+
+import ai
 
 # ── Helpers ──────────────────────────────────────────────────────
 
@@ -69,6 +72,22 @@ def read_activity_log(log_file: pathlib.Path) -> Counter[str]:
     if not log_file.exists():
         return Counter()
     return Counter(log_file.read_text().splitlines())
+
+
+_EVENT_ADAPTER: pydantic.TypeAdapter[ai.events.Event] = pydantic.TypeAdapter(
+    ai.events.DiscriminatedEvent
+)
+
+
+def read_streamed_events(event_log: pathlib.Path) -> list[ai.events.Event]:
+    """Deserialize the events the LLM activity wrote to the streaming sink."""
+    if not event_log.exists():
+        return []
+    return [
+        _EVENT_ADAPTER.validate_json(line)
+        for line in event_log.read_text().splitlines()
+        if line
+    ]
 
 
 QUERY = "What's the weather and population of New York and Los Angeles?"
@@ -92,11 +111,12 @@ async def test_happy_path(
             task_queue=ex.TASK_QUEUE,
         )
 
-    assert result, "expected non-empty text"
+    assert result, "expected a non-empty conversation"
+    final_text = ai.messages.Message.model_validate(result[-1]).text
     assert (
-        "8,336,817" in result or "8336817" in result
-    ), f"expected NYC population in result, got: {result!r}"
-    print(f"  ✓ workflow {wid} produced {len(result)} chars")
+        "8,336,817" in final_text or "8336817" in final_text
+    ), f"expected NYC population in result, got: {final_text!r}"
+    print(f"  ✓ workflow {wid} produced {len(result)} messages")
     print(f"  ✓ activity calls: {dict(read_activity_log(log_file))}")
     return wid
 
@@ -116,6 +136,80 @@ async def test_replay_determinism(
     # line up with what the current workflow code would produce.
     await replayer.replay_workflow(history)
     print(f"  ✓ replay clean for {workflow_id} ({len(history.events)} events)")
+
+
+# ── Test: workflow-minted ids are stable across replay ───────────
+
+
+async def test_workflow_minted_ids_are_deterministic(
+    client: temporalio.client.Client, workflow_id: str
+) -> None:
+    print("\n── test_workflow_minted_ids_are_deterministic ─────")
+
+    def ids(messages: list[dict[str, Any]]) -> list[str]:
+        return [
+            id_
+            for m in messages
+            for id_ in (m["id"], *(p["id"] for p in m["parts"]))
+        ]
+
+    handle = client.get_workflow_handle(workflow_id)
+    original = ids(await handle.result())
+
+    # Querying the closed workflow forces a worker to replay the history
+    # and re-run ``run`` to answer -- so these messages are rebuilt by the
+    # replay, not the original execution.
+    async with make_worker(client):
+        replayed = ids(await handle.query(ex.WeatherWorkflow.messages))
+
+    # Any id generated in workflow code (system/user/tool messages and the
+    # tool-result parts inside them) would be re-minted on replay and
+    # diverge here. Ids sourced from a cached activity result survive
+    # identically regardless.
+    assert original == replayed, (
+        "workflow re-minted ids on replay -- nondeterministic id "
+        "generation in workflow code:\n"
+        f"  original: {original}\n"
+        f"  replayed: {replayed}"
+    )
+    print(f"  ✓ all {len(original)} message/part ids stable across replay")
+
+
+# ── Test: streamed ids match the final returned messages ─────────
+
+
+async def test_stream_ids_match_final_messages(
+    client: temporalio.client.Client, event_log: pathlib.Path
+) -> None:
+    print("\n── test_stream_ids_match_final_messages ───────────")
+    event_log.write_text("")
+
+    async with make_worker(client):
+        wid = f"ids-{uuid.uuid4().hex[:8]}"
+        messages = await client.execute_workflow(
+            ex.WeatherWorkflow.run,
+            QUERY,
+            id=wid,
+            task_queue=ex.TASK_QUEUE,
+        )
+
+    streamed = read_streamed_events(event_log)
+    streamed_ids = {e.message.id for e in streamed}
+    final_ids = {m["id"] for m in messages}
+    assert streamed, "no events reached the streaming sink"
+
+    # Every assistant turn streamed to the sink must be identifiable in
+    # the durable result by the same message id. Today the workflow's
+    # Stream re-mints the id when it reassembles the message, so the id a
+    # client saw streaming live is absent from the final messages.
+    missing = streamed_ids - final_ids
+    assert not missing, (
+        f"message ids streamed to the sink are absent from the final "
+        f"returned messages: {sorted(missing)}\n"
+        f"  streamed: {sorted(streamed_ids)}\n"
+        f"  final:    {sorted(final_ids)}"
+    )
+    print(f"  ✓ all {len(streamed_ids)} streamed id(s) present in final")
 
 
 # ── Test 3: activity caching across a worker restart ─────────────
@@ -234,11 +328,15 @@ def _unraisablehook(unraisable: Any) -> None:
 
 
 async def main() -> None:
-    log_file = pathlib.Path(tempfile.mkdtemp()) / "activity_log.txt"
+    tmp = pathlib.Path(tempfile.mkdtemp())
+    log_file = tmp / "activity_log.txt"
+    event_log = tmp / "event_log.txt"
     # In-process workers (worker2 below, plus the happy-path worker)
     # share this module's ``LOGGED_ACTIVITIES``, which look at this env
     # var to decide whether to log. Set it for the whole run.
     os.environ["DURABILITY_ACTIVITY_LOG"] = str(log_file)
+    # The LLM activity emits every stream event to this sink.
+    os.environ[ex._EVENT_LOG_ENV] = str(event_log)
 
     print("Starting embedded Temporal dev server...")
     async with (
@@ -248,6 +346,8 @@ async def main() -> None:
 
         wid = await test_happy_path(client, log_file)
         await test_replay_determinism(client, wid)
+        await test_workflow_minted_ids_are_deterministic(client, wid)
+        await test_stream_ids_match_final_messages(client, event_log)
         await test_activity_caching(env, client, log_file)
 
     print("\nAll durability checks passed.")

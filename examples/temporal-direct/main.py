@@ -29,7 +29,9 @@ from __future__ import annotations
 import dataclasses
 import datetime
 import json
+import os
 import sys
+import threading
 import uuid
 from typing import TYPE_CHECKING, Any, ClassVar
 
@@ -42,9 +44,14 @@ import temporalio.workflow
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
+# ai itself is safe to import in a workflow... but its transitive deps
+# httpx and modelsdotdev are *not*
 with temporalio.workflow.unsafe.imports_passed_through():
-    import ai
+    import httpx  # noqa: F401
+    import modelsdotdev  # noqa: F401
+    import pydantic_core  # noqa: F401
 
+import ai
 
 MODEL_ID = "gateway:anthropic/claude-sonnet-4.6"
 
@@ -94,6 +101,28 @@ TOOL_ACTIVITIES: dict[str, Any] = {
 }
 
 
+# ── Stream-event sink ────────────────────────────────────────────
+#
+# The durable result of the workflow is the final list of Messages.
+# Live token-by-token streaming is a separate, ephemeral concern: the
+# LLM activity emits every model-stream event to an out-of-band sink
+# as it drains the stream. The sink is a plain file named in
+# DURABILITY_EVENT_LOG (/dev/stdout is a good choice for observing);
+# each line is one event serialized as JSON
+# (``event.model_dump_json()``), so a consumer can rebuild the event.
+
+_EVENT_LOG_ENV = "DURABILITY_EVENT_LOG"
+_event_lock = threading.Lock()
+
+
+def _emit_event(event: ai.events.Event) -> None:
+    path = os.environ.get(_EVENT_LOG_ENV)
+    if not path:
+        return
+    with _event_lock, open(path, "a") as f:
+        f.write(event.model_dump_json() + "\n")
+
+
 @dataclasses.dataclass
 class LLMParams:
     model_id: str
@@ -114,8 +143,8 @@ async def llm_call_activity(params: LLMParams) -> LLMResult:
     tools = [ai.Tool.model_validate(t) for t in params.tool_schemas]
 
     async with ai.stream(model, messages, tools=tools) as s:
-        async for _event in s:
-            pass
+        async for event in s:
+            _emit_event(event)
         if s.message is None:
             raise RuntimeError("LLM stream ended without a final message")
         return LLMResult(message=s.message.model_dump())
@@ -206,8 +235,15 @@ def _activity_tool_call(
 
 @temporalio.workflow.defn
 class WeatherWorkflow:
+    def __init__(self) -> None:
+        self._messages: list[ai.messages.Message] = []
+
+    # Draw message/part ids from the workflow's deterministic RNG so they
+    # are stable across replay. ``workflow.random`` is passed as a factory
+    # (it's only valid inside the workflow) and resolved on each call.
     @temporalio.workflow.run
-    async def run(self, user_query: str) -> str:
+    @ai.messages.use_random_async(temporalio.workflow.random)
+    async def run(self, user_query: str) -> list[dict[str, Any]]:
         model = ai.get_model(MODEL_ID)
         messages: list[ai.messages.Message] = [
             ai.system_message(
@@ -216,12 +252,16 @@ class WeatherWorkflow:
             ai.user_message(user_query),
         ]
 
-        final_text = ""
         async with weather_agent.run(model, messages) as stream:
-            async for event in stream:
-                if isinstance(event, ai.events.StreamEnd):
-                    final_text = event.message.text
-        return final_text
+            async for _event in stream:
+                pass
+        self._messages = stream.messages
+        return [m.model_dump() for m in self._messages]
+
+    @temporalio.workflow.query
+    def messages(self) -> list[dict[str, Any]]:
+        """The final messages, as rebuilt by this replay."""
+        return [m.model_dump() for m in self._messages]
 
 
 # ── Entry point ──────────────────────────────────────────────────
@@ -246,13 +286,14 @@ async def main(user_query: str) -> None:
         print(f"Workflow: {workflow_id}")
         print(f"Query:    {user_query}\n")
 
-        result = await client.execute_workflow(
+        messages = await client.execute_workflow(
             WeatherWorkflow.run,
             user_query,
             id=workflow_id,
             task_queue=TASK_QUEUE,
         )
-        print(result)
+        final = ai.messages.Message.model_validate(messages[-1])
+        print(f"\nResult:   {final.text}")
 
 
 if __name__ == "__main__":

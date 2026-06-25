@@ -1,5 +1,9 @@
 import base64
-import uuid
+import contextlib
+import contextvars
+import functools
+import random
+from collections.abc import AsyncIterator, Callable, Iterator
 from typing import Annotated, Any, Literal, Self, overload
 
 import pydantic
@@ -7,11 +11,79 @@ import pydantic
 from . import media
 from . import usage as usage_
 
+type RandomSource = random.Random | Callable[[], random.Random]
+"""A ``Random``, or a zero-arg factory that produces one."""
+
+
+@functools.cache
+def _default_random() -> random.Random:
+    # Built lazily, not at import time: Vercel's workflow library is
+    # unhappy with a Random constructed while the module is imported.
+    #
+    # We use a fresh construction and not just random.getrandbits() because
+    # we don't want to rely on a fixed seed having been set.
+    return random.Random()
+
+
+_id_random: contextvars.ContextVar[random.Random | None] = (
+    contextvars.ContextVar("id_random", default=None)
+)
+
 
 def generate_id(prefix: str | None = None) -> str:
-    """Generate a short random ID for messages and parts."""
-    raw = uuid.uuid4().hex[:12]
+    """Generate a short id for messages and parts.
+
+    Every message/part id flows through here, drawn from a ``Random``: a
+    lazily-created module-global one by default, or whatever was installed
+    for the current context with :func:`use_random` -- e.g. a
+    deterministic, replay-safe generator inside a durable workflow.
+    """
+    rng = _id_random.get() or _default_random()
+    raw = f"{rng.getrandbits(48):012x}"
     return f"{prefix}_{raw}" if prefix else raw
+
+
+def _resolve_random(source: RandomSource) -> random.Random:
+    return source if isinstance(source, random.Random) else source()
+
+
+@contextlib.contextmanager
+def use_random(source: RandomSource) -> Iterator[None]:
+    """Draw message/part ids from ``source`` within this context.
+
+    ``source`` is a ``Random`` or a zero-arg factory returning one. A
+    factory is resolved on entry, so a generator only valid inside a
+    workflow (e.g. ``workflow.random``) can be passed and built lazily
+    there. The override is scoped to the calling task and tasks spawned
+    from it, and restored on exit::
+
+        with ai.messages.use_random(rng):
+            ...  # ids built here are drawn from rng
+    """
+    token = _id_random.set(_resolve_random(source))
+    try:
+        yield
+    finally:
+        _id_random.reset(token)
+
+
+@contextlib.asynccontextmanager
+async def use_random_async(source: RandomSource) -> AsyncIterator[None]:
+    """Async version of :func:`use_random`.
+
+    Being an async context manager, it also works as a decorator on an
+    ``async def`` (a sync ``@contextmanager`` cannot) -- handy for passing
+    ``workflow.random`` straight onto a workflow's entrypoint::
+
+        @ai.messages.use_random_async(workflow.random)
+        async def run(...):
+            ...
+    """
+    token = _id_random.set(_resolve_random(source))
+    try:
+        yield
+    finally:
+        _id_random.reset(token)
 
 
 class TextPart(pydantic.BaseModel):

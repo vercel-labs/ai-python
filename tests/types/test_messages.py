@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import random
 import subprocess
 import sys
 from typing import Any
@@ -322,3 +324,44 @@ def test_tool_result_without_model_input_serializes_after_deep_copy() -> None:
     assert isinstance(rpart, messages.ToolResultPart)
     assert rpart.result == {"ok": 1}
     assert not rpart.has_model_input
+
+
+def test_use_random_overrides_and_restores() -> None:
+    # A seeded Random gives a deterministic id sequence; the override
+    # drives generate_id and the model default factories alike.
+    with messages.use_random(random.Random(0)):
+        a_msg = messages.generate_id("msg")
+        a_part = messages.TextPart(text="hi").id
+    with messages.use_random(random.Random(0)):
+        b_msg = messages.generate_id("msg")
+        b_part = messages.TextPart(text="hi").id
+
+    assert (a_msg, a_part) == (b_msg, b_part)
+    assert a_msg.startswith("msg_")
+    assert a_part.startswith("part_")
+
+    # A factory is resolved on entry (so e.g. workflow.random works).
+    with messages.use_random(lambda: random.Random(0)):
+        assert messages.generate_id("msg") == a_msg
+
+    # Restored on exit -- back to the default Random.
+    assert messages.generate_id("msg").startswith("msg_")
+
+
+async def test_use_random_async_overrides_and_restores() -> None:
+    with messages.use_random(random.Random(0)):
+        expected = messages.generate_id("msg")
+
+    # Works across an await...
+    async with messages.use_random_async(random.Random(0)):
+        await asyncio.sleep(0)
+        assert messages.generate_id("msg") == expected
+
+    # ...and as a decorator on an async fn, resolving the factory per call.
+    @messages.use_random_async(lambda: random.Random(0))
+    async def build() -> str:
+        await asyncio.sleep(0)
+        return messages.generate_id("msg")
+
+    assert await build() == expected
+    assert await build() == expected
