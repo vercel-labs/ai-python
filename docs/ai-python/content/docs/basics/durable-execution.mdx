@@ -6,7 +6,7 @@ summary: Build custom loops with durable model calls, serialized messages, tool 
 ---
 
 Use durable execution when a run must survive process restarts, worker moves, or
-long waits. 
+long waits.
 
 The SDK currently does not provide a built-in durability solution, so you will
 have to create a custom loop (or copy one from the example). This section will
@@ -15,25 +15,94 @@ approach can be applied to other durable execution frameworks (e.g. Temporal).
 
 ## Why durability is different
 
-The core idea of durable execution is to make your code deterministic and 
+The core idea of durable execution is to make your code deterministic and
 replayable by isolating side-effects and non-deterministic work inside *steps*
 (or *activities*), i.e. functions that accept JSON inputs and produce JSON
-outputs. Every successful step gets recorded in the event log. The rest of the 
+outputs. Every successful step gets recorded in the event log. The rest of the
 code turns into a deterministic orchestration *workflow*, that can replay
 results of completed steps from the event log as many times as necessary.
 
 When applied to the agent, this idea turns it into a *workflow*, with `ai.stream`
-and tool calls wrapped in *steps*. The SDK exposes all the necessary primitives 
-and ensures that their inputs and outputs can roundtrip through JSON. 
+and tool calls wrapped in *steps*. The SDK exposes all the necessary primitives
+and ensures that their inputs and outputs can round-trip through JSON.
 
-Another important caveat to durabile execution is that it normally does not
+Another important caveat to durable execution is that it normally does not
 support async generators. Depending on the framework, additional work may be
 required for your streaming setup.
 
 ## Example: Vercel Workflows
 
-> insert a breakdown of a simplified seal-like loop here
+Wrap the model call in a step that returns the final assistant `Message`,
+and wrap tools in steps before decorating them with `@ai.tool`.
 
-> explain that ai.stream is wrapped, tools are wrapped, ai.merge is not necessary,
-> and the hook shape is serverless because that allows the workflow to not take
-> up resources while the approval is being acquired outside of the workflow.
+```python
+@workflow.step
+async def llm_step(
+    model_data: dict[str, object],
+    messages_data: list[dict[str, object]],
+    tools_data: list[dict[str, object]],
+) -> dict[str, object]:
+    model = ai.Model.model_validate(model_data)
+    messages = [
+        ai.messages.Message.model_validate(message)
+        for message in messages_data
+    ]
+    tools = [ai.Tool.model_validate(tool) for tool in tools_data]
+
+    async with ai.stream(model, messages, tools=tools) as stream:
+        async for _event in stream:
+            pass
+
+    return stream.message.model_dump(mode="json")
+
+
+@ai.tool
+@workflow.step
+async def ask_mothership(question: str) -> str:
+    """Ask the mothership for a status update."""
+    response = await mothership_client.ask(question)
+    return response.summary
+```
+
+Then use a custom loop that calls the model step, schedules tool work, and
+stores the resulting messages:
+
+```python
+class DurableAgent(ai.Agent):
+    async def loop(self, context: ai.Context):
+        while context.keep_running():
+            result = await llm_step(
+                context.model.model_dump(mode="json"),
+                [
+                    message.model_dump(mode="json")
+                    for message in context.messages
+                ],
+                [
+                    tool.model_dump(mode="json")
+                    for tool in context.tools
+                ],
+            )
+
+            assistant_message = ai.messages.Message.model_validate(result)
+            context.add(assistant_message)
+
+            async with ai.ToolRunner() as runner:
+                for tool_call in assistant_message.tool_calls:
+                    runner.schedule(context.resolve(tool_call))
+
+                async for event in runner.events():
+                    yield event
+
+                context.add(runner.get_tool_message())
+```
+
+This loop does not need `ai.util.merge`, because `llm_step` returns a complete
+assistant message before tools are scheduled. In a streaming loop, `merge`
+interleaves model events and tool results while the model is still producing
+output.
+
+Consider using the serverless hook flow for approvals. When a pending `HookEvent`
+appears, call `ai.abort_pending_hook(event.hook)`, persist `stream.messages`, 
+and return the approval request to the client. On the next workflow turn, call
+`ai.resolve_hook(...)` before `agent.run(...)`. The SDK replays the interrupted
+assistant turn and continues when the hook reads the pre-registered resolution.
