@@ -5,7 +5,7 @@ type: guide
 summary: Define function tools, design schemas, handle tool errors, use schema-only tools, provider tools, and MCP tools.
 ---
 
-AI SDK for Python supports multiple types of tools, inlcuding function tools
+AI SDK for Python supports multiple types of tools, including function tools
 defined in code using `@ai.tool`, as well as built-in provider-side tools.
 
 ## Declare function tools
@@ -52,7 +52,7 @@ use those when your tools need to return partial output, e.g. when wrapping
 subagents.
 
 Streaming tools require a special return type in order to get correctly
-handled by the SDK, since partial outputs need to be accumulated, passed though,
+handled by the SDK, since partial outputs need to be accumulated, passed through,
 and the LLM needs to receive an accumulated result. That return type must be
 a subtype of `ai.Aggregator`.
 
@@ -71,13 +71,20 @@ async def draft_reply(topic: str) -> ai.StreamingTextTool:
 Use `ai.StreamingStatusTool[T]` when intermediate yields are progress updates
 and the last yielded value is the final result.
 
-The agent emits `PartialToolCallResult` events for those values, then sends 
+The agent emits `PartialToolCallResult` events for those values, then sends
 the aggregated result back to the model on the next turn.
 
 ## Understand tool anatomy
 
-> provide a diagram of ai.Tool, AgentTool, provider tools, etc.
-> mention that tools contain spec and params, and which tools have which
+`ai.Tool` represents tools of all kinds in the SDK.
+
+Each tool carries an optional `spec`, which is a description consumed by the 
+model, as well as a `tool_config` that contains tool-specific execution config 
+(e.g. retry policy).
+
+`AgentTool` wraps `ai.Tool` together with its corresponding Python function,
+which allows `agent.run` to find and call that function when the model requests
+to do so.
 
 Pass `ai.Tool` objects directly to `ai.stream` when you want the model to emit
 tool calls but you do not want the SDK to execute them:

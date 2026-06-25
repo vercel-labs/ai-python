@@ -6,20 +6,38 @@ summary: Construct messages, add files, read outputs, serialize history, handle 
 ---
 
 Messages and events make up AI SDK for Python's data model. Events are used
-to communicate transient streaming state, while messages are used to accumulate, 
+to communicate transient streaming state, while messages are used to accumulate,
 store, and pass around non-streaming state.
 
-Both are Pydantic models, so you can pattern-match, serialize, and persist them 
+Both are Pydantic models, so you can pattern-match, serialize, and persist them
 when your app needs that.
 
 ## Build messages
 
 Messages store the conversation history you send to the model. Each message
-represents a turn in the conversation and is made up of `Part`'s:
+represents a turn in the conversation and is made up of `Part` values:
 
-> insert flowchart of what the message is made out of
+```python
+class Message:
+    role: "system" | "user" | "assistant" | "tool" | "internal"
+    parts: list[Part]
+    ...
 
-Use builtin factory functions to quickly construct frequently used shapes of 
+
+Part = (
+    TextPart
+    | ReasoningPart
+    | ToolCallPart
+    | ToolResultPart
+    | BuiltinToolCallPart
+    | BuiltinToolReturnPart
+    | FilePart
+    | HookPart
+)
+
+```
+
+Use built-in factory functions to quickly construct frequently used shapes of
 messages:
 
 ```python
@@ -38,7 +56,7 @@ restored = [ai.messages.Message.model_validate(item) for item in encoded]
 
 ## Add files and multimodal input
 
-File parts let you send images, audio, or documents when the provider supports 
+File parts let you send images, audio, or documents when the provider supports
 them.
 
 ```python
@@ -61,8 +79,8 @@ print(message.tool_calls)
 print(message.files)
 ```
 
-When working with structured outputs, use `get_output` to get the final assistant
-message wrapped into the provided Pydantic model. 
+When working with structured outputs, use `get_output` to get the final
+assistant message wrapped into the provided Pydantic model.
 
 ```python
 forecast = message.get_output(Forecast)
@@ -70,8 +88,8 @@ forecast = message.get_output(Forecast)
 
 ## Handle stream events
 
-Streams and agents both yield event objects from `ai.events`. Applications can handle
-each kind of event as they see fit:
+Streams and agents both yield event objects from `ai.events`. Applications can
+handle each kind of event as they see fit:
 
 ```python
 if isinstance(event, ai.events.TextDelta):
@@ -82,6 +100,43 @@ Text arrives through `TextStart`, `TextDelta`, and `TextEnd` events. Tool calls
 arrive through `ToolStart`, `ToolDelta`, and `ToolEnd` events. Provider-executed
 tools use the `BuiltinToolStart`, `BuiltinToolDelta`, `BuiltinToolEnd`, and
 `BuiltinToolResult` events.
+
+```text
+StreamStart
+
+    # text output
+    TextStart
+    TextDelta ...
+    TextEnd
+
+    # reasoning output
+    ReasoningStart
+    ReasoningDelta ...
+    ReasoningEnd
+
+    # host-executed tool call
+    ToolStart
+    ToolDelta ...
+    ToolEnd
+
+    # provider-executed tool call
+    BuiltinToolStart
+    BuiltinToolDelta ...
+    BuiltinToolEnd
+    BuiltinToolResult
+
+    # generated file
+    FileEvent
+
+StreamEnd
+```
+
+```text
+# Agent runs can also interleave:
+ToolCallResult          # emitted after a Python tool finishes
+PartialToolCallResult   # emitted while a streaming tool or subagent yields
+HookEvent               # emitted when a hook is pending, resolved, or cancelled
+```
 
 ```python
 async with ai.stream(model, messages, tools=tools) as stream:
@@ -95,6 +150,9 @@ async with ai.stream(model, messages, tools=tools) as stream:
 Agents can also emit tool results, hook events, and partial tool output. You can
 ignore events you do not need, or route them into your application UI,
 observability pipeline, or durable workflow.
+
+Every event also carries a reference to a `ai.Message` that has partial content
+accumulated from the stream *so far*.
 
 ## Track usage
 
