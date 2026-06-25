@@ -8,6 +8,7 @@
     "tools",
     "agents",
     "custom-loops",
+    "durable-execution",
     "subagents-and-multi-agent",
     "human-in-the-loop",
     "ai-sdk-ui"

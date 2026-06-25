@@ -1,0 +1,39 @@
+---
+title: Durable Execution
+description: Run agent loops inside durable workflow systems.
+type: guide
+summary: Build custom loops with durable model calls, serialized messages, tool dispatch, and external resume points.
+---
+
+Use durable execution when a run must survive process restarts, worker moves, or
+long waits. 
+
+The SDK currently does not provide a built-in durability solution, so you will
+have to create a custom loop (or copy one from the example). This section will
+use terminology and the general shape of Vercel Workflows for simplicity; same
+approach can be applied to other durable execution frameworks (e.g. Temporal).
+
+## Why durability is different
+
+The core idea of durable execution is to make your code deterministic and 
+replayable by isolating side-effects and non-deterministic work inside *steps*
+(or *activities*), i.e. functions that accept JSON inputs and produce JSON
+outputs. Every successful step gets recorded in the event log. The rest of the 
+code turns into a deterministic orchestration *workflow*, that can replay
+results of completed steps from the event log as many times as necessary.
+
+When applied to the agent, this idea turns it into a *workflow*, with `ai.stream`
+and tool calls wrapped in *steps*. The SDK exposes all the necessary primitives 
+and ensures that their inputs and outputs can roundtrip through JSON. 
+
+Another important caveat to durabile execution is that it normally does not
+support async generators. Depending on the framework, additional work may be
+required for your streaming setup.
+
+## Example: Vercel Workflows
+
+> insert a breakdown of a simplified seal-like loop here
+
+> explain that ai.stream is wrapped, tools are wrapped, ai.merge is not necessary,
+> and the hook shape is serverless because that allows the workflow to not take
+> up resources while the approval is being acquired outside of the workflow.
