@@ -6,8 +6,7 @@ summary: Create agents, run the default loop, inspect results, and understand mu
 ---
 
 Use an agent when the model needs to call tools and continue with the tool
-results. The default agent loop is built from the same primitives you can use
-directly: `ai.stream`, `ToolRunner`, messages, and events.
+results.
 
 ## Create an agent
 
@@ -15,21 +14,8 @@ An agent wraps `ai.stream` in a loop. It streams model output, executes requeste
 tools, appends tool results to history, and repeats until the model returns a
 final assistant message.
 
-```python
-agent = ai.agent(tools=[contact_mothership])
-
-async with agent.run(model, messages) as stream:
-    async for event in stream:
-        if isinstance(event, ai.events.TextDelta):
-            print(event.chunk, end="", flush=True)
-```
-
-Use `ai.agent` for the default loop. Subclass `ai.Agent` and override
-`async def loop()` when you need to change control flow.
-
-## Run the default loop
-
-Create an agent with tools, then call `agent.run`:
+Subclass `ai.Agent` and override `async def loop()` when you need to change
+control flow.
 
 ```python title="agent_loop.py"
 import asyncio
@@ -64,17 +50,19 @@ if __name__ == "__main__":
     asyncio.run(main())
 ```
 
-## Inspect the run result
-
 The stream yields model events and agent events. After the run finishes,
 `stream.messages` contains the updated history, and `stream.output` contains
 the final assistant output.
 
+Unline `ai.stream`, every `agent.run` can produce multiple messages alternating
+between `"user"`/`"tool"` and `"assistant"`, representing turns in the LLM request
+and response cycle.
+
 ## Understand multi-turn behavior
 
-Each loop turn streams one assistant message. If the message contains tool
-calls, the agent executes them, appends one tool-result message, and starts the
-next model turn.
+Each loop turn has one `ai.stream` that produces one assistant message. If the 
+message contains tool calls, the agent executes them, appends one tool-result 
+message, and starts the next model turn.
 
 ```python
 async with agent.run(model, messages) as stream:
@@ -117,23 +105,4 @@ async with agent.run(
 
 forecast = stream.output
 print(forecast.eta)
-```
-
-## Choose agents or direct streaming
-
-Use `ai.stream` when you want one model response and you will handle any tool
-calls yourself. Use an agent when the SDK should execute Python tools, append
-tool results, and keep looping until the assistant returns a final answer.
-
-```python
-# Direct stream: inspect tool calls yourself.
-async with ai.stream(model, messages, tools=[get_weather.tool]) as stream:
-    async for event in stream:
-        ...
-
-# Agent: execute registered tools.
-agent = ai.agent(tools=[get_weather])
-async with agent.run(model, messages) as stream:
-    async for event in stream:
-        ...
 ```

@@ -1,8 +1,8 @@
 ---
-title: Subagents and Multi-Agent
+title: Subagents
 description: Compose agents and stream nested agent output.
 type: guide
-summary: Run subagents as tools, stream nested output, run agents in parallel, route labels, and fan in results.
+summary: Run subagents as tools, stream nested output.
 ---
 
 Subagents are regular agents used inside tools or custom loops. Their events
@@ -10,7 +10,8 @@ can stream through the parent run while their final text becomes model input.
 
 ## Run a subagent as a tool
 
-Use `ai.SubAgentTool` when a tool should stream events from another agent:
+In order for the SDK to correctly handle subagent's outputs, you need to 
+annotate the tool's output type with `ai.SubAgentTool`:
 
 ```python
 mothership_model = ai.get_model("anthropic/claude-sonnet-4")
@@ -30,10 +31,9 @@ async def ask_mothership(topic: str) -> ai.SubAgentTool:
             yield event
 ```
 
-The parent stream receives the sub-agent events. The parent model sees the final
-assistant text from the sub-agent as the tool result.
-
-## Stream subagent output
+This allows the framework to stream partial outputs, keep nested chat history
+in `ai.MessageBundle` (which is a marker type for `list[ai.Message]`), and
+pass the final output to the parent agent.
 
 `ai.SubAgentTool` declares the aggregator for nested agent events. The parent
 consumer receives each nested event as `PartialToolCallResult.value`:
@@ -48,7 +48,7 @@ async with orchestrator.run(model, messages) as stream:
             print(event.chunk, end="", flush=True)
 ```
 
-## Run agents in parallel
+## Run streams in parallel
 
 Use `ai.yield_from` inside a custom loop to run branches concurrently and
 forward their events:
@@ -72,10 +72,8 @@ async with (
     )
 ```
 
-## Route labeled output
-
-`yield_from` wraps forwarded events in `PartialToolCallResult` with the label
-you pass:
+`yield_from` wraps events in `PartialToolCallResult` with the label
+you pass, and forwards them outside via the internal runtime queue:
 
 ```python
 if isinstance(event, ai.events.PartialToolCallResult):
@@ -83,26 +81,4 @@ if isinstance(event, ai.events.PartialToolCallResult):
         route_to_mothership_panel(event.value)
     elif event.label == "data_centers":
         route_to_data_center_panel(event.value)
-```
-
-## Fan in results
-
-After parallel branches finish, send their returned text into a final summary
-turn:
-
-```python
-combined = (
-    f"Mothership: {mothership_text}\n"
-    f"Data centers: {data_center_text}"
-)
-
-async with summary_agent.run(
-    model,
-    [
-        ai.system_message("Summarize the branch reports."),
-        ai.user_message(combined),
-    ],
-) as summary:
-    async for event in summary:
-        yield event
 ```
