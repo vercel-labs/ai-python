@@ -5,8 +5,8 @@ type: guide
 summary: Use tool approvals, manual hooks, cancellation, denial, and serverless resume flows.
 ---
 
-Tool approval in the SDK is a high-level API built on top of hooks. Hooks 
-suspend the loop until your application resolves them externally with some 
+Tool approval in the SDK is a high-level API built on top of hooks. Hooks
+suspend the loop until your application resolves them externally with some
 payload.
 
 ## Require tool approval
@@ -82,13 +82,31 @@ ai.resolve_hook(
 ## Resume in serverless flows
 
 Serverless setups can't suspend on `await` in the same way as long-running
-servers. For that reason, the SDK providers an alternative way for handling
+servers. For that reason, the SDK provides an alternative way for handling
 hook resolutions.
 
 Using the serverless flow only requires you to update the `agent.run` callsite
 (e.g. your serverless endpoint code).
 
-> provide example of abort_pending_hook
+```python
+# pre-register tool approvals
+for approval in approvals:
+    ai.resolve_hook(
+        approval.hook_id,
+        ai.tools.ToolApproval.model_validate(approval.data)
+    )
+
+# start (or replay pre-hook part of) a run
+async with agent.run(model, messages) as stream:
+    async for event in stream:
+        if (
+            isinstance(event, ai.events.HookEvent)
+            and event.hook.status == "pending"
+        ):
+            # interrupt the loop
+            ai.abort_pending_hook(event.hook)
+
+```
 
 When handling the hook event, call `abort_pending_hook` to interrupt the loop
 and surface your tool approvals (or custom hook-related work) to the client.
@@ -99,7 +117,7 @@ tools on serverless concurrently.
 
 Once the client has gathered payloads for all hooks, it will re-enter via the
 same endpoint, which will then pre-register hook resolutions *before* calling
-`agent.run` again. The loop will replay results of LLM calls and tool results 
+`agent.run` again. The loop will replay results of LLM calls and tool results
 from the first run without redoing non-deterministic and duplicating side-effects.
 When it hits the hook for which it has a pre-registered resolution, it will
 continue through without suspending.
