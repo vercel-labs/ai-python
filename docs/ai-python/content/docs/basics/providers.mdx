@@ -55,7 +55,7 @@ provider = ai.get_provider(
     api_key="your_access_token_here",
 )
 
-model = ai.Model("local-model", provider=provider)
+model = ai.Model(id="local-model", provider=provider)
 ```
 
 You can pass an upstream client to the provider:
@@ -72,7 +72,7 @@ provider = ai.get_provider(
     api_key="your_access_token_here",
     client=client,
 )
-model = ai.Model("local-model", provider=provider)
+model = ai.Model(id="local-model", provider=provider)
 ```
 
 Close explicit providers when your app shuts down:
@@ -110,12 +110,14 @@ except ai.ProviderError as exc:
 Pass request-scoped provider options with `params`:
 
 ```python
-params = {
-    "providerOptions": {
-        "gateway": {"sort": "cost"},
-        "anthropic": {"speed": "fast"},
+params = ai.InferenceRequestParams(
+    extra_body={
+        "providerOptions": {
+            "gateway": {"sort": "cost"},
+            "anthropic": {"speed": "fast"},
+        }
     }
-}
+)
 
 async with ai.stream(model, messages, params=params) as stream:
     async for event in stream:

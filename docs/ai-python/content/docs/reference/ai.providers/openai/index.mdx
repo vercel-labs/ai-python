@@ -10,7 +10,7 @@ provider-executed tools.
 
 ```python
 provider = ai.get_provider("openai")
-model = ai.Model("gpt-5", provider=provider)
+model = ai.Model(id="gpt-5", provider=provider)
 ```
 
 The optional upstream OpenAI SDK loads lazily when the provider creates or uses
@@ -33,7 +33,7 @@ provider = ai.get_provider(
     "openai",
     base_url="http://localhost:11434/v1",
 )
-model = ai.Model("llama3", provider=provider)
+model = ai.Model(id="llama3", provider=provider)
 ```
 
 The provider supports model listing, probing, streaming, provider-executed

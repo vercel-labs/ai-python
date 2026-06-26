@@ -53,7 +53,7 @@ These module aliases are also re-exported from `ai`.
 endpoints, model listing, and wire translation.
 
 ```python
-model = ai.Model("gpt-5", provider=provider)
+model = ai.Model(id="gpt-5", provider=provider)
 model.id
 model.provider
 model.protocol
@@ -65,7 +65,7 @@ model.with_protocol(protocol)
 Fields:
 
 - `id`: Provider model id.
-- `provider`: Provider instance or provider id.
+- `provider`: Provider instance.
 - `protocol`: Optional provider protocol override.
 
 Methods:
@@ -109,8 +109,15 @@ provider wire formats.
 Provider instances use a protocol for `stream` and `generate` calls.
 
 ```python
-protocol.stream(client, model, messages, tools=tools, params=params)
-await protocol.generate(client, model, messages, params)
+protocol.stream(
+    client,
+    model,
+    messages,
+    tools=tools,
+    params=params,
+    provider=provider.name,
+)
+await protocol.generate(client, model, messages, params, provider=provider.name)
 ```
 
 ## Request Params

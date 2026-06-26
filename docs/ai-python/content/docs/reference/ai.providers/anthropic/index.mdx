@@ -10,7 +10,7 @@ and provider-executed tools.
 
 ```python
 provider = ai.get_provider("anthropic")
-model = ai.Model("claude-sonnet-4-6", provider=provider)
+model = ai.Model(id="claude-sonnet-4-6", provider=provider)
 ```
 
 The optional upstream Anthropic SDK loads lazily when the provider creates or
@@ -34,7 +34,7 @@ provider = ai.get_provider(
     "anthropic",
     base_url="https://anthropic.example.com",
 )
-model = ai.Model("claude-sonnet-4-6", provider=provider)
+model = ai.Model(id="claude-sonnet-4-6", provider=provider)
 ```
 
 The provider supports model listing, probing, streaming, provider-executed

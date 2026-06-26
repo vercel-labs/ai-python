@@ -157,6 +157,10 @@ tools = [
 
 The Model Context Protocol (MCP) adapter converts server tools into agent tools:
 
+```bash
+uv add "ai[mcp]"
+```
+
 ```python
 tools = await ai.mcp.get_http_tools(
     "http://localhost:3000/mcp",
