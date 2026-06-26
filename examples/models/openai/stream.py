@@ -1,10 +1,10 @@
-"""Basic streaming — print text deltas as they arrive."""
+"""Streaming through OpenAI."""
 
 import asyncio
 
 import ai
 
-model = ai.get_model("anthropic/claude-sonnet-4.6")
+model = ai.get_model("openai:gpt-5.5")
 
 messages = [
     ai.system_message("Be concise."),
@@ -13,6 +13,11 @@ messages = [
 
 
 async def main() -> None:
+    provider = model.provider
+    if not provider.is_configured():
+        print(f"[SKIP] {provider.name} provider is not configured")
+        return
+
     async with ai.stream(model, messages) as s:
         async for event in s:
             if isinstance(event, ai.events.TextDelta):

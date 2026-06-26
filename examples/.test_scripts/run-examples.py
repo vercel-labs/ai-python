@@ -41,19 +41,19 @@ class Sample:
 
 TEXT_SAMPLES = [
     Sample("models/stream.py"),
-    Sample("models/stream_all.py"),
-    Sample("models/tools_schema.py"),
-    Sample("agents/agent_simple.py"),
-    Sample("agents/agent_custom_loop.py"),
-    Sample("agents/agent_nested.py"),
+    Sample("models/gateway/stream.py"),
+    Sample("models/anthropic/stream.py"),
+    Sample("models/openai/stream.py"),
+    Sample("agents/basic.py"),
+    Sample("agents/custom_loop.py"),
+    Sample("agents/subagent.py"),
     Sample("agents/streaming_tool.py"),
     Sample("models/openai/openai_chat_completions.py"),
     Sample("models/openai/explicit_client.py"),
     Sample("media/multimodal_input.py"),
     Sample("models/check_connection.py"),
-    Sample("agents/agent_hooks.py", stdin="y\n"),
-    Sample("agents/agent_hooks_inline.py", stdin="y\n"),
-    Sample("agents/agent_hooks_serverless.py"),
+    Sample("agents/tool_approval.py"),
+    Sample("agents/custom_hook.py"),
     Sample("agents/mcp_tools.py"),
     Sample("models/anthropic/builtin_web_search.py"),
 ]
@@ -295,7 +295,7 @@ def main() -> None:
         "--model",
         help=(
             "run each sample through run-with-patched-model.py with this "
-            "model id (e.g. 'gateway:openai/gpt-5.4-mini'); ignored for "
+            "model id (e.g. 'openai/gpt-5.4-mini'); ignored for "
             "samples with a custom cmd"
         ),
     )

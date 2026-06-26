@@ -53,7 +53,7 @@ with temporalio.workflow.unsafe.imports_passed_through():
 
 import ai
 
-MODEL_ID = "gateway:anthropic/claude-sonnet-4.6"
+MODEL_ID = "anthropic/claude-sonnet-4.6"
 
 
 # ── Tool definitions ─────────────────────────────────────────────

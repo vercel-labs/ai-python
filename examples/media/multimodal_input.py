@@ -5,7 +5,7 @@ import pathlib
 
 import ai
 
-model = ai.get_model("gateway:anthropic/claude-sonnet-4.6")
+model = ai.get_model("anthropic/claude-sonnet-4.6")
 
 image_path = pathlib.Path(__file__).parent / "sample_image.jpg"
 image_data = image_path.read_bytes()
