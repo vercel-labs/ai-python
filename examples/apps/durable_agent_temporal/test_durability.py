@@ -1,4 +1,4 @@
-"""Durability tests for ``temporal-direct/main.py``.
+"""Durability tests for ``durable_agent_temporal/main.py``.
 
 Three checks:
 

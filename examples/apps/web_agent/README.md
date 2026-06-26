@@ -1,4 +1,4 @@
-# fastapi-chat
+# web_agent
 
 Chat demo using the Python Vercel AI SDK with a FastAPI backend and React frontend.
 Includes **human-in-the-loop tool approval** — every tool call is gated

@@ -163,6 +163,8 @@ Focused samples live in category directories under `examples/`.
 
 End-to-end demos:
 
-- `examples/apps/fastapi-vite/` - FastAPI + React chat with tool approval
-- `examples/apps/multiagent-textual/` - parallel agents with terminal hook resolution
-- `examples/apps/temporal-direct/` - durable agent with a custom loop
+- `examples/apps/web_agent/` - FastAPI + React chat with tool approval
+- `examples/apps/coding_agent/` - coding agent
+- `examples/apps/durable_agent_temporal/` - durable agent with Temporal
+- `examples/apps/durable_agent_workflows/` - durable agent with Workflows
+- `examples/apps/slack_agent/` - Slack agent

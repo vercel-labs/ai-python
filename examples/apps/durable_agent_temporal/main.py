@@ -226,7 +226,7 @@ class WeatherWorkflow:
 
 # ── Entry point ──────────────────────────────────────────────────
 
-TASK_QUEUE = "temporal-direct"
+TASK_QUEUE = "durable-agent-temporal"
 
 
 async def main(user_query: str) -> None:

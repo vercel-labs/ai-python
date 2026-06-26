@@ -642,7 +642,7 @@ wheels = [
 ]
 
 [[package]]
-name = "temporal-direct"
+name = "durable-agent-temporal"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
