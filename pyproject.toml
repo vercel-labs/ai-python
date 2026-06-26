@@ -81,7 +81,7 @@ python_version = "3.12"
 strict = true
 plugins = ["pydantic.mypy"]
 files = ["src", "tests", "examples"]
-exclude = ["examples/fastapi-vite/backend/main.py"]
+exclude = ["examples/apps/fastapi-vite/backend/main.py"]
 
 [tool.ty.environment]
 python-version = "3.12"

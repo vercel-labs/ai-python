@@ -7,8 +7,9 @@ set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/.." && pwd)
+PROJECT_ROOT=$(cd "$ROOT/../../.." && pwd)
 
-if ! uv run --frozen --with-editable "$ROOT/../.." python - <<'PY'
+if ! uv run --frozen --with-editable "$PROJECT_ROOT" python - <<'PY'
 import sys
 
 import ai
@@ -38,7 +39,7 @@ trap cleanup EXIT
 echo "Starting backend on :$BACKEND_PORT..."
 (
     cd "$ROOT/backend"
-    uv run --frozen --with-editable ~/src/py-ai/ fastapi dev main.py --port "$BACKEND_PORT"
+    uv run --frozen --with-editable "$PROJECT_ROOT" fastapi dev main.py --port "$BACKEND_PORT"
 ) > "$LOGS/backend.log" 2>&1 &
 BACKEND_PID=$!
 
