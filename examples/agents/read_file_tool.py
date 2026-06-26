@@ -23,7 +23,7 @@ from ai.types import media
 # Restrict the tool to a directory we trust the model to roam in.
 # `.resolve()` collapses symlinks so a path inside ALLOWED_ROOT cannot
 # escape via a symlink that points elsewhere.
-ALLOWED_ROOT = pathlib.Path(__file__).parent.resolve()
+ALLOWED_ROOT = pathlib.Path(__file__).parents[1].resolve()
 
 
 def _resolve_within_allowed(path: str) -> pathlib.Path:
@@ -56,7 +56,7 @@ async def main() -> None:
     my_agent = ai.agent(tools=[read_file])
 
     here = pathlib.Path(__file__).parent
-    image_path = here / "sample_image.jpg"
+    image_path = ALLOWED_ROOT / "media" / "sample_image.jpg"
     text_path = here / "agent_simple.py"
 
     messages = [

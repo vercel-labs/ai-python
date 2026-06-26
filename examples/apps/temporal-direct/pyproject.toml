@@ -12,4 +12,4 @@ dependencies = [
 exclude-newer = "2 days"
 
 [tool.uv.sources]
-ai = { path = "../..", editable = true }
+ai = { path = "../../..", editable = true }

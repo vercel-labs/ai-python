@@ -155,10 +155,15 @@ ai.resolve_hook("approve_send_email", {"granted": True, "reason": "approved"})
 
 ## Examples
 
-Focused samples live in `examples/`.
+Focused samples live in category directories under `examples/`.
+
+- `examples/agents/` - agent loops, tools, hooks, and MCP
+- `examples/media/` - image, video, and multimodal input/output
+- `examples/models/` - streaming, structured output, and provider examples
+- `examples/apps/` - end-to-end demos
 
 End-to-end demos:
 
-- `examples/fastapi-vite/` - FastAPI + React chat with tool approval
-- `examples/multiagent-textual/` - parallel agents with terminal hook resolution
-- `examples/temporal-direct/` - durable agent with a custom loop
+- `examples/apps/fastapi-vite/` - FastAPI + React chat with tool approval
+- `examples/apps/multiagent-textual/` - parallel agents with terminal hook resolution
+- `examples/apps/temporal-direct/` - durable agent with a custom loop

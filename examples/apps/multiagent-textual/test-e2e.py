@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     from http.client import HTTPResponse
 
 HERE = Path(__file__).resolve().parent
+REPO = HERE.parents[2]
 SESSION = f"multiagent-e2e-{os.getpid()}"
 SERVER_PORT = os.environ.get("SERVER_PORT", "8000")
 SERVER_URL = f"http://127.0.0.1:{SERVER_PORT}"
@@ -123,7 +124,7 @@ def main() -> int:
                 "run",
                 "--frozen",
                 "--with-editable",
-                str(Path.home() / "src/py-ai"),
+                str(REPO),
                 "fastapi",
                 "dev",
                 "server.py",
@@ -162,7 +163,7 @@ def main() -> int:
                 "120",
                 (
                     f"cd '{HERE}' && "
-                    "uv run --frozen --with-editable ~/src/py-ai/ "
+                    f"uv run --frozen --with-editable '{REPO}' "
                     "python client.py"
                 ),
             ],

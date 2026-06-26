@@ -8,7 +8,7 @@ exclude-newer-span = "P2D"
 
 [[package]]
 name = "ai"
-source = { editable = "../../" }
+source = { editable = "../../.." }
 dependencies = [
     { name = "httpx" },
     { name = "mcp" },
@@ -669,7 +669,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "ai", editable = "../../" },
+    { name = "ai", editable = "../../.." },
     { name = "fastapi", extras = ["standard"], specifier = ">=0.128.1" },
     { name = "textual", specifier = ">=3.0" },
     { name = "websockets", specifier = ">=15.0" },
