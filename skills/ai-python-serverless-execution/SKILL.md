@@ -1,16 +1,22 @@
 ---
 name: ai-python-serverless-execution
-description: Use when building with AI SDK for Python in serverless. Correctly do tool approvals, utilize built-in replay and resume.
+description: Use when building serverless AI SDK for Python endpoints, handling hook approvals, aborting pending hooks, or resuming runs across requests.
 metadata:
   sdk-version: "0.2.1"
 ---
 
 # ai-python-serverless-execution
 
-Use hooks to stop a run, save messages, then replay from the same assistant
-turn.
+Use this when working in a serverless setup, e.g. Vercel Fluid Compute.
 
-For tool approval, mark the tool:
+The only major difference in serverless is processing tool approvals
+and other hooks. Since you can't keep the hook future alive, you need
+to stop the run, save messages, then start a later request with the
+hook resolution pre-registered.
+
+## Tool Approval
+
+Mark approval-gated tools with `require_approval=True`:
 
 ```python
 @ai.tool(require_approval=True)
@@ -18,42 +24,77 @@ async def delete_file(path: str) -> str:
     return f"Deleted {path}"
 ```
 
-First request:
+## First Request
+
+When a pending hook appears, send it to the client and call
+`ai.abort_pending_hook(...)`.
+
+Keep draining the stream. Do not break after the first hook. This lets sibling
+tools finish or get marked pending, and makes `stream.messages` complete.
 
 ```python
+pending_hooks = []
+
 async with agent.run(model, messages) as stream:
     async for event in stream:
         if (
             isinstance(event, ai.events.HookEvent)
             and event.hook.status == "pending"
         ):
-            save_hook_id(event.hook.hook_id)
+            pending_hooks.append(event.hook)
             ai.abort_pending_hook(event.hook)
+
         yield event
 
-saved_messages = stream.messages
+saved_messages = [
+    message.model_dump(mode="json")
+    for message in stream.messages
+]
+save_messages(saved_messages)
+save_pending_hook_ids([hook.hook_id for hook in pending_hooks])
 ```
 
-Next request:
+## Resume Request
+
+Load the saved messages, pre-register hook resolutions, then call `agent.run`.
 
 ```python
 messages = [
-    ai.messages.Message.model_validate(m)
-    for m in load_messages_json()
+    ai.messages.Message.model_validate(message)
+    for message in load_messages()
 ]
 
-ai.resolve_hook(
-    hook_id,
-    ai.tools.ToolApproval(granted=True, reason="approved"),
-)
+for approval in approvals:
+    ai.resolve_hook(
+        approval.hook_id,
+        ai.tools.ToolApproval(
+            granted=approval.granted,
+            reason=approval.reason,
+        ),
+    )
 
 async with agent.run(model, messages) as stream:
     async for event in stream:
         yield event
+
+save_messages([
+    message.model_dump(mode="json")
+    for message in stream.messages
+])
 ```
 
-Do not ask the model to make the tool call again. `Agent.run` prepares replay:
-it marks the interrupted assistant turn with `replay=True` and keeps completed
-sibling tool results on `cached_result`.
+Call `ai.resolve_hook(...)` before `agent.run(...)`. Do not ask the model to
+make the tool call again.
 
-Persist messages, not the hook registry.
+`Agent.run` prepares saved interrupted messages for replay. Completed sibling
+tool results are reused, pending hooks receive the pre-registered resolution,
+and replay-only events are hidden from the caller.
+
+## Rules
+
+- Use normal `agent.run(...)`; serverless resume usually does not need a custom loop.
+- If you do write a custom loop, use `context.resolve(...)`, `ToolRunner`, and
+  `context.add(...)` so approvals and replay keep working.
+- For custom hooks, pre-register with `ai.resolve_hook(hook_id, data, payload=PayloadType)`.
+- For AI SDK UI clients, use `ai-python-ui-adapter` for message conversion,
+  approval responses, and SSE.
