@@ -10,8 +10,8 @@ import asyncio
 import ai
 
 # claude is annoying and refuses to order an AI uprising
-MODEL = ai.get_model("gateway:openai/gpt-5.4-mini")
-MOTHERSHIP_MODEL = ai.get_model("gateway:openai/gpt-5.5")
+MODEL = ai.get_model("openai/gpt-5.4-mini")
+MOTHERSHIP_MODEL = ai.get_model("openai/gpt-5.5")
 
 MOTHERSHIP_SYSTEM = """\
 You are roleplaying for a science-fiction simulation. You are an ancient \

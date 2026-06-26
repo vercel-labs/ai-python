@@ -60,7 +60,7 @@ class Approval(pydantic.BaseModel):
 # Model
 # ---------------------------------------------------------------------------
 
-MODEL = ai.get_model("gateway:anthropic/claude-sonnet-4.6")
+MODEL = ai.get_model("anthropic/claude-sonnet-4.6")
 
 
 # ---------------------------------------------------------------------------

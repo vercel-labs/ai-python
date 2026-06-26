@@ -52,12 +52,12 @@ async def read_file(path: str) -> str | ai.messages.ContentOutput:
 
 
 async def main() -> None:
-    model = ai.get_model("gateway:anthropic/claude-sonnet-4.6")
+    model = ai.get_model("anthropic/claude-sonnet-4.6")
     my_agent = ai.agent(tools=[read_file])
 
     here = pathlib.Path(__file__).parent
     image_path = ALLOWED_ROOT / "media" / "sample_image.jpg"
-    text_path = here / "agent_simple.py"
+    text_path = here / "basic.py"
 
     messages = [
         ai.system_message(

@@ -1,23 +1,21 @@
-"""Prompt caching via AI Gateway's automatic caching.
+"""Prompt caching via request-scoped cache params.
 
-Sets ``providerOptions.gateway.caching = "auto"`` and lets the gateway
-place a ``cache_control`` breakpoint at the end of the static prefix
-(system + tools).  Works without sprinkling cache markers through the
-message list.
+Sets ``cache.mode = "auto"`` and lets the provider place an appropriate
+cache breakpoint at the end of the static prefix (system + tools). Works
+without sprinkling cache markers through the message list.
 
 Cache stats are surfaced on ``Stream.usage``:
 ``cache_write_tokens`` on the first call, ``cache_read_tokens`` on the
 second.  Each model has a minimum prefix size below which caching
 silently no-ops — no error, just zeros.
 
-See https://vercel.com/docs/ai-gateway/models-and-providers/automatic-caching
 """
 
 import asyncio
 
 import ai
 
-model = ai.get_model("gateway:anthropic/claude-sonnet-4.6")
+model = ai.get_model("anthropic/claude-sonnet-4.6")
 
 # A NOTE FROM A HUMAN: Opus originally generated this example with a
 # system prompt for a "senior incident-response engineer". I told it
