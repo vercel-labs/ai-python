@@ -464,6 +464,43 @@ async def test_stream_replays_marked_last_assistant_with_tool_calls() -> None:
         assert not any(isinstance(e, events_.TextDelta) for e in events)
 
 
+async def test_replay_message_preserves_id() -> None:
+    """``Stream.replay_message`` keeps the message id and rebuilds parts."""
+    msg = messages_.Message(
+        role="assistant",
+        parts=[
+            messages_.TextPart(id="t1", text="calling tools"),
+            messages_.ToolCallPart(
+                tool_call_id="tc-1",
+                tool_name="weather",
+                tool_args='{"city":"SF"}',
+            ),
+        ],
+    )
+
+    async with ai.Stream.replay_message(msg) as stream:
+        events: list[events_.Event] = [event async for event in stream]
+
+    # The rebuilt message keeps the original id (a fresh Message, not the
+    # original object) and the parts are reconstructed from the events --
+    # no duplication, same part ids.
+    assert stream.message is not msg
+    assert stream.message.id == msg.id
+    assert len(stream.message.parts) == 2
+    assert stream.text == "calling tools"
+    assert [tc.tool_call_id for tc in stream.tool_calls] == ["tc-1"]
+
+    # The full event set is re-emitted (and is visible to consumers --
+    # nothing is flagged ``replay``), enough to drive a tool runner.
+    assert events
+    assert not any(e.replay for e in events)
+    tool_ends = [e for e in events if isinstance(e, events_.ToolEnd)]
+    assert len(tool_ends) == 1
+    assert tool_ends[0].tool_call.tool_call_id == "tc-1"
+    assert any(isinstance(e, events_.TextDelta) for e in events)
+    assert any(isinstance(e, events_.ToolStart) for e in events)
+
+
 def test_tool_end_replay_flag_excluded_from_json() -> None:
     """The replay flag is internal — it must not appear in serialized output."""
     ev = events_.ToolEnd(

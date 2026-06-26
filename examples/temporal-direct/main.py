@@ -153,11 +153,10 @@ class WeatherAgent(ai.Agent):
 
             # 2. Wrap the complete message in a synthetic stream so we can
             #    drive the rest of the loop with ToolRunner — same shape as
-            #    the default loop. ``replay_message_events`` is the framework
-            #    helper that decomposes a complete ``Message`` back into the
-            #    events a streaming adapter would have produced.
+            #    the default loop. ``Stream.replay_message`` replays events
+            #    from llm_msg.
             async with (
-                ai.Stream(ai.events.replay_message_events(llm_msg)) as stream,
+                ai.Stream.replay_message(llm_msg) as stream,
                 ai.ToolRunner() as tr,
             ):
                 async for event in ai.util.merge(stream, tr.events()):

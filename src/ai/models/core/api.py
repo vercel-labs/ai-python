@@ -135,6 +135,53 @@ class Stream(Generic[StreamOutputT]):
         # rather than look like a normal end of turn.
         self._ended = False
 
+    @classmethod
+    def replay_message(
+        cls,
+        message: types.messages.Message,
+        *,
+        output_type: type[StreamOutputT] | None = None,
+    ) -> Stream[StreamOutputT]:
+        """Synthesize stream events for ``msg``.
+
+        Use when you have a complete ``Message`` from a non-streaming source —
+        e.g., the result of a Temporal activity, a cached LLM response, or an
+        offline test fixture — and want to feed it through code that consumes
+        an async event stream (``ai.Stream``, ``ai.ToolRunner``, custom loops
+        that mirror the default loop's shape, etc.)::
+
+            async with ai.Stream.replay_message(msg) as stream:
+                async with ai.ToolRunner() as tr:
+                    async for event in ai.util.merge(stream, tr.events()):
+                        ...
+
+        Each part is emitted as the start/delta/end triple a streaming adapter
+        would have produced, in part order, bracketed by ``StreamStart`` and
+        ``StreamEnd``. The full body of text/reasoning/tool-args is sent as a
+        single delta — the granularity of the model's original chunking is
+        not recoverable from a complete message.
+
+        Each part's ``provider_metadata`` (and the message's) rides on its end
+        event, mirroring the real adapters, so a rebuilt turn keeps it --
+        reasoning signatures included, which must survive to replay the turn
+        back to the provider.
+
+        Parts with no model-layer event analog — ``ToolResultPart``,
+        ``HookPart`` — are skipped silently; they are agent-layer concerns
+        and never appear on the model stream.
+
+        ``stream.message`` keeps ``message``'s id; the parts are rebuilt
+        from the stream.
+        """
+        seed = types.messages.Message(
+            id=message.id, role=message.role, parts=[]
+        )
+        return cls(
+            types.events._replay_message_events(message),
+            seed_message=seed,
+            output_type=output_type,
+        )
+
     async def aclose(self) -> None:
         await self._gen.aclose()
 
