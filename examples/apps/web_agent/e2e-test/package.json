@@ -1,5 +1,5 @@
 {
-  "name": "fastapi-vite-e2e",
+  "name": "web-agent-e2e",
   "private": true,
   "scripts": {
     "test:e2e": "node e2e-test.mjs"
