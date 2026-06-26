@@ -7,9 +7,11 @@ metadata:
 
 # ai-python-basics
 
-Install with `uv add ai`.
+Requires Python 3.12 or later. Install with `uv add ai`.
 
 Use `import ai`.
+
+For gateway-routed model IDs, set `AI_GATEWAY_API_KEY`.
 
 Core pieces:
 

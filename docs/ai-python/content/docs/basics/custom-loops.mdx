@@ -6,9 +6,9 @@ summary: Override the agent loop to customize scheduling, routing, history updat
 ---
 
 Override `loop` when you need custom tool dispatch, logging, durability, or
-branching. While the SDK is doing it's best to define the loop as a Python 
-async generator, it's still using *some* special components. Be sure to reuse 
-those to retain certain framework-controlled behavior.
+branching. While the SDK defines the loop as a Python async generator, it still
+uses a few framework components. Reuse those to retain framework-controlled
+behavior.
 
 ## Explore the standard loop shape
 
@@ -18,7 +18,7 @@ turn, it streams the model response and schedules tool calls:
 ```python
 class CustomAgent(ai.Agent):
     # ai.Context keeps track of message history, run inputs, and other per-run data
-    async def loop(self, context: ai.Context) -> AsyncGenerator[ai.Event]:  
+    async def loop(self, context: ai.Context) -> AsyncGenerator[ai.events.AgentEvent]:
         while context.keep_running():
             # call ai.stream with whatever model, tools, and messages the user has
             # passed to agent.run
@@ -26,8 +26,8 @@ class CustomAgent(ai.Agent):
                 ai.stream(context=context) as stream,
                 # ai.ToolRunner is responsible for concurrent tool scheduling and
                 # streaming, as well as graceful handling of hook interruptions
-                ai.ToolRunner() as tool_runner,  
-                
+                ai.ToolRunner() as tool_runner,
+
             ):
                 # ai.util.merge interleaves two streams together, so the agent
                 # can fire off tools as they arrive in the stream rather than

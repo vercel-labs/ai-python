@@ -21,7 +21,7 @@ Default configuration uses `AI_GATEWAY_API_KEY`.
 
 ```python
 provider = ai.get_provider("vercel")
-model = ai.Model("anthropic/claude-sonnet-4", provider=provider)
+model = ai.Model(id="anthropic/claude-sonnet-4", provider=provider)
 ```
 
 The provider uses the Gateway v3 protocol by default, owns the Gateway client,

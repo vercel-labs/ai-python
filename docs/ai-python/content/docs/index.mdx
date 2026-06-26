@@ -21,6 +21,13 @@ async Python.
 uv add ai
 ```
 
+AI Gateway is the default route for unprefixed model IDs. Configure the gateway
+key before running the examples:
+
+```bash title="Terminal"
+export AI_GATEWAY_API_KEY="your_access_token_here"
+```
+
 Then import the package in Python:
 
 ```python

@@ -97,7 +97,7 @@ async with agent.run(
     model,
     [ai.user_message("Return a JSON mothership forecast.")],
     output_type=Forecast,
-    params={"temperature": 0},
+    params=ai.InferenceRequestParams().with_temperature(0),
 ) as stream:
     async for event in stream:
         if isinstance(event, ai.events.TextDelta):

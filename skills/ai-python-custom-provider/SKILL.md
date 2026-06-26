@@ -14,13 +14,15 @@ Minimal shape:
 
 ```python
 from collections.abc import AsyncGenerator, Sequence
-from typing import Any
+from typing import Any, Literal
 
 import pydantic
 import ai
 
 
 class MyProtocol(ai.ProviderProtocol[Any]):
+    protocol_class_id: Literal["my_protocol"] = "my_protocol"
+
     def stream(
         self,
         client: Any,
@@ -50,13 +52,16 @@ class MyProtocol(ai.ProviderProtocol[Any]):
 
 
 class MyProvider(ai.Provider[Any]):
-    def __init__(self, client: Any) -> None:
-        super().__init__(
-            name="my",
-            base_url="",
-            protocol=MyProtocol(),
-            client=client,
-        )
+    provider_class_id: Literal["my_provider"] = "my_provider"
+    name: str = "my"
+    default_base_url: str = "https://example.invalid"
+
+    def __init__(self, *, client: Any) -> None:
+        super().__init__()
+        self._set_client(client)
+
+    def default_protocol(self) -> ai.ProviderProtocol[Any]:
+        return MyProtocol()
 
     async def list_models(self) -> list[str]:
         return ["my-model"]
@@ -65,7 +70,7 @@ class MyProvider(ai.Provider[Any]):
         return None
 
 
-model = ai.Model("my-model", provider=MyProvider(client))
+model = ai.Model(id="my-model", provider=MyProvider(client=client))
 ```
 
 For Python tool calls, emit `ToolStart`, `ToolDelta`, and `ToolEnd`:
@@ -84,3 +89,7 @@ Then `Agent` resolves and runs the tool.
 
 If the provider runs its own built-in tool, emit `BuiltinToolStart`,
 `BuiltinToolDelta`, `BuiltinToolEnd`, and `BuiltinToolResult` instead.
+
+Do not implement a custom provider for normal app configuration. Prefer
+`ai.get_provider(...)`, `ai.get_model(...)`, or a protocol override unless you
+are adding a new upstream API adapter.
