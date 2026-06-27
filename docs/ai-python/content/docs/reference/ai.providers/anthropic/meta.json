@@ -1,0 +1,7 @@
+{
+  "title": "anthropic",
+  "description": "Reference for Anthropic-compatible provider APIs.",
+  "pages": [
+    "tools"
+  ]
+}

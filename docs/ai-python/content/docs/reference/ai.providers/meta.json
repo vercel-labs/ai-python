@@ -1,0 +1,9 @@
+{
+  "title": "ai.providers",
+  "description": "Reference for provider APIs.",
+  "pages": [
+    "ai-gateway",
+    "openai",
+    "anthropic"
+  ]
+}

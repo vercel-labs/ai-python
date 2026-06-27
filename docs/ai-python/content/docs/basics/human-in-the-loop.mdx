@@ -5,8 +5,9 @@ type: guide
 summary: Use tool approvals, manual hooks, cancellation, denial, and serverless resume flows.
 ---
 
-Hooks let an agent suspend while your application waits for a decision. Tool
-approvals are the built-in hook workflow.
+Tool approval in the SDK is a high-level API built on top of hooks. Hooks
+suspend the loop until your application resolves them externally with some
+payload.
 
 ## Require tool approval
 
@@ -21,18 +22,6 @@ async def notify_mothership(message: str) -> str:
 
 When the model calls the tool, the agent emits a hook event. Resolve it with
 `ai.resolve_hook`:
-
-```python
-ai.resolve_hook(
-    "approve_tool_call_id_here",
-    ai.tools.ToolApproval(granted=True, reason="approved"),
-)
-```
-
-## Resolve approvals in a live app
-
-Listen for pending hook events and resolve the matching hook from another task,
-request handler, or UI callback:
 
 ```python
 async with agent.run(model, messages) as stream:
@@ -50,33 +39,6 @@ ai.resolve_hook(
 )
 ```
 
-## Build manual hooks
-
-Hooks let an agent suspend while your application waits for external input,
-such as a human approval:
-
-```python
-approval = await ai.hook(
-    "approve_contact_mothership",
-    payload=ai.tools.ToolApproval,
-    metadata={"tool": "contact_mothership"},
-)
-```
-
-Resolve the hook from another part of your application:
-
-```python
-ai.resolve_hook(
-    "approve_contact_mothership",
-    {"granted": True, "reason": "approved"},
-)
-```
-
-Use hooks when a tool or workflow needs a decision that cannot happen inside the
-model call.
-
-## Deny or cancel work
-
 Return a denial by resolving the hook with `granted=False`:
 
 ```python
@@ -92,26 +54,70 @@ Cancel a live hook when the waiting workflow should stop:
 await ai.cancel_hook("approve_tool_call_id_here", reason="client disconnected")
 ```
 
-## Resume in serverless flows
+## Build custom hooks
 
-For serverless or resumable flows, keep the pending hook part from the emitted
-event, call `ai.abort_pending_hook(hook_part)` to end the current run, persist
-`stream.messages`, and call `ai.resolve_hook` before replaying the agent.
-
-## Persist approval state
-
-Persist `stream.messages` when a run stops on a pending hook. When the user
-responds, restore those messages, register the resolution, and run the same
-agent again:
+Use `ai.hook` to define your own custom hooks to suspend execution
+and deliver external information into the loop:
 
 ```python
-messages, approvals = ai.agents.ui.ai_sdk.to_messages(ui_messages)
-ai.agents.ui.ai_sdk.apply_approvals(approvals)
+class CustomPayload(pydantic.BaseModel):
+    foo: int
 
-async with agent.run(model, messages) as stream:
-    async for event in stream:
-        ...
+approval = await ai.hook(
+    "some_hook",
+    payload=CustomPayload,
+    metadata={"kek": "pek"},
+)
 ```
 
-The agent marks interrupted assistant turns for replay, so the resumed run can
-dispatch the original tool call without asking the model to emit it again.
+Resolve the hook from another part of your application:
+
+```python
+ai.resolve_hook(
+    "some_hook",
+    {"foo": 999},
+)
+```
+
+## Resume in serverless flows
+
+Serverless setups can't suspend on `await` in the same way as long-running
+servers. For that reason, the SDK provides an alternative way for handling
+hook resolutions.
+
+Using the serverless flow only requires you to update the `agent.run` callsite
+(e.g. your serverless endpoint code).
+
+```python
+# pre-register tool approvals
+for approval in approvals:
+    ai.resolve_hook(
+        approval.hook_id,
+        ai.tools.ToolApproval.model_validate(approval.data)
+    )
+
+# start (or replay pre-hook part of) a run
+async with agent.run(model, messages) as stream:
+    async for event in stream:
+        if (
+            isinstance(event, ai.events.HookEvent)
+            and event.hook.status == "pending"
+        ):
+            # interrupt the loop
+            ai.abort_pending_hook(event.hook)
+
+```
+
+When handling the hook event, call `abort_pending_hook` to interrupt the loop
+and surface your tool approvals (or custom hook-related work) to the client.
+
+The `ToolRunner` will handle multiple concurrent aborts by waiting for all
+scheduled tasks to complete or get aborted. That way you can run approval-gated
+tools on serverless concurrently.
+
+Once the client has gathered payloads for all hooks, it will re-enter via the
+same endpoint, which will then pre-register hook resolutions *before* calling
+`agent.run` again. The loop will replay results of LLM calls and tool results
+from the first run without redoing non-deterministic and duplicating side-effects.
+When it hits the hook for which it has a pre-registered resolution, it will
+continue through without suspending.

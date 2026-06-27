@@ -1,0 +1,81 @@
+---
+title: "stream"
+description: Stream model responses and inspect the aggregated result.
+type: reference
+summary: Reference for ai.stream, Stream, stream events, aggregation, and replay.
+---
+
+`ai.stream` calls a model and returns an async context manager whose value is a
+`Stream`.
+
+```python
+async with ai.stream(model, messages, tools=tools) as stream:
+    async for event in stream:
+        ...
+```
+
+## Function
+
+```python
+ai.stream(
+    model,
+    messages,
+    *,
+    tools=None,
+    output_type=None,
+    params=None,
+)
+```
+
+You can also pass `context=` from an agent loop:
+
+```python
+async with ai.stream(context=context) as stream:
+    ...
+```
+
+Pass either `model` and `messages`, or `context=`, not both.
+
+## Arguments
+
+- `model`: `ai.Model`.
+- `messages`: list of `ai.messages.Message`.
+- `tools`: optional model-facing `ai.Tool` declarations.
+- `output_type`: optional Pydantic model for JSON output validation.
+- `params`: optional `ai.InferenceRequestParams`.
+
+## Stream
+
+`Stream` is an async iterator of `ai.events.Event` values. It aggregates events
+into an assistant message while you iterate.
+
+```python
+message = stream.message
+text = stream.text
+tool_calls = stream.tool_calls
+usage = stream.usage
+output = stream.output
+```
+
+`stream.output` returns text by default. When `output_type` is set, it validates
+the final text as JSON and returns the parsed Pydantic model.
+
+## Event Aggregation
+
+Text and reasoning blocks are built from start, delta, and end events. Tool
+calls are built from `ToolStart`, `ToolDelta`, and `ToolEnd`. Provider-executed
+tools use built-in tool events. Generated files arrive as `FileEvent`.
+
+Each yielded event has the current aggregated `event.message`.
+
+## Replay
+
+If the last input message has `replay=True`, `ai.stream` does not call the
+provider. It emits replay tool-end events from the existing assistant message
+so resumable agent flows can dispatch the same tool calls again.
+
+## Errors
+
+If the provider stream ends before a finish event, iteration raises
+`ai.errors.ProviderIncompleteResponseError`. The partial message is still on
+`stream.message`.

@@ -1,0 +1,73 @@
+---
+title: "ai.types"
+description: "Reference for lower-level public type helper modules."
+type: reference
+summary: "Reference for public type helpers that are not top-level imports."
+---
+
+Most message, event, and tool APIs are documented under the root aliases
+`ai.messages`, `ai.events`, and `ai.tools`. Use `ai.types` for lower-level
+helper modules that do not have a shorter public alias.
+
+## ai.types.media
+
+`ai.types.media` contains URL, data URL, media type inference, and magic-byte
+detection helpers.
+
+URL helpers:
+
+- `is_url`
+- `is_downloadable_url`
+- `split_data_url`
+
+Encoding helpers:
+
+- `data_to_base64`
+- `data_to_data_url`
+
+Media type helpers:
+
+- `infer_media_type`
+- `detect_media_type`
+- `detect_image_media_type`
+- `detect_audio_media_type`
+
+## ai.types.integrity
+
+Before provider calls, the SDK prepares message history. It strips internal
+messages, removes non-model parts, repairs invalid tool args to `{}`, and
+inserts error results for missing tool calls when possible.
+
+```python
+from ai.types import integrity
+
+
+prepared = integrity.prepare_messages(messages)
+```
+
+Use strict validation when you want repairable issues to raise.
+
+```python
+integrity.prepare_messages(messages, mode="strict")
+```
+
+APIs:
+
+- `prepare_messages`
+- `IntegrityError`
+
+## ai.types.usage
+
+`Usage` is normalized token usage from a single model call.
+
+```python
+usage.input_tokens
+usage.output_tokens
+usage.reasoning_tokens
+usage.cache_read_tokens
+usage.cache_write_tokens
+usage.raw
+usage.total_tokens
+```
+
+Use `usage_a + usage_b` to accumulate usage across calls.

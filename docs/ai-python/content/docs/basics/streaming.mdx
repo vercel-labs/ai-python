@@ -29,12 +29,14 @@ async def main() -> None:
         async for event in stream:
             if isinstance(event, ai.events.TextDelta):
                 print(event.chunk, end="", flush=True)
-    print()
 
 
 if __name__ == "__main__":
     asyncio.run(main())
 ```
+
+One call to `ai.stream` produces one `ai.Message`.
+
 
 ## Read the final message
 
@@ -43,21 +45,25 @@ The stream aggregates events into a final assistant message:
 ```python
 async with ai.stream(model, messages) as stream:
     async for event in stream:
-        if isinstance(event, ai.events.TextDelta):
-            print(event.chunk, end="", flush=True)
+        pass
 
 message = stream.message  # Final message
 text = stream.text  # Unwrapped text from the final message
 usage = stream.usage
 ```
 
-Use `stream.message` when you need to append the assistant turn to your own
-history. Use `stream.text` when you only need the final text.
+If a provider stream ends before its finish event, iteration raises
+`ai.errors.ProviderIncompleteResponseError`. The partial message is still
+available on `stream.message`.
+
+The stream updates `stream.message` as events arrive. Text and reasoning use
+start, delta, and end events. Tool calls use `ToolStart`, `ToolDelta`, and
+`ToolEnd`. Generated files arrive as `FileEvent` and are added to the final
+message.
 
 ## Use structured output
 
-Pass a Pydantic model as `output_type` when you want the final text parsed as
-JSON:
+Pass a Pydantic model as `output_type` when you want to use structured outputs:
 
 ```python title="structured_output.py"
 import asyncio
@@ -93,34 +99,27 @@ if __name__ == "__main__":
 `stream.output` returns text by default. When you pass `output_type`, it returns
 an instance of that Pydantic model after the stream finishes.
 
-## Pass tool schemas without an agent
+## Pass tools
 
-`ai.stream` does not execute function tools. Use it when you want to inspect
-tool calls and manage execution yourself. Use an agent when you want the SDK to
+`ai.stream` accepts a list of `ai.Tool`, however, it does not have any 
+framework-side tool execution machinery. Use an agent when you want the SDK to 
 execute requested tools and continue the loop.
 
-## Use provider-executed tools
-
-Provider-executed tools run inside the provider or gateway. They appear in the
+Provider-executed tools run on provider's side. They appear in the
 stream as built-in tool events and do not need a Python function:
 
 ```python
-tools = [ai.providers.anthropic.tools.web_search(max_uses=3)]
+tools = [ai.providers.ai_gateway.tools.perplexity_search(max_results=5)]
 
 async with ai.stream(model, messages, tools=tools) as stream:
     async for event in stream:
-        if isinstance(event, ai.events.BuiltinToolEnd):
-            print(event.tool_call.tool_name)
-        elif isinstance(event, ai.events.BuiltinToolResult):
-            print(event.result.result)
-        elif isinstance(event, ai.events.TextDelta):
-            print(event.chunk, end="", flush=True)
-```
-
-When you route through AI Gateway, you can also pass gateway tools:
-
-```python
-tools = [ai.providers.ai_gateway.tools.perplexity_search(max_results=5)]
+        match event:
+            case ai.events.BuiltinToolEnd(tool_call):
+                print(tool_call.tool_name)
+            case ai.events.BuiltinToolResult(result):
+                print(result.result)
+            case ai.events.TextDelta(chunk):
+                print(chunk, end="", flush=True)
 ```
 
 ## Handle files from a stream
@@ -134,8 +133,8 @@ async with ai.stream(model, messages) as stream:
         if isinstance(event, ai.events.FileEvent):
             print(event.media_type, event.filename)
 
-for file in stream.message.files:
-    print(file.media_type)
+for f in stream.message.files:
+    print(f.media_type)
 ```
 
 Use `ai.generate` for dedicated image and video models:

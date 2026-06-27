@@ -1,0 +1,67 @@
+---
+title: "ai.tools"
+description: Reference for schema tool types and approval payloads.
+type: reference
+summary: Reference for ai.tools.
+---
+
+`ai.tools` defines model-facing tool declarations and tool approval payloads.
+
+Schema-only tools and provider-executed tools are both represented as `ai.Tool`
+values. Pass them to `ai.stream(..., tools=[...])` or to an agent when the
+provider should receive the declaration.
+
+Provider-specific built-in tool factories live under provider namespaces such
+as `ai.providers.openai.tools`, `ai.providers.anthropic.tools`, and
+`ai.providers.ai_gateway.tools`.
+
+## Tool
+
+`Tool` is the model-facing declaration used by providers.
+
+Fields:
+
+- `kind`: `function` or `provider`.
+- `name`: Tool name exposed to the model.
+- `spec`: Function tool schema.
+- `tool_config`: Provider-executed tool configuration.
+- `require_approval`: Whether the tool call needs approval before execution.
+
+Function tools require `spec`. Provider tools require `tool_config.id` and do
+not accept `spec`.
+
+## ToolSpec
+
+`ToolSpec` contains the provider-facing schema for a host-executed function
+tool.
+
+Fields:
+
+- `description`
+- `params`
+
+## ToolConfig
+
+`ToolConfig` stores provider-facing tool options.
+
+Fields:
+
+- `id`: Canonical provider tool id.
+- `args`: Provider wire arguments as plain snake_case data.
+
+Use it with `ai.Tool` when a provider-executed tool needs provider-specific
+configuration.
+
+## ToolApproval
+
+`ToolApproval` is a Pydantic model used with hooks and UI adapters when a tool
+call needs external approval.
+
+```python
+approval = await ai.hook("approve_tool", payload=ai.tools.ToolApproval)
+```
+
+Fields:
+
+- `granted`
+- `reason`
