@@ -53,7 +53,7 @@ async def main() -> None:
 
     # -- First run: no resolution, hook interrupts --
     print("--- Run 1: hook fires, no resolution, run suspends ---")
-    pending_hook_labels: list[str] = []
+    pending_hooks: list[ai.messages.HookPart[ai.tools.ToolApproval]] = []
 
     async with my_agent.run(model, messages) as stream:
         async for event in stream:
@@ -64,7 +64,7 @@ async def main() -> None:
                 and event.hook.status == "pending"
             ):
                 hook_part = event.hook
-                pending_hook_labels.append(hook_part.hook_id)
+                pending_hooks.append(hook_part)
                 print(
                     f"  Hook pending: {hook_part.hook_id} "
                     f"(metadata={hook_part.metadata})"
@@ -84,9 +84,10 @@ async def main() -> None:
 
     # -- Second run: pre-register resolution, replay from checkpoint --
     print("--- Run 2: pre-register approval, resume from checkpoint ---")
-    for label in pending_hook_labels:
+    for hook_part in pending_hooks:
         ai.resolve_hook(
-            label, ai.tools.ToolApproval(granted=True, reason="user granted")
+            hook_part,
+            ai.tools.ToolApproval(granted=True, reason="user granted"),
         )
 
     async with my_agent.run(model, messages) as stream:
