@@ -21,7 +21,7 @@ async def notify_mothership(message: str) -> str:
 ```
 
 When the model calls the tool, the agent emits a hook event. Resolve it with
-`ai.resolve_hook`:
+the `resolve()` method:
 
 ```python
 async with agent.run(model, messages) as stream:
@@ -31,8 +31,7 @@ async with agent.run(model, messages) as stream:
             and event.hook.status == "pending"
         ):
             print(event.hook.hook_id, event.hook.metadata)
-            ai.resolve_hook(
-                event.hook,
+            event.hook.resolve(
                 ai.tools.ToolApproval(granted=True, reason="approved"),
             )
 ```
@@ -40,8 +39,7 @@ async with agent.run(model, messages) as stream:
 Return a denial by resolving the hook with `granted=False`:
 
 ```python
-ai.resolve_hook(
-    "approve_tool_call_id_here",
+event.hook.resolve(
     ai.tools.ToolApproval(granted=False, reason="not allowed"),
 )
 ```
@@ -49,7 +47,7 @@ ai.resolve_hook(
 Cancel a live hook when the waiting workflow should stop:
 
 ```python
-await ai.cancel_hook("approve_tool_call_id_here", reason="client disconnected")
+await event.hook.cancel(reason="client disconnected")
 ```
 
 Hook operations target the current `HookRegistry`, which is set inside the
@@ -106,13 +104,10 @@ approval = await ai.hook(
 )
 ```
 
-Resolve the hook from another part of your application:
+Resolve the hook from your event handler:
 
 ```python
-ai.resolve_hook(
-    "some_hook",
-    {"foo": 999},
-)
+event.hook.resolve({"foo": 999})
 ```
 
 ## Resume in serverless flows
@@ -127,12 +122,8 @@ Using the serverless flow only requires you to update the `agent.run` callsite
 ```python
 # start (or replay pre-hook part of) a run
 async with agent.run(model, messages) as stream:
-    # pre-register tool approvals before iterating the stream
-    for approval in approvals:
-        ai.resolve_hook(
-            approval.hook_id,
-            ai.tools.ToolApproval.model_validate(approval.data)
-        )
+    # apply approvals from the resumed request before iterating the stream
+    ai.agents.ui.ai_sdk.apply_approvals(approvals)
 
     async for event in stream:
         if (
@@ -140,11 +131,11 @@ async with agent.run(model, messages) as stream:
             and event.hook.status == "pending"
         ):
             # interrupt the loop
-            ai.defer_hook(event.hook)
+            event.hook.defer()
 
 ```
 
-When handling the hook event, call `defer_hook` to interrupt the loop
+When handling the hook event, call `event.hook.defer()` to interrupt the loop
 and surface your tool approvals (or custom hook-related work) to the client.
 
 The `ToolRunner` will handle multiple concurrent aborts by waiting for all
@@ -152,9 +143,8 @@ scheduled tasks to complete or get aborted. That way you can run approval-gated
 tools on serverless concurrently.
 
 Once the client has gathered payloads for all hooks, it will re-enter via the
-same endpoint, which will then pre-register hook resolutions inside the
-`agent.run` block, before iterating the stream. The loop will replay results
-of LLM calls and tool results
-from the first run without redoing non-deterministic and duplicating side-effects.
-When it hits the hook for which it has a pre-registered resolution, it will
-continue through without suspending.
+same endpoint, which will then apply the approvals inside the `agent.run`
+block, before iterating the stream. The loop will replay results of LLM calls
+and tool results from the first run without redoing non-deterministic and
+duplicating side-effects. When it hits the hook for which it has a
+pre-registered resolution, it will continue through without suspending.

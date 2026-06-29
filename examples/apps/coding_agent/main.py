@@ -4,7 +4,7 @@ The whole app is this file: a bash tool, a transcript that renders
 streamed markdown, and an approval prompt.  The user types a message,
 the agent streams its reply, and every bash call suspends the run on a
 ``ToolApproval`` hook until the operator answers y/n — the decision is
-resolved in-process with ``ai.resolve_hook()``.
+resolved in-process.
 
 Run it from this directory:
 
