@@ -21,7 +21,8 @@ import fastapi.responses  # noqa: E402
 import pydantic  # noqa: E402
 import vercel.workflow  # noqa: E402
 
-from workflow_agent import turn  # noqa: E402
+from . import worker
+
 
 app = fastapi.FastAPI(title="durable-agent-workflows")
 app.add_middleware(
@@ -49,12 +50,12 @@ async def post_chat(request: ChatRequest) -> fastapi.responses.StreamingResponse
         raise fastapi.HTTPException(status_code=400, detail="No messages to run")
 
     run = await vercel.workflow.start(
-        turn.run_turn,
-        turn.TurnInput(
+        worker.run_turn,
+        worker.TurnInput(
             messages=_with_system_message(messages),
         ).model_dump(mode="json"),
     )
-    output = turn.TurnOutput.model_validate(await run.return_value())
+    output = worker.TurnOutput.model_validate(await run.return_value())
     if output.error is not None:
         raise fastapi.HTTPException(status_code=500, detail=output.error)
 
@@ -69,7 +70,7 @@ def _with_system_message(
 ) -> list[ai.messages.Message]:
     if messages and messages[0].role == "system":
         return messages
-    return [ai.system_message(turn.SYSTEM_PROMPT), *messages]
+    return [ai.system_message(worker.SYSTEM_PROMPT), *messages]
 
 
 async def _to_sse(
@@ -77,7 +78,7 @@ async def _to_sse(
 ) -> collections.abc.AsyncIterator[str]:
     async def events() -> collections.abc.AsyncIterator[ai.events.AgentEvent]:
         for event_data in events_data:
-            yield turn.AGENT_EVENT_ADAPTER.validate_python(event_data)
+            yield worker.AGENT_EVENT_ADAPTER.validate_python(event_data)
 
     async for chunk in ai_sdk.to_sse(events()):
         yield chunk
