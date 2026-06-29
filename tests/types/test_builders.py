@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import inspect
 from typing import Any, cast
 
+import pydantic
 import pytest
 
 from ai.types import builders, messages
@@ -18,6 +20,34 @@ def test_user_message_mixed_content() -> None:
     assert isinstance(msg.parts[0], messages.TextPart)
     assert isinstance(msg.parts[1], messages.FilePart)
     assert isinstance(msg.parts[2], messages.TextPart)
+
+
+def test_message_with_explicit_role() -> None:
+    fp = messages.FilePart(
+        data="https://example.com/img.png", media_type="image/png"
+    )
+    msg = builders.message("Describe this:", fp, role="user")
+    assert msg.role == "user"
+    assert len(msg.parts) == 2
+    assert isinstance(msg.parts[0], messages.TextPart)
+    assert isinstance(msg.parts[1], messages.FilePart)
+
+
+def test_message_role_is_keyword_only() -> None:
+    # ``role`` is declared keyword-only (after ``*content``).
+    params = inspect.signature(builders.message).parameters
+    assert params["role"].kind == inspect.Parameter.KEYWORD_ONLY
+
+
+def test_message_rejects_unknown_role() -> None:
+    with pytest.raises(pydantic.ValidationError):
+        builders.message("hi", role="not-a-role")
+
+
+def test_named_builders_delegate_to_message() -> None:
+    assert builders.system_message("hi").role == "system"
+    assert builders.user_message("hi").role == "user"
+    assert builders.assistant_message("hi").role == "assistant"
 
 
 def test_text_part() -> None:

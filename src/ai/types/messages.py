@@ -400,8 +400,12 @@ Part = Annotated[
 ]
 
 
+MessageRole = Literal["user", "assistant", "system", "tool", "internal"]
+"""Allowed values for :attr:`Message.role`."""
+
+
 class Message(pydantic.BaseModel):
-    role: Literal["user", "assistant", "system", "tool", "internal"]
+    role: MessageRole
     parts: list[Part]
     id: str = pydantic.Field(default_factory=lambda: generate_id("msg"))
     turn_id: str | None = None
