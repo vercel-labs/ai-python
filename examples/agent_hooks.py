@@ -3,7 +3,7 @@
 Demonstrates the function-based hook API:
   - mark a tool with ``require_approval=True`` to gate its execution
     behind an approval hook
-  - resolve_hook("label", data) to unblock from outside
+  - resolve_hook(hook_part, data) to unblock from outside
   - Hook signals arrive as HookEvent events
 """
 
@@ -44,7 +44,7 @@ async def main() -> None:
                 hook_part = event.hook
                 answer = input(f"Approve {hook_part.hook_id}? [y/n] ")
                 ai.resolve_hook(
-                    hook_part.hook_id,
+                    hook_part,
                     ai.tools.ToolApproval(
                         granted=answer.strip().lower() in ("y", "yes"),
                         reason="operator decision",

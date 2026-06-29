@@ -69,6 +69,11 @@ class HookPendingError(Exception):
         self.hook = hook
 
 
+def _label(target: str | messages_.HookPart[Any]) -> str:
+    """Normalize a hook label or a HookPart down to its label string."""
+    return target.hook_id if isinstance(target, messages_.HookPart) else target
+
+
 def cleanup_run(labels: set[str]) -> None:
     """Remove all registry entries associated with a finished run."""
     for label in labels:
@@ -77,7 +82,7 @@ def cleanup_run(labels: set[str]) -> None:
 
 
 async def hook[T: pydantic.BaseModel](
-    label: str,
+    hook: str | messages_.HookPart[Any],
     *,
     payload: type[T],
     metadata: dict[str, Any] | None = None,
@@ -85,7 +90,8 @@ async def hook[T: pydantic.BaseModel](
     """Create a hook suspension point and await its resolution.
 
     Args:
-        label: Unique identifier for this hook instance.
+        hook: Unique identifier for this hook instance, or a HookPart
+            whose ``hook_id`` supplies it.
         payload: Pydantic model class — the resolution data must validate
             against this type.  The return value is a validated instance.
         metadata: Arbitrary metadata surfaced in the pending signal message
@@ -94,7 +100,7 @@ async def hook[T: pydantic.BaseModel](
 
     """
     call = middleware_.HookContext(
-        label=label,
+        label=_label(hook),
         payload=payload,
         metadata=metadata or {},
     )
@@ -155,7 +161,7 @@ async def _hook_impl(call: middleware_.HookContext) -> pydantic.BaseModel:
 
 
 def resolve_hook(
-    label: str,
+    hook: str | messages_.HookPart[Any],
     data: pydantic.BaseModel | dict[str, Any] | BaseException,
     *,
     payload: type[pydantic.BaseModel] | None = None,
@@ -179,13 +185,15 @@ def resolve_hook(
     propagating a :class:`HookPendingError`.
 
     Args:
-        label: The hook label to resolve.
+        hook: The hook label to resolve, or a HookPart whose ``hook_id``
+            supplies it.
         data: Resolution data — a dict, pydantic model instance, or an
             exception to raise in the awaiter.
         payload: Optional pydantic model class for validation.  Ignored
             when *data* is an exception.
 
     """
+    label = _label(hook)
     resolution: dict[str, Any] | BaseException
     if isinstance(data, BaseException):
         resolution = data
@@ -229,12 +237,16 @@ def abort_pending_hook(hook_part: messages_.HookPart[Any]) -> None:
     resolve_hook(hook_part.hook_id, HookPendingError(hook_part))
 
 
-async def cancel_hook(label: str, *, reason: str | None = None) -> None:
+async def cancel_hook(
+    hook: str | messages_.HookPart[Any], *, reason: str | None = None
+) -> None:
     """Cancel a pending hook.
 
     Only works for live hooks (long-running mode).  Raises ValueError
-    if the hook is not currently pending.
+    if the hook is not currently pending.  ``hook`` may be a label
+    string or a HookPart whose ``hook_id`` supplies it.
     """
+    label = _label(hook)
     if label not in _live_hooks:
         raise ValueError(f"No pending hook with label: {label!r}")
 
