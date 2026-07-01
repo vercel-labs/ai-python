@@ -9,10 +9,6 @@ os.environ.setdefault(
     os.path.join(_BACKEND_DIR, ".workflow-data"),
 )
 
-import vercel._internal.workflow.py_sandbox  # noqa: E402
-
-vercel._internal.workflow.py_sandbox._PASSTHROUGHS.update({"ai"})
-
 import ai  # noqa: E402
 import ai.agents.ui.ai_sdk as ai_sdk  # noqa: E402
 import fastapi  # noqa: E402
@@ -21,8 +17,7 @@ import fastapi.responses  # noqa: E402
 import pydantic  # noqa: E402
 import vercel.workflow  # noqa: E402
 
-from . import worker
-
+from . import worker  # noqa: E402
 
 app = fastapi.FastAPI(title="durable-agent-workflows")
 app.add_middleware(
