@@ -24,6 +24,68 @@ def _factory(t: ai.AgentTool) -> object:
     return factory()
 
 
+def test_tool_return_type_can_be_overridden() -> None:
+    @ai.tool(return_type=dict[str, int])
+    async def t() -> object:
+        return {"x": 1}
+
+    assert t.return_type == dict[str, int]
+
+
+def test_aggregator_return_type_can_be_overridden() -> None:
+    @ai.tool(aggregator=ai.agents.LastAggregator, return_type=int)
+    async def t() -> AsyncGenerator[str]:
+        yield "1"
+
+    assert t.return_type is int
+
+
+def test_aggregator_result_type_extracted_from_status_tool_alias() -> None:
+    @ai.tool
+    async def t() -> ai.StreamingStatusTool[str]:
+        yield "x"
+
+    assert t.return_type == str | None
+
+
+def test_aggregator_result_type_extracted_from_streaming_text_alias() -> None:
+    @ai.tool
+    async def t() -> ai.StreamingTextTool:
+        yield "hello"
+
+    assert t.return_type is str
+
+
+def test_aggregator_result_type_extracted_from_sub_agent_alias() -> None:
+    @ai.tool
+    async def t() -> ai.SubAgentTool:
+        yield ai.events.StreamStart()
+
+    assert t.return_type is ai.messages.MessageBundle
+
+
+def test_aggregator_result_type_binds_from_item_to_result() -> None:
+    class Box[T](ai.events.Aggregator[T, list[T], str]):
+        def __init__(self) -> None:
+            self.items: list[T] = []
+
+        def feed(self, item: T) -> None:
+            self.items.append(item)
+
+        def snapshot(self) -> list[T]:
+            return self.items
+
+        @classmethod
+        def to_model_input(cls, snapshot: list[T]) -> str:
+            return ""
+
+    @ai.tool(aggregator=Box)
+    async def t() -> AsyncGenerator[int]:
+        yield 1
+
+    assert t.return_type == list[int]
+
+
 def test_aggregate_marker_extracted_from_direct_annotated() -> None:
     """Bare ``Annotated[..., Aggregate(...)]`` on the return type."""
 

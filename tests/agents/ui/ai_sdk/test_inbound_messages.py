@@ -1,14 +1,21 @@
 from __future__ import annotations
 
+from collections.abc import AsyncGenerator
 from typing import Any
 
+import pydantic
 import pytest
 
+import ai
 from ai.agents.ui.ai_sdk import to_messages, to_ui_messages
 from ai.agents.ui.ai_sdk.inbound_messages import _normalize_ui_messages
 from ai.agents.ui.ai_sdk.ui_messages import UIMessage, UIToolPart
 from ai.types import messages as messages_
 from ai.types.messages import MessageBundle
+
+
+class InboundWeather(pydantic.BaseModel):
+    temp: int
 
 
 def _ui(role: str, *parts: dict[str, Any], id: str = "m1") -> UIMessage:
@@ -314,6 +321,166 @@ def test_content_result_round_trips_via_metadata() -> None:
     assert text_part.text == "desc"
     assert isinstance(file_part, messages_.FilePart)
     assert file_part.media_type == "image/png"
+
+
+def test_to_messages_validates_agent_tool_normal_return_annotation() -> None:
+    @ai.tool
+    async def weather() -> InboundWeather:
+        return InboundWeather(temp=1)
+
+    messages, _ = to_messages(
+        [
+            _ui(
+                "assistant",
+                _tool(
+                    "weather",
+                    "tc1",
+                    "output-available",
+                    input={},
+                    output={"temp": "72"},
+                ),
+                id="a1",
+            )
+        ],
+        tools=[weather],
+    )
+
+    tool_msgs = [m for m in messages if m.role == "tool"]
+    part = tool_msgs[0].tool_results[0]
+    assert isinstance(part.result, InboundWeather)
+    assert part.result.temp == 72
+
+
+def test_to_messages_validates_tool_outputs_with_agent_tool_aggregator() -> (
+    None
+):
+    @ai.tool(aggregator=ai.agents.LastAggregator)
+    async def weather() -> AsyncGenerator[InboundWeather]:
+        yield InboundWeather(temp=1)
+
+    messages, _ = to_messages(
+        [
+            _ui(
+                "assistant",
+                _tool(
+                    "weather",
+                    "tc1",
+                    "output-available",
+                    input={},
+                    output={"temp": "72"},
+                ),
+                id="a1",
+            )
+        ],
+        tools=[weather],
+    )
+
+    tool_msgs = [m for m in messages if m.role == "tool"]
+    part = tool_msgs[0].tool_results[0]
+    assert isinstance(part.result, InboundWeather)
+    assert part.result.temp == 72
+
+
+def test_to_messages_validates_agent_tool_annotated_aggregator_output() -> None:
+    @ai.tool
+    async def weather() -> ai.StreamingStatusTool[InboundWeather]:
+        yield InboundWeather(temp=1)
+
+    messages, _ = to_messages(
+        [
+            _ui(
+                "assistant",
+                _tool(
+                    "weather",
+                    "tc1",
+                    "output-available",
+                    input={},
+                    output={"temp": "72"},
+                ),
+                id="a1",
+            )
+        ],
+        tools=[weather],
+    )
+
+    tool_msgs = [m for m in messages if m.role == "tool"]
+    part = tool_msgs[0].tool_results[0]
+    assert isinstance(part.result, InboundWeather)
+    assert part.result.temp == 72
+
+
+def test_to_messages_validates_agent_tool_annotated_message_aggregator() -> (
+    None
+):
+    @ai.tool
+    async def research() -> ai.SubAgentTool:
+        yield ai.events.StreamStart()
+
+    messages, _ = to_messages(
+        [
+            _ui(
+                "assistant",
+                _tool(
+                    "research",
+                    "tc1",
+                    "output-available",
+                    input={},
+                    output={
+                        "type": "messages",
+                        "messages": [
+                            {
+                                "role": "assistant",
+                                "parts": [{"kind": "text", "text": "ok"}],
+                            }
+                        ],
+                    },
+                ),
+                id="a1",
+            )
+        ],
+        tools=[research],
+    )
+
+    tool_msgs = [m for m in messages if m.role == "tool"]
+    part = tool_msgs[0].tool_results[0]
+    assert isinstance(part.result, MessageBundle)
+    assert part.result.messages[0].text == "ok"
+
+
+def test_to_messages_validates_agent_tool_passed_aggregator_output() -> None:
+    @ai.tool(aggregator=ai.agents.MessageAggregator)
+    async def research() -> AsyncGenerator[ai.events.AgentEvent]:
+        yield ai.events.StreamStart()
+
+    messages, _ = to_messages(
+        [
+            _ui(
+                "assistant",
+                _tool(
+                    "research",
+                    "tc1",
+                    "output-available",
+                    input={},
+                    output={
+                        "type": "messages",
+                        "messages": [
+                            {
+                                "role": "assistant",
+                                "parts": [{"kind": "text", "text": "ok"}],
+                            }
+                        ],
+                    },
+                ),
+                id="a1",
+            )
+        ],
+        tools=[research],
+    )
+
+    tool_msgs = [m for m in messages if m.role == "tool"]
+    part = tool_msgs[0].tool_results[0]
+    assert isinstance(part.result, MessageBundle)
+    assert part.result.messages[0].text == "ok"
 
 
 def test_to_messages_passthrough_keeps_wire_shape() -> None:
