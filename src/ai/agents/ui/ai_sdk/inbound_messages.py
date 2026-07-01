@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ....types import messages as messages_
 from ....types.messages import MessageBundle
@@ -16,6 +16,9 @@ from . import approvals, id_utils
 from . import ui_messages as ui_messages_
 from .approvals import ApprovalResponse, extract_approvals
 from .tool_utils import normalize_tool_args
+
+if TYPE_CHECKING:
+    from ...agent import AgentTool
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +67,7 @@ def _build_result_part(
     output: Any,
     is_error: bool,
     kind_hint: str | None = None,
+    validate_context: dict[str, Any] | None = None,
 ) -> messages_.ToolResultPart:
     """Reconstruct a tool result from its wire form.
 
@@ -93,16 +97,21 @@ def _build_result_part(
             else ui_messages_.UIMessage.model_validate(m)
             for m in raw
         ]
-        result = MessageBundle(messages=tuple(_parse(ui_msgs)))
+        result = MessageBundle(
+            messages=tuple(_parse(ui_msgs, validate_context=validate_context))
+        )
         result_kind = "special"
     else:
         result = _normalize_tool_result(output)
         result_kind = "json"
-    return messages_.ToolResultPart(
-        tool_call_id=tool_call_id,
-        tool_name=tool_name,
-        result=result,
-        result_kind=result_kind,
+    return messages_.ToolResultPart.model_validate(
+        dict(  # noqa: C408
+            tool_call_id=tool_call_id,
+            tool_name=tool_name,
+            result=result,
+            result_kind=result_kind,
+        ),
+        context=validate_context,
     )
 
 
@@ -205,6 +214,8 @@ def _patch_pending_hook_aborts(
 
 def _parse(
     ui_messages: list[ui_messages_.UIMessage],
+    *,
+    validate_context: dict[str, Any] | None = None,
 ) -> list[messages_.Message]:
     result: list[messages_.Message] = []
 
@@ -276,6 +287,7 @@ def _parse(
                                     kind_hint=result_kinds.get(
                                         inv.tool_invocation_id
                                     ),
+                                    validate_context=validate_context,
                                 )
                             )
 
@@ -340,6 +352,7 @@ def _parse(
                                 output=_tool_result_output(tp),
                                 is_error=is_error,
                                 kind_hint=result_kinds.get(tp.tool_call_id),
+                                validate_context=validate_context,
                             )
                         )
                         if tp.result_provider_metadata is not None:
@@ -507,6 +520,8 @@ def _split_assistant_parts(
 
 def to_messages(
     ui_messages: list[ui_messages_.UIMessage],
+    *,
+    tools: list[AgentTool] | None = None,
 ) -> tuple[list[messages_.Message], list[ApprovalResponse]]:
     """Parse a UI request into runtime messages + extracted approvals.
 
@@ -526,11 +541,14 @@ def to_messages(
     resolutions via :func:`apply_approvals` before calling
     :meth:`Agent.run` if the run should resume from a hook.
     """
+    validate_context = (
+        messages_.tool_validate_context(tools) if tools is not None else None
+    )
     normalized = _normalize_ui_messages(ui_messages)
     approval_responses = extract_approvals(normalized)
     messages = [
         m
-        for m in _parse(normalized)
+        for m in _parse(normalized, validate_context=validate_context)
         if not approvals.is_resolved_approval_message(m)
     ]
     _patch_pending_hook_aborts(messages, approval_responses)

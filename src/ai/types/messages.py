@@ -3,8 +3,8 @@ import contextlib
 import contextvars
 import functools
 import random
-from collections.abc import AsyncIterator, Callable, Iterator
-from typing import Annotated, Any, Literal, Self, overload
+from collections.abc import AsyncIterator, Callable, Iterator, Sequence
+from typing import Annotated, Any, Literal, Protocol, Self, cast, overload
 
 import pydantic
 
@@ -225,6 +225,20 @@ _MODEL_INPUT_UNSET: Any = _ModelInputUnset()
 ResultKind = Literal["error", "json", "special"]
 
 
+class ToolResultValidatorTool(Protocol):
+    @property
+    def name(self) -> str: ...
+
+    @property
+    def return_type(self) -> Any: ...
+
+
+def tool_validate_context(
+    tools: Sequence[ToolResultValidatorTool],
+) -> dict[str, dict[str, ToolResultValidatorTool]]:
+    return {"ai.tools": {tool.name: tool for tool in tools}}
+
+
 class ToolResultPart(pydantic.BaseModel):
     id: str = pydantic.Field(default_factory=lambda: generate_id("part"))
     tool_call_id: str
@@ -259,7 +273,7 @@ class ToolResultPart(pydantic.BaseModel):
 
     @pydantic.model_validator(mode="before")
     @classmethod
-    def _restore_content(cls, data: Any) -> Any:
+    def _restore_content(cls, data: Any, info: pydantic.ValidationInfo) -> Any:
         """Rebuild a typed :class:`SpecialToolResult` after a JSON round-trip.
 
         ``result`` is ``Any``, so pydantic restores a serialized
@@ -275,10 +289,33 @@ class ToolResultPart(pydantic.BaseModel):
             data = {
                 **data,
                 "result": _SPECIAL_TOOL_RESULT_ADAPTER.validate_python(
-                    data["result"]
+                    data["result"], context=info.context
                 ),
             }
         return data
+
+    @pydantic.model_validator(mode="after")
+    def _validate_tool_result(self, info: pydantic.ValidationInfo) -> Self:
+        if self.is_error or self.result_kind == "special":
+            return self
+
+        if info.context is None:
+            return self
+
+        context = cast(
+            "dict[str, dict[str, ToolResultValidatorTool]]", info.context
+        )
+        tools_by_name = context.get("ai.tools", {})
+        tool = tools_by_name.get(self.tool_name)
+        if tool is None or tool.return_type is None:
+            return self
+
+        result = pydantic.TypeAdapter(tool.return_type).validate_python(
+            self.result, context=info.context
+        )
+        if result is not self.result:
+            object.__setattr__(self, "result", result)
+        return self
 
     @staticmethod
     def kind_for(result: Any) -> ResultKind:
