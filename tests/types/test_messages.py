@@ -3,14 +3,22 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import random
 import subprocess
 import sys
 from typing import Any
 
+import pydantic
 import pytest
 
 from ai.types import messages, usage
+
+
+@dataclasses.dataclass
+class ToolForResultValidation:
+    name: str
+    return_type: Any
 
 
 def test_usage_add_merges_optional_fields() -> None:
@@ -209,6 +217,105 @@ def test_tool_result_content_output_with_file_part_round_trip() -> None:
     assert text_part.text == "label"
     assert isinstance(file_part, messages.FilePart)
     assert file_part.media_type == "image/png"
+
+
+def test_tool_result_validates_result_from_context_tools() -> None:
+    class Weather(pydantic.BaseModel):
+        temp: int
+        city: str
+
+    weather_tool = ToolForResultValidation(name="weather", return_type=Weather)
+
+    restored = messages.ToolResultPart.model_validate(
+        {
+            "tool_call_id": "tc",
+            "tool_name": "weather",
+            "result": {"temp": "72", "city": "SF"},
+        },
+        context=messages.tool_context([weather_tool]),
+    )
+
+    assert isinstance(restored.result, Weather)
+    assert restored.result.temp == 72
+    assert restored.result.city == "SF"
+
+
+def test_tool_result_uses_tool_name_for_context_lookup() -> None:
+    class Weather(pydantic.BaseModel):
+        temp: int
+
+    class Search(pydantic.BaseModel):
+        hits: list[str]
+
+    weather_tool = ToolForResultValidation(name="weather", return_type=Weather)
+    search_tool = ToolForResultValidation(name="search", return_type=Search)
+
+    restored = messages.ToolResultPart.model_validate(
+        {
+            "tool_call_id": "tc",
+            "tool_name": "search",
+            "result": {"hits": ["a", "b"]},
+        },
+        context=messages.tool_context([weather_tool, search_tool]),
+    )
+
+    assert isinstance(restored.result, Search)
+    assert restored.result.hits == ["a", "b"]
+
+
+def test_message_validates_tool_result_parts_with_context_tools() -> None:
+    class Weather(pydantic.BaseModel):
+        temp: int
+
+    weather_tool = ToolForResultValidation(name="weather", return_type=Weather)
+
+    msg = messages.Message.model_validate(
+        {
+            "role": "tool",
+            "parts": [
+                {
+                    "kind": "tool_result",
+                    "tool_call_id": "tc",
+                    "tool_name": "weather",
+                    "result": {"temp": "72"},
+                }
+            ],
+        },
+        context=messages.tool_context([weather_tool]),
+    )
+
+    part = msg.tool_results[0]
+    assert isinstance(part.result, Weather)
+    assert part.result.temp == 72
+
+
+def test_tool_result_without_context_stores_raw() -> None:
+    part = messages.ToolResultPart.model_validate(
+        {
+            "tool_call_id": "tc",
+            "tool_name": "weather",
+            "result": {"temp": "72"},
+        }
+    )
+
+    assert part.result == {"temp": "72"}
+
+
+def test_tool_result_context_validation_error() -> None:
+    class Weather(pydantic.BaseModel):
+        temp: int
+
+    weather_tool = ToolForResultValidation(name="weather", return_type=Weather)
+
+    with pytest.raises(pydantic.ValidationError, match="temp"):
+        messages.ToolResultPart.model_validate(
+            {
+                "tool_call_id": "tc",
+                "tool_name": "weather",
+                "result": {"temp": "hot"},
+            },
+            context=messages.tool_context([weather_tool]),
+        )
 
 
 def test_tool_result_plain_values_stored_raw() -> None:

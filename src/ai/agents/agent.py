@@ -35,7 +35,7 @@ import pydantic
 # Use the typing_extensions backport so this works on 3.12 too.
 from typing_extensions import TypeVar
 
-from .. import models, types, util
+from .. import models, type_utils, types, util
 from ..types import builders
 from ..types import events as events_
 from ..types.messages import MessageBundle
@@ -351,6 +351,67 @@ For a custom delimiter, drop down to the marker form:
 """
 
 
+def _return_type_from_callable(fn: Callable[..., Any]) -> Any:
+    try:
+        return get_type_hints(fn, include_extras=True).get("return")
+    except Exception:
+        return None
+
+
+def _stream_item_type(return_type: Any) -> Any:
+    resolved = type_utils.resolve_type_alias(return_type)
+    if typing.get_origin(resolved) is typing.Annotated:
+        resolved = typing.get_args(resolved)[0]
+
+    if typing.get_origin(resolved) is not AsyncGenerator:
+        return None
+
+    args = typing.get_args(resolved)
+    return args[0] if args else Any
+
+
+def _aggregator_result_type(
+    aggregator: Callable[[], events_.Aggregator[Any, Any, Any]] | None,
+    stream_item_type: Any,
+) -> Any:
+    agg_cls = _aggregator_cls(aggregator)
+    if agg_cls is None:
+        return None
+
+    args = type_utils.generic_base_args(agg_cls, events_.Aggregator)
+    if args is None:
+        return None
+
+    item_type, result_type, _model_input_type = args
+    bindings = type_utils.bind_typevars(item_type, stream_item_type)
+    return type_utils.replace_typevars(result_type, bindings)
+
+
+def _tool_result_type_from_return_annotation(
+    return_type: Any,
+    aggregator: Callable[[], events_.Aggregator[Any, Any, Any]] | None,
+) -> Any:
+    """Return the type used to validate ``ToolResultPart.result``.
+
+    Normal tools store the function's return value directly, so the function's
+    return annotation is the result type.
+
+    Async-generator tools store ``aggregator.snapshot()`` instead. For those,
+    read the ``Result`` parameter from ``Aggregator[Item, Result, ModelInput]``
+    on the configured aggregator class, binding generic aggregators from the
+    stream item type when possible (for example ``StreamingStatusTool[str]`` +
+    ``LastAggregator[T]`` becomes ``str | None``).
+    """
+    if return_type is None:
+        return None
+
+    item_type = _stream_item_type(return_type)
+    if item_type is not None:
+        return _aggregator_result_type(aggregator, item_type)
+
+    return return_type
+
+
 def _aggregate_from_return_type(fn: Callable[..., Any]) -> Aggregate | None:
     """Find an ``Aggregate`` marker in *fn*'s return-type metadata, if any.
 
@@ -360,11 +421,7 @@ def _aggregate_from_return_type(fn: Callable[..., Any]) -> Aggregate | None:
     * a PEP 695 alias ``type Foo = Annotated[X, Aggregate(...)]``,
     * a parameterized alias ``type Foo[T] = Annotated[X[T], Aggregate(...)]``.
     """
-    try:
-        hints = get_type_hints(fn, include_extras=True)
-    except Exception:
-        return None
-    ret = hints.get("return")
+    ret = _return_type_from_callable(fn)
     if ret is None:
         return None
 
@@ -398,6 +455,7 @@ class AgentTool:
     validator: type[pydantic.BaseModel] | None = None
     is_gen: bool = False
     aggregator: Callable[[], events_.Aggregator[Any, Any, Any]] | None = None
+    return_type: Any = None
 
     @property
     def name(self) -> str:
@@ -435,7 +493,17 @@ def tool[**P, T](fn: Callable[P, AsyncGenerator[T]], /) -> AgentTool: ...
 
 @overload
 def tool[**P](
-    *, require_approval: bool
+    *,
+    require_approval: bool,
+    return_type: Any = None,
+) -> Callable[[Callable[P, Any]], AgentTool]: ...
+
+
+@overload
+def tool[**P](
+    *,
+    return_type: Any,
+    require_approval: bool = False,
 ) -> Callable[[Callable[P, Any]], AgentTool]: ...
 
 
@@ -444,6 +512,7 @@ def tool[**P](
     *,
     aggregator: Callable[[], events_.Aggregator[Any, Any, Any]],
     require_approval: bool = False,
+    return_type: Any = None,
 ) -> Callable[[Callable[P, AsyncGenerator[Any]]], AgentTool]: ...
 
 
@@ -455,6 +524,7 @@ def tool[**P, T, R](
     *,
     aggregator: Callable[[], events_.Aggregator[Any, Any, Any]] | None = None,
     require_approval: bool = False,
+    return_type: Any = None,
 ) -> (
     Callable[[Callable[P, AsyncGenerator[Any]]], AgentTool]
     | Callable[[Callable[P, Awaitable[R]]], AgentTool]
@@ -466,7 +536,8 @@ def tool[**P, T, R](
     ``aggregator=`` keyword argument or by annotating the return type
     with an :class:`Aggregate` marker (e.g. via the :data:`SubAgentTool`
     or :data:`StreamingStatusTool` aliases).  Specifying both raises
-    ``TypeError``.
+    ``TypeError``. Pass ``return_type=`` to override the type used when
+    validating round-tripped tool results.
     """
 
     def wrap(fn: Any) -> AgentTool:
@@ -483,6 +554,7 @@ def tool[**P, T, R](
 
         validator = pydantic.create_model(f"{fn.__name__}_Args", **fields)
 
+        annotated_return_type = _return_type_from_callable(fn)
         annotated_aggregate = _aggregate_from_return_type(fn)
         if annotated_aggregate is not None and aggregator is not None:
             raise TypeError(
@@ -508,6 +580,10 @@ def tool[**P, T, R](
             validator=validator,
             is_gen=inspect.isasyncgenfunction(fn),
             aggregator=effective_aggregator,
+            return_type=return_type
+            or _tool_result_type_from_return_annotation(
+                annotated_return_type, effective_aggregator
+            ),
         )
 
     if fn is None:
