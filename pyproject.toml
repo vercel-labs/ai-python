@@ -81,11 +81,19 @@ python_version = "3.12"
 strict = true
 plugins = ["pydantic.mypy"]
 files = ["src", "tests", "examples"]
-exclude = ["examples/apps/web_agent/backend/main.py"]
+exclude = [
+    "examples/apps/web_agent/backend/main.py",
+    # depends on the vercel package, which is not part of this project's env
+    "examples/apps/durable_agent_workflows/",
+]
 
 [tool.ty.environment]
 python-version = "3.12"
 root = ["./src", "./"]
+
+[tool.ty.src]
+# depends on the vercel package, which is not part of this project's env
+exclude = ["examples/apps/durable_agent_workflows/"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

@@ -5,10 +5,17 @@ import traceback
 from collections.abc import AsyncGenerator
 from typing import Any, ClassVar
 
-import ai
-import pydantic
+import vercel._internal.workflow.py_sandbox
 
-import vercel.workflow
+# The workflow sandbox re-imports non-passthrough modules under determinism
+# restrictions, which the ai package (via httpx -> tempfile -> shutil) does
+# not survive. Share the host's ai module instead. This must be registered
+# here: the worker service is the process that runs the sandbox.
+vercel._internal.workflow.py_sandbox._PASSTHROUGHS.update({"ai"})
+
+import ai  # noqa: E402
+import pydantic  # noqa: E402
+import vercel.workflow  # noqa: E402
 
 # The app uses one registry for all workflow decorators so queue messages
 # are dispatched by the same Workflows instance.
