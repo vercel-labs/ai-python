@@ -25,21 +25,25 @@ _SAMPLE_FILES = sorted(
 EXAMPLES: list[tuple[str, Path, list[str], list[str]]] = [
     ("samples", _EXAMPLES_DIR, [], _SAMPLE_FILES),
     (
-        "fastapi-vite/backend",
-        _EXAMPLES_DIR / "apps" / "fastapi-vite" / "backend",
+        "web_agent/backend",
+        _EXAMPLES_DIR / "apps" / "web_agent" / "backend",
         ["fastapi"],
         ["."],
     ),
     (
-        "multiagent-textual",
-        _EXAMPLES_DIR / "apps" / "multiagent-textual",
-        ["fastapi", "textual", "websockets"],
+        "durable_agent_temporal",
+        _EXAMPLES_DIR / "apps" / "durable_agent_temporal",
+        ["temporalio"],
         ["."],
     ),
     (
-        "temporal-direct",
-        _EXAMPLES_DIR / "apps" / "temporal-direct",
-        ["temporalio"],
+        "durable_agent_workflows/backend",
+        _EXAMPLES_DIR / "apps" / "durable_agent_workflows" / "backend",
+        [
+            "fastapi",
+            "vercel @ git+https://github.com/vercel/vercel-py@47d881242e35b18dcbc7d58b7018e1188894f332",
+            "vercel-workers>=0.0.22",
+        ],
         ["."],
     ),
 ]
