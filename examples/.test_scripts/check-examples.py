@@ -46,6 +46,12 @@ EXAMPLES: list[tuple[str, Path, list[str], list[str]]] = [
         ],
         ["."],
     ),
+    (
+        "slack_agent",
+        _EXAMPLES_DIR / "apps" / "slack_agent",
+        ["slack-bolt>=1.29", "aiohttp"],
+        ["."],
+    ),
 ]
 
 

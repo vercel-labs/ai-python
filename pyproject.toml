@@ -88,6 +88,8 @@ exclude = [
     "examples/apps/web_agent/backend/main.py",
     # depends on the vercel package, which is not part of this project's env
     "examples/apps/durable_agent_workflows/",
+    # depends on slack-bolt, which is not part of this project's env
+    "examples/apps/slack_agent/",
 ]
 
 [tool.ty.environment]
@@ -95,8 +97,12 @@ python-version = "3.12"
 root = ["./src", "./"]
 
 [tool.ty.src]
-# depends on the vercel package, which is not part of this project's env
-exclude = ["examples/apps/durable_agent_workflows/"]
+exclude = [
+    # depends on the vercel package, which is not part of this project's env
+    "examples/apps/durable_agent_workflows/",
+    # depends on slack-bolt, which is not part of this project's env
+    "examples/apps/slack_agent/",
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

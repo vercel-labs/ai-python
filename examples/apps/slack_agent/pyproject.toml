@@ -1,0 +1,16 @@
+[project]
+name = "slack-agent"
+version = "0.1.0"
+description = "Minimal Slack mention-bot using the AI SDK for Python and Socket Mode"
+requires-python = ">=3.12"
+dependencies = [
+    "ai",
+    "aiohttp>=3.10",
+    "slack-bolt>=1.29",
+]
+
+[tool.uv]
+exclude-newer = "2 days"
+
+[tool.uv.sources]
+ai = { path = "../../..", editable = true }
