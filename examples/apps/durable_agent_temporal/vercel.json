@@ -1,0 +1,15 @@
+{
+  "fluid": true,
+  "experimentalServices": {
+    "frontend": {
+      "framework": "vite",
+      "entrypoint": "frontend",
+      "routePrefix": "/"
+    },
+    "backend": {
+      "framework": "fastapi",
+      "entrypoint": "backend/app/server.py",
+      "routePrefix": "/api"
+    }
+  }
+}
