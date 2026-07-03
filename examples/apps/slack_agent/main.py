@@ -51,7 +51,7 @@ async def get_weather(city: str) -> str:
 
 app = slack_bolt.app.async_app.AsyncApp(token=os.environ["SLACK_BOT_TOKEN"])
 model = ai.get_model(MODEL_ID)
-agent = ai.agent(tools=[get_weather])
+agent = ai.Agent(tools=[get_weather])
 
 # One turn at a time per thread: a second mention while the first is
 # still streaming waits its turn (and then sees the finished reply in

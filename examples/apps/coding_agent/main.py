@@ -298,7 +298,7 @@ class CodingAgentApp(textual.app.App[None]):
     def __init__(self) -> None:
         super().__init__()
         self.model = ai.get_model(MODEL_ID)
-        self.agent = ai.agent(tools=[bash])
+        self.agent = ai.Agent(tools=[bash])
         self.messages: list[ai.messages.Message] = [
             ai.system_message(SYSTEM_PROMPT)
         ]

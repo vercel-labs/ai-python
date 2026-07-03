@@ -1,8 +1,8 @@
 # web_agent
 
 Chat demo using the Python Vercel AI SDK with a FastAPI backend and React frontend.
-Includes **human-in-the-loop tool approval** — every tool call is gated
-behind user confirmation before execution.
+Includes **human-in-the-loop tool approval** — the `talk_to_mothership`
+tool is gated behind user confirmation before execution.
 
 ## Stack
 
@@ -11,19 +11,21 @@ behind user confirmation before execution.
 
 ## Human-in-the-Loop
 
-The agent graph in `backend/agent.py` uses the function-based hook API
-to suspend execution whenever the LLM wants to call a tool. The flow is:
+`talk_to_mothership` in `backend/agent.py` is declared with
+`@ai.tool(require_approval=True)`, so the runtime suspends the run on a
+`ToolApproval` hook before executing it. The flow is:
 
-1. LLM emits a tool call
-2. Backend calls `await ai.hook(...)` with `payload=ai.ToolApproval`
-3. The runtime emits a `HookEvent` containing the `HookPart`
-4. The frontend renders Approve / Reject buttons via the
+1. LLM emits a call to the gated tool
+2. The runtime emits a `HookEvent` with a pending `HookPart`; the
+   backend aborts the pending hook (`ai.abort_pending_hook`) so the turn
+   ends and the pending approval streams to the client
+3. The frontend renders Approve / Reject buttons via the
    `<Confirmation>` component (from AI Elements)
-5. When the user clicks a button, `addToolApprovalResponse()` patches
+4. When the user clicks a button, `addToolApprovalResponse()` patches
    the message and sends a new request with the decision
-6. The backend pre-registers the approval via `ai.resolve_hook(...)` on the
-   next request, then either executes the tool or returns an error tool-result
-   message
+5. The backend pre-registers the decision via
+   `ai.agents.ui.ai_sdk.apply_approvals(...)` and re-runs the turn: the
+   resumed run either executes the tool or records a denied tool result
 
 Tool results are appended as separate `role="tool"` messages. The
 assistant tool-call message remains immutable.
@@ -34,7 +36,7 @@ assistant tool-call message remains immutable.
 # Backend
 cd backend
 uv sync
-cp .env.example .env  # add your AI_GATEWAY_API_KEY
+export AI_GATEWAY_API_KEY=…  # or put it in backend/.env and use `uv run --env-file .env`
 
 # Frontend
 cd frontend

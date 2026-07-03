@@ -56,7 +56,6 @@ class ChatRequest(pydantic.BaseModel):
     """Request body for the chat endpoint."""
 
     messages: list[ai.agents.ui.ai_sdk.UIMessage]
-    session_id: str | None = None
 
 
 @app.post("/chat")

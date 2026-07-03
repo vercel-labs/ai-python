@@ -33,7 +33,7 @@ async def talk_to_mothership(question: str) -> ai.StreamingStatusTool[str]:
 async def main() -> None:
     model = ai.get_model("anthropic/claude-sonnet-4.6")
 
-    my_agent = ai.agent(tools=[talk_to_mothership])
+    my_agent = ai.Agent(tools=[talk_to_mothership])
 
     messages = [
         ai.system_message(

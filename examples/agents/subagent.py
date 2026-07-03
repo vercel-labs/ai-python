@@ -26,7 +26,7 @@ async def get_facts(topic: str) -> str:
 @ai.tool
 async def research(topic: str) -> ai.SubAgentTool:
     """Research a topic in depth using a sub-agent."""
-    researcher = ai.agent(tools=[get_facts])
+    researcher = ai.Agent(tools=[get_facts])
 
     messages = [
         ai.system_message("You are a research assistant. Be concise."),
@@ -39,7 +39,7 @@ async def research(topic: str) -> ai.SubAgentTool:
 
 
 async def main() -> None:
-    orchestrator = ai.agent(tools=[research])
+    orchestrator = ai.Agent(tools=[research])
 
     messages = [
         ai.system_message(

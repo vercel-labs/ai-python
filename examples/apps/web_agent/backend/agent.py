@@ -49,7 +49,7 @@ async def get_population(city: str) -> int:
 @ai.tool(require_approval=True)
 async def talk_to_mothership(question: str) -> ai.SubAgentTool:
     """Contact the mothership for important decisions."""
-    mothership = ai.agent()
+    mothership = ai.Agent()
     messages = [
         ai.system_message(MOTHERSHIP_SYSTEM),
         ai.user_message(question),

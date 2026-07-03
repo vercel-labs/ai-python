@@ -132,7 +132,7 @@ windowsills and laundry piles.
 """
 
 
-agent = ai.agent()
+agent = ai.Agent()
 
 
 async def _run(user_text: str) -> ai.types.usage.Usage | None:

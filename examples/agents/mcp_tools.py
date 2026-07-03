@@ -15,7 +15,7 @@ async def main() -> None:
         tool_prefix="context7",
     )
 
-    my_agent = ai.agent(tools=context7_tools)
+    my_agent = ai.Agent(tools=context7_tools)
 
     messages = [
         ai.system_message(

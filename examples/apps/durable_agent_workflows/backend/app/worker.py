@@ -116,8 +116,9 @@ class DurableAgent(ai.Agent):
             assistant_message = ai.messages.Message.model_validate(result)
             context.add(assistant_message)
 
-            async for event in ai.events.replay_message_events(assistant_message):
-                yield event
+            async with ai.Stream.replay_message(assistant_message) as replay:
+                async for event in replay:
+                    yield event
 
             async with ai.ToolRunner() as runner:
                 for tool_call in assistant_message.tool_calls:

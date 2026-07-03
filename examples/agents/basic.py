@@ -14,7 +14,7 @@ async def get_weather(city: str) -> str:
 async def main() -> None:
     model = ai.get_model("anthropic/claude-sonnet-4.6")
 
-    my_agent = ai.agent(tools=[get_weather])
+    my_agent = ai.Agent(tools=[get_weather])
 
     messages = [
         ai.system_message("You are a helpful weather assistant."),

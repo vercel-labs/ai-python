@@ -53,7 +53,7 @@ async def read_file(path: str) -> str | ai.messages.ContentOutput:
 
 async def main() -> None:
     model = ai.get_model("anthropic/claude-sonnet-4.6")
-    my_agent = ai.agent(tools=[read_file])
+    my_agent = ai.Agent(tools=[read_file])
 
     here = pathlib.Path(__file__).parent
     image_path = ALLOWED_ROOT / "media" / "sample_image.jpg"
