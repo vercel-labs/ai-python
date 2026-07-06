@@ -17,6 +17,7 @@ from .span import (
     register,
     span,
     unregister,
+    wrap_span,
 )
 
 __all__ = [
@@ -33,4 +34,5 @@ __all__ = [
     "register",
     "span",
     "unregister",
+    "wrap_span",
 ]

@@ -39,7 +39,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Literal, Protocol
 from ..types import messages as messages_
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncGenerator, AsyncIterator, Callable
 
     from ..models.core import params as params_
     from ..types import usage as usage_
@@ -311,3 +311,87 @@ async def span(
                 "opening task; open overlapping spans with "
                 "set_as_current=False."
             )
+
+
+# ── wrap_span: one generator frame per span ───────────────────────
+
+
+class _WrapSpanAdapter:
+    """Adapter built by :func:`wrap_span`.
+
+    Holds one suspended generator per live span: the frame's locals
+    carry state from span start to span end, so context-manager-shaped
+    vendor SDKs bridge without any bookkeeping dict.
+    """
+
+    def __init__(self, fn: Callable[[Span], AsyncGenerator[None]]) -> None:
+        self._fn = fn
+        self._live: dict[str, AsyncGenerator[None]] = {}
+
+    def __repr__(self) -> str:
+        return f"wrap_span({getattr(self._fn, '__qualname__', self._fn)!r})"
+
+    async def on_span_start(self, span_: Span) -> None:
+        gen = self._fn(span_)
+        try:
+            await anext(gen)
+        except StopAsyncIteration:
+            return  # returned before yielding: opted out of this span
+        self._live[span_.id] = gen
+
+    async def on_span_end(self, span_: Span) -> None:
+        gen = self._live.pop(span_.id, None)
+        if gen is None:  # opted out, or start raised (and was logged)
+            return
+        try:
+            if span_.error is not None:
+                # Throw the span's error into the generator at its
+                # yield, so a vendor context manager around the yield
+                # records the failure exactly as if it wrapped the
+                # work itself.
+                await gen.athrow(span_.error)
+            else:
+                await anext(gen)
+        except StopAsyncIteration:
+            return
+        except BaseException as exc:
+            if exc is span_.error:
+                return  # the thrown error propagated back out: expected
+            raise  # the generator itself failed: logged by _dispatch
+        await gen.aclose()
+        raise RuntimeError("wrap_span generator yielded more than once")
+
+
+def wrap_span(fn: Callable[[Span], AsyncGenerator[None]]) -> _WrapSpanAdapter:
+    """Build an adapter from an async generator function that yields once.
+
+    The bridge for context-manager-shaped vendor SDKs: write the
+    vendor's ``with``/``async with`` around a single ``yield``.  Code
+    before the yield runs at span start; code after it runs at span
+    end, when ``span.data`` is fully populated and ``ended_at`` is
+    set::
+
+        @wrap_span
+        async def vendor(span):
+            with sdk.start_span(span.name) as v:
+                yield
+                v.update(output=span.data)
+
+        ai.telemetry.register(vendor)
+
+    - A span that ends with an error is thrown into the generator at
+      the ``yield``, so the vendor context manager sees the failure.
+      Use ``try/finally`` around the yield for code that must run on
+      both paths; catching the error only suppresses it here, never
+      for the application.
+    - Returning before the first ``yield`` skips that span — cheap
+      filtering by span type.
+    - Like any adapter, a generator that raises is logged and skipped;
+      it never kills the run.
+    """
+    if not inspect.isasyncgenfunction(fn):
+        raise TypeError(
+            "wrap_span requires an async generator function "
+            "(`async def` containing exactly one bare `yield`)"
+        )
+    return _WrapSpanAdapter(fn)

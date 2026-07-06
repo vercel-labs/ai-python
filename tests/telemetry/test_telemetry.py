@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
 import ai
 
 from ..conftest import Recorder
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator, AsyncIterator
 
 
 async def test_nesting_and_ids(recorder: Recorder) -> None:
@@ -133,3 +138,146 @@ async def test_async_adapter_methods_awaited() -> None:
     finally:
         ai.telemetry.unregister(adapter)
     assert ended == ["s"]
+
+
+# ── wrap_span ─────────────────────────────────────────────────────
+
+
+@contextlib.asynccontextmanager
+async def _registered(adapter: Any) -> AsyncIterator[None]:
+    ai.telemetry.register(adapter)
+    try:
+        yield
+    finally:
+        ai.telemetry.unregister(adapter)
+
+
+async def test_wrap_span_locals_across_yield() -> None:
+    events: list[str] = []
+
+    @ai.telemetry.wrap_span
+    async def adapter(span: ai.telemetry.Span) -> AsyncGenerator[None]:
+        name = span.name  # local state, no bookkeeping dict
+        events.append(f"start {name}")
+        yield
+        assert span.ended_at is not None
+        assert isinstance(span.data, ai.telemetry.CustomSpanData)
+        events.append(f"end {name} a={span.data.attributes.get('a')}")
+
+    async with _registered(adapter):
+        async with ai.telemetry.span("outer") as outer:
+            async with ai.telemetry.span("inner") as inner:
+                inner.set(a=1)
+            outer.set(a=2)
+
+    # One generator frame per live span, each resumed at its own
+    # span's end with the final data visible after the yield.
+    assert events == [
+        "start outer",
+        "start inner",
+        "end inner a=1",
+        "end outer a=2",
+    ]
+
+
+async def test_wrap_span_vendor_context_manager_sees_error() -> None:
+    seen: list[BaseException | None] = []
+
+    @contextlib.asynccontextmanager
+    async def vendor_span() -> AsyncIterator[None]:
+        try:
+            yield
+        except BaseException as exc:
+            seen.append(exc)
+            raise
+        else:
+            seen.append(None)
+
+    @ai.telemetry.wrap_span
+    async def adapter(span: ai.telemetry.Span) -> AsyncGenerator[None]:
+        async with vendor_span():
+            yield
+
+    error = ValueError("boom")
+    async with _registered(adapter):
+        with pytest.raises(ValueError) as excinfo:
+            async with ai.telemetry.span("failing"):
+                raise error
+        # The app still gets the original exception...
+        assert excinfo.value is error
+        # ...and the vendor context manager saw the very same object,
+        # as if it had wrapped the work itself.
+        assert seen == [error]
+
+        async with ai.telemetry.span("fine"):
+            pass
+        assert seen == [error, None]
+
+
+async def test_wrap_span_swallowing_error_only_local() -> None:
+    @ai.telemetry.wrap_span
+    async def adapter(span: ai.telemetry.Span) -> AsyncGenerator[None]:
+        with contextlib.suppress(ValueError):
+            yield
+
+    async with _registered(adapter):
+        # The adapter suppressing the thrown error in its own frame
+        # never suppresses it for the application.
+        with pytest.raises(ValueError):
+            async with ai.telemetry.span("failing"):
+                raise ValueError("boom")
+
+
+async def test_wrap_span_opt_out_before_yield(recorder: Recorder) -> None:
+    ended: list[str] = []
+
+    @ai.telemetry.wrap_span
+    async def adapter(span: ai.telemetry.Span) -> AsyncGenerator[None]:
+        if span.name == "boring":
+            return
+        yield
+        ended.append(span.name)
+
+    async with _registered(adapter):
+        async with ai.telemetry.span("boring"):
+            pass
+        async with ai.telemetry.span("interesting"):
+            pass
+
+    assert ended == ["interesting"]
+    assert [s.name for s in recorder.ended] == ["boring", "interesting"]
+
+
+async def test_wrap_span_failures_isolated(recorder: Recorder) -> None:
+    @ai.telemetry.wrap_span
+    async def broken_before(span: ai.telemetry.Span) -> AsyncGenerator[None]:
+        raise RuntimeError("pre-yield bug")
+        yield
+
+    @ai.telemetry.wrap_span
+    async def broken_after(span: ai.telemetry.Span) -> AsyncGenerator[None]:
+        yield
+        raise RuntimeError("post-yield bug")
+
+    @ai.telemetry.wrap_span
+    async def yields_twice(span: ai.telemetry.Span) -> AsyncGenerator[None]:
+        yield
+        yield
+
+    async with _registered(broken_before):
+        async with _registered(broken_after):
+            async with _registered(yields_twice):
+                async with ai.telemetry.span("s"):
+                    pass
+
+    # None of the broken generators killed the span or other adapters.
+    assert [s.name for s in recorder.ended] == ["s"]
+
+
+async def test_wrap_span_rejects_plain_functions() -> None:
+    async def not_a_generator(span: ai.telemetry.Span) -> None:
+        pass
+
+    fn: Any = not_a_generator
+    with pytest.raises(TypeError, match="async generator function"):
+        ai.telemetry.wrap_span(fn)
