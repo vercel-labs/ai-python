@@ -15,6 +15,7 @@ from ...conftest import (
     MOCK_MODEL,
     MOCK_PROVIDER,
     MockProvider,
+    Recorder,
     mock_llm,
     text_msg,
 )
@@ -589,3 +590,18 @@ async def test_stream_does_not_raise_on_early_consumer_exit() -> None:
         async for event in stream:
             if isinstance(event, events_.TextDelta):
                 break
+
+
+async def test_replayed_turn_gets_replay_span(recorder: Recorder) -> None:
+    replayed = text_msg("prior turn").model_copy(update={"replay": True})
+    async with models.stream(
+        MOCK_MODEL, [ai.user_message("go"), replayed]
+    ) as stream:
+        async for _ in stream:
+            pass
+
+    (call,) = [s for s in recorder.ended if s.name == "model_call"]
+    assert call.replay
+    assert isinstance(call.data, ai.telemetry.ModelCallSpanData)
+    assert call.data.message is not None
+    assert call.data.message.text == "prior turn"

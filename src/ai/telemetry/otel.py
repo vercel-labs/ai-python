@@ -1,0 +1,159 @@
+"""OpenTelemetry adapter: forwards spans to an otel tracer.
+
+::
+
+    from ai.telemetry import otel
+    otel.install()  # uses the global TracerProvider
+
+Span names and attributes follow the ``gen_ai`` semantic conventions,
+so LLM-aware viewers (Phoenix, Braintrust, Langfuse, Datadog, ...)
+render them natively.
+
+The adapter also attaches each otel span to the otel context in the
+task that opened it, so raw otel spans a user creates inside a tool
+still parent correctly under ours — and our root spans nest under any
+raw otel span the caller already has open.
+"""
+
+from __future__ import annotations
+
+import json
+from typing import TYPE_CHECKING, Any
+
+from .. import errors, telemetry
+
+try:
+    from opentelemetry import context as otel_context
+    from opentelemetry import trace as otel_trace
+except ModuleNotFoundError as exc:  # pragma: no cover
+    raise errors.InstallationError(
+        "could not import `opentelemetry`, which is required for the otel "
+        'telemetry adapter, you can install it with `pip install "ai[otel]"` '
+        'or `uv add "ai[otel]"`'
+    ) from exc
+
+if TYPE_CHECKING:
+    from ..types import messages as messages_
+
+
+def _messages_json(messages: list[messages_.Message]) -> str:
+    return "[" + ",".join(m.model_dump_json() for m in messages) + "]"
+
+
+def _name(sp: telemetry.Span) -> str:
+    match sp.data:
+        case telemetry.ModelCallSpanData() as d:
+            return f"chat {d.model}"
+        case telemetry.GenerateSpanData() as d:
+            return f"generate_content {d.model}"
+        case telemetry.ToolSpanData() as d:
+            return f"execute_tool {d.tool_name}"
+        case telemetry.RunSpanData() as d:
+            return f"invoke_agent {d.agent}"
+        case telemetry.StepSpanData() as d:
+            return f"step {d.index}"
+        case _:
+            return sp.name
+
+
+def _attributes(sp: telemetry.Span) -> dict[str, Any]:
+    attrs: dict[str, Any] = {}
+    if sp.replay:
+        attrs["ai.replay"] = True
+    match sp.data:
+        case telemetry.ModelCallSpanData() as d:
+            attrs["gen_ai.operation.name"] = "chat"
+            attrs["gen_ai.request.model"] = d.model
+            attrs["gen_ai.input.messages"] = _messages_json(d.messages)
+            if d.message is not None:
+                attrs["gen_ai.output.messages"] = _messages_json([d.message])
+            if d.usage is not None:
+                attrs["gen_ai.usage.input_tokens"] = d.usage.input_tokens
+                attrs["gen_ai.usage.output_tokens"] = d.usage.output_tokens
+        case telemetry.GenerateSpanData() as d:
+            attrs["gen_ai.operation.name"] = "generate_content"
+            attrs["gen_ai.request.model"] = d.model
+            if d.message is not None:
+                attrs["gen_ai.output.messages"] = _messages_json([d.message])
+        case telemetry.ToolSpanData() as d:
+            attrs["gen_ai.operation.name"] = "execute_tool"
+            attrs["gen_ai.tool.name"] = d.tool_name
+            attrs["gen_ai.tool.call.id"] = d.tool_call_id
+            if d.args is not None:
+                attrs["gen_ai.tool.call.arguments"] = json.dumps(
+                    d.args, default=str
+                )
+            if d.result is not None:
+                attrs["gen_ai.tool.call.result"] = json.dumps(
+                    d.result, default=str
+                )
+            if d.is_error:
+                attrs["ai.tool.is_error"] = True
+        case telemetry.RunSpanData() as d:
+            attrs["gen_ai.operation.name"] = "invoke_agent"
+            attrs["gen_ai.agent.name"] = d.agent
+            attrs["gen_ai.request.model"] = d.model
+        case telemetry.HookSpanData() as d:
+            attrs["ai.hook.label"] = d.label
+            attrs["ai.hook.type"] = d.hook_type
+            attrs["ai.hook.status"] = d.status
+        case telemetry.StepSpanData() as d:
+            attrs["ai.step.index"] = d.index
+        case telemetry.CustomSpanData() as d:
+            for key, value in d.attributes.items():
+                attrs[key] = (
+                    value
+                    if isinstance(value, str | bool | int | float)
+                    else repr(value)
+                )
+    return attrs
+
+
+class OtelAdapter:
+    """Bridge: one otel span per ai span, exact parenting across tasks."""
+
+    def __init__(self, tracer: otel_trace.Tracer) -> None:
+        self._tracer = tracer
+        # ai span id -> (otel span, token from otel_context.attach()).
+        self._live: dict[str, tuple[otel_trace.Span, Any]] = {}
+
+    def on_span_start(self, span: telemetry.Span) -> None:
+        context = None
+        if span.parent_id is not None:
+            parent = self._live.get(span.parent_id)
+            if parent is not None:
+                context = otel_trace.set_span_in_context(parent[0])
+        # context=None falls back to the current otel context, so our
+        # root nests under any raw otel span the caller has open.
+        otel_span = self._tracer.start_span(
+            _name(span), context=context, start_time=span.started_at
+        )
+        token = otel_context.attach(otel_trace.set_span_in_context(otel_span))
+        self._live[span.id] = (otel_span, token)
+
+    def on_span_end(self, span: telemetry.Span) -> None:
+        entry = self._live.pop(span.id, None)
+        if entry is None:
+            return
+        otel_span, token = entry
+        otel_context.detach(token)
+        for key, value in _attributes(span).items():
+            otel_span.set_attribute(key, value)
+        if span.error is not None:
+            if isinstance(span.error, Exception):
+                otel_span.record_exception(span.error)
+            otel_span.set_status(otel_trace.StatusCode.ERROR, str(span.error))
+        otel_span.end(end_time=span.ended_at)
+
+
+def install(
+    *, tracer_provider: otel_trace.TracerProvider | None = None
+) -> OtelAdapter:
+    """Create an :class:`OtelAdapter`, register it, and return it.
+
+    Uses the global tracer provider unless one is passed.
+    """
+    tracer = otel_trace.get_tracer("ai", tracer_provider=tracer_provider)
+    adapter = OtelAdapter(tracer)
+    telemetry.register(adapter)
+    return adapter

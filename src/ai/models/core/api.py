@@ -20,7 +20,7 @@ import pydantic
 # Use the typing_extensions backport so this works on 3.12 too.
 from typing_extensions import TypeVar
 
-from ... import errors, types
+from ... import errors, telemetry, types
 from ...types import integrity
 
 if TYPE_CHECKING:
@@ -540,6 +540,10 @@ async def _stream(
         # demand a finish event from the synthetic replay generator
         # (it yields nothing when the turn has no tool calls).
         s._ended = True
+        data = telemetry.ModelCallSpanData(
+            model=model.id, messages=list(messages), params=params
+        )
+        replay = True
     else:
         prepared = integrity.prepare_messages(messages)
         request = StreamRequest(
@@ -553,10 +557,21 @@ async def _stream(
             executor._do_stream(request),
             output_type=cast("type[Any] | None", output_type),
         )
-    try:
-        yield s
-    finally:
-        await s.aclose()
+        data = telemetry.ModelCallSpanData(
+            model=model.id, messages=prepared, params=params
+        )
+        replay = False
+    # Not set as current: the caller's work while the stream is open
+    # (tool dispatch, user code between events) is not part of the
+    # model call.
+    async with telemetry.span(data, replay=replay, set_as_current=False):
+        try:
+            yield s
+        finally:
+            # Record whatever got built, even a partial message.
+            data.message = s.message
+            data.usage = s.usage
+            await s.aclose()
 
 
 async def generate(
@@ -569,7 +584,13 @@ async def generate(
     """Generate a non-streaming response (images, video, etc.)."""
     messages = integrity.prepare_messages(messages)
     request = GenerateRequest(model, messages, params)
-    return await executor._do_generate(request)
+    data = telemetry.GenerateSpanData(
+        model=model.id, messages=messages, params=params
+    )
+    async with telemetry.span(data):
+        message = await executor._do_generate(request)
+        data.message = message
+        return message
 
 
 async def probe(model: model_.Model) -> None:

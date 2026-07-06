@@ -38,6 +38,9 @@ dependencies = [
 anthropic = ["anthropic>=0.83.0"]
 mcp = ["mcp>=1.18.0"]
 openai = ["openai>=2.14.0"]
+otel = [
+    "opentelemetry-sdk>=1.30",
+]
 vercel = [
     "vercel>=0.5.9",
 ]
@@ -67,6 +70,8 @@ dev = [
     "ruff~=0.8.0",
     "async-solipsism>=0.9",
     "ty~=0.0.37",
+    "opentelemetry-sdk>=1.43.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.43.0",
 ]
 examples = [
     "fastapi>=0.136.1",

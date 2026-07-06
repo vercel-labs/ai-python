@@ -25,7 +25,7 @@ from typing import Any, cast
 
 import pydantic
 
-from .. import types
+from .. import telemetry, types
 from ..types import messages as messages_
 from . import _middleware as middleware_
 from . import runtime as runtime_
@@ -124,49 +124,62 @@ async def _hook_impl(call: middleware_.HookContext) -> pydantic.BaseModel:
     payload = call.payload
     hook_metadata = call.metadata
 
+    data = telemetry.HookSpanData(
+        label=label, hook_type=payload.__name__, metadata=hook_metadata
+    )
+
     # Pre-registered resolution (serverless re-entry).
     pre_registered = _pending_resolutions.pop(label, None)
     if pre_registered is not None:
-        if isinstance(pre_registered, BaseException):
-            raise pre_registered
-        return payload(**pre_registered)
+        async with telemetry.span(data, replay=True):
+            if isinstance(pre_registered, BaseException):
+                raise pre_registered
+            data.status = "resolved"
+            return payload(**pre_registered)
 
-    # No resolution available — suspend.
-    future: asyncio.Future[dict[str, Any]] = asyncio.Future()
+    # No resolution available — suspend.  The span covers the whole
+    # suspension: how long the run sat waiting on external input.
+    async with telemetry.span(data):
+        future: asyncio.Future[dict[str, Any]] = asyncio.Future()
 
-    _live_hooks[label] = (future, hook_metadata, rt)
-    rt.track_hook_label(label)
+        _live_hooks[label] = (future, hook_metadata, rt)
+        rt.track_hook_label(label)
 
-    # Emit pending signal.
-    hook_part: messages_.HookPart[Any] = messages_.HookPart(
-        hook_id=label,
-        hook_type=payload.__name__,
-        status="pending",
-        metadata=hook_metadata,
-        tool_call_id=call.tool_call_id,
-    )
-
-    await rt.put_hook(hook_part)
-
-    # Await resolution — may be resolved externally or cancelled.
-    resolution = await future
-
-    # Clean up live registry.
-    _live_hooks.pop(label, None)
-
-    # Emit resolved signal.
-    await rt.put_hook(
-        messages_.HookPart(
+        # Emit pending signal.
+        hook_part: messages_.HookPart[Any] = messages_.HookPart(
             hook_id=label,
             hook_type=payload.__name__,
-            status="resolved",
+            status="pending",
             metadata=hook_metadata,
-            resolution=resolution,
             tool_call_id=call.tool_call_id,
         )
-    )
 
-    return payload(**resolution)
+        await rt.put_hook(hook_part)
+
+        # Await resolution — may be resolved externally or cancelled.
+        try:
+            resolution = await future
+        except asyncio.CancelledError:
+            data.status = "cancelled"
+            raise
+
+        # Clean up live registry.
+        _live_hooks.pop(label, None)
+        data.status = "resolved"
+
+        # Emit resolved signal.
+        await rt.put_hook(
+            messages_.HookPart(
+                hook_id=label,
+                hook_type=payload.__name__,
+                status="resolved",
+                metadata=hook_metadata,
+                resolution=resolution,
+                tool_call_id=call.tool_call_id,
+            )
+        )
+
+        return payload(**resolution)
 
 
 def resolve_hook(

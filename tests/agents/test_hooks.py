@@ -12,7 +12,7 @@ import pytest
 import ai
 from ai.types import events as agent_events_
 
-from ..conftest import MOCK_MODEL, mock_llm, text_msg
+from ..conftest import MOCK_MODEL, Recorder, mock_llm, text_msg
 
 
 class Confirmation(pydantic.BaseModel):
@@ -210,3 +210,55 @@ async def test_hook_metadata_in_pending() -> None:
 
     assert len(hooks) >= 1
     assert hooks[0].metadata == {"tool": "rm -rf", "path": "/"}
+
+
+# -- telemetry spans --------------------------------------------------------
+
+
+class _HookAgent(ai.Agent):
+    """One model turn, then suspend on a hook."""
+
+    label = "confirm_span"
+
+    async def loop(
+        self, context: ai.Context
+    ) -> AsyncGenerator[agent_events_.AgentEvent]:
+        async with ai.models.stream(context=context) as stream:
+            async for event in stream:
+                yield event
+        await ai.hook(self.label, payload=Confirmation)
+
+
+def _hook_spans(recorder: Recorder) -> list[ai.telemetry.Span]:
+    return [s for s in recorder.ended if s.name == "hook"]
+
+
+async def test_live_hook_span(recorder: Recorder) -> None:
+    mock_llm([[text_msg("OK")]])
+    my_agent = _HookAgent()
+    async with my_agent.run(MOCK_MODEL, [ai.user_message("go")]) as stream:
+        async for event in stream:
+            if (
+                isinstance(event, agent_events_.HookEvent)
+                and event.hook.status == "pending"
+            ):
+                ai.resolve_hook(my_agent.label, {"approved": True})
+
+    (hook_span,) = _hook_spans(recorder)
+    assert isinstance(hook_span.data, ai.telemetry.HookSpanData)
+    assert hook_span.data.status == "resolved"
+    assert not hook_span.replay
+
+
+async def test_pre_registered_hook_is_replay_span(recorder: Recorder) -> None:
+    my_agent = _HookAgent()
+    ai.resolve_hook(my_agent.label, {"approved": True}, payload=Confirmation)
+    mock_llm([[text_msg("OK")]])
+    async with my_agent.run(MOCK_MODEL, [ai.user_message("go")]) as stream:
+        async for _ in stream:
+            pass
+
+    (hook_span,) = _hook_spans(recorder)
+    assert hook_span.replay
+    assert isinstance(hook_span.data, ai.telemetry.HookSpanData)
+    assert hook_span.data.status == "resolved"
