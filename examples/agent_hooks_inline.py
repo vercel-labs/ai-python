@@ -2,7 +2,7 @@
 
 Demonstrates the function-based hook API:
   - await hook("label", payload=Model) to suspend inside the loop
-  - resolve_hook("label", data) to unblock from outside
+  - resolve_hook(hook_part, data) to unblock from outside
   - Hook signals arrive as HookEvent events
 
 The custom loop uses the concurrent ``ToolRunner`` flow.  The approval
@@ -102,7 +102,7 @@ async def main() -> None:
                 hook_part = event.hook
                 answer = input(f"Approve {hook_part.hook_id}? [y/n] ")
                 ai.resolve_hook(
-                    hook_part.hook_id,
+                    hook_part,
                     Approval(
                         granted=answer.strip().lower() in ("y", "yes"),
                         reason="operator decision",
