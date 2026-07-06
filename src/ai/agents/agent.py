@@ -630,7 +630,7 @@ class BoundToolCall:
 
     async def __call__(self, **overrides: Any) -> events_.ToolCallResult:
         """Execute the tool and return a :class:`ToolCallResult`."""
-        data = telemetry.ToolSpanData(
+        data = telemetry.ToolExecutionSpanData(
             tool_name=self._part.tool_name,
             tool_call_id=self._part.tool_call_id,
         )
@@ -1279,7 +1279,7 @@ class Agent:
         while context.keep_running():
             step += 1
             async with (
-                telemetry.span(telemetry.StepSpanData(index=step)),
+                telemetry.span(telemetry.LoopTurnSpanData(index=step)),
                 models.stream(context=context) as stream,
                 ToolRunner() as tr,
             ):

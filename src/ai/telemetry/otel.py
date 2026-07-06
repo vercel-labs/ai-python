@@ -42,16 +42,16 @@ def _messages_json(messages: list[messages_.Message]) -> str:
 
 def _name(sp: telemetry.Span) -> str:
     match sp.data:
-        case telemetry.ModelCallSpanData() as d:
+        case telemetry.AiStreamSpanData() as d:
             return f"chat {d.model}"
-        case telemetry.GenerateSpanData() as d:
+        case telemetry.AiGenerateSpanData() as d:
             return f"generate_content {d.model}"
-        case telemetry.ToolSpanData() as d:
+        case telemetry.ToolExecutionSpanData() as d:
             return f"execute_tool {d.tool_name}"
         case telemetry.RunSpanData() as d:
             return f"invoke_agent {d.agent}"
-        case telemetry.StepSpanData() as d:
-            return f"step {d.index}"
+        case telemetry.LoopTurnSpanData() as d:
+            return f"loop_turn {d.index}"
         case _:
             return sp.name
 
@@ -61,7 +61,7 @@ def _attributes(sp: telemetry.Span) -> dict[str, Any]:
     if sp.replay:
         attrs["ai.replay"] = True
     match sp.data:
-        case telemetry.ModelCallSpanData() as d:
+        case telemetry.AiStreamSpanData() as d:
             attrs["gen_ai.operation.name"] = "chat"
             attrs["gen_ai.request.model"] = d.model
             attrs["gen_ai.input.messages"] = _messages_json(d.messages)
@@ -70,12 +70,12 @@ def _attributes(sp: telemetry.Span) -> dict[str, Any]:
             if d.usage is not None:
                 attrs["gen_ai.usage.input_tokens"] = d.usage.input_tokens
                 attrs["gen_ai.usage.output_tokens"] = d.usage.output_tokens
-        case telemetry.GenerateSpanData() as d:
+        case telemetry.AiGenerateSpanData() as d:
             attrs["gen_ai.operation.name"] = "generate_content"
             attrs["gen_ai.request.model"] = d.model
             if d.message is not None:
                 attrs["gen_ai.output.messages"] = _messages_json([d.message])
-        case telemetry.ToolSpanData() as d:
+        case telemetry.ToolExecutionSpanData() as d:
             attrs["gen_ai.operation.name"] = "execute_tool"
             attrs["gen_ai.tool.name"] = d.tool_name
             attrs["gen_ai.tool.call.id"] = d.tool_call_id
@@ -97,8 +97,8 @@ def _attributes(sp: telemetry.Span) -> dict[str, Any]:
             attrs["ai.hook.label"] = d.label
             attrs["ai.hook.type"] = d.hook_type
             attrs["ai.hook.status"] = d.status
-        case telemetry.StepSpanData() as d:
-            attrs["ai.step.index"] = d.index
+        case telemetry.LoopTurnSpanData() as d:
+            attrs["ai.loop_turn.index"] = d.index
         case telemetry.CustomSpanData() as d:
             for key, value in d.attributes.items():
                 attrs[key] = (

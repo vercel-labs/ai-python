@@ -27,24 +27,24 @@ def _short(text: str, limit: int = 60) -> str:
 
 def _label(sp: telemetry.Span) -> str:
     match sp.data:
-        case telemetry.ModelCallSpanData() as d:
+        case telemetry.AiStreamSpanData() as d:
             tokens = (
                 f"  in:{d.usage.input_tokens} out:{d.usage.output_tokens} tok"
                 if d.usage is not None
                 else ""
             )
             return f"chat {d.model}{tokens}"
-        case telemetry.GenerateSpanData() as d:
+        case telemetry.AiGenerateSpanData() as d:
             return f"generate {d.model}"
-        case telemetry.ToolSpanData() as d:
+        case telemetry.ToolExecutionSpanData() as d:
             args = ", ".join(f"{k}={v!r}" for k, v in (d.args or {}).items())
             return f"tool {d.tool_name}({_short(args)})"
         case telemetry.HookSpanData() as d:
             return f"hook {d.label} {d.hook_type} [{d.status}]"
         case telemetry.RunSpanData() as d:
             return f"run {d.agent} ({d.model})"
-        case telemetry.StepSpanData() as d:
-            return f"step {d.index}"
+        case telemetry.LoopTurnSpanData() as d:
+            return f"turn {d.index}"
         case telemetry.CustomSpanData() as d:
             attrs = ", ".join(f"{k}={v!r}" for k, v in d.attributes.items())
             return sp.name + (f" ({_short(attrs)})" if attrs else "")

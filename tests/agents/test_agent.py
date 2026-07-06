@@ -1,4 +1,4 @@
-"""Telemetry spans emitted by ``Agent.run``: the run/step/tool tree."""
+"""Telemetry spans emitted by ``Agent.run``: the run/turn/tool tree."""
 
 from __future__ import annotations
 
@@ -34,12 +34,12 @@ async def test_agent_run_span_tree(recorder: Recorder) -> None:
 
     spans = _by_name(recorder)
     (run,) = spans["run"]
-    steps = sorted(spans["step"], key=lambda s: s.started_at)
-    calls = sorted(spans["model_call"], key=lambda s: s.started_at)
-    (tool_span,) = spans["tool"]
+    steps = sorted(spans["loop_turn"], key=lambda s: s.started_at)
+    calls = sorted(spans["ai_stream"], key=lambda s: s.started_at)
+    (tool_span,) = spans["tool_execution"]
     (user_span,) = spans["user_work"]
 
-    # Shape: run > step[1,2]; step 1 > model_call + tool > user span.
+    # Shape: run > turn[1,2]; turn 1 > ai_stream + tool_execution > user span.
     assert len(steps) == 2
     assert len(calls) == 2
     assert {s.parent_id for s in steps} == {run.id}
@@ -54,13 +54,13 @@ async def test_agent_run_span_tree(recorder: Recorder) -> None:
     assert run.data.agent == "Agent"
     assert run.data.model == "mock-model"
 
-    assert isinstance(tool_span.data, ai.telemetry.ToolSpanData)
+    assert isinstance(tool_span.data, ai.telemetry.ToolExecutionSpanData)
     assert tool_span.data.tool_name == "lookup"
     assert tool_span.data.args == {"x": 1}
     assert tool_span.data.result == "ok"
     assert not tool_span.data.is_error
 
-    assert isinstance(calls[1].data, ai.telemetry.ModelCallSpanData)
+    assert isinstance(calls[1].data, ai.telemetry.AiStreamSpanData)
     assert calls[1].data.message is not None
     assert calls[1].data.message.text == "done"
 
@@ -77,8 +77,8 @@ async def test_tool_error_marked_on_span(recorder: Recorder) -> None:
         async for _ in stream:
             pass
 
-    (tool_span,) = _by_name(recorder)["tool"]
-    assert isinstance(tool_span.data, ai.telemetry.ToolSpanData)
+    (tool_span,) = _by_name(recorder)["tool_execution"]
+    assert isinstance(tool_span.data, ai.telemetry.ToolExecutionSpanData)
     # The framework converts the exception into an error result, so the
     # span itself succeeded but carries the error marker.
     assert tool_span.error is None

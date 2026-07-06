@@ -540,7 +540,7 @@ async def _stream(
         # demand a finish event from the synthetic replay generator
         # (it yields nothing when the turn has no tool calls).
         s._ended = True
-        data = telemetry.ModelCallSpanData(
+        data = telemetry.AiStreamSpanData(
             model=model.id, messages=list(messages), params=params
         )
         replay = True
@@ -557,7 +557,7 @@ async def _stream(
             executor._do_stream(request),
             output_type=cast("type[Any] | None", output_type),
         )
-        data = telemetry.ModelCallSpanData(
+        data = telemetry.AiStreamSpanData(
             model=model.id, messages=prepared, params=params
         )
         replay = False
@@ -584,7 +584,7 @@ async def generate(
     """Generate a non-streaming response (images, video, etc.)."""
     messages = integrity.prepare_messages(messages)
     request = GenerateRequest(model, messages, params)
-    data = telemetry.GenerateSpanData(
+    data = telemetry.AiGenerateSpanData(
         model=model.id, messages=messages, params=params
     )
     async with telemetry.span(data):

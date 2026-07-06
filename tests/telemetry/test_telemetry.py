@@ -55,14 +55,18 @@ async def test_set_attributes(recorder: Recorder) -> None:
 
 
 async def test_set_rejects_framework_spans() -> None:
-    async with ai.telemetry.span(ai.telemetry.StepSpanData(index=1)) as span:
+    async with ai.telemetry.span(
+        ai.telemetry.LoopTurnSpanData(index=1)
+    ) as span:
         with pytest.raises(TypeError):
             span.set(a=1)
 
 
 async def test_data_with_attributes_rejected() -> None:
     with pytest.raises(TypeError):
-        async with ai.telemetry.span(ai.telemetry.StepSpanData(index=1), a=1):
+        async with ai.telemetry.span(
+            ai.telemetry.LoopTurnSpanData(index=1), a=1
+        ):
             pass
 
 

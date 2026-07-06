@@ -600,8 +600,8 @@ async def test_replayed_turn_gets_replay_span(recorder: Recorder) -> None:
         async for _ in stream:
             pass
 
-    (call,) = [s for s in recorder.ended if s.name == "model_call"]
+    (call,) = [s for s in recorder.ended if s.name == "ai_stream"]
     assert call.replay
-    assert isinstance(call.data, ai.telemetry.ModelCallSpanData)
+    assert isinstance(call.data, ai.telemetry.AiStreamSpanData)
     assert call.data.message is not None
     assert call.data.message.text == "prior turn"
