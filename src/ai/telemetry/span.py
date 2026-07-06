@@ -168,6 +168,12 @@ class Span:
     serverless re-entry) rather than performed live — adapters can and
     should render it differently.
 
+    ``set_as_current=False`` marks a span that does not parent the work
+    done while it is open (see :func:`span`).  Adapters that bridge to
+    an ambient-context SDK (otel, ...) must not make such spans
+    "current" there either, or spans opened meanwhile mis-parent under
+    them on the other side.
+
     ``schema_version`` tracks the shape of spans and their data types;
     it is bumped on breaking changes so adapters can detect them.
     """
@@ -181,6 +187,7 @@ class Span:
     ended_at: int | None = None
     error: BaseException | None = None
     replay: bool = False
+    set_as_current: bool = True
 
     schema_version: ClassVar[int] = 1
 
@@ -273,6 +280,7 @@ async def span(
         parent_id=parent.id if parent else None,
         started_at=time.time_ns(),
         replay=replay,
+        set_as_current=set_as_current,
     )
     await _dispatch("on_span_start", sp)
     token = _current.set(sp) if set_as_current else None
