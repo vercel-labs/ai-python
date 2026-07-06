@@ -81,7 +81,7 @@ class TestCreateGatewayError:
         err = client_errors.create_gateway_error(
             response_body=body,
             status_code=401,
-            api_key_provided=True,
+            auth_method="api-key",
         )
         assert isinstance(err, client_errors.GatewayAuthenticationError)
         assert err.status_code == 401
@@ -98,7 +98,7 @@ class TestCreateGatewayError:
         err = client_errors.create_gateway_error(
             response_body=body,
             status_code=401,
-            oidc_token_provided=True,
+            auth_method="oidc",
         )
         assert isinstance(err, client_errors.GatewayAuthenticationError)
         assert "OIDC token" in str(err)

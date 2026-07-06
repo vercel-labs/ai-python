@@ -85,11 +85,8 @@ class GatewayProvider(base.Provider[gateway_client.GatewayClient]):
                 )
             )
         client = super().client
-        auth_token, auth_method = self._gateway_auth()
-        client.base_url = self.base_url
-        client.auth_token = auth_token
-        client.auth_method = auth_method
-        client.headers = dict(self.headers)
+        # only auth is refreshed per access: OIDC tokens rotate
+        client.auth_token, client.auth_method = self._gateway_auth()
         return client
 
     def default_protocol(
@@ -112,6 +109,7 @@ class GatewayProvider(base.Provider[gateway_client.GatewayClient]):
 
     def is_configured(self) -> bool:
         """Return ``True`` when Gateway auth can be attempted."""
+        # must accept exactly the cases _gateway_auth() produces a token for
         return (
             bool(self.api_key)
             or self._config_value(_VERCEL_ENV) == "1"

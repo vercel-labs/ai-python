@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-import importlib
+import sys
 from collections.abc import Callable
 from types import ModuleType
+from typing import cast
 
 import httpx
 import pytest
@@ -15,27 +16,16 @@ def _set_oidc_token(
     monkeypatch: pytest.MonkeyPatch,
     get_token: Callable[[], str],
 ) -> None:
-    real_import_module = importlib.import_module
     oidc = ModuleType("vercel.oidc")
-    oidc.__dict__["get_vercel_oidc_token"] = get_token
-
-    def _import_module(name: str, package: str | None = None) -> ModuleType:
-        if name == "vercel.oidc":
-            return oidc
-        return real_import_module(name, package)
-
-    monkeypatch.setattr(importlib, "import_module", _import_module)
+    setattr(oidc, "get_vercel_oidc_token", get_token)  # noqa: B010
+    monkeypatch.setitem(sys.modules, "vercel.oidc", oidc)
 
 
-def _fail_oidc_import(monkeypatch: pytest.MonkeyPatch) -> None:
-    real_import_module = importlib.import_module
+def _fail_oidc_token_fetch(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _fail() -> str:
+        pytest.fail("OIDC token should not be fetched when an API key is set")
 
-    def _import_module(name: str, package: str | None = None) -> ModuleType:
-        if name == "vercel.oidc":
-            pytest.fail("OIDC should not be imported when an API key is set")
-        return real_import_module(name, package)
-
-    monkeypatch.setattr(importlib, "import_module", _import_module)
+    _set_oidc_token(monkeypatch, _fail)
 
 
 async def test_list_models_gets_config_with_gateway_headers_and_sorts_ids() -> (
@@ -168,17 +158,12 @@ async def test_oidc_expected_without_vercel_extra_raises_installation_error(
 ) -> None:
     monkeypatch.delenv("AI_GATEWAY_API_KEY", raising=False)
     monkeypatch.setenv("VERCEL", "1")
-    real_import_module = importlib.import_module
-
-    def _import_module(name: str, package: str | None = None) -> ModuleType:
-        if name == "vercel.oidc":
-            raise ModuleNotFoundError(name="vercel")
-        return real_import_module(name, package)
+    # a None entry in sys.modules makes the import raise ModuleNotFoundError
+    monkeypatch.setitem(sys.modules, "vercel.oidc", cast("ModuleType", None))
 
     def _handler(request: httpx.Request) -> httpx.Response:
         pytest.fail("Gateway should not be called without the OIDC helper")
 
-    monkeypatch.setattr(importlib, "import_module", _import_module)
     provider = ai.get_provider(
         "vercel",
         base_url="https://gateway.test/v3/ai",
@@ -201,7 +186,7 @@ async def test_api_key_env_takes_precedence_over_oidc(
 ) -> None:
     monkeypatch.setenv("AI_GATEWAY_API_KEY", "env-test-key")
     monkeypatch.setenv("VERCEL", "1")
-    _fail_oidc_import(monkeypatch)
+    _fail_oidc_token_fetch(monkeypatch)
     captured_headers: dict[str, str] = {}
 
     def _handler(request: httpx.Request) -> httpx.Response:
@@ -228,7 +213,7 @@ async def test_explicit_api_key_takes_precedence_over_oidc(
 ) -> None:
     monkeypatch.setenv("AI_GATEWAY_API_KEY", "env-test-key")
     monkeypatch.setenv("VERCEL", "1")
-    _fail_oidc_import(monkeypatch)
+    _fail_oidc_token_fetch(monkeypatch)
     captured_headers: dict[str, str] = {}
 
     def _handler(request: httpx.Request) -> httpx.Response:
