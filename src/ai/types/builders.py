@@ -7,7 +7,7 @@ constructing Part lists. Each ``*_message`` function returns a single
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
     from . import events as events_
@@ -18,6 +18,7 @@ from .messages import (
     FilePart,
     HookPart,
     Message,
+    MessageRole,
     Part,
     ReasoningPart,
     ResultKind,
@@ -51,12 +52,26 @@ def _coerce_parts(args: tuple[PartLike, ...]) -> list[Part]:
     return parts
 
 
+def message(*content: PartLike, role: str) -> Message:
+    """Create a message with an explicit ``role``.
+
+    ``role`` is a plain :class:`str` -- pydantic validates it against
+    the allowed roles at construction time, so an unknown value raises
+    a ``ValidationError``.
+
+    >>> ai.message("You are a helpful robot.", role="system")
+    """
+    # ``role`` is ``str`` but ``Message.role`` is a Literal; pydantic still
+    # validates it, so the cast only satisfies the static checker.
+    return Message(role=cast("MessageRole", role), parts=_coerce_parts(content))
+
+
 def system_message(*content: PartLike) -> Message:
     """Create a system message.
 
     >>> ai.system_message("You are a helpful robot.")
     """
-    return Message(role="system", parts=_coerce_parts(content))
+    return message(*content, role="system")
 
 
 def user_message(*content: PartLike) -> Message:
@@ -64,7 +79,7 @@ def user_message(*content: PartLike) -> Message:
 
     >>> ai.user_message("Describe this image:", ai.file_part(url))
     """
-    return Message(role="user", parts=_coerce_parts(content))
+    return message(*content, role="user")
 
 
 def assistant_message(*content: PartLike) -> Message:
@@ -72,7 +87,7 @@ def assistant_message(*content: PartLike) -> Message:
 
     >>> ai.assistant_message(ai.thinking("hmm"), "Hello!")
     """
-    return Message(role="assistant", parts=_coerce_parts(content))
+    return message(*content, role="assistant")
 
 
 def file_part(
