@@ -123,7 +123,7 @@ def install(
     tracer = otel_trace.get_tracer("ai", tracer_provider=tracer_provider)
 
     @telemetry.wrap_span
-    async def otel_spans(span: telemetry.Span) -> AsyncGenerator[None]:
+    async def otel_spans(span: telemetry.Span) -> AsyncGenerator[None, Any]:
         # Parenting is ambient: the current otel context holds the
         # parent (ours attach below; a raw otel span the caller has
         # open works the same way), and it mirrors the framework's
@@ -138,13 +138,10 @@ def install(
             else None
         )
         try:
-            yield
-        finally:
-            if token is not None:
-                otel_context.detach(token)
-            for key, value in _attributes(span).items():
-                otel_span.set_attribute(key, value)
-            for ev in span.span_events:
+            # Milestones resume the yield live and are forwarded right
+            # away, so backends that render in-progress spans show them
+            # as they happen; span end resumes with None.
+            while (ev := (yield)) is not None:
                 otel_span.add_event(
                     ev.name,
                     {
@@ -155,6 +152,11 @@ def install(
                     },
                     timestamp=ev.time_ns,
                 )
+        finally:
+            if token is not None:
+                otel_context.detach(token)
+            for key, value in _attributes(span).items():
+                otel_span.set_attribute(key, value)
             if span.error is not None:
                 if isinstance(span.error, Exception):
                     otel_span.record_exception(span.error)

@@ -157,10 +157,11 @@ async def test_wrap_span_locals_across_yield() -> None:
     events: list[str] = []
 
     @ai.telemetry.wrap_span
-    async def adapter(span: ai.telemetry.Span) -> AsyncGenerator[None]:
+    async def adapter(span: ai.telemetry.Span) -> AsyncGenerator[None, Any]:
         name = span.name  # local state, no bookkeeping dict
         events.append(f"start {name}")
-        yield
+        while (yield) is not None:
+            pass
         assert span.ended_at is not None
         assert isinstance(span.data, ai.telemetry.CustomSpanData)
         events.append(f"end {name} a={span.data.attributes.get('a')}")
@@ -195,9 +196,10 @@ async def test_wrap_span_vendor_context_manager_sees_error() -> None:
             seen.append(None)
 
     @ai.telemetry.wrap_span
-    async def adapter(span: ai.telemetry.Span) -> AsyncGenerator[None]:
+    async def adapter(span: ai.telemetry.Span) -> AsyncGenerator[None, Any]:
         async with vendor_span():
-            yield
+            while (yield) is not None:
+                pass
 
     error = ValueError("boom")
     async with _registered(adapter):
@@ -217,9 +219,10 @@ async def test_wrap_span_vendor_context_manager_sees_error() -> None:
 
 async def test_wrap_span_swallowing_error_only_local() -> None:
     @ai.telemetry.wrap_span
-    async def adapter(span: ai.telemetry.Span) -> AsyncGenerator[None]:
+    async def adapter(span: ai.telemetry.Span) -> AsyncGenerator[None, Any]:
         with contextlib.suppress(ValueError):
-            yield
+            while (yield) is not None:
+                pass
 
     async with _registered(adapter):
         # The adapter suppressing the thrown error in its own frame
@@ -233,10 +236,11 @@ async def test_wrap_span_opt_out_before_yield(recorder: Recorder) -> None:
     ended: list[str] = []
 
     @ai.telemetry.wrap_span
-    async def adapter(span: ai.telemetry.Span) -> AsyncGenerator[None]:
+    async def adapter(span: ai.telemetry.Span) -> AsyncGenerator[None, Any]:
         if span.name == "boring":
             return
-        yield
+        while (yield) is not None:
+            pass
         ended.append(span.name)
 
     async with _registered(adapter):
@@ -251,23 +255,32 @@ async def test_wrap_span_opt_out_before_yield(recorder: Recorder) -> None:
 
 async def test_wrap_span_failures_isolated(recorder: Recorder) -> None:
     @ai.telemetry.wrap_span
-    async def broken_before(span: ai.telemetry.Span) -> AsyncGenerator[None]:
+    async def broken_before(
+        span: ai.telemetry.Span,
+    ) -> AsyncGenerator[None, Any]:
         raise RuntimeError("pre-yield bug")
-        yield
+        while (yield) is not None:
+            pass
 
     @ai.telemetry.wrap_span
-    async def broken_after(span: ai.telemetry.Span) -> AsyncGenerator[None]:
-        yield
-        raise RuntimeError("post-yield bug")
+    async def broken_after(
+        span: ai.telemetry.Span,
+    ) -> AsyncGenerator[None, Any]:
+        while (yield) is not None:
+            pass
+        raise RuntimeError("post-loop bug")
 
     @ai.telemetry.wrap_span
-    async def yields_twice(span: ai.telemetry.Span) -> AsyncGenerator[None]:
-        yield
-        yield
+    async def yields_after_end(
+        span: ai.telemetry.Span,
+    ) -> AsyncGenerator[None, Any]:
+        while (yield) is not None:
+            pass
+        yield  # one yield too many: span already ended
 
     async with _registered(broken_before):
         async with _registered(broken_after):
-            async with _registered(yields_twice):
+            async with _registered(yields_after_end):
                 async with ai.telemetry.span("s"):
                     pass
 
@@ -282,6 +295,114 @@ async def test_wrap_span_rejects_plain_functions() -> None:
     fn: Any = not_a_generator
     with pytest.raises(TypeError, match="async generator function"):
         ai.telemetry.wrap_span(fn)
+
+
+async def test_wrap_span_events_live_loop() -> None:
+    seen: list[str] = []
+
+    @ai.telemetry.wrap_span
+    async def adapter(span: ai.telemetry.Span) -> AsyncGenerator[None, Any]:
+        vendor = f"vendor:{span.name}"  # frame-local state
+        while (ev := (yield)) is not None:
+            # Delivered live, while the span is still open.
+            assert span.ended_at is None
+            seen.append(f"{vendor} event {ev.name}")
+        assert isinstance(span.data, ai.telemetry.CustomSpanData)
+        seen.append(f"{vendor} end a={span.data.attributes.get('a')}")
+
+    async with _registered(adapter):
+        async with ai.telemetry.span("s") as sp:
+            await sp.add_event("one")
+            await sp.add_event("two")
+            sp.set(a=1)
+
+    assert seen == [
+        "vendor:s event one",
+        "vendor:s event two",
+        "vendor:s end a=1",
+    ]
+
+
+async def test_wrap_span_error_reaches_loop() -> None:
+    seen: list[str] = []
+
+    @ai.telemetry.wrap_span
+    async def adapter(span: ai.telemetry.Span) -> AsyncGenerator[None, Any]:
+        try:
+            while (ev := (yield)) is not None:
+                seen.append(ev.name)
+        except ValueError as exc:
+            seen.append(f"error {exc}")
+            raise
+
+    async with _registered(adapter):
+        with pytest.raises(ValueError, match="boom"):
+            async with ai.telemetry.span("failing") as sp:
+                await sp.add_event("one")
+                raise ValueError("boom")
+
+    # The span's error is thrown in at the yield inside the loop.
+    assert seen == ["one", "error boom"]
+
+
+async def test_wrap_span_early_finish_opts_out(
+    recorder: Recorder,
+) -> None:
+    seen: list[str] = []
+    ended: list[str] = []
+
+    @ai.telemetry.wrap_span
+    async def adapter(span: ai.telemetry.Span) -> AsyncGenerator[None, Any]:
+        ev = yield  # handle one event, then finish
+        assert ev is not None
+        seen.append(ev.name)
+        ended.append(span.name)
+
+    async with _registered(adapter):
+        async with ai.telemetry.span("s") as sp:
+            await sp.add_event("one")
+            await sp.add_event("two")
+
+    # Finishing mid-span opted out of the rest: the second event and
+    # the span end were skipped, and nothing blew up.
+    assert seen == ["one"]
+    assert ended == ["s"]
+    assert [s.name for s in recorder.ended] == ["s"]
+
+
+async def test_wrap_span_raising_event_handler_isolated(
+    recorder: Recorder,
+) -> None:
+    @ai.telemetry.wrap_span
+    async def adapter(span: ai.telemetry.Span) -> AsyncGenerator[None, Any]:
+        while (yield) is not None:
+            raise RuntimeError("event bug")
+
+    async with _registered(adapter):
+        async with ai.telemetry.span("s") as sp:
+            await sp.add_event("one")
+            await sp.add_event("two")  # generator already dead: skipped
+
+    assert [s.name for s in recorder.ended] == ["s"]
+
+
+async def test_wrap_span_drain_loop() -> None:
+    order: list[str] = []
+
+    @ai.telemetry.wrap_span
+    async def adapter(span: ai.telemetry.Span) -> AsyncGenerator[None, Any]:
+        order.append("start")
+        while (yield) is not None:
+            pass  # a bridge that doesn't react to events drains them
+        # The events are still on the span at end, with timestamps.
+        order.append(f"end events={[e.name for e in span.span_events]}")
+
+    async with _registered(adapter):
+        async with ai.telemetry.span("s") as sp:
+            await sp.add_event("one")
+            order.append("event added")
+
+    assert order == ["start", "event added", "end events=['one']"]
 
 
 # ── span events ───────────────────────────────────────────────────

@@ -34,7 +34,9 @@ span or the adapter interface — consumers correlate the live stream via
 ``Stream.span`` instead.
 
 For bridging context-manager-shaped vendor SDKs, :func:`wrap_span`
-builds an adapter from an async generator function that yields once.
+builds an adapter from an async generator function: one frame per
+span, resumed live with each :class:`SpanEvent` as the value of
+``yield`` and with ``None`` at span end.
 """
 
 from __future__ import annotations
@@ -392,13 +394,16 @@ class WrapSpanAdapter:
     """Adapter built by :func:`wrap_span`.
 
     Holds one suspended generator per live span: the frame's locals
-    carry state from span start to span end, so context-manager-shaped
-    vendor SDKs bridge without any bookkeeping dict.
+    carry state through span start, every span event, and span end, so
+    context-manager-shaped vendor SDKs bridge without any bookkeeping
+    dict.  Each :meth:`Span.add_event` resumes the generator with the
+    :class:`SpanEvent` as the value of ``yield``; span end resumes it
+    with ``None``.
     """
 
-    def __init__(self, fn: Callable[[Span], AsyncGenerator[None]]) -> None:
+    def __init__(self, fn: Callable[[Span], AsyncGenerator[None, Any]]) -> None:
         self._fn = fn
-        self._live: dict[str, AsyncGenerator[None]] = {}
+        self._live: dict[str, AsyncGenerator[None, Any]] = {}
 
     def __repr__(self) -> str:
         return f"wrap_span({getattr(self._fn, '__qualname__', self._fn)!r})"
@@ -410,6 +415,22 @@ class WrapSpanAdapter:
         except StopAsyncIteration:
             return  # returned before yielding: opted out of this span
         self._live[span_.id] = gen
+
+    async def on_span_event(self, span_: Span, event: SpanEvent) -> None:
+        gen = self._live.get(span_.id)
+        if gen is None:  # opted out, span already ended, or start raised
+            return
+        try:
+            await gen.asend(event)
+        except StopAsyncIteration:
+            # Finished mid-span: opted out of the rest of this span,
+            # including its end.
+            del self._live[span_.id]
+        except BaseException:
+            # The generator frame is dead — don't resume it again at
+            # span end.  The error itself is logged by _dispatch.
+            del self._live[span_.id]
+            raise
 
     async def on_span_end(self, span_: Span) -> None:
         gen = self._live.pop(span_.id, None)
@@ -431,39 +452,54 @@ class WrapSpanAdapter:
                 return  # the thrown error propagated back out: expected
             raise  # the generator itself failed: logged by _dispatch
         await gen.aclose()
-        raise RuntimeError("wrap_span generator yielded more than once")
+        raise RuntimeError("wrap_span generator yielded again after span end")
 
 
-def wrap_span(fn: Callable[[Span], AsyncGenerator[None]]) -> WrapSpanAdapter:
-    """Build an adapter from an async generator function that yields once.
+def wrap_span(
+    fn: Callable[[Span], AsyncGenerator[None, Any]],
+) -> WrapSpanAdapter:
+    """Build an adapter from an async generator function.
 
     The bridge for context-manager-shaped vendor SDKs: write the
-    vendor's ``with``/``async with`` around a single ``yield``.  Code
-    before the yield runs at span start; code after it runs at span
-    end, when ``span.data`` is fully populated and ``ended_at`` is
-    set::
+    vendor's ``with``/``async with`` around one yield loop.  Code
+    before the loop runs at span start; each span event resumes the
+    yield with the :class:`SpanEvent`, live; span end resumes it with
+    ``None``, and the code after the loop runs with ``span.data``
+    fully populated and ``ended_at`` set::
 
         @wrap_span
         async def vendor(span):
             with sdk.start_span(span.name) as v:
-                yield
-                v.update(output=span.data)
+                while (ev := (yield)) is not None:   # each event, live
+                    v.log_event(ev.name, timestamp=ev.time_ns)
+                v.update(output=span.data)           # span end
 
         ai.telemetry.register(vendor)
 
+    One generator frame per live span: the frame's locals (``v``)
+    carry state through start, every event, and end.  A bridge that
+    doesn't react to events drains them — ``while (yield) is not
+    None: pass`` — they are still on ``span.span_events`` after the
+    loop, with timestamps.  (Async generators have no ``yield from``,
+    so the drain loop can't be factored out.)
+
     - A span that ends with an error is thrown into the generator at
       the ``yield``, so the vendor context manager sees the failure.
-      Use ``try/finally`` around the yield for code that must run on
+      Use ``try/finally`` around the loop for code that must run on
       both paths; catching the error only suppresses it here, never
       for the application.
     - Returning before the first ``yield`` skips that span — cheap
-      filtering by span type.
+      filtering by span type.  Returning mid-span, from inside the
+      loop, opts out of the rest of that span, including its end.
+    - The one mistake to avoid: a bare ``yield`` that ignores the sent
+      value runs the code after it on the first event, not at span
+      end.  Always loop until the yield returns ``None``.
     - Like any adapter, a generator that raises is logged and skipped;
       it never kills the run.
     """
     if not inspect.isasyncgenfunction(fn):
         raise TypeError(
             "wrap_span requires an async generator function "
-            "(`async def` containing exactly one bare `yield`)"
+            "(`async def` containing a `yield` loop)"
         )
     return WrapSpanAdapter(fn)
