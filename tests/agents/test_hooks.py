@@ -248,6 +248,46 @@ async def test_live_hook_span(recorder: Recorder) -> None:
     assert isinstance(hook_span.data, ai.telemetry.HookSpanData)
     assert hook_span.data.status == "resolved"
     assert not hook_span.replay
+    # The suspension's timeline: pending once resolvers can see it,
+    # resolved when the external input arrived.
+    pending, resolved = hook_span.span_events
+    assert pending.name == ai.telemetry.HOOK_PENDING
+    assert resolved.name == ai.telemetry.HOOK_RESOLVED
+    assert pending.time_ns <= resolved.time_ns
+
+
+async def test_cancelled_hook_span(recorder: Recorder) -> None:
+    class _CancelHookAgent(ai.Agent):
+        label = "cancel_span"
+
+        async def loop(
+            self, context: ai.Context
+        ) -> AsyncGenerator[agent_events_.AgentEvent]:
+            async with ai.models.stream(context=context) as stream:
+                async for event in stream:
+                    yield event
+            try:
+                await ai.hook(self.label, payload=Confirmation)
+            except asyncio.CancelledError:
+                pass
+
+    mock_llm([[text_msg("OK")]])
+    my_agent = _CancelHookAgent()
+    async with my_agent.run(MOCK_MODEL, [ai.user_message("go")]) as stream:
+        async for event in stream:
+            if (
+                isinstance(event, agent_events_.HookEvent)
+                and event.hook.status == "pending"
+            ):
+                await ai.cancel_hook(my_agent.label, reason="denied")
+
+    (hook_span,) = _hook_spans(recorder)
+    assert isinstance(hook_span.data, ai.telemetry.HookSpanData)
+    assert hook_span.data.status == "cancelled"
+    pending, cancelled = hook_span.span_events
+    assert pending.name == ai.telemetry.HOOK_PENDING
+    assert cancelled.name == ai.telemetry.HOOK_CANCELLED
+    assert cancelled.attributes == {"reason": "denied"}
 
 
 async def test_pre_registered_hook_is_replay_span(recorder: Recorder) -> None:
@@ -262,3 +302,5 @@ async def test_pre_registered_hook_is_replay_span(recorder: Recorder) -> None:
     assert hook_span.replay
     assert isinstance(hook_span.data, ai.telemetry.HookSpanData)
     assert hook_span.data.status == "resolved"
+    # A replayed suspension gets no synthetic timeline.
+    assert hook_span.span_events == []

@@ -1,9 +1,10 @@
-"""Core span API: nesting, errors, adapters, replay."""
+"""Core span API: nesting, errors, adapters, replay, span events."""
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -281,3 +282,95 @@ async def test_wrap_span_rejects_plain_functions() -> None:
     fn: Any = not_a_generator
     with pytest.raises(TypeError, match="async generator function"):
         ai.telemetry.wrap_span(fn)
+
+
+# ── span events ───────────────────────────────────────────────────
+
+
+async def test_add_event_appends_stamps_and_returns() -> None:
+    async with ai.telemetry.span("s") as sp:
+        first = await sp.add_event("first", a=1)
+        second = await sp.add_event("second")
+
+    assert sp.span_events == [first, second]
+    assert isinstance(first, ai.telemetry.SpanEvent)
+    assert first.name == "first"
+    assert first.attributes == {"a": 1}
+    assert second.attributes == {}
+    # Wall-clock stamps, appended in call order.
+    assert sp.started_at <= first.time_ns <= second.time_ns
+    assert sp.ended_at is not None
+    assert second.time_ns <= sp.ended_at
+
+
+async def test_span_event_dispatched_live_sync_and_async(
+    recorder: Recorder,
+) -> None:
+    seen: list[tuple[str, str, bool]] = []
+
+    class SyncAdapter:
+        def on_span_event(
+            self, span: ai.telemetry.Span, event: ai.telemetry.SpanEvent
+        ) -> None:
+            seen.append(("sync", event.name, span.ended_at is None))
+
+    class AsyncAdapter:
+        async def on_span_event(
+            self, span: ai.telemetry.Span, event: ai.telemetry.SpanEvent
+        ) -> None:
+            seen.append(("async", event.name, span.ended_at is None))
+
+    async with _registered(SyncAdapter()), _registered(AsyncAdapter()):
+        async with ai.telemetry.span("s") as sp:
+            await sp.add_event("milestone")
+
+    # Both handlers saw the event while the span was still live; the
+    # recorder (no on_span_event) was skipped without error.
+    assert seen == [
+        ("sync", "milestone", True),
+        ("async", "milestone", True),
+    ]
+    assert [s.name for s in recorder.ended] == ["s"]
+
+
+async def test_span_event_raising_handler_isolated(
+    recorder: Recorder,
+) -> None:
+    seen: list[str] = []
+
+    class Broken:
+        def on_span_event(
+            self, span: ai.telemetry.Span, event: ai.telemetry.SpanEvent
+        ) -> None:
+            raise RuntimeError("adapter bug")
+
+    class Fine:
+        def on_span_event(
+            self, span: ai.telemetry.Span, event: ai.telemetry.SpanEvent
+        ) -> None:
+            seen.append(event.name)
+
+    # Broken registers first: it must not stop dispatch to Fine.
+    async with _registered(Broken()), _registered(Fine()):
+        async with ai.telemetry.span("s") as sp:
+            event = await sp.add_event("milestone")
+
+    assert seen == ["milestone"]
+    assert sp.span_events == [event]
+    assert [s.name for s in recorder.ended] == ["s"]
+
+
+async def test_add_event_after_end_warns_and_appends(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    async with ai.telemetry.span("s") as sp:
+        pass
+    assert sp.ended_at is not None
+
+    with caplog.at_level(logging.WARNING, logger="ai.telemetry.span"):
+        late = await sp.add_event("late")
+
+    assert sp.span_events == [late]
+    assert any(
+        "already-ended" in record.getMessage() for record in caplog.records
+    )

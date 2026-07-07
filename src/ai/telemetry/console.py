@@ -53,7 +53,15 @@ def _label(sp: telemetry.Span) -> str:
 
 
 def _line(sp: telemetry.Span) -> str:
-    duration = ((sp.ended_at or sp.started_at) - sp.started_at) / 1e9
+    end = sp.ended_at or sp.started_at
+    # A span's lifetime can extend past the response (tool dispatch
+    # while the stream is open); when the milestone is there, report
+    # the true response latency instead.
+    for ev in sp.span_events:
+        if ev.name == telemetry.RESPONSE_COMPLETE:
+            end = ev.time_ns
+            break
+    duration = (end - sp.started_at) / 1e9
     replay = "↻ " if sp.replay else ""
     error = (
         f"  ✗ {type(sp.error).__name__}: {_short(str(sp.error))}"
@@ -78,6 +86,17 @@ class ConsoleAdapter:
         self._depth[span.id] = depth
         replay = "↻ " if span.replay else ""
         self._out.write(f"▸ {'  ' * depth}{replay}{_label(span)}\n")
+
+    def on_span_event(
+        self, span: telemetry.Span, event: telemetry.SpanEvent
+    ) -> None:
+        depth = self._depth.get(span.id, 0) + 1
+        offset_ms = (event.time_ns - span.started_at) / 1e6
+        attrs = ", ".join(f"{k}={v!r}" for k, v in event.attributes.items())
+        suffix = f" ({_short(attrs)})" if attrs else ""
+        self._out.write(
+            f"· {'  ' * depth}{event.name} +{offset_ms:.0f}ms{suffix}\n"
+        )
 
     def on_span_end(self, span: telemetry.Span) -> None:
         self._ended.setdefault(span.trace_id, []).append(span)

@@ -139,7 +139,7 @@ async def _hook_impl(call: middleware_.HookContext) -> pydantic.BaseModel:
 
     # No resolution available — suspend.  The span covers the whole
     # suspension: how long the run sat waiting on external input.
-    async with telemetry.span(data):
+    async with telemetry.span(data) as sp:
         future: asyncio.Future[dict[str, Any]] = asyncio.Future()
 
         _live_hooks[label] = (future, hook_metadata, rt)
@@ -155,17 +155,24 @@ async def _hook_impl(call: middleware_.HookContext) -> pydantic.BaseModel:
         )
 
         await rt.put_hook(hook_part)
+        await sp.add_event(telemetry.HOOK_PENDING)
 
         # Await resolution — may be resolved externally or cancelled.
         try:
             resolution = await future
-        except asyncio.CancelledError:
+        except asyncio.CancelledError as exc:
             data.status = "cancelled"
+            # ``cancel_hook(reason=...)`` rides on the CancelledError.
+            attrs: dict[str, Any] = {}
+            if exc.args and exc.args[0] is not None:
+                attrs["reason"] = exc.args[0]
+            await sp.add_event(telemetry.HOOK_CANCELLED, **attrs)
             raise
 
         # Clean up live registry.
         _live_hooks.pop(label, None)
         data.status = "resolved"
+        await sp.add_event(telemetry.HOOK_RESOLVED)
 
         # Emit resolved signal.
         await rt.put_hook(

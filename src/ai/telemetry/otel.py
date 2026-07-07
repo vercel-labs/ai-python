@@ -144,6 +144,17 @@ def install(
                 otel_context.detach(token)
             for key, value in _attributes(span).items():
                 otel_span.set_attribute(key, value)
+            for ev in span.span_events:
+                otel_span.add_event(
+                    ev.name,
+                    {
+                        k: v
+                        if isinstance(v, str | bool | int | float)
+                        else repr(v)
+                        for k, v in ev.attributes.items()
+                    },
+                    timestamp=ev.time_ns,
+                )
             if span.error is not None:
                 if isinstance(span.error, Exception):
                     otel_span.record_exception(span.error)

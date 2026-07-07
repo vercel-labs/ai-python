@@ -13,17 +13,25 @@ block (a context variable), so anything opened inside — by the user or
 by the framework — becomes a child.  This works across tasks because
 task creation copies context.
 
-An adapter is something that receives spans.  Two methods, both
+An adapter is something that receives spans.  Three methods, all
 optional, each may be sync or async::
 
     class MyAdapter:
-        def on_span_start(self, span): ...   # live view of long runs
-        def on_span_end(self, span): ...     # the main one
+        def on_span_start(self, span): ...          # live view of long runs
+        def on_span_end(self, span): ...            # the main one
+        def on_span_event(self, span, event): ...   # milestones, live
 
     ai.telemetry.register(MyAdapter())
 
 Adapters dispatch on the type of ``span.data``.  An adapter that raises
 is logged and skipped — it never kills the run.
+
+A :class:`SpanEvent` is a named, timestamped milestone inside a span's
+lifetime (``first_token``, ``hook_resolved``, ...), recorded with
+:meth:`Span.add_event`.  ``span_events`` holds bounded milestones only:
+high-frequency stream data (:mod:`ai.types.events`) never lands on the
+span or the adapter interface — consumers correlate the live stream via
+``Stream.span`` instead.
 
 For bridging context-manager-shaped vendor SDKs, :func:`wrap_span`
 builds an adapter from an async generator function that yields once.
@@ -160,6 +168,27 @@ class CustomSpanData:
     span_name: ClassVar[str] = "custom"
 
 
+# ── Span events ───────────────────────────────────────────────────
+#
+# Well-known milestone names.  Module-level constants so producers,
+# adapters, and tests share one spelling.
+
+FIRST_TOKEN = "first_token"
+RESPONSE_COMPLETE = "response_complete"
+HOOK_PENDING = "hook_pending"
+HOOK_RESOLVED = "hook_resolved"
+HOOK_CANCELLED = "hook_cancelled"
+
+
+@dataclasses.dataclass
+class SpanEvent:
+    """A named, timestamped milestone inside a span's lifetime."""
+
+    name: str
+    time_ns: int
+    attributes: dict[str, Any]
+
+
 # ── The span ──────────────────────────────────────────────────────
 
 
@@ -178,7 +207,9 @@ class Span:
     them on the other side.
 
     ``schema_version`` tracks the shape of spans and their data types;
-    it is bumped on breaking changes so adapters can detect them.
+    it is bumped on breaking changes only — additive fields (a new data
+    type, a new field with a default) don't count — so adapters can
+    detect changes they must adapt to.
     """
 
     name: str
@@ -191,6 +222,7 @@ class Span:
     error: BaseException | None = None
     replay: bool = False
     set_as_current: bool = True
+    span_events: list[SpanEvent] = dataclasses.field(default_factory=list)
 
     schema_version: ClassVar[int] = 1
 
@@ -202,6 +234,35 @@ class Span:
                 "typed data — assign its fields directly"
             )
         self.data.attributes.update(attributes)
+
+    async def add_event(self, name: str, **attributes: Any) -> SpanEvent:
+        """Record a milestone on this span and dispatch it to adapters.
+
+        Stamps the current time, appends to ``span_events``, and
+        dispatches ``on_span_event(span, event)`` to every adapter with
+        the usual isolation (a raising adapter is logged and skipped).
+
+        Milestones only: ``span_events`` is for a bounded number of
+        named points per span, never per-chunk stream data.
+
+        Ordering: events on one span are appended in wall-clock order
+        (the order ``add_event`` was called in); there is no ordering
+        guarantee across spans.
+
+        Adding an event to a span that already ended logs a warning
+        but still records and dispatches the event — a late milestone
+        is better reported late than dropped.
+        """
+        event = SpanEvent(
+            name=name, time_ns=time.time_ns(), attributes=dict(attributes)
+        )
+        if self.ended_at is not None:
+            logger.warning(
+                "span event %r added to already-ended span %r", name, self.name
+            )
+        self.span_events.append(event)
+        await _dispatch("on_span_event", self, event)
+        return event
 
 
 # ── Current span + adapter registry ───────────────────────────────
@@ -228,13 +289,13 @@ def unregister(adapter: Any) -> None:
     _adapters.remove(adapter)
 
 
-async def _dispatch(method: str, span_: Span) -> None:
+async def _dispatch(method: str, span_: Span, *args: Any) -> None:
     for adapter in list(_adapters):
         fn = getattr(adapter, method, None)
         if fn is None:
             continue
         try:
-            result = fn(span_)
+            result = fn(span_, *args)
             if inspect.isawaitable(result):
                 await result
         except Exception:

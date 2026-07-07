@@ -77,6 +77,42 @@ async def test_error_status(
     assert "exception" in events
 
 
+async def test_span_events_exported_with_original_timestamps(
+    otel_env: tuple[InMemorySpanExporter, TracerProvider],
+) -> None:
+    exporter, _ = otel_env
+    marker = object()
+    async with ai.telemetry.span("s") as sp:
+        first = await sp.add_event("first_token", event_type="TextStart")
+        second = await sp.add_event("custom", obj=marker)
+
+    (span,) = exporter.get_finished_spans()
+    events = {e.name: e for e in span.events}
+    assert events["first_token"].timestamp == first.time_ns
+    assert events["custom"].timestamp == second.time_ns
+    assert events["first_token"].attributes is not None
+    assert events["first_token"].attributes["event_type"] == "TextStart"
+    # Non-primitive attribute values are sanitized to their repr.
+    assert events["custom"].attributes is not None
+    assert events["custom"].attributes["obj"] == repr(marker)
+
+
+async def test_stream_milestones_exported(
+    otel_env: tuple[InMemorySpanExporter, TracerProvider],
+) -> None:
+    exporter, _ = otel_env
+    mock_llm([[text_msg("hello")]])
+    async with ai.stream(MOCK_MODEL, [ai.user_message("hi")]) as stream:
+        async for _ in stream:
+            pass
+
+    (span,) = exporter.get_finished_spans()
+    assert [e.name for e in span.events] == [
+        "first_token",
+        "response_complete",
+    ]
+
+
 async def test_raw_otel_span_nests_under_ours(
     otel_env: tuple[InMemorySpanExporter, TracerProvider],
 ) -> None:
