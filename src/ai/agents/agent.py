@@ -714,11 +714,15 @@ class BoundToolCall:
 
         data.args = base_kwargs
         chain = middleware_._build_tool_chain(_real)
-        async with telemetry.span(data):
+        async with telemetry.span(data) as sp:
             res = await chain(call)
             if res.results:
                 data.result = res.results[0].result
                 data.is_error = any(p.is_error for p in res.results)
+            # A tool exception is caught and converted to an error
+            # result before it reaches this block, so it never hits the
+            # span's own except path — thread it through explicitly.
+            sp.error = res.exception
             return res
 
 

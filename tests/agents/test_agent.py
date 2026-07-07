@@ -79,7 +79,8 @@ async def test_tool_error_marked_on_span(recorder: Recorder) -> None:
 
     (tool_span,) = _by_name(recorder)["tool_execution"]
     assert isinstance(tool_span.data, ai.telemetry.ToolExecutionSpanData)
-    # The framework converts the exception into an error result, so the
-    # span itself succeeded but carries the error marker.
-    assert tool_span.error is None
+    # The framework converts the exception into an error result (the
+    # run keeps going), but the real exception is threaded onto the span.
+    assert isinstance(tool_span.error, ValueError)
+    assert str(tool_span.error) == "nope"
     assert tool_span.data.is_error

@@ -14,7 +14,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
 import ai
 from ai.telemetry import otel
 
-from ..conftest import MOCK_MODEL, mock_llm, text_msg
+from ..conftest import MOCK_MODEL, mock_llm, text_msg, tool_call_msg
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -75,6 +75,38 @@ async def test_error_status(
     assert not span.status.is_ok
     events = [e.name for e in span.events]
     assert "exception" in events
+
+
+async def test_tool_exception_recorded(
+    otel_env: tuple[InMemorySpanExporter, TracerProvider],
+) -> None:
+    exporter, _ = otel_env
+
+    @ai.tool
+    async def boom() -> str:
+        """Tool that always fails."""
+        raise ValueError("nope")
+
+    mock_llm([[tool_call_msg(name="boom")], [text_msg("done")]])
+    my_agent = ai.agent(tools=[boom])
+    async with my_agent.run(MOCK_MODEL, [ai.user_message("go")]) as stream:
+        async for _ in stream:
+            pass
+
+    (span,) = [
+        s
+        for s in exporter.get_finished_spans()
+        if s.name == "execute_tool boom"
+    ]
+    # The tool exception is caught by the framework, but the span still
+    # records it: ERROR status plus a standard otel exception event.
+    assert not span.status.is_ok
+    events = {e.name: e for e in span.events}
+    assert "exception" in events
+    attrs = events["exception"].attributes
+    assert attrs is not None
+    assert attrs["exception.type"] == "ValueError"
+    assert attrs["exception.message"] == "nope"
 
 
 async def test_span_events_exported_with_original_timestamps(
