@@ -148,14 +148,6 @@ class FileEvent(BaseEvent):
     kind: Literal["file"] = "file"
 
 
-class HookSuspension(BaseEvent):
-    kind: Literal["hook_suspension"] = "hook_suspension"
-
-
-class HookResolution(BaseEvent):
-    kind: Literal["hook_resolution"] = "hook_resolution"
-
-
 Event = (
     StreamStart
     | StreamEnd
@@ -173,8 +165,6 @@ Event = (
     | BuiltinToolEnd
     | BuiltinToolResult
     | FileEvent
-    | HookSuspension
-    | HookResolution
 )
 
 DiscriminatedEvent = Annotated[
