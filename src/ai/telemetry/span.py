@@ -24,6 +24,9 @@ optional, each may be sync or async::
 
 Adapters dispatch on the type of ``span.data``.  An adapter that raises
 is logged and skipped — it never kills the run.
+
+For bridging context-manager-shaped vendor SDKs, :func:`wrap_span`
+builds an adapter from an async generator function that yields once.
 """
 
 from __future__ import annotations
@@ -324,7 +327,7 @@ async def span(
 # ── wrap_span: one generator frame per span ───────────────────────
 
 
-class _WrapSpanAdapter:
+class WrapSpanAdapter:
     """Adapter built by :func:`wrap_span`.
 
     Holds one suspended generator per live span: the frame's locals
@@ -370,7 +373,7 @@ class _WrapSpanAdapter:
         raise RuntimeError("wrap_span generator yielded more than once")
 
 
-def wrap_span(fn: Callable[[Span], AsyncGenerator[None]]) -> _WrapSpanAdapter:
+def wrap_span(fn: Callable[[Span], AsyncGenerator[None]]) -> WrapSpanAdapter:
     """Build an adapter from an async generator function that yields once.
 
     The bridge for context-manager-shaped vendor SDKs: write the
@@ -402,4 +405,4 @@ def wrap_span(fn: Callable[[Span], AsyncGenerator[None]]) -> _WrapSpanAdapter:
             "wrap_span requires an async generator function "
             "(`async def` containing exactly one bare `yield`)"
         )
-    return _WrapSpanAdapter(fn)
+    return WrapSpanAdapter(fn)

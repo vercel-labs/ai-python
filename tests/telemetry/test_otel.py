@@ -92,6 +92,32 @@ async def test_raw_otel_span_nests_under_ours(
     assert raw.parent.span_id == outer.context.span_id
 
 
+async def test_non_current_span_not_attached_to_otel_context(
+    otel_env: tuple[InMemorySpanExporter, TracerProvider],
+) -> None:
+    exporter, provider = otel_env
+    tracer = provider.get_tracer("test")
+    async with ai.telemetry.span("outer"):
+        async with ai.telemetry.span("overlapping", set_as_current=False):
+            # A raw otel span opened while the non-current span is
+            # open parents like our own spans do: under the outer
+            # span, not under the overlapping one.
+            with tracer.start_as_current_span("raw"):
+                pass
+
+    spans = {s.name: s for s in exporter.get_finished_spans()}
+    outer, overlapping, raw = (
+        spans["outer"],
+        spans["overlapping"],
+        spans["raw"],
+    )
+    assert raw.parent is not None
+    assert raw.parent.span_id == outer.context.span_id
+    # The overlapping span itself still parents exactly (via ids).
+    assert overlapping.parent is not None
+    assert overlapping.parent.span_id == outer.context.span_id
+
+
 async def test_our_root_nests_under_raw_otel_span(
     otel_env: tuple[InMemorySpanExporter, TracerProvider],
 ) -> None:

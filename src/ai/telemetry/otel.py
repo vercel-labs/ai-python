@@ -9,10 +9,12 @@ Span names and attributes follow the ``gen_ai`` semantic conventions,
 so LLM-aware viewers (Phoenix, Braintrust, Langfuse, Datadog, ...)
 render them natively.
 
-The adapter also attaches each otel span to the otel context in the
-task that opened it, so raw otel spans a user creates inside a tool
-still parent correctly under ours — and our root spans nest under any
-raw otel span the caller already has open.
+The adapter also attaches each current-setting otel span to the otel
+context in the task that opened it, so raw otel spans a user creates
+inside a tool still parent correctly under ours — and our root spans
+nest under any raw otel span the caller already has open.  Spans
+opened with ``set_as_current=False`` are never attached: they don't
+parent concurrent work in our tree, so they must not do it in otel's.
 """
 
 from __future__ import annotations
@@ -33,6 +35,8 @@ except ModuleNotFoundError as exc:  # pragma: no cover
     ) from exc
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
+
     from ..types import messages as messages_
 
 
@@ -109,51 +113,44 @@ def _attributes(sp: telemetry.Span) -> dict[str, Any]:
     return attrs
 
 
-class OtelAdapter:
-    """Bridge: one otel span per ai span, exact parenting across tasks."""
-
-    def __init__(self, tracer: otel_trace.Tracer) -> None:
-        self._tracer = tracer
-        # ai span id -> (otel span, token from otel_context.attach()).
-        self._live: dict[str, tuple[otel_trace.Span, Any]] = {}
-
-    def on_span_start(self, span: telemetry.Span) -> None:
-        context = None
-        if span.parent_id is not None:
-            parent = self._live.get(span.parent_id)
-            if parent is not None:
-                context = otel_trace.set_span_in_context(parent[0])
-        # context=None falls back to the current otel context, so our
-        # root nests under any raw otel span the caller has open.
-        otel_span = self._tracer.start_span(
-            _name(span), context=context, start_time=span.started_at
-        )
-        token = otel_context.attach(otel_trace.set_span_in_context(otel_span))
-        self._live[span.id] = (otel_span, token)
-
-    def on_span_end(self, span: telemetry.Span) -> None:
-        entry = self._live.pop(span.id, None)
-        if entry is None:
-            return
-        otel_span, token = entry
-        otel_context.detach(token)
-        for key, value in _attributes(span).items():
-            otel_span.set_attribute(key, value)
-        if span.error is not None:
-            if isinstance(span.error, Exception):
-                otel_span.record_exception(span.error)
-            otel_span.set_status(otel_trace.StatusCode.ERROR, str(span.error))
-        otel_span.end(end_time=span.ended_at)
-
-
 def install(
     *, tracer_provider: otel_trace.TracerProvider | None = None
-) -> OtelAdapter:
-    """Create an :class:`OtelAdapter`, register it, and return it.
+) -> telemetry.WrapSpanAdapter:
+    """Create the otel adapter, register it, and return it.
 
     Uses the global tracer provider unless one is passed.
     """
     tracer = otel_trace.get_tracer("ai", tracer_provider=tracer_provider)
-    adapter = OtelAdapter(tracer)
-    telemetry.register(adapter)
-    return adapter
+
+    @telemetry.wrap_span
+    async def otel_spans(span: telemetry.Span) -> AsyncGenerator[None]:
+        # Parenting is ambient: the current otel context holds the
+        # parent (ours attach below; a raw otel span the caller has
+        # open works the same way), and it mirrors the framework's
+        # parenting because only current-setting spans attach.
+        otel_span = tracer.start_span(_name(span), start_time=span.started_at)
+        # Mirror the framework's currentness: a set_as_current=False
+        # span doesn't parent concurrent work in our tree, so it must
+        # not become current in the otel context either.
+        token = (
+            otel_context.attach(otel_trace.set_span_in_context(otel_span))
+            if span.set_as_current
+            else None
+        )
+        try:
+            yield
+        finally:
+            if token is not None:
+                otel_context.detach(token)
+            for key, value in _attributes(span).items():
+                otel_span.set_attribute(key, value)
+            if span.error is not None:
+                if isinstance(span.error, Exception):
+                    otel_span.record_exception(span.error)
+                otel_span.set_status(
+                    otel_trace.StatusCode.ERROR, str(span.error)
+                )
+            otel_span.end(end_time=span.ended_at)
+
+    telemetry.register(otel_spans)
+    return otel_spans
