@@ -24,9 +24,16 @@ class ApprovalResponse(NamedTuple):
 
 
 def tool_call_id_for(hook_part: messages_.HookPart[Any]) -> str | None:
-    """Return the tool_call_id encoded in a ToolApproval hook id, or None."""
+    """Return the tool call a ToolApproval hook suspends, or None.
+
+    Prefers the first-class ``tool_call_id`` field; falls back to
+    parsing the legacy ``approve_<tool_call_id>`` label for hook parts
+    serialized before the field existed.
+    """
     if hook_part.hook_type != TOOL_APPROVAL_HOOK_TYPE:
         return None
+    if hook_part.tool_call_id is not None:
+        return hook_part.tool_call_id
     if hook_part.hook_id.startswith(_PREFIX):
         return hook_part.hook_id[len(_PREFIX) :]
     return None
@@ -52,6 +59,7 @@ def hook_part_from_tool_part(tp: ToolPart) -> messages_.HookPart[Any] | None:
             hook_type=TOOL_APPROVAL_HOOK_TYPE,
             status="pending",
             metadata=metadata,
+            tool_call_id=tp.tool_call_id,
         )
 
     if tp.state == "approval-responded" and approval.approved is not None:
@@ -64,6 +72,7 @@ def hook_part_from_tool_part(tp: ToolPart) -> messages_.HookPart[Any] | None:
                 "granted": approval.approved,
                 "reason": approval.reason,
             },
+            tool_call_id=tp.tool_call_id,
         )
 
     if tp.state == "output-denied":
@@ -76,6 +85,7 @@ def hook_part_from_tool_part(tp: ToolPart) -> messages_.HookPart[Any] | None:
                 "granted": False,
                 "reason": approval.reason,
             },
+            tool_call_id=tp.tool_call_id,
         )
 
     return None

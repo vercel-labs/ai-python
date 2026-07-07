@@ -607,6 +607,10 @@ async def to_stream(
             case events_.HookEvent():
                 for ui_event in state.on_hook(event):
                     yield ui_event
+            case events_.RunBlocked():
+                # No AI SDK UI equivalent; hook parts already carry the
+                # pending-approval state the UI renders.
+                pass
             case _:
                 for ui_event in state.on_event(event):
                     yield ui_event

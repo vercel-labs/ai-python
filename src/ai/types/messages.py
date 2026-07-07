@@ -419,6 +419,13 @@ class HookPart[T](pydantic.BaseModel):
     status: Literal["pending", "resolved", "cancelled"]
     metadata: dict[str, Any] = pydantic.Field(default_factory=dict)
     resolution: T | None = None
+    tool_call_id: str | None = None
+    """The tool call this hook suspends, if any.
+
+    Set via ``ai.hook(..., tool_call_id=...)``; approval gating sets it
+    automatically.  Lets consumers attribute a hook to its tool call
+    (e.g. run-blocked tracking, UI rendering) without parsing labels.
+    """
 
     kind: Literal["hook"] = "hook"
     model_config = pydantic.ConfigDict(frozen=True)

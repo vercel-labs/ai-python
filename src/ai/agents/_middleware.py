@@ -97,6 +97,7 @@ class HookContext:
     label: str
     payload: type[pydantic.BaseModel]
     metadata: dict[str, Any]
+    tool_call_id: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "metadata", dict(self.metadata))

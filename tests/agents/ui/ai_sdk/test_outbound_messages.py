@@ -600,3 +600,66 @@ def test_duplicate_tool_copies_do_not_reach_model_integrity() -> None:
     next_request_history, _ = ai_sdk.to_messages(reloaded_ui)
 
     integrity.prepare_messages(next_request_history)
+
+
+def _parked_turn(*, hook_id: str, tool_call_id: str) -> list[messages_.Message]:
+    """History as a run parked on a gated tool records it."""
+    return [
+        messages_.Message(
+            id="assistant-1",
+            turn_id="turn-1",
+            role="assistant",
+            parts=[
+                messages_.ToolCallPart(
+                    id="call-1",
+                    tool_call_id=tool_call_id,
+                    tool_name="bash",
+                    tool_args='{"command": "ls"}',
+                )
+            ],
+        ),
+        messages_.Message(
+            id="hook-1",
+            turn_id="turn-1",
+            role="internal",
+            parts=[
+                messages_.HookPart(
+                    id="part-1",
+                    hook_id=hook_id,
+                    hook_type="ToolApproval",
+                    status="pending",
+                    metadata={"tool": "bash", "kwargs": {"command": "ls"}},
+                    tool_call_id=tool_call_id,
+                )
+            ],
+        ),
+    ]
+
+
+def test_pending_approval_hook_roundtrips_tool_call_id() -> None:
+    # Both the conventional approve_<id> label and a custom label must
+    # survive: the approval rides the UI tool part via the hook's
+    # tool_call_id field, and inbound reconstruction restores it.
+    for hook_id in ("approve_tc-1", "my_custom_gate"):
+        ui = ai_sdk.to_ui_messages(
+            _parked_turn(hook_id=hook_id, tool_call_id="tc-1")
+        )
+        [tool_part] = [
+            p
+            for m in ui
+            for p in m.parts
+            if isinstance(p, UIToolPart | UIDynamicToolPart)
+        ]
+        assert tool_part.state == "approval-requested"
+
+        back, approval_responses = ai_sdk.to_messages(ui)
+        assert approval_responses == []
+        [hook] = [
+            p
+            for m in back
+            for p in m.parts
+            if isinstance(p, messages_.HookPart)
+        ]
+        assert hook.hook_id == hook_id
+        assert hook.status == "pending"
+        assert hook.tool_call_id == "tc-1"

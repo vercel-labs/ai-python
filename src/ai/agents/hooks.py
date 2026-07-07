@@ -86,6 +86,7 @@ async def hook[T: pydantic.BaseModel](
     *,
     payload: type[T],
     metadata: dict[str, Any] | None = None,
+    tool_call_id: str | None = None,
 ) -> T:
     """Create a hook suspension point and await its resolution.
 
@@ -97,12 +98,18 @@ async def hook[T: pydantic.BaseModel](
         metadata: Arbitrary metadata surfaced in the pending signal message
             and checkpoint.  Useful for UI rendering (e.g. which tool needs
             approval, what arguments it received).
+        tool_call_id: The tool call this hook suspends, if any.  Stamped
+            onto the emitted :class:`~ai.messages.HookPart` so consumers
+            (run-blocked tracking, UIs) can attribute the suspension to
+            its tool call.  Approval gating sets this automatically;
+            custom gating wrappers should pass it too.
 
     """
     call = middleware_.HookContext(
         label=_label(hook),
         payload=payload,
         metadata=metadata or {},
+        tool_call_id=tool_call_id,
     )
 
     chain = middleware_._build_hook_chain(_hook_impl)
@@ -136,6 +143,7 @@ async def _hook_impl(call: middleware_.HookContext) -> pydantic.BaseModel:
         hook_type=payload.__name__,
         status="pending",
         metadata=hook_metadata,
+        tool_call_id=call.tool_call_id,
     )
 
     await rt.put_hook(hook_part)
@@ -154,6 +162,7 @@ async def _hook_impl(call: middleware_.HookContext) -> pydantic.BaseModel:
             status="resolved",
             metadata=hook_metadata,
             resolution=resolution,
+            tool_call_id=call.tool_call_id,
         )
     )
 
