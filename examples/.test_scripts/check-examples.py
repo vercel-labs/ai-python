@@ -12,28 +12,44 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent.parent
 MYPY_VERSION = "mypy>=1.11"
+_EXAMPLES_DIR = REPO / "examples"
 
-_SAMPLE_FILES = sorted(p.name for p in (REPO / "examples").glob("*.py"))
+_SAMPLE_FILES = sorted(
+    str(p.relative_to(_EXAMPLES_DIR))
+    for p in _EXAMPLES_DIR.rglob("*.py")
+    if ".test_scripts" not in p.parts
+    and p.relative_to(_EXAMPLES_DIR).parts[:1] != ("apps",)
+)
 
 # Each entry: (display name, directory to check, extra --with deps, targets)
 EXAMPLES: list[tuple[str, Path, list[str], list[str]]] = [
-    ("samples", REPO / "examples", [], _SAMPLE_FILES),
+    ("samples", _EXAMPLES_DIR, [], _SAMPLE_FILES),
     (
-        "fastapi-vite/backend",
-        REPO / "examples" / "fastapi-vite" / "backend",
+        "web_agent/backend",
+        _EXAMPLES_DIR / "apps" / "web_agent" / "backend",
         ["fastapi"],
         ["."],
     ),
     (
-        "multiagent-textual",
-        REPO / "examples" / "multiagent-textual",
-        ["fastapi", "textual", "websockets"],
+        "durable_agent_temporal",
+        _EXAMPLES_DIR / "apps" / "durable_agent_temporal",
+        ["temporalio"],
         ["."],
     ),
     (
-        "temporal-direct",
-        REPO / "examples" / "temporal-direct",
-        ["temporalio"],
+        "durable_agent_workflows/backend",
+        _EXAMPLES_DIR / "apps" / "durable_agent_workflows" / "backend",
+        [
+            "fastapi",
+            "vercel @ git+https://github.com/vercel/vercel-py@47d881242e35b18dcbc7d58b7018e1188894f332",
+            "vercel-workers>=0.0.22",
+        ],
+        ["."],
+    ),
+    (
+        "slack_agent",
+        _EXAMPLES_DIR / "apps" / "slack_agent",
+        ["slack-bolt>=1.29", "aiohttp"],
         ["."],
     ),
 ]

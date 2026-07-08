@@ -8,7 +8,7 @@ Usage (from repo root):
     uv run examples/.test_scripts/run-examples.py --e2e  # also e2e test scripts
     uv run examples/.test_scripts/run-examples.py --all  # everything
     uv run examples/.test_scripts/run-examples.py --parallel  # in parallel
-    uv run examples/.test_scripts/run-examples.py stream.py tools_schema.py
+    uv run examples/.test_scripts/run-examples.py models/stream.py
         # run selected example files
     uv run examples/.test_scripts/run-examples.py --model MODEL
         # patch ai.get_model() to use the given model for every sample
@@ -40,85 +40,56 @@ class Sample:
 
 
 TEXT_SAMPLES = [
-    Sample("stream.py"),
-    Sample("stream_all.py"),
-    Sample("tools_schema.py"),
-    Sample("agent_simple.py"),
-    Sample("agent_custom_loop.py"),
-    Sample("agent_nested.py"),
-    Sample("streaming_tool.py"),
-    Sample("openai_chat_completions.py"),
-    Sample("explicit_client.py"),
-    Sample("multimodal_input.py"),
-    Sample("check_connection.py"),
-    Sample("agent_hooks.py", stdin="y\n"),
-    Sample("agent_hooks_inline.py", stdin="y\n"),
-    Sample("agent_hooks_serverless.py"),
-    Sample("mcp_tools.py"),
-    Sample("builtin_web_search.py"),
+    Sample("models/stream.py"),
+    Sample("models/gateway/stream.py"),
+    Sample("models/anthropic/stream.py"),
+    Sample("models/openai/stream.py"),
+    Sample("agents/basic.py"),
+    Sample("agents/custom_loop.py"),
+    Sample("agents/subagent.py"),
+    Sample("agents/streaming_tool.py"),
+    Sample("models/openai/openai_chat_completions.py"),
+    Sample("models/openai/explicit_client.py"),
+    Sample("media/multimodal_input.py"),
+    Sample("models/check_connection.py"),
+    Sample("agents/tool_approval.py"),
+    Sample("agents/custom_hook.py"),
+    Sample("agents/mcp_tools.py"),
+    Sample("models/anthropic/builtin_web_search.py"),
+    Sample("models/structured_output.py"),
 ]
 
 IMAGE_SAMPLES = [
-    Sample("image_generation.py"),
-    Sample("image_edit.py"),
-    Sample("inline_image.py"),
+    Sample("media/image_generation.py"),
+    Sample("media/image_edit.py"),
+    Sample("media/inline_image.py"),
 ]
 
 VIDEO_SAMPLES = [
-    Sample("video_generation.py"),
+    Sample("media/video_generation.py"),
 ]
 
-BROKEN_SAMPLES = [
-    Sample("structured_output.py"),
-]
+BROKEN_SAMPLES: list[Sample] = []
 
 # E2E tests pick non-default ports so they don't collide with a running
 # dev server on 8000/5173. Each test gets its own ports so that --parallel
 # doesn't make them collide with each other either.
-_MULTIAGENT_SERVER_PORT = "18000"
-_FASTAPI_BACKEND_PORT = "18001"
-_FASTAPI_FRONTEND_PORT = "15173"
+_WEB_AGENT_BACKEND_PORT = "18001"
+_WEB_AGENT_FRONTEND_PORT = "15173"
 
 E2E_TESTS = [
     Sample(
-        "multiagent-textual/test-e2e.py",
-        cmd=[
-            "uv",
-            "run",
-            "--frozen",
-            "--with-editable",
-            str(REPO),
-            "python",
-            str(REPO / "examples" / "multiagent-textual" / "test-e2e.py"),
-        ],
-        extra_env={"SERVER_PORT": _MULTIAGENT_SERVER_PORT},
-        timeout=300.0,
-    ),
-    Sample(
-        "fastapi-vite/e2e-test/run.sh",
+        "apps/web_agent/e2e-test/run.sh",
         cmd=[
             "bash",
-            str(REPO / "examples" / "fastapi-vite" / "e2e-test" / "run.sh"),
+            str(
+                REPO / "examples" / "apps" / "web_agent" / "e2e-test" / "run.sh"
+            ),
         ],
         extra_env={
-            "BACKEND_PORT": _FASTAPI_BACKEND_PORT,
-            "FRONTEND_PORT": _FASTAPI_FRONTEND_PORT,
+            "BACKEND_PORT": _WEB_AGENT_BACKEND_PORT,
+            "FRONTEND_PORT": _WEB_AGENT_FRONTEND_PORT,
         },
-        timeout=300.0,
-    ),
-    Sample(
-        "temporal-direct/test_durability.py",
-        cmd=[
-            "uv",
-            "run",
-            "--frozen",
-            "--directory",
-            str(REPO / "examples" / "temporal-direct"),
-            "--with-editable",
-            str(REPO),
-            "python",
-            "test_durability.py",
-        ],
         timeout=300.0,
     ),
 ]
@@ -163,9 +134,13 @@ def _select_sample(
     sample = known_samples.get(_path_key(Path(name).resolve()))
     if sample is not None:
         return sample
+    path = Path(name)
+    if not path.is_absolute() and len(path.parts) == 1:
+        matches = [s for s in KNOWN_SAMPLES if Path(s.name).name == name]
+        if len(matches) == 1:
+            return matches[0]
     if _sample_path(name).is_file():
         return Sample(name)
-    path = Path(name)
     if not path.is_absolute() and path.parts[:1] != ("examples",):
         example_path = REPO / "examples" / path
         if example_path.is_file():
@@ -278,7 +253,7 @@ def main() -> None:
         "--model",
         help=(
             "run each sample through run-with-patched-model.py with this "
-            "model id (e.g. 'gateway:openai/gpt-5.4-mini'); ignored for "
+            "model id (e.g. 'openai/gpt-5.4-mini'); ignored for "
             "samples with a custom cmd"
         ),
     )
@@ -295,7 +270,8 @@ def main() -> None:
         nargs="*",
         metavar="example",
         help=(
-            "example file(s) to run, e.g. stream.py or " "examples/stream.py"
+            "example file(s) to run, e.g. models/stream.py or "
+            "examples/models/stream.py"
         ),
     )
     args = parser.parse_args()

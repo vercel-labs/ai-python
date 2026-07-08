@@ -38,16 +38,17 @@ needs those control points.
 
 ## Example map
 
-Focused samples live in `examples/`:
+Focused samples live in category directories under `examples/`:
 
-- `stream.py` streams text from a model.
-- `tools_schema.py` passes a schema-only tool to a model.
-- `agent_simple.py` runs the default agent loop.
-- `agent_custom_loop.py` overrides `Agent.loop`.
-- `streaming_tool.py` streams partial output from a tool.
-- `agent_nested.py` runs a subagent as a tool.
+- `examples/models/stream.py` streams text from a model.
+- `examples/agents/basic.py` runs the default agent loop.
+- `examples/agents/custom_loop.py` overrides `Agent.loop`.
+- `examples/agents/streaming_tool.py` streams partial output from a tool.
+- `examples/agents/subagent.py` runs a subagent as a tool.
 
 End-to-end demos live in
-[`examples/fastapi-vite`](https://github.com/vercel-labs/ai-python/tree/main/examples/fastapi-vite),
-[`examples/multiagent-textual`](https://github.com/vercel-labs/ai-python/tree/main/examples/multiagent-textual),
-and [`examples/temporal-direct`](https://github.com/vercel-labs/ai-python/tree/main/examples/temporal-direct).
+[`examples/apps/web_agent`](https://github.com/vercel-labs/ai-python/tree/main/examples/apps/web_agent),
+[`examples/apps/coding_agent`](https://github.com/vercel-labs/ai-python/tree/main/examples/apps/coding_agent),
+[`examples/apps/durable_agent_temporal`](https://github.com/vercel-labs/ai-python/tree/main/examples/apps/durable_agent_temporal),
+[`examples/apps/durable_agent_workflows`](https://github.com/vercel-labs/ai-python/tree/main/examples/apps/durable_agent_workflows),
+and [`examples/apps/slack_agent`](https://github.com/vercel-labs/ai-python/tree/main/examples/apps/slack_agent).

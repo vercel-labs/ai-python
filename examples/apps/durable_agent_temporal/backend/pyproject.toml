@@ -1,0 +1,50 @@
+[project]
+name = "durable-agent-temporal-backend"
+version = "0.1.0"
+description = "Durable AI SDK Python agent using Temporal"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi[standard]>=0.115.0",
+    "temporalio>=1.9.0",
+    "ai",
+]
+
+[project.scripts]
+worker = "app.worker:run"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+plugins = ["pydantic.mypy"]
+
+[tool.ty.environment]
+python-version = "3.12"
+root = ["./"]
+
+[tool.ruff]
+target-version = "py312"
+src = ["."]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.uv]
+exclude-newer = "2 days"
+
+[tool.uv.sources]
+ai = { path = "../../../..", editable = true }
+
+[dependency-groups]
+dev = [
+    "mypy>=1.19.1",
+    "pydantic>=2.12.5",
+    "ruff>=0.15.5",
+    "ty~=0.0.37",
+]

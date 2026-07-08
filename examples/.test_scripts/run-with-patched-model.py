@@ -12,8 +12,8 @@ Usage (from repo root):
 
 Example:
     uv run examples/.test_scripts/run-with-patched-model.py \\
-        gateway:openai/gpt-5.4-mini \\
-        examples/stream.py
+        openai/gpt-5.4-mini \\
+        examples/models/stream.py
 
 """
 
@@ -62,7 +62,7 @@ def _protocol_factory(
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--model", help="model id, e.g. 'gateway:anthropic/claude-sonnet-4.6'"
+        "--model", help="model id, e.g. 'anthropic/claude-sonnet-4.6'"
     )
     parser.add_argument("--protocol", choices=PROTOCOLS)
     parser.add_argument("args", nargs="+", metavar="ARG")

@@ -84,11 +84,25 @@ python_version = "3.12"
 strict = true
 plugins = ["pydantic.mypy"]
 files = ["src", "tests", "examples"]
-exclude = ["examples/fastapi-vite/backend/main.py"]
+exclude = [
+    "examples/apps/web_agent/backend/main.py",
+    # depends on the vercel package, which is not part of this project's env
+    "examples/apps/durable_agent_workflows/",
+    # depends on slack-bolt, which is not part of this project's env
+    "examples/apps/slack_agent/",
+]
 
 [tool.ty.environment]
 python-version = "3.12"
 root = ["./src", "./"]
+
+[tool.ty.src]
+exclude = [
+    # depends on the vercel package, which is not part of this project's env
+    "examples/apps/durable_agent_workflows/",
+    # depends on slack-bolt, which is not part of this project's env
+    "examples/apps/slack_agent/",
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
