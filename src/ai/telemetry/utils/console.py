@@ -43,8 +43,6 @@ def _label(sp: telemetry.Span) -> str:
             return f"hook {d.label} {d.hook_type} [{d.status}]"
         case telemetry.RunSpanData() as d:
             return f"run {d.agent} ({d.model})"
-        case telemetry.LoopTurnSpanData() as d:
-            return f"turn {d.index}"
         case telemetry.CustomSpanData() as d:
             attrs = ", ".join(f"{k}={v!r}" for k, v in d.attributes.items())
             return sp.name + (f" ({_short(attrs)})" if attrs else "")

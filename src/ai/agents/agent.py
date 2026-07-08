@@ -1279,11 +1279,9 @@ class Agent:
         the layers it calls — but loses per-step grouping unless it
         opens its own ``telemetry.span`` blocks.)
         """
-        step = 0
         while context.keep_running():
-            step += 1
             async with (
-                telemetry.span(telemetry.LoopTurnSpanData(index=step)),
+                telemetry.span(telemetry.LoopTurnSpanData()),
                 models.stream(context=context) as stream,
                 ToolRunner() as tr,
             ):
