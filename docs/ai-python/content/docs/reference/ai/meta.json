@@ -1,0 +1,12 @@
+{
+  "title": "ai",
+  "description": "Reference for top-level ai exports.",
+  "pages": [
+    "stream",
+    "generate",
+    "get-model",
+    "get-provider",
+    "tool-decorator",
+    "agent"
+  ]
+}

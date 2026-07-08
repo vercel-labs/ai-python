@@ -21,6 +21,13 @@ async Python.
 uv add ai
 ```
 
+AI Gateway is the default route for unprefixed model IDs. Configure the gateway
+key before running the examples:
+
+```bash title="Terminal"
+export AI_GATEWAY_API_KEY="your_access_token_here"
+```
+
 Then import the package in Python:
 
 ```python
@@ -44,7 +51,7 @@ async def contact_mothership(query: str) -> str:
 
 async def main() -> None:
     model = ai.get_model("anthropic/claude-sonnet-4")
-    agent = ai.agent(tools=[contact_mothership])
+    agent = ai.Agent(tools=[contact_mothership])
 
     messages = [
         ai.system_message(
@@ -106,10 +113,10 @@ After iteration, `s.message`, `s.text`, `s.tool_calls`, `s.output`, and
 
 ## What's next
 
-- **Core concepts**: Learn the primitives that shape the SDK.
-- **Streaming**: Stream model responses and inspect events.
-- **Agents**: Add tools, customize the loop, and handle approvals.
-- **Samples**: Focused, single-file examples live in the `agents`, `media`,
+- **Basics**: Learn the main workflows for providers, messages, streams,
+  tools, agents, hooks, and UI integrations.
+- **Reference**: Look up public APIs by the names you import and call.
+- **Examples**: Focused, single-file examples live in the `agents`, `media`,
   and `models` directories under
   [`examples/`](https://github.com/vercel-labs/ai-python/tree/main/examples).
 - **End-to-end demos**:

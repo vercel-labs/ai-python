@@ -1,0 +1,45 @@
+---
+title: "ai.util"
+description: Reference for async utility helpers.
+type: reference
+summary: Reference for ai.util.
+---
+
+`ai.util` contains asynchronous utility primitives used by the SDK.
+
+## merge
+
+`merge` consumes multiple async iterables concurrently and yields items as they
+become available.
+
+```python
+async for event in ai.util.merge(stream, tool_runner.events()):
+    ...
+```
+
+## decouple
+
+`decouple` separates producer and consumer timing for an async iterable.
+
+Use it when a producer should continue running while another task consumes
+items at a different pace.
+
+## Queues
+
+Queue primitives:
+
+- `AsyncIterableQueue`
+- `MultiWaiter`
+
+`AsyncIterableQueue` is an async iterable queue that can be closed. `MultiWaiter`
+waits for the first completed item across multiple async sources.
+
+## Lifecycle Helpers
+
+Lifecycle helpers:
+
+- `unwrap_generator_exit`
+- `maybe_aclosing`
+
+Use these helpers when implementing custom async generators or safely closing
+optional async resources.

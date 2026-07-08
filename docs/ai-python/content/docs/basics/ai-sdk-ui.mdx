@@ -5,42 +5,18 @@ type: guide
 summary: Parse UI messages, apply approvals, stream SSE responses, set headers, and rebuild UI history.
 ---
 
-The AI SDK UI adapter converts between AI SDK UI messages and the Python
-runtime message/event types.
+This adapter provides integration with the UI part of the sister AI SDK
+in TypeScript.
 
-## Parse UI messages
+AI SDK UI provides `useChat`, which handles streaming complexity on the
+client side, such as collecting message chunks and optimistically updating
+the UI when the user submits a new message.
 
-Accept `UIMessage` values from an AI SDK UI client, then convert them to
-runtime messages:
+The AI SDK UI's data model is significantly different from the AI SDK for 
+Python's, which is why you need to convert events and messages back and forth
+using the adapter.
 
-```python
-class ChatRequest(pydantic.BaseModel):
-    messages: list[ai.agents.ui.ai_sdk.UIMessage]
-
-
-@app.post("/chat")
-async def chat(request: ChatRequest):
-    messages, approvals = ai.agents.ui.ai_sdk.to_messages(request.messages)
-```
-
-`to_messages` also extracts approval responses from tool parts.
-
-## Apply approval responses
-
-Register extracted approvals before resuming the agent:
-
-```python
-messages, approvals = ai.agents.ui.ai_sdk.to_messages(request.messages)
-ai.agents.ui.ai_sdk.apply_approvals(approvals)
-
-async with chat_agent.run(model, messages) as stream:
-    ...
-```
-
-The hook registry stores each approval until the matching tool-approval hook
-runs.
-
-## Stream SSE responses
+## Outbound streaming and message history
 
 Use `to_sse` to convert agent events to AI SDK UI stream chunks:
 
@@ -61,18 +37,6 @@ async def chat(request: ChatRequest) -> fastapi.responses.StreamingResponse:
     )
 ```
 
-## Set response headers
-
-Return the adapter headers on every streamed response:
-
-```python
-headers = ai.agents.ui.ai_sdk.UI_MESSAGE_STREAM_HEADERS
-```
-
-These headers identify the response as an AI SDK UI message stream.
-
-## Rebuild UI history
-
 Convert stored runtime messages back to AI SDK UI messages for history
 endpoints:
 
@@ -85,8 +49,6 @@ async def get_chat(session_id: str):
 
 The adapter groups assistant, tool, and internal hook messages into one
 assistant UI message.
-
-## Support streaming tool output
 
 Generator tools and subagents emit `PartialToolCallResult` events. The UI
 adapter folds those partial values into the corresponding tool output:
@@ -101,4 +63,37 @@ async def draft_mothership_reply(topic: str) -> ai.StreamingTextTool:
 ```
 
 For subagents, `ai.SubAgentTool` streams nested events and stores the nested
-assistant message as the tool output.
+transcript as a `MessageBundle`. The model sees the nested agent's final
+assistant text.
+
+## Inbound message updates
+
+Accept `UIMessage` values from an AI SDK UI client, then convert them to
+runtime messages:
+
+```python
+class ChatRequest(pydantic.BaseModel):
+    messages: list[ai.agents.ui.ai_sdk.UIMessage]
+
+
+@app.post("/chat")
+async def chat(request: ChatRequest):
+    messages, approvals = ai.agents.ui.ai_sdk.to_messages(request.messages)
+```
+
+`to_messages` also extracts approval responses from tool parts.
+
+## Tool approvals
+
+Register extracted approvals before resuming the agent:
+
+```python
+messages, approvals = ai.agents.ui.ai_sdk.to_messages(request.messages)
+ai.agents.ui.ai_sdk.apply_approvals(approvals)
+
+async with chat_agent.run(model, messages) as stream:
+    ...
+```
+
+The hook registry stores each approval until the matching tool-approval hook
+runs.

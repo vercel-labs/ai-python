@@ -1,0 +1,20 @@
+---
+title: "get_provider"
+description: Resolve and configure providers.
+type: reference
+summary: Reference for ai.get_provider.
+---
+
+`get_provider` resolves a provider by id.
+
+```python
+provider = ai.get_provider("openai")
+provider = ai.get_provider(
+    "openai",
+    base_url="http://localhost:1234/v1",
+    api_key="your_access_token_here",
+)
+```
+
+Known providers include AI Gateway, OpenAI-compatible providers, and
+Anthropic-compatible providers.

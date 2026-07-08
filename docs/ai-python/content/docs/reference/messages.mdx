@@ -1,0 +1,102 @@
+---
+title: "ai.messages"
+description: Reference for message models and message parts.
+type: reference
+summary: Reference for ai.messages.
+---
+
+`ai.messages` is the public message-model namespace. Messages are Pydantic
+models and durable state shared by model calls, agents, tools, UI adapters,
+and resume flows.
+
+## Message
+
+`Message` carries one conversation item.
+
+```python
+message.role
+message.parts
+message.id
+message.turn_id
+message.usage
+message.provider_metadata
+message.replay
+```
+
+Roles are `user`, `assistant`, `system`, `tool`, and `internal`.
+
+Convenience properties:
+
+```python
+message.text
+message.reasoning
+message.tool_calls
+message.tool_results
+message.builtin_tool_calls
+message.builtin_tool_returns
+message.files
+message.images
+message.videos
+message.get_output(output_type=None)
+```
+
+`get_output()` returns text by default. With a Pydantic model, it validates the
+message text as JSON and returns that model.
+
+## Parts
+
+Message parts store typed content inside a `Message`.
+
+Common parts:
+
+- `TextPart`: Text content.
+- `FilePart`: File, image, document, audio, or video content.
+- `ReasoningPart`: Model reasoning text.
+
+Tool and runtime parts:
+
+- `ToolCallPart`: A host-executed tool call requested by the model.
+- `ToolResultPart`: The result for a host-executed tool call.
+- `BuiltinToolCallPart`: A provider-executed tool call.
+- `BuiltinToolReturnPart`: A provider-executed tool result.
+- `HookPart`: A hook suspension, resolution, or cancellation.
+
+`ToolResultPart.get_model_input()` returns the value sent back to the model. For
+most tools this is the same as `result`. Aggregator-backed tools can store a
+rich `result` while sending a simpler model-facing value.
+
+## Message Bundles
+
+Message bundle types are used when a tool or adapter needs to carry multiple
+message-layer values as one result.
+
+- `MessageBundle`: A tuple of `Message` values.
+- `ContentOutput`: A multipart tool result containing text and file parts.
+- `ContentPart`: The text-or-file part union used by `ContentOutput`.
+- `SpecialToolResult`: The special result union for multipart content and
+  message bundles.
+- `ResultKind`: The coarse tag for a tool result shape: `error`, `json`, or
+  `special`.
+
+## Message IDs
+
+`generate_id` creates SDK-style IDs for messages and parts.
+
+```python
+message_id = ai.messages.generate_id("msg")
+```
+
+Pass a prefix to control the ID family. If no prefix is supplied, the helper
+returns an unprefixed generated ID.
+
+## Serialization
+
+Messages serialize through Pydantic.
+
+```python
+encoded = [message.model_dump(mode="json") for message in messages]
+restored = [ai.messages.Message.model_validate(item) for item in encoded]
+```
+
+Persist messages after completed or suspended runs. Recreate providers, hooks,
+streams, and other live runtime objects on the next request.

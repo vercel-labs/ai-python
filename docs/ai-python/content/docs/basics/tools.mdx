@@ -5,10 +5,10 @@ type: guide
 summary: Define function tools, design schemas, handle tool errors, use schema-only tools, provider tools, and MCP tools.
 ---
 
-Tools can be schema-only declarations for direct streaming, executable Python
-functions for agents, or provider-executed tools that run outside your process.
+AI SDK for Python supports multiple types of tools, including function tools
+defined in code using `@ai.tool`, as well as built-in provider-side tools.
 
-## Define function tools
+## Declare function tools
 
 Decorate an async function with `@ai.tool`:
 
@@ -25,35 +25,9 @@ async def contact_mothership(query: str) -> str:
 The tool name comes from the function name. The model receives the function
 parameters as a JSON schema and the docstring as the tool description.
 
-## Design tool schemas
-
-The function signature becomes the tool schema. The docstring becomes the tool
-description the model sees.
-
-```python
-@ai.tool
-async def scan_sector(sector: str, depth: int = 1) -> str:
-    """Scan a mothership sector at the requested depth."""
-    return f"{sector}: clear at depth {depth}"
-```
-
-The model receives `sector` as a required string and `depth` as an optional
-integer with a default.
-
-## Validate arguments
-
-Tool arguments validate through the generated Pydantic model before your
-function runs:
-
-```python
-@ai.tool
-async def set_alert_level(level: int) -> str:
-    """Set the mothership alert level."""
-    return f"Alert level set to {level}"
-```
-
-If the model sends `{"level": "high"}`, validation fails and the agent returns
-an error tool result instead of calling the function.
+Function tools will only be automatically executed by the SDK when used
+in the context of the agent. Provider-side tools will always get executed
+by the provider, even when passed to `ai.stream`.
 
 ## Handle tool errors
 
@@ -71,7 +45,60 @@ async with agent.run(model, messages) as stream:
 
 The original exception is available on `event.exception` for logging.
 
-## Use schema-only tools
+## Declare tools that stream output
+
+AI SDK for Python supports tools that are async-generators. You might want to
+use those when your tools need to return partial output, e.g. when wrapping
+subagents.
+
+Streaming tools use aggregators. An aggregator solves two problems: the tool can
+yield many values over time, but the agent still needs one final tool result;
+and your app may want a rich stored result while the model needs a simpler value
+on the next turn.
+
+The core interface is:
+
+```python
+class Aggregator[Item, Result, ModelInput]:
+    def feed(self, item: Item) -> None: ...
+    def snapshot(self) -> Result: ...
+
+    @classmethod
+    def to_model_input(cls, snapshot: Result) -> ModelInput: ...
+```
+
+Use `ai.StreamingTextTool` when yielded strings should concatenate into the
+tool result:
+
+```python
+@ai.tool
+async def draft_reply(topic: str) -> ai.StreamingTextTool:
+    """Draft a reply."""
+    yield "Checking "
+    yield "records for "
+    yield topic
+```
+
+Use `ai.StreamingStatusTool[T]` when intermediate yields are progress updates
+and the last yielded value is the final result.
+
+Use `ai.SubAgentTool` when a tool streams events from a nested agent. The stored
+result is a message bundle, and the model sees the final assistant text.
+
+The agent emits `PartialToolCallResult` events for those values, then sends
+the aggregated result back to the model on the next turn.
+
+## Understand tool anatomy
+
+`ai.Tool` represents tools of all kinds in the SDK.
+
+Each tool carries an optional `spec`, which is a description consumed by the 
+model, as well as a `tool_config` that contains tool-specific execution config 
+(e.g. retry policy).
+
+`AgentTool` wraps `ai.Tool` together with its corresponding Python function,
+which allows `agent.run` to find and call that function when the model requests
+to do so.
 
 Pass `ai.Tool` objects directly to `ai.stream` when you want the model to emit
 tool calls but you do not want the SDK to execute them:
@@ -80,7 +107,7 @@ tool calls but you do not want the SDK to execute them:
 tool = ai.Tool(
     kind="function",
     name="contact_mothership",
-    args=ai.tools.FunctionToolArgs(
+    spec=ai.tools.ToolSpec(
         description="Contact the mothership.",
         params={
             "type": "object",
@@ -129,6 +156,10 @@ tools = [
 ## Use MCP tools
 
 The Model Context Protocol (MCP) adapter converts server tools into agent tools:
+
+```bash
+uv add "ai[mcp]"
+```
 
 ```python
 tools = await ai.mcp.get_http_tools(

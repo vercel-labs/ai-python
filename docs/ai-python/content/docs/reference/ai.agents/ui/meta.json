@@ -1,0 +1,7 @@
+{
+  "title": "ai.agents.ui",
+  "description": "Reference for agent UI adapters.",
+  "pages": [
+    "ai-sdk"
+  ]
+}

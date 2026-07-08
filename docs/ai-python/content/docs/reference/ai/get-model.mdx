@@ -1,0 +1,26 @@
+---
+title: "get_model"
+description: Resolve a model reference from an id.
+type: reference
+summary: Reference for ai.get_model.
+---
+
+`get_model` resolves a model id to a `Model`.
+
+```python
+model = ai.get_model("anthropic/claude-sonnet-4")
+model = ai.get_model("openai:gpt-5")
+model = ai.get_model()
+```
+
+Unprefixed ids route through AI Gateway. Calling `get_model()` with no argument
+reads `AI_SDK_DEFAULT_MODEL`.
+
+## Arguments
+
+- `model_id`: Optional model id. Provider-prefixed ids use `provider:model`.
+  Gateway model ids can use `provider/model`.
+
+## Return value
+
+Returns `ai.Model`.

@@ -1,0 +1,53 @@
+---
+title: "ai.providers.anthropic"
+description: Reference for Anthropic-compatible provider APIs.
+type: reference
+summary: Reference for ai.providers.anthropic.
+---
+
+`ai.providers.anthropic` contains the Anthropic-compatible provider, protocol,
+and provider-executed tools.
+
+```python
+provider = ai.get_provider("anthropic")
+model = ai.Model(id="claude-sonnet-4-6", provider=provider)
+```
+
+The optional upstream Anthropic SDK loads lazily when the provider creates or
+uses an SDK client.
+
+## AnthropicCompatibleProvider
+
+`AnthropicCompatibleProvider` implements `Provider` for Anthropic-compatible
+APIs.
+
+Default configuration for the `anthropic` provider uses:
+
+- `ANTHROPIC_API_KEY`
+- `ANTHROPIC_BASE_URL`
+
+Pass `base_url`, `api_key`, or a custom client through `get_provider` when you
+need explicit configuration.
+
+```python
+provider = ai.get_provider(
+    "anthropic",
+    base_url="https://anthropic.example.com",
+)
+model = ai.Model(id="claude-sonnet-4-6", provider=provider)
+```
+
+The provider supports model listing, probing, streaming, provider-executed
+tools, and custom Anthropic-compatible clients.
+
+## AnthropicMessagesProtocol
+
+`AnthropicMessagesProtocol` translates SDK messages and params to the
+Anthropic Messages API wire format.
+
+The provider uses this protocol by default. Use it directly only when you need
+a protocol override.
+
+## Tools
+
+Provider-executed Anthropic tools are documented on the child `tools` page.
