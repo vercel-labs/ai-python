@@ -56,6 +56,7 @@ TEXT_SAMPLES = [
     Sample("agents/custom_hook.py"),
     Sample("agents/mcp_tools.py"),
     Sample("models/anthropic/builtin_web_search.py"),
+    Sample("models/structured_output.py"),
 ]
 
 IMAGE_SAMPLES = [
@@ -68,70 +69,27 @@ VIDEO_SAMPLES = [
     Sample("media/video_generation.py"),
 ]
 
-BROKEN_SAMPLES = [
-    Sample("models/structured_output.py"),
-]
+BROKEN_SAMPLES: list[Sample] = []
 
 # E2E tests pick non-default ports so they don't collide with a running
 # dev server on 8000/5173. Each test gets its own ports so that --parallel
 # doesn't make them collide with each other either.
-_MULTIAGENT_SERVER_PORT = "18000"
-_FASTAPI_BACKEND_PORT = "18001"
-_FASTAPI_FRONTEND_PORT = "15173"
+_WEB_AGENT_BACKEND_PORT = "18001"
+_WEB_AGENT_FRONTEND_PORT = "15173"
 
 E2E_TESTS = [
     Sample(
-        "apps/multiagent-textual/test-e2e.py",
-        cmd=[
-            "uv",
-            "run",
-            "--frozen",
-            "--with-editable",
-            str(REPO),
-            "python",
-            str(
-                REPO
-                / "examples"
-                / "apps"
-                / "multiagent-textual"
-                / "test-e2e.py"
-            ),
-        ],
-        extra_env={"SERVER_PORT": _MULTIAGENT_SERVER_PORT},
-        timeout=300.0,
-    ),
-    Sample(
-        "apps/fastapi-vite/e2e-test/run.sh",
+        "apps/web_agent/e2e-test/run.sh",
         cmd=[
             "bash",
             str(
-                REPO
-                / "examples"
-                / "apps"
-                / "fastapi-vite"
-                / "e2e-test"
-                / "run.sh"
+                REPO / "examples" / "apps" / "web_agent" / "e2e-test" / "run.sh"
             ),
         ],
         extra_env={
-            "BACKEND_PORT": _FASTAPI_BACKEND_PORT,
-            "FRONTEND_PORT": _FASTAPI_FRONTEND_PORT,
+            "BACKEND_PORT": _WEB_AGENT_BACKEND_PORT,
+            "FRONTEND_PORT": _WEB_AGENT_FRONTEND_PORT,
         },
-        timeout=300.0,
-    ),
-    Sample(
-        "apps/temporal-direct/test_durability.py",
-        cmd=[
-            "uv",
-            "run",
-            "--frozen",
-            "--directory",
-            str(REPO / "examples" / "apps" / "temporal-direct"),
-            "--with-editable",
-            str(REPO),
-            "python",
-            "test_durability.py",
-        ],
         timeout=300.0,
     ),
 ]
