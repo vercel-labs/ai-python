@@ -38,6 +38,9 @@ dependencies = [
 anthropic = ["anthropic>=0.83.0"]
 mcp = ["mcp>=1.18.0"]
 openai = ["openai>=2.14.0"]
+vercel = [
+    "vercel>=0.5.9",
+]
 
 [build-system]
 requires = ["hatchling", "uv-dynamic-versioning>=0.7.0"]

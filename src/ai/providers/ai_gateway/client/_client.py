@@ -19,6 +19,7 @@ if TYPE_CHECKING:
 _PROTOCOL_VERSION = "0.0.1"
 
 ModelType = Literal["language", "image", "video"]
+AuthMethod = Literal["api-key", "oidc"]
 
 
 class GatewayClient:
@@ -33,12 +34,14 @@ class GatewayClient:
         self,
         *,
         base_url: str,
-        api_key: str | None = None,
+        auth_token: str | None = None,
+        auth_method: AuthMethod | None = None,
         headers: Mapping[str, str] | None = None,
         client: httpx.AsyncClient | None = None,
     ) -> None:
         self.base_url = base_url
-        self.api_key = api_key
+        self.auth_token = auth_token
+        self.auth_method = auth_method
         self.headers = dict(headers or {})
         self._http = client or httpx.AsyncClient(
             timeout=httpx.Timeout(timeout=300.0, connect=10.0),
@@ -59,9 +62,9 @@ class GatewayClient:
     def protocol_headers(self) -> dict[str, str]:
         headers = dict(self.headers)
         headers["ai-gateway-protocol-version"] = _PROTOCOL_VERSION
-        if self.api_key:
-            headers["Authorization"] = f"Bearer {self.api_key}"
-            headers["ai-gateway-auth-method"] = "api-key"
+        if self.auth_token and self.auth_method:
+            headers["Authorization"] = f"Bearer {self.auth_token}"
+            headers["ai-gateway-auth-method"] = self.auth_method
         return headers
 
     def model_headers(
@@ -165,7 +168,7 @@ class GatewayClient:
         auth_resp = await self.get("v1/credits", origin=True)
         if auth_resp.status_code in {401, 403}:
             raise errors.GatewayAuthenticationError.create_contextual(
-                api_key_provided=bool(self.api_key),
+                auth_method=self.auth_method if self.auth_token else None,
                 status_code=auth_resp.status_code,
             )
         if auth_resp.status_code != 200:
@@ -239,7 +242,7 @@ class GatewayClient:
         raise errors.create_gateway_error(
             response_body=response.text,
             status_code=response.status_code,
-            api_key_provided=bool(self.api_key),
+            auth_method=self.auth_method if self.auth_token else None,
         )
 
     async def iter_sse(

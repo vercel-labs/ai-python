@@ -8,13 +8,14 @@ A toolkit for building LLM-powered applications and agent loops.
 uv add ai
 ```
 
-AI Gateway usage works with the base package. Direct providers that use an
-OpenAI-compatible or Anthropic-compatible adapter load the corresponding
-official SDK lazily and require optional extras:
+AI Gateway API-key usage works with the base package. Direct providers that
+use an OpenAI-compatible or Anthropic-compatible adapter load the corresponding
+official SDK lazily. Vercel OIDC for AI Gateway also uses an optional extra:
 
 ```bash
 uv add "ai[openai]"      # OpenAI-compatible providers
 uv add "ai[anthropic]"   # Anthropic-compatible providers
+uv add "ai[vercel]"      # Vercel OIDC for AI Gateway
 ```
 
 ```python

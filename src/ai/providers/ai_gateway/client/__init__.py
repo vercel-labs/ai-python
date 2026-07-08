@@ -1,6 +1,6 @@
 """Async client for the AI Gateway provider protocol."""
 
 from . import errors
-from ._client import GatewayClient, ModelType
+from ._client import AuthMethod, GatewayClient, ModelType
 
-__all__ = ["GatewayClient", "ModelType", "errors"]
+__all__ = ["AuthMethod", "GatewayClient", "ModelType", "errors"]

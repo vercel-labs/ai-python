@@ -15,8 +15,13 @@ gateway's JSON error response format::
     }
 """
 
+from __future__ import annotations
+
 import json
-from typing import Any, Self
+from typing import TYPE_CHECKING, Any, Self
+
+if TYPE_CHECKING:
+    from ._client import AuthMethod
 
 _KEY_URL = "https://vercel.com/d?to=%2F%5Bteam%5D%2F%7E%2Fai%2Fapi-keys"
 
@@ -91,17 +96,23 @@ class GatewayAuthenticationError(GatewayError):
     def create_contextual(
         cls,
         *,
-        api_key_provided: bool,
+        auth_method: AuthMethod | None,
         status_code: int = 401,
         generation_id: str | None = None,
     ) -> Self:
         """Build a helpful message based on which auth method was used."""
-        if api_key_provided:
+        if auth_method == "api-key":
             msg = (
                 "AI Gateway authentication failed: Invalid API key.\n\n"
                 f"Create a new API key: {_KEY_URL}\n\n"
                 "Provide via 'api_key' option or "
                 "'AI_GATEWAY_API_KEY' environment variable."
+            )
+        elif auth_method == "oidc":
+            msg = (
+                "AI Gateway authentication failed: Invalid OIDC token.\n\n"
+                "Check that Vercel OIDC is enabled for this project and "
+                "that the token has not expired."
             )
         else:
             msg = (
@@ -265,7 +276,7 @@ def create_gateway_error(
     *,
     response_body: Any,
     status_code: int,
-    api_key_provided: bool = False,
+    auth_method: AuthMethod | None = None,
 ) -> GatewayError:
     """Create a typed error from a gateway JSON error response.
 
@@ -309,7 +320,7 @@ def create_gateway_error(
     match error_type:
         case "authentication_error":
             err = GatewayAuthenticationError.create_contextual(
-                api_key_provided=api_key_provided,
+                auth_method=auth_method,
                 status_code=status_code,
                 generation_id=generation_id,
             )
