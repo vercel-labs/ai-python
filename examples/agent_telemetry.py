@@ -23,7 +23,7 @@ async def main() -> None:
     ai.telemetry.register(console.ConsoleAdapter())
 
     model = ai.get_model("gateway:anthropic/claude-sonnet-4.6")
-    my_agent = ai.agent(tools=[get_weather])
+    my_agent = ai.Agent(tools=[get_weather])
     messages = [ai.user_message("What's the weather in Tokyo?")]
 
     async with my_agent.run(model, messages) as stream:

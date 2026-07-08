@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 import ai
 
 from ..conftest import MOCK_MODEL, Recorder, mock_llm, text_msg, tool_call_msg
@@ -27,7 +29,7 @@ async def test_agent_run_span_tree(recorder: Recorder) -> None:
             [text_msg("done", id="msg-2")],
         ]
     )
-    my_agent = ai.agent(tools=[lookup])
+    my_agent = ai.Agent(tools=[lookup])
     async with my_agent.run(MOCK_MODEL, [ai.user_message("go")]) as stream:
         async for _ in stream:
             pass
@@ -65,6 +67,40 @@ async def test_agent_run_span_tree(recorder: Recorder) -> None:
     assert calls[1].data.message.text == "done"
 
 
+async def test_early_break_closes_span_tree(recorder: Recorder) -> None:
+    """Breaking out of the event loop must still close every span.
+
+    The spans are open in the ``run()`` generator stack; an early break
+    must close them in-task and in order (children before the run span)
+    rather than leaving them to GC finalization in another task.
+    """
+    mock_llm([[text_msg("hello")]])
+    my_agent = ai.Agent()
+    async with my_agent.run(MOCK_MODEL, [ai.user_message("go")]) as stream:
+        async for _ in stream:
+            break
+
+    assert ai.telemetry.current() is None
+    assert {s.id for s in recorder.ended} == {s.id for s in recorder.started}
+    names = [s.name for s in recorder.ended]
+    assert names[-1] == "run"
+    assert names.index("loop_turn") < names.index("run")
+
+
+async def test_consumer_error_closes_span_tree(recorder: Recorder) -> None:
+    """An exception in the consumer's loop body closes spans the same way."""
+    mock_llm([[text_msg("hello")]])
+    my_agent = ai.Agent()
+    with pytest.raises(ValueError, match="stop"):
+        async with my_agent.run(MOCK_MODEL, [ai.user_message("go")]) as stream:
+            async for _ in stream:
+                raise ValueError("stop")
+
+    assert ai.telemetry.current() is None
+    assert {s.id for s in recorder.ended} == {s.id for s in recorder.started}
+    assert [s.name for s in recorder.ended][-1] == "run"
+
+
 async def test_tool_error_marked_on_span(recorder: Recorder) -> None:
     @ai.tool
     async def boom() -> str:
@@ -72,7 +108,7 @@ async def test_tool_error_marked_on_span(recorder: Recorder) -> None:
         raise ValueError("nope")
 
     mock_llm([[tool_call_msg(name="boom")], [text_msg("done")]])
-    my_agent = ai.agent(tools=[boom])
+    my_agent = ai.Agent(tools=[boom])
     async with my_agent.run(MOCK_MODEL, [ai.user_message("go")]) as stream:
         async for _ in stream:
             pass

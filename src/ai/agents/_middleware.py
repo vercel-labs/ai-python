@@ -15,6 +15,7 @@ wraps the real call.  A sees the call first and the result last.
 
 from __future__ import annotations
 
+import contextlib
 import contextvars
 import dataclasses
 from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
@@ -141,8 +142,11 @@ class _Middleware:
                     yield event
                 span.end()
         """
-        async for event in next(call):
-            yield event
+        # aclosing: propagate an early close from the consumer down the
+        # chain, so inner generators unwind in the task that runs them
+        async with contextlib.aclosing(next(call)) as events:
+            async for event in events:
+                yield event
 
     async def wrap_model(
         self,
@@ -344,8 +348,10 @@ def _build_agent_run_chain(
 
         def _make(m: _Middleware, nxt: _AgentRunNext) -> _AgentRunNext:
             async def _wrapped(call: Context) -> AsyncGenerator[_Event]:
-                async for event in m.wrap_agent_run(call, nxt):
-                    yield event
+                gen = m.wrap_agent_run(call, nxt)
+                async with contextlib.aclosing(gen) as events:
+                    async for event in events:
+                        yield event
 
             return _wrapped
 

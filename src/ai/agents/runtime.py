@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import contextvars
 from typing import TYPE_CHECKING, Any
 
@@ -12,7 +13,7 @@ from . import hooks as hooks_
 from .mcp import client as mcp_client
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, AsyncIterable, Awaitable
+    from collections.abc import AsyncGenerator, Awaitable
 
 
 class Runtime:
@@ -65,7 +66,7 @@ async def _stop_when_done(runtime: Runtime, task: Awaitable[None]) -> None:
 
 
 async def run(
-    source: AsyncIterable[events_.AgentEvent],
+    source: AsyncGenerator[events_.AgentEvent],
 ) -> AsyncGenerator[events_.AgentEvent]:
     """Run *source* and yield events put into the Runtime queue."""
     rt = Runtime()
@@ -80,8 +81,11 @@ async def run(
         mcp_token = mcp_client._pool.set(mcp_pool)
 
         try:
-            async for event in source:
-                await rt.put_event(event)
+            # aclosing: if this task is cancelled while *source* sits
+            # suspended at a yield, close it here
+            async with contextlib.aclosing(source) as events:
+                async for event in events:
+                    await rt.put_event(event)
 
         finally:
             rt.cleanup_hooks()

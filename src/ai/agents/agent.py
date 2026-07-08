@@ -1385,19 +1385,22 @@ class Agent:
         async def _real(call: Context) -> AsyncGenerator[events_.AgentEvent]:
             tracker = events_.RunStateTracker()
             source = self.loop(call)
-            async for event in runtime.run(source):
-                # Feed the tracker before the replay filter: replayed
-                # StreamEnds carry the tool calls the dispatcher is
-                # about to re-run, which the fold must count.
-                transition = tracker.feed(event)
-                # Drop replay-flagged events: they're a control-flow
-                # signal for the loop's tool dispatcher (which already
-                # ran by the time we see the event here), not user-
-                # facing output.
-                if not (isinstance(event, events_.BaseEvent) and event.replay):
-                    yield event
-                if transition is not None:
-                    yield transition
+            async with contextlib.aclosing(runtime.run(source)) as events:
+                async for event in events:
+                    # Feed the tracker before the replay filter: replayed
+                    # StreamEnds carry the tool calls the dispatcher is
+                    # about to re-run, which the fold must count.
+                    transition = tracker.feed(event)
+                    # Drop replay-flagged events: they're a control-flow
+                    # signal for the loop's tool dispatcher (which already
+                    # ran by the time we see the event here), not user-
+                    # facing output.
+                    if not (
+                        isinstance(event, events_.BaseEvent) and event.replay
+                    ):
+                        yield event
+                    if transition is not None:
+                        yield transition
 
         async def _stream() -> AsyncGenerator[events_.AgentEvent]:
             run_data = telemetry.RunSpanData(
@@ -1419,10 +1422,16 @@ class Agent:
                     mw_token = middleware_.activate(parent + _middleware)
                 try:
                     chain = middleware_._build_agent_run_chain(_real)
-                    async for event in chain(context):
-                        yield event
+                    async with contextlib.aclosing(chain(context)) as events:
+                        async for event in events:
+                            yield event
                 finally:
                     if mw_token is not None:
                         middleware_.deactivate(mw_token)
 
-        yield AgentStream(_stream(), context)
+        # close the event generator on exit from the ``run()`` block.
+        agen = _stream()
+        try:
+            yield AgentStream(agen, context)
+        finally:
+            await agen.aclose()

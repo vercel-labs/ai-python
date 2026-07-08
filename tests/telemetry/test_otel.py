@@ -88,7 +88,7 @@ async def test_tool_exception_recorded(
         raise ValueError("nope")
 
     mock_llm([[tool_call_msg(name="boom")], [text_msg("done")]])
-    my_agent = ai.agent(tools=[boom])
+    my_agent = ai.Agent(tools=[boom])
     async with my_agent.run(MOCK_MODEL, [ai.user_message("go")]) as stream:
         async for _ in stream:
             pass
