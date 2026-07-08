@@ -151,6 +151,7 @@ def test_merge_approval_signals_pending_then_resolved() -> None:
                 hook_id="approve_tc1",
                 hook_type="ToolApproval",
                 status="pending",
+                tool_call_id="tc1",
             )
         ],
     )
@@ -167,6 +168,7 @@ def test_merge_approval_signals_pending_then_resolved() -> None:
                 hook_type="ToolApproval",
                 status="resolved",
                 resolution={"granted": True, "reason": None},
+                tool_call_id="tc1",
             )
         ],
     )
@@ -359,6 +361,7 @@ def test_to_ui_messages_internal_role_merges_approval() -> None:
                     hook_id="approve_tc1",
                     hook_type="ToolApproval",
                     status="pending",
+                    tool_call_id="tc1",
                 )
             ],
         ),

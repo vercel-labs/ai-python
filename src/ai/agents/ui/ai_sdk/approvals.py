@@ -8,9 +8,6 @@ from ....types import messages as messages_
 from ...hooks import TOOL_APPROVAL_HOOK_TYPE, resolve_hook
 from . import ui_messages
 
-_PREFIX = "approve_"
-
-
 ToolPart = ui_messages.UIToolPart | ui_messages.UIDynamicToolPart
 
 
@@ -24,19 +21,10 @@ class ApprovalResponse(NamedTuple):
 
 
 def tool_call_id_for(hook_part: messages_.HookPart[Any]) -> str | None:
-    """Return the tool call a ToolApproval hook suspends, or None.
-
-    Prefers the first-class ``tool_call_id`` field; falls back to
-    parsing the legacy ``approve_<tool_call_id>`` label for hook parts
-    serialized before the field existed.
-    """
+    """Return the tool call a ToolApproval hook suspends, or None."""
     if hook_part.hook_type != TOOL_APPROVAL_HOOK_TYPE:
         return None
-    if hook_part.tool_call_id is not None:
-        return hook_part.tool_call_id
-    if hook_part.hook_id.startswith(_PREFIX):
-        return hook_part.hook_id[len(_PREFIX) :]
-    return None
+    return hook_part.tool_call_id
 
 
 def hook_part_from_tool_part(tp: ToolPart) -> messages_.HookPart[Any] | None:

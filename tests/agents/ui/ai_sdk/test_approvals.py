@@ -27,16 +27,7 @@ def _tool(
     }
 
 
-def test_tool_call_id_for_strips_prefix() -> None:
-    hook: messages_.HookPart[Any] = messages_.HookPart(
-        hook_id="approve_tc_42",
-        hook_type="ToolApproval",
-        status="pending",
-    )
-    assert approvals.tool_call_id_for(hook) == "tc_42"
-
-
-def test_tool_call_id_for_prefers_field_over_label() -> None:
+def test_tool_call_id_for_returns_field() -> None:
     # Custom gating can use any label as long as tool_call_id is set.
     hook: messages_.HookPart[Any] = messages_.HookPart(
         hook_id="my_custom_gate",
@@ -62,6 +53,7 @@ def test_tool_call_id_for_rejects_non_approval_type() -> None:
         hook_id="approve_tc_42",
         hook_type="SomethingElse",
         status="pending",
+        tool_call_id="tc_42",
     )
     assert approvals.tool_call_id_for(hook) is None
 
@@ -118,12 +110,3 @@ def test_extract_approvals_handles_dynamic_tool_responses() -> None:
     assert approval_responses[0].granted is True
     assert approval_responses[0].reason == "ok"
     assert approval_responses[0].tool_call_id == "tc1"
-
-
-def test_tool_call_id_for_rejects_bad_prefix() -> None:
-    hook: messages_.HookPart[Any] = messages_.HookPart(
-        hook_id="tc_42",
-        hook_type="ToolApproval",
-        status="pending",
-    )
-    assert approvals.tool_call_id_for(hook) is None
