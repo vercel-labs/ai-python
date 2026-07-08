@@ -15,6 +15,7 @@ from ...conftest import (
     MOCK_MODEL,
     MOCK_PROVIDER,
     MockProvider,
+    Recorder,
     mock_llm,
     text_msg,
 )
@@ -589,3 +590,110 @@ async def test_stream_does_not_raise_on_early_consumer_exit() -> None:
         async for event in stream:
             if isinstance(event, events_.TextDelta):
                 break
+
+
+async def test_stream_span_milestones(recorder: Recorder) -> None:
+    """A live stream reports first_token and response_complete, once each."""
+    mock_llm([[text_msg("Hello world")]])
+
+    async with models.stream(MOCK_MODEL, [ai.user_message("Hi")]) as stream:
+        assert stream.span is not None
+        assert stream.span.span_events == []
+        async for _ in stream:
+            pass
+
+    (call,) = [s for s in recorder.ended if s.name == "ai_stream"]
+    assert stream.span is call
+    assert [e.name for e in call.span_events] == [
+        ai.telemetry.FIRST_TOKEN,
+        ai.telemetry.RESPONSE_COMPLETE,
+    ]
+    first, complete = call.span_events
+    # The milestone says what kind of output arrived first.
+    assert first.attributes == {"event_type": "TextStart"}
+    assert call.started_at <= first.time_ns <= complete.time_ns
+    assert call.ended_at is not None
+    assert complete.time_ns <= call.ended_at
+
+
+async def test_stream_first_token_fires_on_delta_without_start() -> None:
+    """A provider that skips start events still gets a first_token."""
+
+    async def _no_starts_stream(
+        model: models.Model,
+        messages: list[messages_.Message],
+        **kwargs: Any,
+    ) -> AsyncGenerator[events_.Event]:
+        yield events_.StreamStart()
+        yield events_.TextDelta(block_id="t", chunk="hi")
+        yield events_.StreamEnd()
+
+    MOCK_PROVIDER._stream_impl = _no_starts_stream
+
+    async with models.stream(MOCK_MODEL, [ai.user_message("Hi")]) as stream:
+        async for _ in stream:
+            pass
+
+    assert stream.span is not None
+    first = stream.span.span_events[0]
+    assert first.name == ai.telemetry.FIRST_TOKEN
+    assert first.attributes == {"event_type": "TextDelta"}
+
+
+async def test_replay_stream_has_no_milestones(recorder: Recorder) -> None:
+    """Replayed turns carry no synthetic timing milestones."""
+    replayed = messages_.Message(
+        role="assistant",
+        parts=[
+            messages_.ToolCallPart(
+                tool_call_id="tc-1",
+                tool_name="weather",
+                tool_args='{"city":"SF"}',
+            )
+        ],
+    ).model_copy(update={"replay": True})
+
+    async with models.stream(
+        MOCK_MODEL, [ai.user_message("go"), replayed]
+    ) as stream:
+        events = [event async for event in stream]
+
+    assert events, "replay should still emit ToolEnd events"
+    (call,) = [s for s in recorder.ended if s.name == "ai_stream"]
+    assert stream.span is call
+    assert call.span_events == []
+
+
+async def test_early_close_no_response_complete(recorder: Recorder) -> None:
+    """A consumer that stops early gets first_token but no completion."""
+    mock_llm([[text_msg("Hello world")]])
+
+    async with models.stream(MOCK_MODEL, [ai.user_message("Hi")]) as stream:
+        async for event in stream:
+            if isinstance(event, events_.TextDelta):
+                break
+
+    (call,) = [s for s in recorder.ended if s.name == "ai_stream"]
+    assert [e.name for e in call.span_events] == [ai.telemetry.FIRST_TOKEN]
+
+
+async def test_directly_constructed_stream_has_no_span() -> None:
+    async with ai.Stream.replay_message(text_msg("hi")) as stream:
+        async for _ in stream:
+            pass
+    assert stream.span is None
+
+
+async def test_replayed_turn_gets_replay_span(recorder: Recorder) -> None:
+    replayed = text_msg("prior turn").model_copy(update={"replay": True})
+    async with models.stream(
+        MOCK_MODEL, [ai.user_message("go"), replayed]
+    ) as stream:
+        async for _ in stream:
+            pass
+
+    (call,) = [s for s in recorder.ended if s.name == "ai_stream"]
+    assert call.replay
+    assert isinstance(call.data, ai.telemetry.AiStreamSpanData)
+    assert call.data.message is not None
+    assert call.data.message.text == "prior turn"

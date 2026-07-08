@@ -35,7 +35,7 @@ import pydantic
 # Use the typing_extensions backport so this works on 3.12 too.
 from typing_extensions import TypeVar
 
-from .. import models, type_utils, types, util
+from .. import models, telemetry, type_utils, types, util
 from ..types import builders
 from ..types import events as events_
 from ..types.messages import MessageBundle
@@ -630,14 +630,24 @@ class BoundToolCall:
 
     async def __call__(self, **overrides: Any) -> events_.ToolCallResult:
         """Execute the tool and return a :class:`ToolCallResult`."""
+        data = telemetry.ToolExecutionSpanData(
+            tool_name=self._part.tool_name,
+            tool_call_id=self._part.tool_call_id,
+        )
+
         # Replay-from-pending-hook short-circuit: if a prior run already
         # produced a result for this call (cached on the ToolCallPart
         # by ``_process_interrupted_hooks``), return it without
         # re-executing the tool.
         cached = self._part.cached_result
         if cached is not None:
-            msg = builders.tool_message(cached)
-            return events_.ToolCallResult(message=msg, results=msg.tool_results)
+            async with telemetry.span(data, replay=True):
+                data.result = cached.result
+                data.is_error = cached.is_error
+                msg = builders.tool_message(cached)
+                return events_.ToolCallResult(
+                    message=msg, results=msg.tool_results
+                )
 
         # Best-effort parse so middleware sees usable kwargs when possible.
         # If parsing fails, middleware still gets the raw tool_call_id /
@@ -702,8 +712,18 @@ class BoundToolCall:
             part.set_model_input(model_input)
             return tool_result(part)
 
+        data.args = base_kwargs
         chain = middleware_._build_tool_chain(_real)
-        return await chain(call)
+        async with telemetry.span(data) as sp:
+            res = await chain(call)
+            if res.results:
+                data.result = res.results[0].result
+                data.is_error = any(p.is_error for p in res.results)
+            # A tool exception is caught and converted to an error
+            # result before it reaches this block, so it never hits the
+            # span's own except path — thread it through explicitly.
+            sp.error = res.exception
+            return res
 
 
 class GatedToolCall:
@@ -1255,9 +1275,15 @@ class Agent:
         """Stream, execute tools, repeat.
 
         Override in a subclass to customise the agent's control flow.
+        (A custom loop keeps run/model/tool/hook spans — those live in
+        the layers it calls — but loses per-step grouping unless it
+        opens its own ``telemetry.span`` blocks.)
         """
+        step = 0
         while context.keep_running():
+            step += 1
             async with (
+                telemetry.span(telemetry.LoopTurnSpanData(index=step)),
                 models.stream(context=context) as stream,
                 ToolRunner() as tr,
             ):
@@ -1374,6 +1400,11 @@ class Agent:
                     yield transition
 
         async def _stream() -> AsyncGenerator[events_.AgentEvent]:
+            run_data = telemetry.RunSpanData(
+                agent=type(self).__name__,
+                model=model.id,
+                messages=list(messages),
+            )
             # Activate middleware for this run (and everything it calls).
             # When middleware is None (default), inherit the parent's
             # middleware from the context var — this lets nested agents
@@ -1381,16 +1412,17 @@ class Agent:
             # *extend* the parent stack so that outer cross-cutting
             # concerns (tracing, durability) are preserved.  Pass
             # ``_middleware=[]`` to clear the stack entirely.
-            mw_token: middleware_.Token | None = None
-            if _middleware is not None:
-                parent = middleware_.get()
-                mw_token = middleware_.activate(parent + _middleware)
-            try:
-                chain = middleware_._build_agent_run_chain(_real)
-                async for event in chain(context):
-                    yield event
-            finally:
-                if mw_token is not None:
-                    middleware_.deactivate(mw_token)
+            async with telemetry.span(run_data):
+                mw_token: middleware_.Token | None = None
+                if _middleware is not None:
+                    parent = middleware_.get()
+                    mw_token = middleware_.activate(parent + _middleware)
+                try:
+                    chain = middleware_._build_agent_run_chain(_real)
+                    async for event in chain(context):
+                        yield event
+                finally:
+                    if mw_token is not None:
+                        middleware_.deactivate(mw_token)
 
         yield AgentStream(_stream(), context)
