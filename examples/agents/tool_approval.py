@@ -32,7 +32,7 @@ async def live(messages: list[ai.messages.Message]) -> None:
             ):
                 print(f"\n[pending] {event.hook.hook_id}")
                 ai.resolve_hook(
-                    event.hook.hook_id,
+                    event.hook,
                     ai.tools.ToolApproval(
                         granted=True,
                         reason="approved while the run is still active",

@@ -50,7 +50,7 @@ async def main() -> None:
             ):
                 print(f"\n[pending] {event.hook.hook_id}")
                 ai.resolve_hook(
-                    event.hook.hook_id,
+                    event.hook,
                     DeploymentReview(
                         approved=True,
                         reviewer="ops",
