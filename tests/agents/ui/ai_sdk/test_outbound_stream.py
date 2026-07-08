@@ -356,6 +356,7 @@ async def test_approval_request_hook_emits_approval_event() -> None:
                             hook_id="approve_tc1",
                             hook_type="ToolApproval",
                             status="pending",
+                            tool_call_id="tc1",
                         )
                     ],
                 ),
@@ -363,6 +364,7 @@ async def test_approval_request_hook_emits_approval_event() -> None:
                     hook_id="approve_tc1",
                     hook_type="ToolApproval",
                     status="pending",
+                    tool_call_id="tc1",
                 ),
             ),
         ]
@@ -544,6 +546,7 @@ async def test_resolved_approval_hook_emits_response_event() -> None:
             "callProviderMetadata": {"provider": {"approval": True}},
         },
         resolution={"granted": False, "reason": "not allowed"},
+        tool_call_id="tc1",
     )
 
     out = await _collect(

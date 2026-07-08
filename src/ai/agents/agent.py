@@ -228,7 +228,7 @@ class MessageAggregator(
         self._index_by_id: dict[str, int] = {}
 
     def feed(self, item: events_.AgentEvent) -> None:
-        if isinstance(item, events_.PartialToolCallResult):
+        if isinstance(item, events_.PartialToolCallResult | events_.RunBlocked):
             return
         msg = item.message
         if msg is None:
@@ -750,6 +750,7 @@ class GatedToolCall:
                 f"approve_{tc.id}",
                 payload=types.tools.ToolApproval,
                 metadata={"tool": tc.name, "kwargs": hook_kwargs},
+                tool_call_id=tc.id,
             )
         except hooks_.HookPendingError as e:
             return pending_tool_result(
@@ -980,18 +981,37 @@ class AgentStream(Generic[AgentOutputT]):
     ) -> None:
         self._gen = gen
         self._context = context
+        self._blocked = False
+        self._pending_hooks: dict[str, types.messages.HookPart[Any]] = {}
+
+    def _track(self, event: events_.AgentEvent) -> events_.AgentEvent:
+        # Fold delivered events into the exposed run state, so that the
+        # properties below are always consistent with the events the
+        # consumer has seen so far.
+        if isinstance(event, events_.RunBlocked):
+            self._blocked = True
+        elif isinstance(event, events_.HookEvent):
+            if event.hook.status == "pending":
+                self._pending_hooks[event.hook.hook_id] = event.hook
+            else:
+                # A blocked run can only resume via a hook resolution
+                # or cancellation (see RunBlocked), so this is also the
+                # unblock signal.
+                self._pending_hooks.pop(event.hook.hook_id, None)
+                self._blocked = False
+        return event
 
     def __aiter__(self) -> Self:
         return self
 
     async def __anext__(self) -> events_.AgentEvent:
-        return await self._gen.__anext__()
+        return self._track(await self._gen.__anext__())
 
     async def asend(self, value: Any) -> events_.AgentEvent:
-        return await self._gen.asend(value)
+        return self._track(await self._gen.asend(value))
 
     async def athrow(self, *args: Any, **kwargs: Any) -> events_.AgentEvent:
-        return await self._gen.athrow(*args, **kwargs)
+        return self._track(await self._gen.athrow(*args, **kwargs))
 
     async def aclose(self) -> None:
         await self._gen.aclose()
@@ -999,6 +1019,25 @@ class AgentStream(Generic[AgentOutputT]):
     @property
     def context(self) -> Context:
         return self._context
+
+    @property
+    def blocked(self) -> bool:
+        """Whether the run is blocked awaiting external hook resolution.
+
+        Set by a delivered :class:`~ai.types.events.RunBlocked` event,
+        cleared by the hook resolution that follows.  True means
+        nothing in the run can make progress until a pending hook (see
+        :attr:`pending_hooks`) is resolved — e.g. a tool approval.
+        After the run ends this keeps its final value, so serverless
+        drivers can distinguish "turn complete" from "turn suspended
+        awaiting input".
+        """
+        return self._blocked
+
+    @property
+    def pending_hooks(self) -> list[types.messages.HookPart[Any]]:
+        """Hooks that are pending as of the last delivered event."""
+        return list(self._pending_hooks.values())
 
     @property
     def messages(self) -> list[types.messages.Message]:
@@ -1318,15 +1357,21 @@ class Agent:
         _process_interrupted_hooks(context.messages)
 
         async def _real(call: Context) -> AsyncGenerator[events_.AgentEvent]:
+            tracker = events_.RunStateTracker()
             source = self.loop(call)
             async for event in runtime.run(source):
+                # Feed the tracker before the replay filter: replayed
+                # StreamEnds carry the tool calls the dispatcher is
+                # about to re-run, which the fold must count.
+                transition = tracker.feed(event)
                 # Drop replay-flagged events: they're a control-flow
                 # signal for the loop's tool dispatcher (which already
                 # ran by the time we see the event here), not user-
                 # facing output.
-                if isinstance(event, events_.BaseEvent) and event.replay:
-                    continue
-                yield event
+                if not (isinstance(event, events_.BaseEvent) and event.replay):
+                    yield event
+                if transition is not None:
+                    yield transition
 
         async def _stream() -> AsyncGenerator[events_.AgentEvent]:
             # Activate middleware for this run (and everything it calls).

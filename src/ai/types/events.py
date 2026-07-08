@@ -322,8 +322,120 @@ class HookEvent(pydantic.BaseModel):
     kind: Literal["hook"] = "hook"
 
 
+class RunBlocked(pydantic.BaseModel):
+    """The run is blocked on hooks.
+
+    Emitted when the run stops being able to make progress without
+    external input: at least one hook is pending, no model stream is
+    producing events, and every in-flight tool call is suspended
+    awaiting a hook.  Streaming consumers can use this to surface
+    "waiting for approval" state without reconstructing it from
+    tool/hook events.
+
+    ``hooks`` is a snapshot of the pending hooks the run is blocked on.
+
+    There is no mirror "unblocked" event because it would be redundant:
+    a blocked run can only resume via a hook resolution (or
+    cancellation), so the next ``HookEvent`` with a non-``pending``
+    status *is* the unblock signal.  Note the converse does not hold —
+    a ``ToolCallResult`` carrying an ``is_hook_pending`` placeholder
+    (serverless abort) arrives while the run stays blocked, and the run
+    then ends still blocked.
+    """
+
+    hooks: tuple[messages.HookPart[Any], ...] = ()
+
+    kind: Literal["run_blocked"] = "run_blocked"
+
+
 AgentMessageEvent = Event | ToolCallResult | HookEvent
 
-AgentEvent = Event | ToolCallResult | HookEvent | PartialToolCallResult
+AgentEvent = (
+    Event | ToolCallResult | HookEvent | PartialToolCallResult | RunBlocked
+)
 
 TerminalEvent = StreamEnd | ToolCallResult | HookEvent
+
+
+class RunStateTracker:
+    """Fold an agent event stream into run state (blocked-on-hooks).
+
+    A pure function of the event stream: feed every event in order and
+    :meth:`feed` returns a :class:`RunBlocked` event whenever the run
+    becomes blocked, else None (:attr:`blocked` flips back silently —
+    see :class:`RunBlocked` for why no mirror event exists).  Works
+    identically over a live run or a serialized replay of one.
+
+    The fold reads three things:
+
+    * hook state from :class:`HookEvent` (``pending`` adds, ``resolved``
+      / ``cancelled`` removes);
+    * model-stream activity from :class:`StreamStart` / :class:`StreamEnd`;
+    * in-flight tool calls from the assistant message on
+      :class:`StreamEnd` (scheduled) and :class:`ToolCallResult`
+      (settled), matched by ``tool_call_id``.
+
+    The run is blocked when at least one hook is pending, no stream is
+    producing, and every in-flight tool call is accounted for by a
+    pending hook's ``tool_call_id``.  Consequently the signal is only
+    as good as the stream: loops must yield their ``StreamEnd`` (with
+    the assistant message) for tool calls to be counted, and custom
+    gating must pass ``tool_call_id=`` to ``ai.hook()`` — an
+    unattributed hook while tools are in flight reads as "still busy"
+    and suppresses the signal.
+    """
+
+    def __init__(self) -> None:
+        self._pending: dict[str, messages.HookPart[Any]] = {}
+        self._in_flight: set[str] = set()
+        self._streaming = 0
+        self._blocked = False
+
+    @property
+    def blocked(self) -> bool:
+        return self._blocked
+
+    @property
+    def pending_hooks(self) -> list[messages.HookPart[Any]]:
+        return list(self._pending.values())
+
+    def feed(self, event: AgentEvent) -> RunBlocked | None:
+        match event:
+            case StreamStart():
+                self._streaming += 1
+            case StreamEnd():
+                # Loops may emit a bare StreamEnd without a StreamStart
+                # (e.g. when the model was streamed out-of-band), so
+                # clamp at zero.
+                self._streaming = max(0, self._streaming - 1)
+                self._in_flight.update(
+                    tc.tool_call_id for tc in event.message.tool_calls
+                )
+            case ToolCallResult():
+                self._in_flight.difference_update(
+                    r.tool_call_id for r in event.results
+                )
+            case HookEvent():
+                if event.hook.status == "pending":
+                    self._pending[event.hook.hook_id] = event.hook
+                else:
+                    self._pending.pop(event.hook.hook_id, None)
+            case _:
+                return None
+
+        attributed = {
+            h.tool_call_id
+            for h in self._pending.values()
+            if h.tool_call_id is not None
+        }
+        now = (
+            bool(self._pending)
+            and not self._streaming
+            and self._in_flight <= attributed
+        )
+        if now == self._blocked:
+            return None
+        self._blocked = now
+        if not now:
+            return None
+        return RunBlocked(hooks=tuple(self._pending.values()))
