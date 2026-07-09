@@ -7,38 +7,38 @@ import contextlib
 import dataclasses
 import functools
 import inspect
-from typing import TYPE_CHECKING, Any, cast, overload
+from typing import TYPE_CHECKING, Any, Protocol, cast, overload
 
 if TYPE_CHECKING:
     from collections.abc import (
         AsyncIterable,
         AsyncIterator,
-        Awaitable,
         Callable,
         Collection,
+        Coroutine,
         Generator,
         Iterator,
     )
     from types import TracebackType
-    from typing import Protocol
 
-    class ContextManagerWithAsyncDecorator[T](Protocol):
-        def __enter__(self) -> T: ...
 
-        def __exit__(
-            self,
-            typ: type[BaseException] | None,
-            value: BaseException | None,
-            traceback: TracebackType | None,
-        ) -> bool | None: ...
+class ContextManagerWithAsyncDecorator[T](Protocol):
+    def __enter__(self) -> T: ...
 
-        @overload
-        def __call__[**P, R](
-            self, func: Callable[P, Awaitable[R]]
-        ) -> Callable[P, Awaitable[R]]: ...
+    def __exit__(
+        self,
+        typ: type[BaseException] | None,
+        value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> bool | None: ...
 
-        @overload
-        def __call__[**P, R](self, func: Callable[P, R]) -> Callable[P, R]: ...
+    @overload
+    def __call__[**P, R](
+        self, func: Callable[P, Coroutine[Any, Any, R]]
+    ) -> Callable[P, Coroutine[Any, Any, R]]: ...
+
+    @overload
+    def __call__[**P, R](self, func: Callable[P, R]) -> Callable[P, R]: ...
 
 
 @dataclasses.dataclass
