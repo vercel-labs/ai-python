@@ -54,15 +54,15 @@ The stream yields model events and agent events. After the run finishes,
 `stream.messages` contains the updated history, and `stream.output` contains
 the final assistant output.
 
-Unline `ai.stream`, every `agent.run` can produce multiple messages alternating
+Unlike `ai.stream`, every `agent.run` can produce multiple messages alternating
 between `"user"`/`"tool"` and `"assistant"`, representing turns in the LLM request
 and response cycle.
 
 ## Understand multi-turn behavior
 
-Each loop turn has one `ai.stream` that produces one assistant message. If the 
-message contains tool calls, the agent executes them, appends one tool-result 
-message, and starts the next model turn.
+Each loop turn makes one call to `ai.stream` and produces one assistant
+message. If the message contains tool calls, the agent executes them, appends
+one tool-result message, and starts the next model turn.
 
 ```python
 async with agent.run(model, messages) as stream:
