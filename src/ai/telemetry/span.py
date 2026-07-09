@@ -9,7 +9,7 @@ Same API is used to instrument the framework and define custom spans::
         docs = await search(q)
         sp.set(count=len(docs))
 
-Nesting is automatic, the current span is tracked using a context var.
+Nesting is automatic: the current span is tracked using a context var.
 
 An adapter processes spans and decides what to do with them::
 
