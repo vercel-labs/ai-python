@@ -1,15 +1,27 @@
 """Model metadata types."""
 
 import os
-from typing import Any, Self
+import weakref
+from typing import TYPE_CHECKING, Any, Self, cast
 
 import pydantic
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 from ... import _modelsdev
 from ...errors import ConfigurationError
 from ...providers import base
 
 _DEFAULT_MODEL_ENV = "AI_SDK_DEFAULT_MODEL"
+
+
+def _exclude_if_none(v: Any) -> bool:
+    # pydantic-core's SchemaSerializer doesn't GC-traverse ``exclude_if``
+    # callables, so a closure stored there directly forms an uncollectable
+    # cycle back through this module; wrap it in weakref.proxy at the call
+    # site to keep the serializer's reference weak.
+    return v is None
 
 
 class Model(pydantic.BaseModel):
@@ -23,7 +35,10 @@ class Model(pydantic.BaseModel):
     id: str
     provider: base.Provider[Any]
     protocol: base.ProviderProtocol[Any] | None = pydantic.Field(
-        default=None, exclude_if=lambda v: v is None
+        default=None,
+        exclude_if=cast(
+            "Callable[[Any], bool]", weakref.proxy(_exclude_if_none)
+        ),
     )
 
     def __repr__(self) -> str:

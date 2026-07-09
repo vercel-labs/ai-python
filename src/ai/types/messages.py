@@ -3,6 +3,7 @@ import contextlib
 import contextvars
 import functools
 import random
+import weakref
 from collections.abc import AsyncIterator, Callable, Iterator, Sequence
 from typing import Annotated, Any, Literal, Protocol, Self, cast, overload
 
@@ -217,6 +218,23 @@ class _ModelInputUnset:
 
 _MODEL_INPUT_UNSET: Any = _ModelInputUnset()
 
+
+def _exclude_if_model_input_unset(v: Any) -> bool:
+    return isinstance(v, _ModelInputUnset)
+
+
+def _exclude_if_none(v: Any) -> bool:
+    # pydantic-core's SchemaSerializer doesn't GC-traverse ``exclude_if``
+    # callables, so a closure stored there directly forms an uncollectable
+    # cycle back through this module; wrap it in weakref.proxy at the call
+    # site to keep the serializer's reference weak.
+    return v is None
+
+
+def _exclude_if_falsy(v: Any) -> bool:
+    return not v
+
+
 # Coarse tag for the shape of ``ToolResultPart.result``.
 # ``"special"`` means a :class:`SpecialToolResult`; ``"error"`` flags
 # an error result; ``"json"`` (the default) is any plain value.
@@ -264,7 +282,10 @@ class ToolResultPart(pydantic.BaseModel):
     # again, though.
     model_input: Any = pydantic.Field(
         default_factory=lambda: _MODEL_INPUT_UNSET,
-        exclude_if=lambda v: isinstance(v, _ModelInputUnset),
+        exclude_if=cast(
+            "Callable[[Any], bool]",
+            weakref.proxy(_exclude_if_model_input_unset),
+        ),
         repr=False,
     )
 
@@ -362,7 +383,9 @@ class ToolCallPart(pydantic.BaseModel):
     # running the tool body again.
     cached_result: ToolResultPart | None = pydantic.Field(
         default=None,
-        exclude_if=lambda v: v is None,
+        exclude_if=cast(
+            "Callable[[Any], bool]", weakref.proxy(_exclude_if_none)
+        ),
         repr=False,
     )
 
@@ -463,7 +486,9 @@ class Message(pydantic.BaseModel):
     # producing a duplicate turn.
     replay: bool = pydantic.Field(
         default=False,
-        exclude_if=lambda v: not v,
+        exclude_if=cast(
+            "Callable[[Any], bool]", weakref.proxy(_exclude_if_falsy)
+        ),
         repr=False,
     )
 
