@@ -325,13 +325,13 @@ Async-generator tools can yield partial output while they run.
 
 ```python
 ai.tool_result(tool_call_id="tc_1", tool_name="lookup", result={"ok": True})
-ai.pending_tool_result(hook_part, tool_call_id="tc_1", tool_name="lookup")
+ai.deferred_tool_result(hook_part, tool_call_id="tc_1", tool_name="lookup")
 ```
 
 Exports:
 
 - `tool_result`: Create a `ToolCallResult`.
-- `pending_tool_result`: Create a pending hook placeholder result.
+- `deferred_tool_result`: Create a deferred hook placeholder result.
 
 ### Hooks
 
@@ -347,9 +347,9 @@ approval = await ai.hook(
 
 Hook exports:
 
-- `hook`: Emit a pending hook event and wait for a matching resolution.
+- `hook`: Emit a deferred hook event and wait for a matching resolution.
 - `resolve_hook`: Resolve a live or future hook.
-- `abort_pending_hook`: Mark a serialized pending hook as aborted.
+- `defer_hook`: Mark a serialized deferred hook as aborted.
 - `cancel_hook`: Cancel a live hook by label.
 
 ## Errors

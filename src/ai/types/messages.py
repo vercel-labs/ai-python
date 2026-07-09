@@ -261,7 +261,7 @@ class ToolResultPart(pydantic.BaseModel):
     id: str = pydantic.Field(default_factory=lambda: generate_id("part"))
     tool_call_id: str
     tool_name: str
-    is_hook_pending: bool = False
+    is_hook_deferred: bool = False
     provider_metadata: dict[str, Any] | None = None
 
     # The "real" result of the tool call.  Stays ``Any``: a plain value
@@ -376,7 +376,7 @@ class ToolCallPart(pydantic.BaseModel):
     tool_args: str
     provider_metadata: dict[str, Any] | None = None
 
-    # Runtime cache used by replay-from-pending-hook flows: when a prior
+    # Runtime cache used by replay-from-deferred-hook flows: when a prior
     # run completed this tool call but a sibling tool call was suspended
     # on a hook, we fold the completed result onto the ``ToolCallPart``
     # so re-execution short-circuits to the cached value instead of
@@ -439,7 +439,7 @@ class HookPart[T](pydantic.BaseModel):
     id: str = pydantic.Field(default_factory=lambda: generate_id("part"))
     hook_id: str
     hook_type: str
-    status: Literal["pending", "resolved", "cancelled"]
+    status: Literal["deferred", "resolved", "cancelled"]
     metadata: dict[str, Any] = pydantic.Field(default_factory=dict)
     resolution: T | None = None
     tool_call_id: str | None = None

@@ -28,7 +28,7 @@ async with agent.run(model, messages) as stream:
     async for event in stream:
         if (
             isinstance(event, ai.events.HookEvent)
-            and event.hook.status == "pending"
+            and event.hook.status == "deferred"
         ):
             print(event.hook.hook_id, event.hook.metadata)
 
@@ -101,14 +101,14 @@ async with agent.run(model, messages) as stream:
     async for event in stream:
         if (
             isinstance(event, ai.events.HookEvent)
-            and event.hook.status == "pending"
+            and event.hook.status == "deferred"
         ):
             # interrupt the loop
-            ai.abort_pending_hook(event.hook)
+            ai.defer_hook(event.hook)
 
 ```
 
-When handling the hook event, call `abort_pending_hook` to interrupt the loop
+When handling the hook event, call `defer_hook` to interrupt the loop
 and surface your tool approvals (or custom hook-related work) to the client.
 
 The `ToolRunner` will handle multiple concurrent aborts by waiting for all

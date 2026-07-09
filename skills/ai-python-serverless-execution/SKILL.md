@@ -1,6 +1,6 @@
 ---
 name: ai-python-serverless-execution
-description: Use when building serverless AI SDK for Python endpoints, handling hook approvals, aborting pending hooks, or resuming runs across requests.
+description: Use when building serverless AI SDK for Python endpoints, handling hook approvals, deferring hooks, or resuming runs across requests.
 metadata:
   sdk-version: "0.2.1"
 ---
@@ -26,23 +26,23 @@ async def delete_file(path: str) -> str:
 
 ## First Request
 
-When a pending hook appears, send it to the client and call
-`ai.abort_pending_hook(...)`.
+When a deferred hook appears, send it to the client and call
+`ai.defer_hook(...)`.
 
 Keep draining the stream. Do not break after the first hook. This lets sibling
-tools finish or get marked pending, and makes `stream.messages` complete.
+tools finish or get marked deferred, and makes `stream.messages` complete.
 
 ```python
-pending_hooks = []
+deferred_hooks = []
 
 async with agent.run(model, messages) as stream:
     async for event in stream:
         if (
             isinstance(event, ai.events.HookEvent)
-            and event.hook.status == "pending"
+            and event.hook.status == "deferred"
         ):
-            pending_hooks.append(event.hook)
-            ai.abort_pending_hook(event.hook)
+            deferred_hooks.append(event.hook)
+            ai.defer_hook(event.hook)
 
         yield event
 
@@ -51,7 +51,7 @@ saved_messages = [
     for message in stream.messages
 ]
 save_messages(saved_messages)
-save_pending_hook_ids([hook.hook_id for hook in pending_hooks])
+save_deferred_hook_ids([hook.hook_id for hook in deferred_hooks])
 ```
 
 ## Resume Request
@@ -87,7 +87,7 @@ Call `ai.resolve_hook(...)` before `agent.run(...)`. Do not ask the model to
 make the tool call again.
 
 `Agent.run` prepares saved interrupted messages for replay. Completed sibling
-tool results are reused, pending hooks receive the pre-registered resolution,
+tool results are reused, deferred hooks receive the pre-registered resolution,
 and replay-only events are hidden from the caller.
 
 ## Rules

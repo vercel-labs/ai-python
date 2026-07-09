@@ -156,7 +156,7 @@ def merge_tool_results(
     for part in tool_parts:
         updates: dict[str, Any]
         match part:
-            case messages_.ToolResultPart() if part.is_hook_pending:
+            case messages_.ToolResultPart() if part.is_hook_deferred:
                 continue
             case messages_.ToolResultPart():
                 tool_call_id = part.tool_call_id
@@ -229,7 +229,7 @@ def merge_approval_signals(
         is_automatic = part.metadata.get("isAutomatic")
         is_automatic = is_automatic if isinstance(is_automatic, bool) else None
         match part.status:
-            case "pending":
+            case "deferred":
                 updates["state"] = "approval-requested"
                 updates["approval"] = ui_messages.UIToolApproval.model_validate(
                     {

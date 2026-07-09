@@ -61,7 +61,7 @@ async def test_invalid_args_with_approval_returns_error_result() -> None:
         async for event in stream:
             if (
                 isinstance(event, events_.HookEvent)
-                and event.hook.status == "pending"
+                and event.hook.status == "deferred"
             ):
                 hook_events.append(event)
                 ai.resolve_hook(
@@ -113,7 +113,7 @@ async def test_invalid_args_skips_approval_hook() -> None:
         async for event in stream:
             if (
                 isinstance(event, events_.HookEvent)
-                and event.hook.status == "pending"
+                and event.hook.status == "deferred"
             ):
                 hook_fired = True
                 ai.resolve_hook(
@@ -154,7 +154,7 @@ async def test_completely_invalid_json_with_approval() -> None:
         async for event in stream:
             if (
                 isinstance(event, events_.HookEvent)
-                and event.hook.status == "pending"
+                and event.hook.status == "deferred"
             ):
                 ai.resolve_hook(
                     event.hook.hook_id,

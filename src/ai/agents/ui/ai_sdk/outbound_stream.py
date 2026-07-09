@@ -391,9 +391,9 @@ class _StreamState:
         for part in event.results:
             if part.tool_call_id in self.emitted_tool_results:
                 continue
-            # Hook-abort placeholders are internal bookkeeping: the
-            # corresponding HookPart(pending) drives the UI state.
-            if part.is_hook_pending:
+            # Hook deferral placeholders are internal bookkeeping: the
+            # corresponding HookPart(deferred) drives the UI state.
+            if part.is_hook_deferred:
                 continue
             self.emitted_tool_results.add(part.tool_call_id)
             if part.is_error:
@@ -490,7 +490,7 @@ class _StreamState:
         is_automatic = hook_part.metadata.get("isAutomatic")
         is_automatic = is_automatic if isinstance(is_automatic, bool) else None
         match hook_part.status:
-            case "pending":
+            case "deferred":
                 if tc_id in self.emitted_approval_requests:
                     return out
                 self.emitted_approval_requests.add(tc_id)
@@ -609,7 +609,7 @@ async def to_stream(
                     yield ui_event
             case events_.RunBlocked():
                 # No AI SDK UI equivalent; hook parts already carry the
-                # pending-approval state the UI renders.
+                # deferred-approval state the UI renders.
                 pass
             case _:
                 for ui_event in state.on_event(event):

@@ -38,9 +38,9 @@ async def body():
             async for event in stream:
                 if (
                     isinstance(event, ai.events.HookEvent)
-                    and event.hook.status == "pending"
+                    and event.hook.status == "deferred"
                 ):
-                    ai.abort_pending_hook(event.hook)
+                    ai.defer_hook(event.hook)
                 yield event
 
         async for chunk in ai.agents.ui.ai_sdk.to_sse(events()):
@@ -56,7 +56,7 @@ The adapter handles `UIMessage` parsing, message IDs, tool state, approvals,
 subagent `MessageBundle` values, and AI SDK UI stream events.
 
 You handle the HTTP route, auth, storage, session lookup, frontend rendering,
-and when to abort pending hooks.
+and when to defer hooks.
 
 For saved UI history, use:
 

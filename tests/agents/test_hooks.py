@@ -46,8 +46,8 @@ async def test_resolve_live_future() -> None:
         async for event in stream:
             if not isinstance(event, agent_events_.HookEvent):
                 continue
-            # When we see the pending hook, resolve it.
-            if event.hook.status == "pending":
+            # When we see the deferred hook, resolve it.
+            if event.hook.status == "deferred":
                 ai.resolve_hook(
                     "confirm_1", {"approved": True, "reason": "looks good"}
                 )
@@ -85,7 +85,7 @@ async def test_cancel_live_hook() -> None:
         async for event in stream:
             if not isinstance(event, agent_events_.HookEvent):
                 continue
-            if event.hook.status == "pending":
+            if event.hook.status == "deferred":
                 await ai.cancel_hook("cancel_me", reason="denied")
 
     assert was_cancelled
@@ -95,7 +95,7 @@ async def test_cancel_live_hook() -> None:
 
 
 async def test_cancel_nonexistent_raises() -> None:
-    with pytest.raises(ValueError, match="No pending hook"):
+    with pytest.raises(ValueError, match="No deferred hook"):
         await ai.cancel_hook("does_not_exist_xyz")
 
 
@@ -169,7 +169,7 @@ async def test_resolved_hook_emits_message() -> None:
             if not isinstance(event, agent_events_.HookEvent):
                 continue
             hooks.append(event.hook)
-            if event.hook.status == "pending":
+            if event.hook.status == "deferred":
                 ai.resolve_hook("emit_test", {"approved": False})
 
     resolved = [h for h in hooks if h.status == "resolved"]
@@ -177,10 +177,10 @@ async def test_resolved_hook_emits_message() -> None:
     assert resolved[0].resolution == {"approved": False}
 
 
-# -- Hook metadata surfaces in pending message -----------------------------
+# -- Hook metadata surfaces in deferred message -----------------------------
 
 
-async def test_hook_metadata_in_pending() -> None:
+async def test_hook_metadata_in_deferred() -> None:
     class MyAgent(ai.Agent):
         async def loop(
             self, context: ai.Context
@@ -194,7 +194,7 @@ async def test_hook_metadata_in_pending() -> None:
                     payload=Confirmation,
                     metadata={"tool": "rm -rf", "path": "/"},
                 )
-            except ai.agents.hooks.HookPendingError:
+            except ai.agents.hooks.HookDeferredException:
                 return
 
     my_agent = MyAgent()
@@ -205,8 +205,8 @@ async def test_hook_metadata_in_pending() -> None:
         async for event in stream:
             if isinstance(event, agent_events_.HookEvent):
                 hooks.append(event.hook)
-                if event.hook.status == "pending":
-                    ai.abort_pending_hook(event.hook)
+                if event.hook.status == "deferred":
+                    ai.defer_hook(event.hook)
 
     assert len(hooks) >= 1
     assert hooks[0].metadata == {"tool": "rm -rf", "path": "/"}
@@ -240,7 +240,7 @@ async def test_live_hook_span(recorder: Recorder) -> None:
         async for event in stream:
             if (
                 isinstance(event, agent_events_.HookEvent)
-                and event.hook.status == "pending"
+                and event.hook.status == "deferred"
             ):
                 ai.resolve_hook(my_agent.label, {"approved": True})
 
@@ -248,12 +248,12 @@ async def test_live_hook_span(recorder: Recorder) -> None:
     assert isinstance(hook_span.data, ai.telemetry.HookSpanData)
     assert hook_span.data.status == "resolved"
     assert not hook_span.replay
-    # The suspension's timeline: pending once resolvers can see it,
+    # The suspension's timeline: deferred once resolvers can see it,
     # resolved when the external input arrived.
-    pending, resolved = hook_span.span_events
-    assert pending.name == ai.telemetry.HOOK_PENDING
+    deferred, resolved = hook_span.span_events
+    assert deferred.name == ai.telemetry.HOOK_DEFERRED
     assert resolved.name == ai.telemetry.HOOK_RESOLVED
-    assert pending.time_ns <= resolved.time_ns
+    assert deferred.time_ns <= resolved.time_ns
 
 
 async def test_cancelled_hook_span(recorder: Recorder) -> None:
@@ -277,15 +277,15 @@ async def test_cancelled_hook_span(recorder: Recorder) -> None:
         async for event in stream:
             if (
                 isinstance(event, agent_events_.HookEvent)
-                and event.hook.status == "pending"
+                and event.hook.status == "deferred"
             ):
                 await ai.cancel_hook(my_agent.label, reason="denied")
 
     (hook_span,) = _hook_spans(recorder)
     assert isinstance(hook_span.data, ai.telemetry.HookSpanData)
     assert hook_span.data.status == "cancelled"
-    pending, cancelled = hook_span.span_events
-    assert pending.name == ai.telemetry.HOOK_PENDING
+    deferred, cancelled = hook_span.span_events
+    assert deferred.name == ai.telemetry.HOOK_DEFERRED
     assert cancelled.name == ai.telemetry.HOOK_CANCELLED
     assert cancelled.attributes == {"reason": "denied"}
 
