@@ -40,7 +40,19 @@ import dataclasses
 import inspect
 import logging
 import time
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, Protocol
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    ClassVar,
+    Generic,
+    Literal,
+    Protocol,
+    overload,
+)
+
+# ``typing.TypeVar`` lacks the ``default=`` kwarg on Python <3.13.
+# Use the typing_extensions backport so this works on 3.12 too.
+from typing_extensions import TypeVar
 
 from ..types import messages as messages_
 
@@ -79,6 +91,15 @@ class SpanData(Protocol):
     """
 
     span_name: ClassVar[str]
+
+
+# Covariant: adapters take ``Span`` (= ``Span[SpanData]``) and must
+# accept any concretely-typed span.  They read ``data``, never replace
+# it, so the widened reference is safe in practice.
+DataT_co = TypeVar("DataT_co", bound=SpanData, default=SpanData, covariant=True)
+# Function-scoped variant for ``span()``: a covariant variable can't
+# appear as a parameter.
+DataT = TypeVar("DataT", bound=SpanData)
 
 
 @dataclasses.dataclass
@@ -181,8 +202,12 @@ class SpanEvent:
 
 
 @dataclasses.dataclass
-class Span:
+class Span(Generic[DataT_co]):
     """A record of a unit of work.
+
+    Generic in its data type: ``span(RetrievalSpanData(...))`` gives a
+    ``Span[RetrievalSpanData]``, so late assignments to ``sp.data``
+    fields are type checked.  A bare ``Span`` is ``Span[SpanData]``.
 
     ``replay=True`` marks work that is being replayed (resume,
     serverless re-entry) rather than performed live.
@@ -197,7 +222,7 @@ class Span:
     """
 
     name: str
-    data: SpanData
+    data: DataT_co
     id: str
     trace_id: str
     parent_id: str | None
@@ -285,25 +310,65 @@ async def _dispatch(method: str, span_: Span, *args: Any) -> None:
             )
 
 
-@contextlib.asynccontextmanager
-async def span(
+@overload
+def span(
+    name_or_data: str,
+    /,
+    *,
+    replay: bool = False,
+    set_as_current: bool = True,
+    **attributes: Any,
+) -> contextlib.AbstractAsyncContextManager[Span[CustomSpanData]]: ...
+
+
+@overload
+def span(
+    name_or_data: DataT,
+    /,
+    *,
+    replay: bool = False,
+    set_as_current: bool = True,
+) -> contextlib.AbstractAsyncContextManager[Span[DataT]]: ...
+
+
+def span(
     name_or_data: str | SpanData,
     /,
     *,
     replay: bool = False,
     set_as_current: bool = True,
     **attributes: Any,
-) -> AsyncIterator[Span]:
+) -> contextlib.AbstractAsyncContextManager[Span[Any]]:
     """Open a span; it is "current" (parents new spans) inside the block.
 
     Pass a name plus attributes for a user span, or a :class:`SpanData`
-    instance for a typed one.  Exceptions are recorded on the span and
-    re-raised.
+    instance for a typed one — the span is generic in it, so late
+    assignments to ``sp.data`` fields are type checked.  Exceptions are
+    recorded on the span and re-raised.
 
     ``set_as_current=False`` keeps the span from becoming current:
     work done while it is open parents to *its* parent instead. Used by
     ai.stream because of the context manager api.
     """
+    # The indirection exists because type checkers can't apply
+    # ``asynccontextmanager`` to an overloaded function directly.
+    return _span_impl(
+        name_or_data,
+        replay=replay,
+        set_as_current=set_as_current,
+        **attributes,
+    )
+
+
+@contextlib.asynccontextmanager
+async def _span_impl(
+    name_or_data: str | SpanData,
+    /,
+    *,
+    replay: bool,
+    set_as_current: bool,
+    **attributes: Any,
+) -> AsyncIterator[Span[Any]]:
     if isinstance(name_or_data, str):
         name = name_or_data
         data: SpanData = CustomSpanData(attributes=dict(attributes))
