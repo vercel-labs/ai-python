@@ -1428,8 +1428,8 @@ class Agent:
                         middleware_.deactivate(mw_token)
 
         # close the event generator on exit from the ``run()`` block.
-        agen = _stream()
+        astream = AgentStream(_stream(), context)
         try:
-            yield AgentStream(agen, context)
+            yield astream
         finally:
-            await agen.aclose()
+            await astream.aclose()
