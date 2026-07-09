@@ -48,7 +48,7 @@ async def test_wrap_tool_is_called() -> None:
         """Double a number."""
         return x * 2
 
-    my_agent = ai.agent(tools=[double])
+    my_agent = ai.Agent(tools=[double])
     call1 = [tool_call_msg(tc_id="tc-1", name="double", args='{"x": 7}')]
     call2 = [text_msg("14")]
     mock_llm([call1, call2])
@@ -131,7 +131,7 @@ async def test_wrap_agent_run_ordering() -> None:
                 yield event
             order.append("inner-after")
 
-    my_agent = ai.agent()
+    my_agent = ai.Agent()
     mock_llm([[text_msg("Hi")]])
 
     async with my_agent.run(
@@ -164,7 +164,7 @@ async def test_wrap_tool_context_fields_flow_to_result() -> None:
         """Echo a number."""
         return x
 
-    my_agent = ai.agent(tools=[echo])
+    my_agent = ai.Agent(tools=[echo])
     call1 = [tool_call_msg(tc_id="tc-1", name="echo", args='{"x": 42}')]
     call2 = [text_msg("done")]
     mock_llm([call1, call2])
@@ -195,7 +195,7 @@ async def test_wrap_tool_rewriting_tool_call_id_breaks_history() -> None:
         """Echo a number."""
         return x
 
-    my_agent = ai.agent(tools=[echo])
+    my_agent = ai.Agent(tools=[echo])
     call1 = [tool_call_msg(tc_id="original-id", name="echo", args='{"x": 42}')]
     call2 = [text_msg("done")]
     mock_llm([call1, call2])
@@ -226,7 +226,7 @@ async def test_model_context_messages_are_isolated() -> None:
             call.messages.append(ai.system_message("injected"))
             return await next(call)
 
-    my_agent = ai.agent()
+    my_agent = ai.Agent()
     mock_llm([[text_msg("Hi")]])
 
     async with my_agent.run(
@@ -261,7 +261,7 @@ async def test_middleware_can_fix_bad_tool_kwargs() -> None:
         """Double a number."""
         return x * 2
 
-    my_agent = ai.agent(tools=[double])
+    my_agent = ai.Agent(tools=[double])
     # Send completely invalid JSON args — parse will fail, kwargs will be {}.
     call1 = [tool_call_msg(tc_id="tc-bad", name="double", args="not json")]
     call2 = [text_msg("done")]

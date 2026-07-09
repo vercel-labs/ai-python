@@ -326,7 +326,7 @@ becomes the tool result the parent model sees::
 
     @ai.tool
     async def research(topic: str) -> SubAgentTool:
-        sub = ai.agent(tools=[...])
+        sub = ai.Agent(tools=[...])
         async with sub.run(model, messages) as stream:
             async for event in stream:
                 yield event
@@ -1394,11 +1394,3 @@ class Agent:
                     middleware_.deactivate(mw_token)
 
         yield AgentStream(_stream(), context)
-
-
-def agent(
-    *,
-    tools: Sequence[AgentTool | Tool] | None = None,
-) -> Agent:
-    """Create an Agent."""
-    return Agent(tools=tools)

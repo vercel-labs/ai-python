@@ -38,7 +38,7 @@ async def progress_tool(query: str) -> AsyncGenerator[str]:
 async def test_generator_tool_streams_and_returns_result() -> None:
     """Generator tool yields streaming events visible to consumer;
     final text becomes the tool result fed back to the LLM."""
-    my_agent = ai.agent(tools=[progress_tool])
+    my_agent = ai.Agent(tools=[progress_tool])
 
     # Turn 1: LLM calls progress_tool
     # Turn 2: LLM produces final text after seeing the tool result
@@ -119,7 +119,7 @@ async def inner_fact(topic: str) -> str:
 @ai.tool(aggregator=ai.agents.MessageAggregator)
 async def research_tool(topic: str) -> AsyncGenerator[agent_events_.AgentEvent]:
     """Nested agent that researches a topic."""
-    inner = ai.agent(tools=[inner_fact])
+    inner = ai.Agent(tools=[inner_fact])
 
     msgs = [
         ai.system_message("Be concise."),
@@ -138,7 +138,7 @@ async def test_yield_from_nested_agent() -> None:
     queue and discards bare Messages, so the parent agent's
     context.messages stays clean.
     """
-    outer = ai.agent(tools=[research_tool])
+    outer = ai.Agent(tools=[research_tool])
 
     # Inner agent: text-only reply (no tools, to keep it simple)
     inner_reply = [text_msg("Mars has two moons.", id="inner-msg")]

@@ -236,20 +236,18 @@ Part builder exports:
 
 ## Tools and Agents
 
-### agent
+### Agent
 
-`agent` creates an `Agent`.
+`Agent` runs the default agent loop.
 
 ```python
-agent = ai.agent(tools=[contact_mothership])
+agent = ai.Agent(tools=[contact_mothership])
 ```
 
 Arguments:
 
 - `tools`: Optional `AgentTool` values from `tool` and schema-only `Tool`
   declarations for provider-executed tools.
-
-Returns `Agent`.
 
 ### AgentTool
 
@@ -264,7 +262,7 @@ tool.validator
 tool.require_approval
 ```
 
-Pass `AgentTool` values to `agent(tools=[...])`.
+Pass `AgentTool` values to `Agent(tools=[...])`.
 
 ### Context
 

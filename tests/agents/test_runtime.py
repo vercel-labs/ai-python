@@ -33,7 +33,7 @@ async def concat(a: str, b: str) -> str:
 
 async def test_agent_text_only() -> None:
     """Agent default loop with no tool calls returns after one LLM call."""
-    my_agent = ai.agent(tools=[double])
+    my_agent = ai.Agent(tools=[double])
 
     llm = mock_llm([[text_msg("Hello!")]])
     async with my_agent.run(MOCK_MODEL, [ai.user_message("Hi")]) as stream:
@@ -47,7 +47,7 @@ async def test_agent_text_only() -> None:
 
 async def test_agent_tool_then_text() -> None:
     """Agent default loop calls tool, feeds result back, gets final text."""
-    my_agent = ai.agent(tools=[double])
+    my_agent = ai.Agent(tools=[double])
 
     call1 = [tool_call_msg(tc_id="tc-1", name="double", args='{"x": 5}')]
     call2 = [text_msg("The answer is 10.")]
@@ -69,7 +69,7 @@ async def test_agent_tool_then_text() -> None:
 
 async def test_agent_parallel_tools() -> None:
     """LLM returns two tool calls in one message; both execute."""
-    my_agent = ai.agent(tools=[double])
+    my_agent = ai.Agent(tools=[double])
 
     two_tools = messages.Message(
         id="msg-1",
@@ -104,7 +104,7 @@ async def test_agent_parallel_tools() -> None:
 
 async def test_agent_multi_turn() -> None:
     """LLM calls a tool, then calls another tool, then returns text."""
-    my_agent = ai.agent(tools=[double, concat])
+    my_agent = ai.Agent(tools=[double, concat])
 
     turn1 = [
         tool_call_msg(

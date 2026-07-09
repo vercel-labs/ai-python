@@ -59,7 +59,7 @@ async def get_weather(city: str) -> str:
 
 async def main() -> None:
     model = ai.get_model("anthropic/claude-sonnet-4")
-    agent = ai.agent(tools=[get_weather])
+    agent = ai.Agent(tools=[get_weather])
     messages = [
         ai.system_message("Use tools when useful."),
         ai.user_message("What is the weather in San Francisco?"),

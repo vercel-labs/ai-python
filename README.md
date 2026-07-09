@@ -37,7 +37,7 @@ async def contact_mothership(query: str) -> str:
 
 async def main() -> None:
     model = ai.get_model("anthropic/claude-sonnet-4")
-    agent = ai.agent(tools=[contact_mothership])
+    agent = ai.Agent(tools=[contact_mothership])
 
     messages = [
         ai.system_message(
