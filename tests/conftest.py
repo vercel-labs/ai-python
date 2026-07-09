@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator, AsyncIterable, Sequence
+from collections.abc import AsyncGenerator, AsyncIterable, Iterator, Sequence
 from typing import Any, Literal, cast
 
 import pydantic
+import pytest
 
 import ai
 from ai import models
@@ -284,3 +285,28 @@ def tool_result_msg(
         result=result,
         is_error=is_error,
     )
+
+
+# ── Telemetry ────────────────────────────────────────────────────
+
+
+class Recorder:
+    """Telemetry adapter that records every span start/end it sees."""
+
+    def __init__(self) -> None:
+        self.started: list[ai.telemetry.Span] = []
+        self.ended: list[ai.telemetry.Span] = []
+
+    def on_span_start(self, span: ai.telemetry.Span) -> None:
+        self.started.append(span)
+
+    def on_span_end(self, span: ai.telemetry.Span) -> None:
+        self.ended.append(span)
+
+
+@pytest.fixture
+def recorder() -> Iterator[Recorder]:
+    r = Recorder()
+    ai.telemetry.register(r)
+    yield r
+    ai.telemetry.unregister(r)
