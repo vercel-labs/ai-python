@@ -13,7 +13,7 @@ agent.
 ```python
 @ai.tool
 async def research(topic: str) -> ai.SubAgentTool:
-    child = ai.agent(tools=[lookup])
+    child = ai.Agent(tools=[lookup])
     messages = [
         ai.system_message("Research briefly."),
         ai.user_message(topic),

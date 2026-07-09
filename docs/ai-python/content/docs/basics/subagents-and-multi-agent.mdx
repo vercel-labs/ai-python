@@ -20,7 +20,7 @@ mothership_model = ai.get_model("anthropic/claude-sonnet-4")
 @ai.tool
 async def ask_mothership(topic: str) -> ai.SubAgentTool:
     """Ask a specialist agent for mothership guidance."""
-    sub_agent = ai.agent()
+    sub_agent = ai.Agent()
     sub_messages = [
         ai.system_message("Answer as the mothership operations desk."),
         ai.user_message(topic),

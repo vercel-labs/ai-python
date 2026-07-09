@@ -115,7 +115,7 @@ async def test_mcp_tool_executes_through_agent() -> None:
     # Replace the executor (which would try to connect) with our fake.
     native = dataclasses.replace(native, fn=fake_fn)
 
-    my_agent = ai.agent(tools=[native])
+    my_agent = ai.Agent(tools=[native])
 
     call1 = [
         tool_call_msg(

@@ -50,7 +50,7 @@ Use `ai.SubAgentTool` when a tool runs another agent and streams its events.
 ```python
 @ai.tool
 async def research(topic: str) -> ai.SubAgentTool:
-    researcher = ai.agent()
+    researcher = ai.Agent()
 
     messages = [
         ai.system_message("Research briefly."),

@@ -57,7 +57,7 @@ def _multi_call_msg(*tc: tuple[str, str]) -> messages_.Message:
 
 async def test_gated_tool_block_cycle() -> None:
     """Park on approval -> RunBlocked; the resolved HookEvent unblocks."""
-    my_agent = ai.agent(tools=[gated])
+    my_agent = ai.Agent(tools=[gated])
     mock_llm(
         [
             [tool_call_msg(name="gated", args='{"x": 1}')],
@@ -118,7 +118,7 @@ async def test_busy_tool_defers_block_signal() -> None:
         await release.wait()
         return "slow done"
 
-    my_agent = ai.agent(tools=[gated, slow])
+    my_agent = ai.Agent(tools=[gated, slow])
     mock_llm(
         [
             [_multi_call_msg(("tc-1", "gated"), ("tc-2", "slow"))],
@@ -154,7 +154,7 @@ async def test_busy_tool_defers_block_signal() -> None:
 async def test_parallel_gated_tools() -> None:
     """Blocking needs *every* in-flight tool parked, and the signal
     re-fires when the run parks again on the remaining hook."""
-    my_agent = ai.agent(tools=[gated])
+    my_agent = ai.Agent(tools=[gated])
     mock_llm(
         [
             [_multi_call_msg(("tc-1", "gated"), ("tc-2", "gated"))],
@@ -203,7 +203,7 @@ async def test_loop_level_hook() -> None:
 
 async def test_abort_leaves_blocked() -> None:
     """Serverless abort: the run ends still blocked, hooks still pending."""
-    my_agent = ai.agent(tools=[gated])
+    my_agent = ai.Agent(tools=[gated])
     mock_llm([[tool_call_msg(name="gated", args='{"x": 1}')]])
 
     blocked_events: list[events_.RunBlocked] = []
@@ -231,7 +231,7 @@ async def test_no_hooks_no_block_events() -> None:
         """A plain tool."""
         return "plain done"
 
-    my_agent = ai.agent(tools=[plain])
+    my_agent = ai.Agent(tools=[plain])
     mock_llm(
         [
             [tool_call_msg(name="plain", args='{"x": 1}')],
@@ -260,7 +260,7 @@ async def test_block_signal_waits_for_stream_end() -> None:
             messages_.TextPart(text="still streaming..."),
         ],
     )
-    my_agent = ai.agent(tools=[gated])
+    my_agent = ai.Agent(tools=[gated])
     mock_llm([[msg], [text_msg("done", id="msg-2")]])
 
     delivered: list[events_.AgentEvent] = []
@@ -291,7 +291,7 @@ async def test_unattributed_hook_in_tool_fails_closed() -> None:
         await ai.hook("self_gate", payload=Confirmation)
         return "ran"
 
-    my_agent = ai.agent(tools=[self_gated])
+    my_agent = ai.Agent(tools=[self_gated])
     mock_llm(
         [
             [tool_call_msg(name="self_gated", args='{"x": 1}')],

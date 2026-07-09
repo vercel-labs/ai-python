@@ -167,7 +167,7 @@ tools = await ai.mcp.get_http_tools(
     headers={"Authorization": "Bearer your_access_token_here"},
 )
 
-agent = ai.agent(tools=tools)
+agent = ai.Agent(tools=tools)
 ```
 
 Use `ai.mcp.get_stdio_tools` for subprocess-based MCP servers.

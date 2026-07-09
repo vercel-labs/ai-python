@@ -32,7 +32,7 @@ async def edit(path: str, edits: list[TextEdit]) -> str:
 async def test_invalid_args_with_approval_returns_error_result() -> None:
     """Invalid tool args on an approval-gated tool should produce an error
     tool result without firing the approval hook."""
-    my_agent = ai.agent(tools=[edit])
+    my_agent = ai.Agent(tools=[edit])
 
     # Model sends edits as a dict instead of a list — this will fail validation
     bad_call = messages_.Message(
@@ -86,7 +86,7 @@ async def test_invalid_args_with_approval_returns_error_result() -> None:
 async def test_invalid_args_skips_approval_hook() -> None:
     """Invalid args should produce a validation error result without
     ever prompting for approval."""
-    my_agent = ai.agent(tools=[edit])
+    my_agent = ai.Agent(tools=[edit])
 
     bad_call = messages_.Message(
         id="msg-1",
@@ -132,7 +132,7 @@ async def test_invalid_args_skips_approval_hook() -> None:
 
 async def test_completely_invalid_json_with_approval() -> None:
     """Completely unparseable tool_args should also be handled gracefully."""
-    my_agent = ai.agent(tools=[edit])
+    my_agent = ai.Agent(tools=[edit])
 
     bad_call = messages_.Message(
         id="msg-1",

@@ -188,7 +188,7 @@ async def alias_progress_tool(query: str) -> ai.StreamingStatusTool[str]:
 
 async def test_alias_declared_tool_runs_end_to_end() -> None:
     """An alias-declared streaming tool behaves like the kwarg form."""
-    my_agent = ai.agent(tools=[alias_progress_tool])
+    my_agent = ai.Agent(tools=[alias_progress_tool])
 
     call = [
         tool_call_msg(

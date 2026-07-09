@@ -16,7 +16,7 @@ uv add "ai[mcp]"
 ## get_stdio_tools
 
 `get_stdio_tools` starts an MCP server subprocess and returns `AgentTool`
-values that can be passed to `ai.agent`.
+values that can be passed to `ai.Agent`.
 
 ```python
 tools = await ai.mcp.get_stdio_tools(
@@ -35,7 +35,7 @@ Arguments:
 ## get_http_tools
 
 `get_http_tools` connects to an MCP HTTP server and returns `AgentTool` values
-that can be passed to `ai.agent`.
+that can be passed to `ai.Agent`.
 
 ```python
 tools = await ai.mcp.get_http_tools("https://example.com/mcp")
