@@ -438,13 +438,6 @@ def wrap_span(
 
         ai.telemetry.register(vendor)
 
-    One generator frame per live span: the frame's locals (``v``)
-    carry state through start, every event, and end.  A bridge that
-    doesn't react to events drains them — ``while (yield) is not
-    None: pass`` — they are still on ``span.span_events`` after the
-    loop, with timestamps.  (Async generators have no ``yield from``,
-    so the drain loop can't be factored out.)
-
     - A span that ends with an error is thrown into the generator at
       the ``yield``, so the vendor context manager sees the failure.
       Use ``try/finally`` around the loop for code that must run on
