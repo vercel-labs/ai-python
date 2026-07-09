@@ -175,7 +175,7 @@ class RunTurn:
     # are stable across replay. ``workflow.random`` is passed as a factory
     # (it's only valid inside the workflow) and resolved on each call.
     @temporalio.workflow.run
-    @ai.messages.use_random_async(temporalio.workflow.random)
+    @ai.messages.use_random(temporalio.workflow.random)
     async def run(self, turn_input: dict[str, Any]) -> dict[str, Any]:
         try:
             output = await _run_turn(turn_input)

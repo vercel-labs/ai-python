@@ -5,16 +5,40 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import dataclasses
-from typing import TYPE_CHECKING, Any
+import functools
+import inspect
+from typing import TYPE_CHECKING, Any, cast, overload
 
 if TYPE_CHECKING:
     from collections.abc import (
         AsyncIterable,
         AsyncIterator,
+        Awaitable,
+        Callable,
         Collection,
         Generator,
+        Iterator,
     )
     from types import TracebackType
+    from typing import Protocol
+
+    class ContextManagerWithAsyncDecorator[T](Protocol):
+        def __enter__(self) -> T: ...
+
+        def __exit__(
+            self,
+            typ: type[BaseException] | None,
+            value: BaseException | None,
+            traceback: TracebackType | None,
+        ) -> bool | None: ...
+
+        @overload
+        def __call__[**P, R](
+            self, func: Callable[P, Awaitable[R]]
+        ) -> Callable[P, Awaitable[R]]: ...
+
+        @overload
+        def __call__[**P, R](self, func: Callable[P, R]) -> Callable[P, R]: ...
 
 
 @dataclasses.dataclass
@@ -115,6 +139,42 @@ class MultiWaiter[T]:
     ) -> bool:
         self.clear()
         return False
+
+
+class _GeneratorContextManagerWithAsyncDecorator[T](
+    contextlib._GeneratorContextManager[T]
+):
+    def __call__[_F: Callable[..., Any]](self, func: _F) -> _F:
+        if inspect.iscoroutinefunction(func):
+
+            @functools.wraps(func)
+            async def inner(*args: Any, **kwds: Any) -> Any:
+                with self._recreate_cm():
+                    return await func(*args, **kwds)
+        else:
+
+            @functools.wraps(func)
+            def inner(*args: Any, **kwds: Any) -> Any:
+                with self._recreate_cm():
+                    return func(*args, **kwds)
+
+        return cast("_F", inner)
+
+
+def contextmanager_with_async_decorator[**P, T](
+    func: Callable[P, Iterator[T]],
+) -> Callable[P, ContextManagerWithAsyncDecorator[T]]:
+    """@contextmanager decorator but the result can be a decorator for async."""
+
+    @functools.wraps(func)
+    def helper(
+        *args: P.args, **kwds: P.kwargs
+    ) -> _GeneratorContextManagerWithAsyncDecorator[T]:
+        return _GeneratorContextManagerWithAsyncDecorator(
+            cast("Callable[..., Generator[T, None, None]]", func), args, kwds
+        )
+
+    return helper
 
 
 class TaskGroupGenExit(GeneratorExit, BaseExceptionGroup[BaseException]):

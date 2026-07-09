@@ -455,17 +455,12 @@ def test_use_random_overrides_and_restores() -> None:
     assert messages.generate_id("msg").startswith("msg_")
 
 
-async def test_use_random_async_overrides_and_restores() -> None:
+async def test_use_random_decorator_handles_async_functions() -> None:
     with messages.use_random(random.Random(0)):
         expected = messages.generate_id("msg")
 
-    # Works across an await...
-    async with messages.use_random_async(random.Random(0)):
-        await asyncio.sleep(0)
-        assert messages.generate_id("msg") == expected
-
-    # ...and as a decorator on an async fn, resolving the factory per call.
-    @messages.use_random_async(lambda: random.Random(0))
+    # Works as a decorator on an async fn, resolving the factory per call.
+    @messages.use_random(lambda: random.Random(0))
     async def build() -> str:
         await asyncio.sleep(0)
         return messages.generate_id("msg")

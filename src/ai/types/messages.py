@@ -1,14 +1,14 @@
 import base64
-import contextlib
 import contextvars
 import functools
 import random
 import weakref
-from collections.abc import AsyncIterator, Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from typing import Annotated, Any, Literal, Protocol, Self, cast, overload
 
 import pydantic
 
+from .. import util
 from . import media
 from . import usage as usage_
 
@@ -48,7 +48,7 @@ def _resolve_random(source: RandomSource) -> random.Random:
     return source if isinstance(source, random.Random) else source()
 
 
-@contextlib.contextmanager
+@util.contextmanager_with_async_decorator
 def use_random(source: RandomSource) -> Iterator[None]:
     """Draw message/part ids from ``source`` within this context.
 
@@ -60,23 +60,9 @@ def use_random(source: RandomSource) -> Iterator[None]:
 
         with ai.messages.use_random(rng):
             ...  # ids built here are drawn from rng
-    """
-    token = _id_random.set(_resolve_random(source))
-    try:
-        yield
-    finally:
-        _id_random.reset(token)
 
-
-@contextlib.asynccontextmanager
-async def use_random_async(source: RandomSource) -> AsyncIterator[None]:
-    """Async version of :func:`use_random`.
-
-    Being an async context manager, it also works as a decorator on an
-    ``async def`` (a sync ``@contextmanager`` cannot) -- handy for passing
-    ``workflow.random`` straight onto a workflow's entrypoint::
-
-        @ai.messages.use_random_async(workflow.random)
+    This can also be used as a decorator on both sync and async functions::
+        @ai.messages.use_random(workflow.random)
         async def run(...):
             ...
     """
