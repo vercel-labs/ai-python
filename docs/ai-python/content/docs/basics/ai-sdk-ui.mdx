@@ -5,12 +5,14 @@ type: guide
 summary: Parse UI messages, apply approvals, stream SSE responses, set headers, and rebuild UI history.
 ---
 
-This adapter provides integration with the UI part of the sister AI SDK
-in TypeScript.
+This adapter provides integration with
+[AI SDK UI](https://ai-sdk.dev/docs/ai-sdk-ui), the UI part of the sister
+AI SDK in TypeScript.
 
-AI SDK UI provides `useChat`, which handles streaming complexity on the
-client side, such as collecting message chunks and optimistically updating
-the UI when the user submits a new message.
+AI SDK UI provides [`useChat`](https://ai-sdk.dev/docs/ai-sdk-ui/chatbot),
+which handles streaming complexity on the client side, such as collecting
+message chunks and optimistically updating the UI when the user submits a
+new message.
 
 The AI SDK UI's data model is significantly different from the AI SDK for 
 Python's, which is why you need to convert events and messages back and forth
@@ -82,6 +84,16 @@ async def chat(request: ChatRequest):
 ```
 
 `to_messages` also extracts approval responses from tool parts.
+
+Pass the agent's tools via the optional `tools` argument to re-validate stored
+tool results against each tool's declared return type. Without it, tool
+results parsed from UI history stay plain JSON:
+
+```python
+messages, approvals = ai.agents.ui.ai_sdk.to_messages(
+    request.messages, tools=chat_agent.tools
+)
+```
 
 ## Tool approvals
 
