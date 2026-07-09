@@ -134,7 +134,7 @@ def test_merge_tool_results_updates_state_and_output() -> None:
     assert merged.output == {"hits": 3}
 
 
-def test_merge_approval_signals_pending_then_resolved() -> None:
+def test_merge_approval_signals_deferred_then_resolved() -> None:
     parts: list[messages_.Part] = [
         messages_.ToolCallPart(
             tool_call_id="tc1",
@@ -150,7 +150,7 @@ def test_merge_approval_signals_pending_then_resolved() -> None:
             messages_.HookPart(
                 hook_id="approve_tc1",
                 hook_type="ToolApproval",
-                status="pending",
+                status="deferred",
                 tool_call_id="tc1",
             )
         ],
@@ -360,7 +360,7 @@ def test_to_ui_messages_internal_role_merges_approval() -> None:
                 messages_.HookPart(
                     hook_id="approve_tc1",
                     hook_type="ToolApproval",
-                    status="pending",
+                    status="deferred",
                     tool_call_id="tc1",
                 )
             ],
@@ -630,7 +630,7 @@ def _parked_turn(*, hook_id: str, tool_call_id: str) -> list[messages_.Message]:
                     id="part-1",
                     hook_id=hook_id,
                     hook_type="ToolApproval",
-                    status="pending",
+                    status="deferred",
                     metadata={"tool": "bash", "kwargs": {"command": "ls"}},
                     tool_call_id=tool_call_id,
                 )
@@ -639,7 +639,7 @@ def _parked_turn(*, hook_id: str, tool_call_id: str) -> list[messages_.Message]:
     ]
 
 
-def test_pending_approval_hook_roundtrips_tool_call_id() -> None:
+def test_deferred_approval_hook_roundtrips_tool_call_id() -> None:
     # Both the conventional approve_<id> label and a custom label must
     # survive: the approval rides the UI tool part via the hook's
     # tool_call_id field, and inbound reconstruction restores it.
@@ -664,5 +664,5 @@ def test_pending_approval_hook_roundtrips_tool_call_id() -> None:
             if isinstance(p, messages_.HookPart)
         ]
         assert hook.hook_id == hook_id
-        assert hook.status == "pending"
+        assert hook.status == "deferred"
         assert hook.tool_call_id == "tc-1"

@@ -326,19 +326,19 @@ class RunBlocked(pydantic.BaseModel):
     """The run is blocked on hooks.
 
     Emitted when the run stops being able to make progress without
-    external input: at least one hook is pending, no model stream is
+    external input: at least one hook is deferred, no model stream is
     producing events, and every in-flight tool call is suspended
     awaiting a hook.  Streaming consumers can use this to surface
     "waiting for approval" state without reconstructing it from
     tool/hook events.
 
-    ``hooks`` is a snapshot of the pending hooks the run is blocked on.
+    ``hooks`` is a snapshot of the deferred hooks the run is blocked on.
 
     There is no mirror "unblocked" event because it would be redundant:
     a blocked run can only resume via a hook resolution (or
-    cancellation), so the next ``HookEvent`` with a non-``pending``
+    cancellation), so the next ``HookEvent`` with a non-``deferred``
     status *is* the unblock signal.  Note the converse does not hold —
-    a ``ToolCallResult`` carrying an ``is_hook_pending`` placeholder
+    a ``ToolCallResult`` carrying an ``is_hook_deferred`` placeholder
     (serverless abort) arrives while the run stays blocked, and the run
     then ends still blocked.
     """
@@ -368,16 +368,16 @@ class RunStateTracker:
 
     The fold reads three things:
 
-    * hook state from :class:`HookEvent` (``pending`` adds, ``resolved``
+    * hook state from :class:`HookEvent` (``deferred`` adds, ``resolved``
       / ``cancelled`` removes);
     * model-stream activity from :class:`StreamStart` / :class:`StreamEnd`;
     * in-flight tool calls from the assistant message on
       :class:`StreamEnd` (scheduled) and :class:`ToolCallResult`
       (settled), matched by ``tool_call_id``.
 
-    The run is blocked when at least one hook is pending, no stream is
+    The run is blocked when at least one hook is deferred, no stream is
     producing, and every in-flight tool call is accounted for by a
-    pending hook's ``tool_call_id``.  Consequently the signal is only
+    deferred hook's ``tool_call_id``.  Consequently the signal is only
     as good as the stream: loops must yield their ``StreamEnd`` (with
     the assistant message) for tool calls to be counted, and custom
     gating must pass ``tool_call_id=`` to ``ai.hook()`` — an
@@ -386,7 +386,7 @@ class RunStateTracker:
     """
 
     def __init__(self) -> None:
-        self._pending: dict[str, messages.HookPart[Any]] = {}
+        self._deferred: dict[str, messages.HookPart[Any]] = {}
         self._in_flight: set[str] = set()
         self._streaming = 0
         self._blocked = False
@@ -396,8 +396,8 @@ class RunStateTracker:
         return self._blocked
 
     @property
-    def pending_hooks(self) -> list[messages.HookPart[Any]]:
-        return list(self._pending.values())
+    def deferred_hooks(self) -> list[messages.HookPart[Any]]:
+        return list(self._deferred.values())
 
     def feed(self, event: AgentEvent) -> RunBlocked | None:
         match event:
@@ -416,20 +416,20 @@ class RunStateTracker:
                     r.tool_call_id for r in event.results
                 )
             case HookEvent():
-                if event.hook.status == "pending":
-                    self._pending[event.hook.hook_id] = event.hook
+                if event.hook.status == "deferred":
+                    self._deferred[event.hook.hook_id] = event.hook
                 else:
-                    self._pending.pop(event.hook.hook_id, None)
+                    self._deferred.pop(event.hook.hook_id, None)
             case _:
                 return None
 
         attributed = {
             h.tool_call_id
-            for h in self._pending.values()
+            for h in self._deferred.values()
             if h.tool_call_id is not None
         }
         now = (
-            bool(self._pending)
+            bool(self._deferred)
             and not self._streaming
             and self._in_flight <= attributed
         )
@@ -438,4 +438,4 @@ class RunStateTracker:
         self._blocked = now
         if not now:
             return None
-        return RunBlocked(hooks=tuple(self._pending.values()))
+        return RunBlocked(hooks=tuple(self._deferred.values()))

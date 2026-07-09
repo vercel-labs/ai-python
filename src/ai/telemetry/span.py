@@ -143,12 +143,12 @@ class ToolExecutionSpanData:
 
 @dataclasses.dataclass
 class HookSpanData:
-    """One hook suspension, from pending until resolved or cancelled."""
+    """One hook suspension, from deferred until resolved or cancelled."""
 
     label: str
     hook_type: str
     metadata: dict[str, Any]
-    status: Literal["pending", "resolved", "cancelled"] = "pending"
+    status: Literal["deferred", "resolved", "cancelled"] = "deferred"
 
     span_name: ClassVar[str] = "hook"
 
@@ -166,7 +166,7 @@ class CustomSpanData:
 # adapters, and tests
 FIRST_TOKEN = "first_token"
 RESPONSE_COMPLETE = "response_complete"
-HOOK_PENDING = "hook_pending"
+HOOK_DEFERRED = "hook_deferred"
 HOOK_RESOLVED = "hook_resolved"
 HOOK_CANCELLED = "hook_cancelled"
 

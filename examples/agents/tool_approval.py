@@ -28,9 +28,9 @@ async def live(messages: list[ai.messages.Message]) -> None:
                 print(event.chunk, end="", flush=True)
             elif (
                 isinstance(event, ai.events.HookEvent)
-                and event.hook.status == "pending"
+                and event.hook.status == "deferred"
             ):
-                print(f"\n[pending] {event.hook.hook_id}")
+                print(f"\n[deferred] {event.hook.hook_id}")
                 ai.resolve_hook(
                     event.hook,
                     ai.tools.ToolApproval(
@@ -48,7 +48,7 @@ async def stateless(
     for hook_id, approval in (approvals or {}).items():
         ai.resolve_hook(hook_id, approval)
 
-    pending: list[ai.messages.HookPart[Any]] = []
+    deferred: list[ai.messages.HookPart[Any]] = []
     text: list[str] = []
 
     async with agent.run(model, history) as stream:
@@ -58,13 +58,13 @@ async def stateless(
                 print(event.chunk, end="", flush=True)
             elif (
                 isinstance(event, ai.events.HookEvent)
-                and event.hook.status == "pending"
+                and event.hook.status == "deferred"
             ):
-                pending.append(event.hook)
-                print(f"\n[pending] {event.hook.hook_id}")
-                ai.abort_pending_hook(event.hook)
+                deferred.append(event.hook)
+                print(f"\n[deferred] {event.hook.hook_id}")
+                ai.defer_hook(event.hook)
 
-    return stream.messages, pending, "".join(text)
+    return stream.messages, deferred, "".join(text)
 
 
 async def main() -> None:
@@ -79,13 +79,13 @@ async def main() -> None:
     await live(messages)
 
     print("\n--- interrupted resolution ---")
-    messages, pending, _ = await stateless(messages)
+    messages, deferred, _ = await stateless(messages)
     approvals = {
         hook.hook_id: ai.tools.ToolApproval(
             granted=True,
             reason="approved before replaying the interrupted run",
         )
-        for hook in pending
+        for hook in deferred
     }
     print("\n\n--- replay with approval ---")
     await stateless(messages, approvals=approvals)

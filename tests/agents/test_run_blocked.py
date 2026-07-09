@@ -1,12 +1,12 @@
 """RunBlocked: the run-is-blocked-on-hooks signal.
 
-A run is blocked when at least one hook is pending, no model stream
+A run is blocked when at least one hook is deferred, no model stream
 is producing events, and every in-flight tool call is suspended
 awaiting a hook.  ``RunStateTracker`` folds the event stream and a
 ``RunBlocked`` event is emitted when the run blocks; there is no
 mirror event — a blocked run can only resume via a hook resolution,
-so the non-``pending`` ``HookEvent`` is the unblock signal.
-``AgentStream`` folds both into its ``blocked`` / ``pending_hooks``
+so the non-``deferred`` ``HookEvent`` is the unblock signal.
+``AgentStream`` folds both into its ``blocked`` / ``deferred_hooks``
 properties.
 """
 
@@ -72,7 +72,7 @@ async def test_gated_tool_block_cycle() -> None:
             delivered.append(event)
             if isinstance(event, events_.RunBlocked):
                 assert stream.blocked
-                assert [h.hook_id for h in stream.pending_hooks] == [
+                assert [h.hook_id for h in stream.deferred_hooks] == [
                     h.hook_id for h in event.hooks
                 ]
                 assert event.hooks[0].tool_call_id == "tc-1"
@@ -86,7 +86,7 @@ async def test_gated_tool_block_cycle() -> None:
                 assert not stream.blocked
 
     assert not stream.blocked
-    assert stream.pending_hooks == []
+    assert stream.deferred_hooks == []
 
     # Ordering: the run blocks after the hook parks (and only once
     # the model stream stops producing).
@@ -94,16 +94,16 @@ async def test_gated_tool_block_cycle() -> None:
         [idx] = [i for i, e in enumerate(delivered) if pred(e)]
         return idx
 
-    pending_idx = index(
+    deferred_idx = index(
         lambda e: isinstance(e, events_.HookEvent)
-        and e.hook.status == "pending"
+        and e.hook.status == "deferred"
     )
     resolved_idx = index(
         lambda e: isinstance(e, events_.HookEvent)
         and e.hook.status == "resolved"
     )
     blocked_idx = index(lambda e: isinstance(e, events_.RunBlocked))
-    assert pending_idx < blocked_idx < resolved_idx
+    assert deferred_idx < blocked_idx < resolved_idx
 
     assert stream.output == "done"
 
@@ -132,7 +132,7 @@ async def test_busy_tool_defers_block_signal() -> None:
             delivered.append(event)
             if (
                 isinstance(event, events_.HookEvent)
-                and event.hook.status == "pending"
+                and event.hook.status == "deferred"
             ):
                 assert not stream.blocked
                 release.set()
@@ -202,7 +202,7 @@ async def test_loop_level_hook() -> None:
 
 
 async def test_abort_leaves_blocked() -> None:
-    """Serverless abort: the run ends still blocked, hooks still pending."""
+    """Serverless abort: the run ends still blocked, hooks still deferred."""
     my_agent = ai.Agent(tools=[gated])
     mock_llm([[tool_call_msg(name="gated", args='{"x": 1}')]])
 
@@ -213,16 +213,16 @@ async def test_abort_leaves_blocked() -> None:
                 blocked_events.append(event)
             if (
                 isinstance(event, events_.HookEvent)
-                and event.hook.status == "pending"
+                and event.hook.status == "deferred"
             ):
-                ai.abort_pending_hook(event.hook)
+                ai.defer_hook(event.hook)
 
-    # The abort settles the tool with an is_hook_pending placeholder,
+    # The abort settles the tool with an is_hook_deferred placeholder,
     # but no hook resolution ever arrives: the run ends still blocked.
     assert len(blocked_events) == 1
     assert stream.blocked
-    assert len(stream.pending_hooks) == 1
-    assert stream.messages[-1].tool_results[0].is_hook_pending
+    assert len(stream.deferred_hooks) == 1
+    assert stream.messages[-1].tool_results[0].is_hook_deferred
 
 
 async def test_no_hooks_no_block_events() -> None:
@@ -244,7 +244,7 @@ async def test_no_hooks_no_block_events() -> None:
             assert not isinstance(event, events_.RunBlocked)
 
     assert not stream.blocked
-    assert stream.pending_hooks == []
+    assert stream.deferred_hooks == []
 
 
 async def test_block_signal_waits_for_stream_end() -> None:
@@ -304,7 +304,7 @@ async def test_unattributed_hook_in_tool_fails_closed() -> None:
             assert not isinstance(event, events_.RunBlocked)
             if (
                 isinstance(event, events_.HookEvent)
-                and event.hook.status == "pending"
+                and event.hook.status == "deferred"
             ):
                 assert event.hook.tool_call_id is None
                 ai.resolve_hook("self_gate", {"approved": True})
@@ -325,7 +325,7 @@ def test_tracker_fold_sequence() -> None:
     hook: messages_.HookPart[Any] = messages_.HookPart(
         hook_id="h1",
         hook_type="ToolApproval",
-        status="pending",
+        status="deferred",
         tool_call_id="tc-1",
     )
 
@@ -341,7 +341,7 @@ def test_tracker_fold_sequence() -> None:
     assert isinstance(transition, events_.RunBlocked)
     assert [h.hook_id for h in transition.hooks] == ["h1"]
     assert tracker.blocked
-    assert [h.hook_id for h in tracker.pending_hooks] == ["h1"]
+    assert [h.hook_id for h in tracker.deferred_hooks] == ["h1"]
 
     # The resolution flips the tracker back silently -- no mirror event.
     resolved = tracker.feed(

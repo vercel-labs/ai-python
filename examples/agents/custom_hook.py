@@ -46,9 +46,9 @@ async def main() -> None:
                 print(event.chunk, end="", flush=True)
             elif (
                 isinstance(event, ai.events.HookEvent)
-                and event.hook.status == "pending"
+                and event.hook.status == "deferred"
             ):
-                print(f"\n[pending] {event.hook.hook_id}")
+                print(f"\n[deferred] {event.hook.hook_id}")
                 ai.resolve_hook(
                     event.hook,
                     DeploymentReview(

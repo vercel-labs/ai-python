@@ -71,8 +71,8 @@ def test_to_messages_splits_at_tool_boundary() -> None:
     assert messages[1].tool_results[0].tool_call_id == "tc1"
 
 
-def test_to_messages_keeps_pending_approval_tombstone() -> None:
-    """Pending approvals carry no response — leave the tombstone in history."""
+def test_to_messages_keeps_deferred_approval_tombstone() -> None:
+    """Deferred approvals carry no response — leave the tombstone in history."""
     messages, _ = to_messages(
         [
             _ui(
@@ -90,7 +90,7 @@ def test_to_messages_keeps_pending_approval_tombstone() -> None:
     hook_part = messages[1].parts[0]
     assert isinstance(hook_part, messages_.HookPart)
     assert hook_part.hook_type == "ToolApproval"
-    assert hook_part.status == "pending"
+    assert hook_part.status == "deferred"
 
 
 def test_to_messages_drops_resolved_approval_tombstone() -> None:

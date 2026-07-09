@@ -32,7 +32,7 @@ def test_tool_call_id_for_returns_field() -> None:
     hook: messages_.HookPart[Any] = messages_.HookPart(
         hook_id="my_custom_gate",
         hook_type="ToolApproval",
-        status="pending",
+        status="deferred",
         tool_call_id="tc_42",
     )
     assert approvals.tool_call_id_for(hook) == "tc_42"
@@ -42,7 +42,7 @@ def test_tool_call_id_for_field_ignored_on_non_approval() -> None:
     hook: messages_.HookPart[Any] = messages_.HookPart(
         hook_id="confirm_something",
         hook_type="Confirmation",
-        status="pending",
+        status="deferred",
         tool_call_id="tc_42",
     )
     assert approvals.tool_call_id_for(hook) is None
@@ -52,7 +52,7 @@ def test_tool_call_id_for_rejects_non_approval_type() -> None:
     hook: messages_.HookPart[Any] = messages_.HookPart(
         hook_id="approve_tc_42",
         hook_type="SomethingElse",
-        status="pending",
+        status="deferred",
         tool_call_id="tc_42",
     )
     assert approvals.tool_call_id_for(hook) is None

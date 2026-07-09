@@ -159,11 +159,11 @@ def _normalize_ui_messages(
     return normalized
 
 
-def _patch_pending_hook_aborts(
+def _patch_deferred_hook_results(
     messages: list[messages_.Message],
     approvals: list[ApprovalResponse],
 ) -> None:
-    """Inject pending-hook placeholders for unresolved tool calls.
+    """Inject deferred-hook placeholders for unresolved tool calls.
 
     This handles tool calls whose approval was responded to but whose tool
     result is still missing.
@@ -176,7 +176,7 @@ def _patch_pending_hook_aborts(
     tool calls, a tool result with fewer results (some are missing),
     and then also some hook approvals.
 
-    This synthesizes `ToolResultPart`s with `is_hook_pending=True` in
+    This synthesizes `ToolResultPart`s with `is_hook_deferred=True` in
     order to be able to feed things back into the agent protocol.
     """
     if len(messages) < 2:
@@ -202,9 +202,9 @@ def _patch_pending_hook_aborts(
             messages_.ToolResultPart(
                 tool_call_id=tc.tool_call_id,
                 tool_name=tc.tool_name,
-                result=f"Pending on hook '{hook.hook_id}'",
+                result=f"Deferred on hook '{hook.hook_id}'",
                 result_kind="error",
-                is_hook_pending=True,
+                is_hook_deferred=True,
             )
         )
 
@@ -438,15 +438,15 @@ def _split_assistant_parts(
     """Split assistant parts into assistant + tool message pairs."""
     results_by_id = {tr.tool_call_id: tr for tr in tool_results}
 
-    pending_results: list[messages_.ToolResultPart] = []
+    split_results: list[messages_.ToolResultPart] = []
     for part in parts:
         if (
             isinstance(part, messages_.ToolCallPart)
             and part.tool_call_id in results_by_id
         ):
-            pending_results.append(results_by_id[part.tool_call_id])
+            split_results.append(results_by_id[part.tool_call_id])
 
-    if not pending_results:
+    if not split_results:
         if parts:
             return [
                 messages_.Message(
@@ -529,7 +529,7 @@ def to_messages(
     parses UIMessages into an ``ai.messages.Message`` list (split at
     tool boundaries), drops the internal tombstones for approval
     responses, and patches the trailing tool message with
-    ``is_hook_pending`` placeholders for tool calls whose approval was
+    ``is_hook_deferred`` placeholders for tool calls whose approval was
     just responded to but never recorded a real tool result.
 
     Sub-agent tool outputs (UIMessage wire shape) are decoded back to
@@ -551,5 +551,5 @@ def to_messages(
         for m in _parse(normalized, validate_context=validate_context)
         if not approvals.is_resolved_approval_message(m)
     ]
-    _patch_pending_hook_aborts(messages, approval_responses)
+    _patch_deferred_hook_results(messages, approval_responses)
     return messages, approval_responses

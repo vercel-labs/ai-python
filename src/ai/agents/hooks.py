@@ -56,8 +56,8 @@ _live_hooks: dict[
 _pending_resolutions: dict[str, dict[str, Any] | BaseException] = {}
 
 
-class HookPendingError(Exception):
-    """Exception for aborting due to a hook."""
+class HookDeferredException(Exception):  # noqa: N818
+    """Exception for deferring due to a hook."""
 
     type: str = "gateway_error"
 
@@ -95,7 +95,7 @@ async def hook[T: pydantic.BaseModel](
             whose ``hook_id`` supplies it.
         payload: Pydantic model class — the resolution data must validate
             against this type.  The return value is a validated instance.
-        metadata: Arbitrary metadata surfaced in the pending signal message
+        metadata: Arbitrary metadata surfaced in the deferred signal message
             and checkpoint.  Useful for UI rendering (e.g. which tool needs
             approval, what arguments it received).
         tool_call_id: The tool call this hook suspends, if any.  Stamped
@@ -145,17 +145,17 @@ async def _hook_impl(call: middleware_.HookContext) -> pydantic.BaseModel:
         _live_hooks[label] = (future, hook_metadata, rt)
         rt.track_hook_label(label)
 
-        # Emit pending signal.
+        # Emit deferred signal.
         hook_part: messages_.HookPart[Any] = messages_.HookPart(
             hook_id=label,
             hook_type=payload.__name__,
-            status="pending",
+            status="deferred",
             metadata=hook_metadata,
             tool_call_id=call.tool_call_id,
         )
 
         await rt.put_hook(hook_part)
-        await sp.add_event(telemetry.HOOK_PENDING)
+        await sp.add_event(telemetry.HOOK_DEFERRED)
 
         # Await resolution — may be resolved externally or cancelled.
         try:
@@ -210,8 +210,8 @@ def resolve_hook(
 
     Passing an exception sends it to the awaiter (or stashes it for the
     next replay) so the awaiting ``ai.hook(...)`` call raises rather than
-    returns.  See :func:`abort_pending_hook` for the common case of
-    propagating a :class:`HookPendingError`.
+    returns.  See :func:`defer_hook` for the common case of
+    propagating a :class:`HookDeferredException`.
 
     Args:
         hook: The hook label to resolve, or a HookPart whose ``hook_id``
@@ -253,31 +253,32 @@ def resolve_hook(
     _pending_resolutions[label] = resolution
 
 
-def abort_pending_hook(hook_part: messages_.HookPart[Any]) -> None:
-    """Abort the hook identified by ``hook_part.hook_id``.
+def defer_hook(hook_part: messages_.HookPart[Any]) -> None:
+    """Defer the hook identified by ``hook_part.hook_id``.
 
-    The abort carries a :class:`HookPendingError` wrapping *hook_part*.
+    The deferred exception carries a :class:`HookDeferredException` wrapping
+    *hook_part*.
 
     Convenience wrapper around :func:`resolve_hook` for the serverless
     pattern where a caller has a :class:`~ai.messages.HookPart` (e.g.
     from inbound conversion) and needs to surface it back through the
     awaiting ``ai.hook(...)`` site as a structured suspension.
     """
-    resolve_hook(hook_part.hook_id, HookPendingError(hook_part))
+    resolve_hook(hook_part.hook_id, HookDeferredException(hook_part))
 
 
 async def cancel_hook(
     hook: str | messages_.HookPart[Any], *, reason: str | None = None
 ) -> None:
-    """Cancel a pending hook.
+    """Cancel a deferred hook.
 
     Only works for live hooks (long-running mode).  Raises ValueError
-    if the hook is not currently pending.  ``hook`` may be a label
+    if the hook is not currently deferred.  ``hook`` may be a label
     string or a HookPart whose ``hook_id`` supplies it.
     """
     label = _label(hook)
     if label not in _live_hooks:
-        raise ValueError(f"No pending hook with label: {label!r}")
+        raise ValueError(f"No deferred hook with label: {label!r}")
 
     future, hook_metadata, rt = _live_hooks.pop(label)
     future.cancel(reason)

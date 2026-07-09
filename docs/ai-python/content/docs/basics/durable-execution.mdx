@@ -101,8 +101,8 @@ assistant message before tools are scheduled. In a streaming loop, `merge`
 interleaves model events and tool results while the model is still producing
 output.
 
-Consider using the serverless hook flow for approvals. When a pending `HookEvent`
-appears, call `ai.abort_pending_hook(event.hook)`, persist `stream.messages`, 
+Consider using the serverless hook flow for approvals. When a deferred `HookEvent`
+appears, call `ai.defer_hook(event.hook)`, persist `stream.messages`,
 and return the approval request to the client. On the next workflow turn, call
 `ai.resolve_hook(...)` before `agent.run(...)`. The SDK replays the interrupted
 assistant turn and continues when the hook reads the pre-registered resolution.

@@ -94,9 +94,9 @@ def _process_interrupted_hooks(messages: list[types.messages.Message]) -> None:
        ``replay=True`` so ``models.stream`` short-circuits and the
        loop's tool dispatcher re-runs the calls.
 
-    2. **Trailing tool message containing ``is_hook_pending=True``
+    2. **Trailing tool message containing ``is_hook_deferred=True``
        results** (concurrent gating: some tools completed, others
-       were suspended on a hook): fold the completed (non-pending)
+       were suspended on a hook): fold the completed (non-deferred)
        tool results onto the matching ``ToolCallPart.cached_result``
        of the preceding assistant turn, drop the tool message, and
        mark the assistant message ``replay=True``.  On replay, the
@@ -114,12 +114,12 @@ def _process_interrupted_hooks(messages: list[types.messages.Message]) -> None:
         messages[-1] = last.model_copy(update={"replay": True})
         return
 
-    # Case 2: trailing tool message with at least one pending-hook result.
+    # Case 2: trailing tool message with at least one deferred-hook result.
     if (
         len(messages) >= 2
         and last.role == "tool"
         and last.tool_results
-        and any(r.is_hook_pending for r in last.tool_results)
+        and any(r.is_hook_deferred for r in last.tool_results)
     ):
         prev = messages[-2]
         if prev.role != "assistant" or not prev.tool_calls:
@@ -128,7 +128,7 @@ def _process_interrupted_hooks(messages: list[types.messages.Message]) -> None:
         completed_by_id = {
             r.tool_call_id: r
             for r in last.tool_results
-            if not r.is_hook_pending
+            if not r.is_hook_deferred
         }
 
         new_parts: list[types.messages.Part] = []
@@ -180,7 +180,7 @@ def _populate_model_inputs(
         if msg.role != "tool":
             continue
         for part in msg.tool_results:
-            if part.has_model_input or part.is_error or part.is_hook_pending:
+            if part.has_model_input or part.is_error or part.is_hook_deferred:
                 continue
             tool = tools_by_name.get(part.tool_name)
             if tool is None:
@@ -635,7 +635,7 @@ class BoundToolCall:
             tool_call_id=self._part.tool_call_id,
         )
 
-        # Replay-from-pending-hook short-circuit: if a prior run already
+        # Replay-from-deferred-hook short-circuit: if a prior run already
         # produced a result for this call (cached on the ToolCallPart
         # by ``_process_interrupted_hooks``), return it without
         # re-executing the tool.
@@ -772,8 +772,8 @@ class GatedToolCall:
                 metadata={"tool": tc.name, "kwargs": hook_kwargs},
                 tool_call_id=tc.id,
             )
-        except hooks_.HookPendingError as e:
-            return pending_tool_result(
+        except hooks_.HookDeferredException as e:
+            return deferred_tool_result(
                 e.hook, tool_call_id=tc.id, tool_name=tc.name
             )
         if approval.granted:
@@ -909,9 +909,9 @@ class Context(pydantic.BaseModel):
 
         last_message = self.messages[-1]
         # Bail out if any tool result in the last message is a
-        # pending-hook placeholder. There's nothing we can do until
+        # deferred-hook placeholder. There's nothing we can do until
         # those are resolved and we get called again.
-        if any(r.is_hook_pending for r in last_message.tool_results):
+        if any(r.is_hook_deferred for r in last_message.tool_results):
             return False
         return last_message.replay or last_message.role not in (
             "assistant",
@@ -1002,7 +1002,7 @@ class AgentStream(Generic[AgentOutputT]):
         self._gen = gen
         self._context = context
         self._blocked = False
-        self._pending_hooks: dict[str, types.messages.HookPart[Any]] = {}
+        self._deferred_hooks: dict[str, types.messages.HookPart[Any]] = {}
 
     def _track(self, event: events_.AgentEvent) -> events_.AgentEvent:
         # Fold delivered events into the exposed run state, so that the
@@ -1011,13 +1011,13 @@ class AgentStream(Generic[AgentOutputT]):
         if isinstance(event, events_.RunBlocked):
             self._blocked = True
         elif isinstance(event, events_.HookEvent):
-            if event.hook.status == "pending":
-                self._pending_hooks[event.hook.hook_id] = event.hook
+            if event.hook.status == "deferred":
+                self._deferred_hooks[event.hook.hook_id] = event.hook
             else:
                 # A blocked run can only resume via a hook resolution
                 # or cancellation (see RunBlocked), so this is also the
                 # unblock signal.
-                self._pending_hooks.pop(event.hook.hook_id, None)
+                self._deferred_hooks.pop(event.hook.hook_id, None)
                 self._blocked = False
         return event
 
@@ -1046,8 +1046,8 @@ class AgentStream(Generic[AgentOutputT]):
 
         Set by a delivered :class:`~ai.types.events.RunBlocked` event,
         cleared by the hook resolution that follows.  True means
-        nothing in the run can make progress until a pending hook (see
-        :attr:`pending_hooks`) is resolved — e.g. a tool approval.
+        nothing in the run can make progress until a deferred hook (see
+        :attr:`deferred_hooks`) is resolved — e.g. a tool approval.
         After the run ends this keeps its final value, so serverless
         drivers can distinguish "turn complete" from "turn suspended
         awaiting input".
@@ -1055,9 +1055,9 @@ class AgentStream(Generic[AgentOutputT]):
         return self._blocked
 
     @property
-    def pending_hooks(self) -> list[types.messages.HookPart[Any]]:
-        """Hooks that are pending as of the last delivered event."""
-        return list(self._pending_hooks.values())
+    def deferred_hooks(self) -> list[types.messages.HookPart[Any]]:
+        """Hooks that are deferred as of the last delivered event."""
+        return list(self._deferred_hooks.values())
 
     @property
     def messages(self) -> list[types.messages.Message]:
@@ -1125,38 +1125,39 @@ def tool_result(
     )
 
 
-def pending_tool_result(
+def deferred_tool_result(
     hook: types.messages.HookPart[Any],
     *,
     tool_call_id: str,
     tool_name: str = "",
 ) -> events_.ToolCallResult:
-    """Build an error :class:`ToolCallResult` for a tool call pending on a hook.
+    """Build an error :class:`ToolCallResult` for a deferred tool call.
 
-    Use in approval-gated flows when a hook abort (e.g. ``HookPendingError``)
-    leaves a tool call without a real result.  The placeholder is flagged
+    Use in approval-gated flows when a hook deferral
+    (e.g. ``HookDeferredException``) leaves a tool call without a real
+    result.  The placeholder is flagged
     ``is_error=True`` and keeps the assistant turn well-formed (every
     ``tool_call`` paired with a ``tool_result``) so the run can be replayed
     on the next invocation once the hook is resolved::
 
         try:
             approval = await ai.hook(...)
-        except ai.HookPendingError as e:
-            return ai.pending_tool_result(
+        except ai.HookDeferredException as e:
+            return ai.deferred_tool_result(
                 e.hook, tool_call_id=tc.id, tool_name=tc.name
             )
 
     The hook itself is surfaced separately via the ``HookPart`` already
-    emitted by ``ai.hook()`` (status=``"pending"``) which downstream
+    emitted by ``ai.hook()`` (status=``"deferred"``) which downstream
     consumers (e.g. the ai-sdk UI bridge) use to render the actual
     approval state.
     """
     part = types.messages.ToolResultPart(
         tool_call_id=tool_call_id,
         tool_name=tool_name,
-        result=f"Pending on hook {hook.hook_id!r}",
+        result=f"Deferred on hook {hook.hook_id!r}",
         result_kind="error",
-        is_hook_pending=True,
+        is_hook_deferred=True,
     )
     msg = types.messages.Message(role="tool", parts=[part])
     return events_.ToolCallResult(message=msg, results=msg.tool_results)
