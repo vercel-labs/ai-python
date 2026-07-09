@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import weakref
 from collections.abc import Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Generic, Self, cast
@@ -17,7 +18,7 @@ from .. import _modelsdev
 from ..errors import UnsupportedProviderError
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Sequence
+    from collections.abc import AsyncGenerator, Callable, Sequence
 
     import modelsdotdev
 
@@ -28,6 +29,14 @@ if TYPE_CHECKING:
     from ..types import tools as tools_
 
 ClientT = TypeVar("ClientT", default=Any)
+
+
+def _exclude_if_none(v: Any) -> bool:
+    # pydantic-core's SchemaSerializer doesn't GC-traverse ``exclude_if``
+    # callables, so a closure stored there directly forms an uncollectable
+    # cycle back through this module; wrap it in weakref.proxy at the call
+    # site to keep the serializer's reference weak.
+    return v is None
 
 
 def _generic_origin(cls: type[Any]) -> type[Any]:
@@ -169,10 +178,16 @@ class Provider(pydantic.BaseModel, Generic[ClientT]):
     name: str  # models.dev identity
     default_base_url: str
     protocol_override: ProviderProtocol[Any] | None = pydantic.Field(
-        default=None, exclude_if=lambda v: v is None
+        default=None,
+        exclude_if=cast(
+            "Callable[[Any], bool]", weakref.proxy(_exclude_if_none)
+        ),
     )
     api_key_value: str | None = pydantic.Field(
-        default=None, exclude_if=lambda v: v is None
+        default=None,
+        exclude_if=cast(
+            "Callable[[Any], bool]", weakref.proxy(_exclude_if_none)
+        ),
     )
     api_key_env: str | None = None
     base_url_env: str | None = None
