@@ -54,8 +54,6 @@ def _name(sp: telemetry.Span) -> str:
             return f"execute_tool {d.tool_name}"
         case telemetry.RunSpanData() as d:
             return f"invoke_agent {d.agent}"
-        case telemetry.LoopTurnSpanData() as d:
-            return f"loop_turn {d.index}"
         case _:
             return sp.name
 
@@ -101,8 +99,6 @@ def _attributes(sp: telemetry.Span) -> dict[str, Any]:
             attrs["ai.hook.label"] = d.label
             attrs["ai.hook.type"] = d.hook_type
             attrs["ai.hook.status"] = d.status
-        case telemetry.LoopTurnSpanData() as d:
-            attrs["ai.loop_turn.index"] = d.index
         case telemetry.CustomSpanData() as d:
             for key, value in d.attributes.items():
                 attrs[key] = (

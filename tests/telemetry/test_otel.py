@@ -14,6 +14,8 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
 import ai
 from ai.telemetry import otel
 
+from ..conftest import MOCK_MODEL, mock_llm, text_msg, tool_call_msg
+
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
@@ -44,6 +46,23 @@ async def test_nesting_names_and_attributes(
     assert outer.attributes["foo"] == "bar"
 
 
+async def test_model_call_attributes(
+    otel_env: tuple[InMemorySpanExporter, TracerProvider],
+) -> None:
+    exporter, _ = otel_env
+    mock_llm([[text_msg("hello")]])
+    async with ai.stream(MOCK_MODEL, [ai.user_message("hi")]) as stream:
+        async for _ in stream:
+            pass
+
+    (span,) = exporter.get_finished_spans()
+    assert span.name == "chat mock-model"
+    assert span.attributes is not None
+    assert span.attributes["gen_ai.operation.name"] == "chat"
+    assert span.attributes["gen_ai.request.model"] == "mock-model"
+    assert "hello" in str(span.attributes["gen_ai.output.messages"])
+
+
 async def test_error_status(
     otel_env: tuple[InMemorySpanExporter, TracerProvider],
 ) -> None:
@@ -56,6 +75,38 @@ async def test_error_status(
     assert not span.status.is_ok
     events = [e.name for e in span.events]
     assert "exception" in events
+
+
+async def test_tool_exception_recorded(
+    otel_env: tuple[InMemorySpanExporter, TracerProvider],
+) -> None:
+    exporter, _ = otel_env
+
+    @ai.tool
+    async def boom() -> str:
+        """Tool that always fails."""
+        raise ValueError("nope")
+
+    mock_llm([[tool_call_msg(name="boom")], [text_msg("done")]])
+    my_agent = ai.Agent(tools=[boom])
+    async with my_agent.run(MOCK_MODEL, [ai.user_message("go")]) as stream:
+        async for _ in stream:
+            pass
+
+    (span,) = [
+        s
+        for s in exporter.get_finished_spans()
+        if s.name == "execute_tool boom"
+    ]
+    # The tool exception is caught by the framework, but the span still
+    # records it: ERROR status plus a standard otel exception event.
+    assert not span.status.is_ok
+    events = {e.name: e for e in span.events}
+    assert "exception" in events
+    attrs = events["exception"].attributes
+    assert attrs is not None
+    assert attrs["exception.type"] == "ValueError"
+    assert attrs["exception.message"] == "nope"
 
 
 async def test_span_events_exported_with_original_timestamps(
@@ -76,6 +127,22 @@ async def test_span_events_exported_with_original_timestamps(
     # Non-primitive attribute values are sanitized to their repr.
     assert events["custom"].attributes is not None
     assert events["custom"].attributes["obj"] == repr(marker)
+
+
+async def test_stream_milestones_exported(
+    otel_env: tuple[InMemorySpanExporter, TracerProvider],
+) -> None:
+    exporter, _ = otel_env
+    mock_llm([[text_msg("hello")]])
+    async with ai.stream(MOCK_MODEL, [ai.user_message("hi")]) as stream:
+        async for _ in stream:
+            pass
+
+    (span,) = exporter.get_finished_spans()
+    assert [e.name for e in span.events] == [
+        "first_token",
+        "response_complete",
+    ]
 
 
 async def test_raw_otel_span_nests_under_ours(

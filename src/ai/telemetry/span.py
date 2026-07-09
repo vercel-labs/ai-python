@@ -94,9 +94,11 @@ class RunSpanData:
 
 @dataclasses.dataclass
 class LoopTurnSpanData:
-    """One turn of the default agent loop."""
+    """One turn of the default agent loop.
 
-    index: int
+    Carries no fields — it exists so adapters can group a turn's model
+    and tool spans.  Turn order is given by ``started_at``/``parent_id``.
+    """
 
     span_name: ClassVar[str] = "loop_turn"
 

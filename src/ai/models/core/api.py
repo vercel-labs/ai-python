@@ -20,7 +20,7 @@ import pydantic
 # Use the typing_extensions backport so this works on 3.12 too.
 from typing_extensions import TypeVar
 
-from ... import errors, types
+from ... import errors, telemetry, types
 from ...types import integrity
 
 if TYPE_CHECKING:
@@ -134,6 +134,11 @@ class Stream(Generic[StreamOutputT]):
         # tool call with truncated args — so exhaustion must raise
         # rather than look like a normal end of turn.
         self._ended = False
+        # The telemetry span bracketing this stream, attached by
+        # ``stream()``.  None for directly constructed streams
+        # (``Stream(gen)``, ``Stream.replay_message``).
+        self._span: telemetry.Span | None = None
+        self._first_output_seen = False
 
     @classmethod
     def replay_message(
@@ -214,7 +219,40 @@ class Stream(Generic[StreamOutputT]):
                 ) from None
             raise
         updates = self._aggregate_event(event)
+        # Milestones on the live span: replayed work gets no synthetic
+        # timings (span.replay covers the replay branch of ``stream()``,
+        # event.replay covers individual synthetic events).
+        if (
+            self._span is not None
+            and not self._span.replay
+            and not event.replay
+        ):
+            if isinstance(event, types.events.StreamEnd):
+                # ``ended_at`` on the span includes whatever the
+                # consumer did while the stream was open (tool
+                # dispatch, ...); this marks the true model latency.
+                await self._span.add_event(telemetry.RESPONSE_COMPLETE)
+            elif not self._first_output_seen and not isinstance(
+                event, types.events.StreamStart
+            ):
+                # Any first output — a start, a delta when the provider
+                # skips starts, a file, a builtin tool result.
+                self._first_output_seen = True
+                await self._span.add_event(
+                    telemetry.FIRST_TOKEN, event_type=type(event).__name__
+                )
         return event.model_copy(update={"message": self._message, **updates})
+
+    @property
+    def span(self) -> telemetry.Span | None:
+        """The telemetry span bracketing this stream.
+
+        Set when the stream came from :func:`stream` (live and replay
+        both); ``None`` for directly constructed streams.  Lets
+        consumers of the live event stream correlate what they see
+        with the span — per-event data itself never lands on the span.
+        """
+        return self._span
 
     @property
     def message(self) -> types.messages.Message:
@@ -540,6 +578,10 @@ async def _stream(
         # demand a finish event from the synthetic replay generator
         # (it yields nothing when the turn has no tool calls).
         s._ended = True
+        data = telemetry.AiStreamSpanData(
+            model=model.id, messages=list(messages), params=params
+        )
+        replay = True
     else:
         prepared = integrity.prepare_messages(messages)
         request = StreamRequest(
@@ -553,10 +595,22 @@ async def _stream(
             executor._do_stream(request),
             output_type=cast("type[Any] | None", output_type),
         )
-    try:
-        yield s
-    finally:
-        await s.aclose()
+        data = telemetry.AiStreamSpanData(
+            model=model.id, messages=prepared, params=params
+        )
+        replay = False
+    # Not set as current: the caller's work while the stream is open
+    # (tool dispatch, user code between events) is not part of the
+    # model call.
+    async with telemetry.span(data, replay=replay, set_as_current=False) as sp:
+        s._span = sp
+        try:
+            yield s
+        finally:
+            # Record whatever got built, even a partial message.
+            data.message = s.message
+            data.usage = s.usage
+            await s.aclose()
 
 
 async def generate(
@@ -569,7 +623,13 @@ async def generate(
     """Generate a non-streaming response (images, video, etc.)."""
     messages = integrity.prepare_messages(messages)
     request = GenerateRequest(model, messages, params)
-    return await executor._do_generate(request)
+    data = telemetry.AiGenerateSpanData(
+        model=model.id, messages=messages, params=params
+    )
+    async with telemetry.span(data):
+        message = await executor._do_generate(request)
+        data.message = message
+        return message
 
 
 async def probe(model: model_.Model) -> None:
