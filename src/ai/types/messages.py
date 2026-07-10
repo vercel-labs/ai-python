@@ -425,7 +425,7 @@ class HookPart[T](pydantic.BaseModel):
     id: str = pydantic.Field(default_factory=lambda: generate_id("part"))
     hook_id: str
     hook_type: str
-    status: Literal["deferred", "resolved", "cancelled"]
+    status: Literal["pending", "resolved", "cancelled"]
     metadata: dict[str, Any] = pydantic.Field(default_factory=dict)
     resolution: T | None = None
     tool_call_id: str | None = None

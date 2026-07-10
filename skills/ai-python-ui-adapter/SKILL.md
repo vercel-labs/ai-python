@@ -38,7 +38,7 @@ async def body():
             async for event in stream:
                 if (
                     isinstance(event, ai.events.HookEvent)
-                    and event.hook.status == "deferred"
+                    and event.hook.status == "pending"
                 ):
                     ai.defer_hook(event.hook)
                 yield event

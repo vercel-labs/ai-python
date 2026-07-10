@@ -39,7 +39,7 @@ async with agent.run(model, messages) as stream:
     async for event in stream:
         if (
             isinstance(event, ai.events.HookEvent)
-            and event.hook.status == "deferred"
+            and event.hook.status == "pending"
         ):
             deferred_hooks.append(event.hook)
             ai.defer_hook(event.hook)

@@ -90,7 +90,7 @@ def test_to_messages_keeps_deferred_approval_tombstone() -> None:
     hook_part = messages[1].parts[0]
     assert isinstance(hook_part, messages_.HookPart)
     assert hook_part.hook_type == "ToolApproval"
-    assert hook_part.status == "deferred"
+    assert hook_part.status == "pending"
 
 
 def test_to_messages_drops_resolved_approval_tombstone() -> None:

@@ -1011,7 +1011,7 @@ class AgentStream(Generic[AgentOutputT]):
         if isinstance(event, events_.RunBlocked):
             self._blocked = True
         elif isinstance(event, events_.HookEvent):
-            if event.hook.status == "deferred":
+            if event.hook.status == "pending":
                 self._deferred_hooks[event.hook.hook_id] = event.hook
             else:
                 # A blocked run can only resume via a hook resolution
@@ -1148,7 +1148,7 @@ def deferred_tool_result(
             )
 
     The hook itself is surfaced separately via the ``HookPart`` already
-    emitted by ``ai.hook()`` (status=``"deferred"``) which downstream
+    emitted by ``ai.hook()`` (status=``"pending"``) which downstream
     consumers (e.g. the ai-sdk UI bridge) use to render the actual
     approval state.
     """

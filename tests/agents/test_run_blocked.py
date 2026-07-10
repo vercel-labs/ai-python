@@ -5,7 +5,7 @@ is producing events, and every in-flight tool call is suspended
 awaiting a hook.  ``RunStateTracker`` folds the event stream and a
 ``RunBlocked`` event is emitted when the run blocks; there is no
 mirror event — a blocked run can only resume via a hook resolution,
-so the non-``deferred`` ``HookEvent`` is the unblock signal.
+so the non-``pending`` ``HookEvent`` is the unblock signal.
 ``AgentStream`` folds both into its ``blocked`` / ``deferred_hooks``
 properties.
 """
@@ -96,7 +96,7 @@ async def test_gated_tool_block_cycle() -> None:
 
     deferred_idx = index(
         lambda e: isinstance(e, events_.HookEvent)
-        and e.hook.status == "deferred"
+        and e.hook.status == "pending"
     )
     resolved_idx = index(
         lambda e: isinstance(e, events_.HookEvent)
@@ -132,7 +132,7 @@ async def test_busy_tool_defers_block_signal() -> None:
             delivered.append(event)
             if (
                 isinstance(event, events_.HookEvent)
-                and event.hook.status == "deferred"
+                and event.hook.status == "pending"
             ):
                 assert not stream.blocked
                 release.set()
@@ -213,7 +213,7 @@ async def test_abort_leaves_blocked() -> None:
                 blocked_events.append(event)
             if (
                 isinstance(event, events_.HookEvent)
-                and event.hook.status == "deferred"
+                and event.hook.status == "pending"
             ):
                 ai.defer_hook(event.hook)
 
@@ -304,7 +304,7 @@ async def test_unattributed_hook_in_tool_fails_closed() -> None:
             assert not isinstance(event, events_.RunBlocked)
             if (
                 isinstance(event, events_.HookEvent)
-                and event.hook.status == "deferred"
+                and event.hook.status == "pending"
             ):
                 assert event.hook.tool_call_id is None
                 ai.resolve_hook("self_gate", {"approved": True})
@@ -325,7 +325,7 @@ def test_tracker_fold_sequence() -> None:
     hook: messages_.HookPart[Any] = messages_.HookPart(
         hook_id="h1",
         hook_type="ToolApproval",
-        status="deferred",
+        status="pending",
         tool_call_id="tc-1",
     )
 

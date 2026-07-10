@@ -150,7 +150,7 @@ def test_merge_approval_signals_deferred_then_resolved() -> None:
             messages_.HookPart(
                 hook_id="approve_tc1",
                 hook_type="ToolApproval",
-                status="deferred",
+                status="pending",
                 tool_call_id="tc1",
             )
         ],
@@ -360,7 +360,7 @@ def test_to_ui_messages_internal_role_merges_approval() -> None:
                 messages_.HookPart(
                     hook_id="approve_tc1",
                     hook_type="ToolApproval",
-                    status="deferred",
+                    status="pending",
                     tool_call_id="tc1",
                 )
             ],
@@ -630,7 +630,7 @@ def _parked_turn(*, hook_id: str, tool_call_id: str) -> list[messages_.Message]:
                     id="part-1",
                     hook_id=hook_id,
                     hook_type="ToolApproval",
-                    status="deferred",
+                    status="pending",
                     metadata={"tool": "bash", "kwargs": {"command": "ls"}},
                     tool_call_id=tool_call_id,
                 )
@@ -664,5 +664,5 @@ def test_deferred_approval_hook_roundtrips_tool_call_id() -> None:
             if isinstance(p, messages_.HookPart)
         ]
         assert hook.hook_id == hook_id
-        assert hook.status == "deferred"
+        assert hook.status == "pending"
         assert hook.tool_call_id == "tc-1"

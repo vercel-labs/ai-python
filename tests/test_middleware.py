@@ -98,7 +98,7 @@ async def test_wrap_hook_is_called() -> None:
         async for event in stream:
             if not isinstance(event, agent_events_.HookEvent):
                 continue
-            if event.hook.status == "deferred":
+            if event.hook.status == "pending":
                 ai.resolve_hook("test_hook", {"approved": True, "reason": "ok"})
 
     assert len(hook_calls) == 1

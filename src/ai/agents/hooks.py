@@ -145,11 +145,11 @@ async def _hook_impl(call: middleware_.HookContext) -> pydantic.BaseModel:
         _live_hooks[label] = (future, hook_metadata, rt)
         rt.track_hook_label(label)
 
-        # Emit deferred signal.
+        # Emit pending signal.
         hook_part: messages_.HookPart[Any] = messages_.HookPart(
             hook_id=label,
             hook_type=payload.__name__,
-            status="deferred",
+            status="pending",
             metadata=hook_metadata,
             tool_call_id=call.tool_call_id,
         )

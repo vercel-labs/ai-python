@@ -336,7 +336,7 @@ class RunBlocked(pydantic.BaseModel):
 
     There is no mirror "unblocked" event because it would be redundant:
     a blocked run can only resume via a hook resolution (or
-    cancellation), so the next ``HookEvent`` with a non-``deferred``
+    cancellation), so the next ``HookEvent`` with a non-``pending``
     status *is* the unblock signal.  Note the converse does not hold —
     a ``ToolCallResult`` carrying an ``is_hook_deferred`` placeholder
     (serverless abort) arrives while the run stays blocked, and the run
@@ -368,7 +368,7 @@ class RunStateTracker:
 
     The fold reads three things:
 
-    * hook state from :class:`HookEvent` (``deferred`` adds, ``resolved``
+    * hook state from :class:`HookEvent` (``pending`` adds, ``resolved``
       / ``cancelled`` removes);
     * model-stream activity from :class:`StreamStart` / :class:`StreamEnd`;
     * in-flight tool calls from the assistant message on
@@ -416,7 +416,7 @@ class RunStateTracker:
                     r.tool_call_id for r in event.results
                 )
             case HookEvent():
-                if event.hook.status == "deferred":
+                if event.hook.status == "pending":
                     self._deferred[event.hook.hook_id] = event.hook
                 else:
                     self._deferred.pop(event.hook.hook_id, None)
