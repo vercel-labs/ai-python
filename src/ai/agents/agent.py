@@ -641,9 +641,9 @@ class BoundToolCall:
         # re-executing the tool.
         cached = self._part.cached_result
         if cached is not None:
-            async with telemetry.span(data, replay=True):
-                data.result = cached.result
-                data.is_error = cached.is_error
+            async with telemetry.span(data, replay=True) as sp:
+                sp.data.result = cached.result
+                sp.data.is_error = cached.is_error
                 msg = builders.tool_message(cached)
                 return events_.ToolCallResult(
                     message=msg, results=msg.tool_results
@@ -717,8 +717,8 @@ class BoundToolCall:
         async with telemetry.span(data) as sp:
             res = await chain(call)
             if res.results:
-                data.result = res.results[0].result
-                data.is_error = any(p.is_error for p in res.results)
+                sp.data.result = res.results[0].result
+                sp.data.is_error = any(p.is_error for p in res.results)
             # A tool exception is caught and converted to an error
             # result before it reaches this block, so it never hits the
             # span's own except path — thread it through explicitly.
@@ -1402,11 +1402,6 @@ class Agent:
                         yield transition
 
         async def _stream() -> AsyncGenerator[events_.AgentEvent]:
-            run_data = telemetry.RunSpanData(
-                agent=type(self).__name__,
-                model=model.id,
-                messages=list(messages),
-            )
             # Activate middleware for this run (and everything it calls).
             # When middleware is None (default), inherit the parent's
             # middleware from the context var — this lets nested agents
@@ -1414,7 +1409,13 @@ class Agent:
             # *extend* the parent stack so that outer cross-cutting
             # concerns (tracing, durability) are preserved.  Pass
             # ``_middleware=[]`` to clear the stack entirely.
-            async with telemetry.span(run_data):
+            async with telemetry.span(
+                telemetry.RunSpanData(
+                    agent=type(self).__name__,
+                    model=model.id,
+                    messages=list(messages),
+                )
+            ):
                 mw_token: middleware_.Token | None = None
                 if _middleware is not None:
                     parent = middleware_.get()

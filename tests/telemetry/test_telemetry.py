@@ -68,7 +68,13 @@ async def test_set_rejects_framework_spans() -> None:
 
 async def test_data_with_attributes_rejected() -> None:
     with pytest.raises(TypeError):
-        async with ai.telemetry.span(ai.telemetry.LoopTurnSpanData(), a=1):
+        # The overloads reject this statically too; the runtime check
+        # covers untyped callers.
+        data = ai.telemetry.LoopTurnSpanData()
+        async with ai.telemetry.span(
+            data,  # ty: ignore[invalid-argument-type]
+            a=1,  # type: ignore[call-overload]
+        ):
             pass
 
 

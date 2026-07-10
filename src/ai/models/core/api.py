@@ -137,7 +137,7 @@ class Stream(Generic[StreamOutputT]):
         # The telemetry span bracketing this stream, attached by
         # ``stream()``.  None for directly constructed streams
         # (``Stream(gen)``, ``Stream.replay_message``).
-        self._span: telemetry.Span | None = None
+        self._span: telemetry.Span[telemetry.AiStreamSpanData] | None = None
         self._first_output_seen = False
 
     @classmethod
@@ -244,7 +244,7 @@ class Stream(Generic[StreamOutputT]):
         return event.model_copy(update={"message": self._message, **updates})
 
     @property
-    def span(self) -> telemetry.Span | None:
+    def span(self) -> telemetry.Span[telemetry.AiStreamSpanData] | None:
         """The telemetry span bracketing this stream.
 
         Set when the stream came from :func:`stream` (live and replay
@@ -608,8 +608,8 @@ async def _stream(
             yield s
         finally:
             # Record whatever got built, even a partial message.
-            data.message = s.message
-            data.usage = s.usage
+            sp.data.message = s.message
+            sp.data.usage = s.usage
             await s.aclose()
 
 
@@ -623,12 +623,13 @@ async def generate(
     """Generate a non-streaming response (images, video, etc.)."""
     messages = integrity.prepare_messages(messages)
     request = GenerateRequest(model, messages, params)
-    data = telemetry.AiGenerateSpanData(
-        model=model.id, messages=messages, params=params
-    )
-    async with telemetry.span(data):
+    async with telemetry.span(
+        telemetry.AiGenerateSpanData(
+            model=model.id, messages=messages, params=params
+        )
+    ) as sp:
         message = await executor._do_generate(request)
-        data.message = message
+        sp.data.message = message
         return message
 
 

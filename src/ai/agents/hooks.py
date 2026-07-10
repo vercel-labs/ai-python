@@ -131,10 +131,10 @@ async def _hook_impl(call: middleware_.HookContext) -> pydantic.BaseModel:
     # Pre-registered resolution (serverless re-entry).
     pre_registered = _pending_resolutions.pop(label, None)
     if pre_registered is not None:
-        async with telemetry.span(data, replay=True):
+        async with telemetry.span(data, replay=True) as sp:
             if isinstance(pre_registered, BaseException):
                 raise pre_registered
-            data.status = "resolved"
+            sp.data.status = "resolved"
             return payload(**pre_registered)
 
     # No resolution available — suspend.  The span covers the whole
@@ -161,7 +161,7 @@ async def _hook_impl(call: middleware_.HookContext) -> pydantic.BaseModel:
         try:
             resolution = await future
         except asyncio.CancelledError as exc:
-            data.status = "cancelled"
+            sp.data.status = "cancelled"
             # ``cancel_hook(reason=...)`` rides on the CancelledError.
             attrs: dict[str, Any] = {}
             if exc.args and exc.args[0] is not None:
@@ -171,7 +171,7 @@ async def _hook_impl(call: middleware_.HookContext) -> pydantic.BaseModel:
 
         # Clean up live registry.
         _live_hooks.pop(label, None)
-        data.status = "resolved"
+        sp.data.status = "resolved"
         await sp.add_event(telemetry.HOOK_RESOLVED)
 
         # Emit resolved signal.
