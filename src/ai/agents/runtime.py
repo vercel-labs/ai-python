@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING, Any
 from .. import util
 from ..types import events as events_
 from ..types import messages as messages_
-from . import hooks as hooks_
 from .mcp import client as mcp_client
 
 if TYPE_CHECKING:
@@ -28,7 +27,6 @@ class Runtime:
         self._event_queue: util.AsyncIterableQueue[events_.AgentEvent] = (
             util.AsyncIterableQueue()
         )
-        self._hook_labels: set[str] = set()
 
     async def put_event(self, event: events_.AgentEvent) -> None:
         await self._event_queue.put(event)
@@ -39,15 +37,6 @@ class Runtime:
 
     async def signal_done(self) -> None:
         await self._event_queue.astop()
-
-    def track_hook_label(self, label: str) -> None:
-        """Register a hook label for cleanup when the run ends."""
-        self._hook_labels.add(label)
-
-    def cleanup_hooks(self) -> None:
-        """Remove all hook registry entries for this run."""
-        hooks_.cleanup_run(self._hook_labels)
-        self._hook_labels.clear()
 
 
 _runtime: contextvars.ContextVar[Runtime] = contextvars.ContextVar("runtime")
@@ -88,8 +77,6 @@ async def run(
                     await rt.put_event(event)
 
         finally:
-            rt.cleanup_hooks()
-
             await mcp_client.close_connections()
             mcp_client._pool.reset(mcp_token)
 

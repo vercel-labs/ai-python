@@ -998,9 +998,11 @@ class AgentStream(Generic[AgentOutputT]):
         self,
         gen: AsyncGenerator[events_.AgentEvent],
         context: Context,
+        hook_registry: hooks_.HookRegistry,
     ) -> None:
         self._gen = gen
         self._context = context
+        self._hook_registry = hook_registry
         self._blocked = False
         self._deferred_hooks: dict[str, types.messages.HookPart[Any]] = {}
 
@@ -1039,6 +1041,17 @@ class AgentStream(Generic[AgentOutputT]):
     @property
     def context(self) -> Context:
         return self._context
+
+    @property
+    def hook_registry(self) -> hooks_.HookRegistry:
+        """The run's :class:`~ai.agents.hooks.HookRegistry`.
+
+        Inside the ``agent.run()`` block the registry is already
+        current, so hook operations find it implicitly.  Pass this
+        explicitly (``resolve_hook(..., registry=...)``) when resolving
+        from a different task -- a UI callback, a server endpoint.
+        """
+        return self._hook_registry
 
     @property
     def blocked(self) -> bool:
@@ -1306,6 +1319,7 @@ class Agent:
         messages: list[types.messages.Message],
         *,
         params: models.InferenceRequestParams | None = None,
+        hook_registry: hooks_.HookRegistry | None = None,
         _middleware: list[middleware_._Middleware] | None = None,
     ) -> AbstractAsyncContextManager[AgentStream[str]]: ...
     @overload
@@ -1316,6 +1330,7 @@ class Agent:
         *,
         output_type: type[T],
         params: models.InferenceRequestParams | None = None,
+        hook_registry: hooks_.HookRegistry | None = None,
         _middleware: list[middleware_._Middleware] | None = None,
     ) -> AbstractAsyncContextManager[AgentStream[T]]: ...
     def run(
@@ -1325,6 +1340,7 @@ class Agent:
         *,
         output_type: type[pydantic.BaseModel] | None = None,
         params: models.InferenceRequestParams | None = None,
+        hook_registry: hooks_.HookRegistry | None = None,
         _middleware: list[middleware_._Middleware] | None = None,
     ) -> AbstractAsyncContextManager[AgentStream[Any]]:
         """Run the agent loop, yielding events to the consumer.
@@ -1343,6 +1359,11 @@ class Agent:
             output_type: Optional Pydantic model the model's output must
                 conform to.  When set, ``stream.output`` validates the
                 final assistant message's text against it.
+            hook_registry: The :class:`~ai.agents.hooks.HookRegistry`
+                for this run's hooks.  Defaults to the current registry
+                (so a nested run joins the enclosing run's hooks), or a
+                fresh one at the top level.  Pass a registry you own to
+                resolve hooks from outside the run's context.
 
         To attribute a sub-agent's events to a branch, wrap the run in
         ``yield_from(..., label=...)`` — the label flows via
@@ -1354,6 +1375,7 @@ class Agent:
             messages,
             output_type=output_type,
             params=params,
+            hook_registry=hook_registry,
             _middleware=_middleware,
         )
 
@@ -1365,6 +1387,7 @@ class Agent:
         *,
         output_type: type[pydantic.BaseModel] | None,
         params: models.InferenceRequestParams | None,
+        hook_registry: hooks_.HookRegistry | None,
         _middleware: list[middleware_._Middleware] | None,
     ) -> AsyncIterator[AgentStream[Any]]:
         context = Context(
@@ -1380,6 +1403,12 @@ class Agent:
         context._agent_tools_by_name = {t.name: t for t in self._tools}
         _populate_model_inputs(context.messages, context._agent_tools_by_name)
         _process_interrupted_hooks(context.messages)
+
+        registry = hook_registry
+        if registry is None:
+            # Join the current registry when there is one (a nested run
+            # shares the enclosing run's hooks); otherwise start fresh.
+            registry = hooks_._hook_registry.get(None) or hooks_.HookRegistry()
 
         async def _real(call: Context) -> AsyncGenerator[events_.AgentEvent]:
             tracker = events_.RunStateTracker()
@@ -1429,9 +1458,10 @@ class Agent:
                     if mw_token is not None:
                         middleware_.deactivate(mw_token)
 
-        # close the event generator on exit from the ``run()`` block.
-        astream = AgentStream(_stream(), context)
-        try:
+        async with (
+            hooks_.use_hook_registry(registry),
+            contextlib.aclosing(
+                AgentStream(_stream(), context, registry)
+            ) as astream,
+        ):
             yield astream
-        finally:
-            await astream.aclose()

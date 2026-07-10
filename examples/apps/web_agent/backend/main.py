@@ -63,12 +63,12 @@ async def chat(request: ChatRequest) -> fastapi.responses.StreamingResponse:
     """Handle chat requests and stream responses."""
     messages, approvals = ai.agents.ui.ai_sdk.to_messages(request.messages)
 
-    # Pre-register hook resolutions so the agent loop's hooks find them
-    # immediately on the resume turn.
-    ai.agents.ui.ai_sdk.apply_approvals(approvals)
-
     async def stream_response() -> AsyncGenerator[str]:
         async with agent_.chat_agent.run(agent_.MODEL, messages) as result:
+            # Pre-register hook resolutions so the agent loop's hooks
+            # find them immediately on the resume turn.
+            ai.agents.ui.ai_sdk.apply_approvals(approvals)
+
             # We need to monitor the stream for HookEvents to abort;
             # since ui.ai_sdk.to_sse consumes a stream, we have a wrapper
             # async generator that does this check and yields the events.

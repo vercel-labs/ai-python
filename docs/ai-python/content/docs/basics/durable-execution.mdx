@@ -104,5 +104,6 @@ output.
 Consider using the serverless hook flow for approvals. When a deferred `HookEvent`
 appears, call `ai.defer_hook(event.hook)`, persist `stream.messages`,
 and return the approval request to the client. On the next workflow turn, call
-`ai.resolve_hook(...)` before `agent.run(...)`. The SDK replays the interrupted
-assistant turn and continues when the hook reads the pre-registered resolution.
+`ai.resolve_hook(...)` inside the `agent.run(...)` block before iterating the
+stream. The SDK replays the interrupted assistant turn and continues when the
+hook reads the pre-registered resolution.

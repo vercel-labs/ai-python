@@ -45,13 +45,14 @@ async def stateless(
     history: list[ai.messages.Message],
     approvals: dict[str, ai.tools.ToolApproval] | None = None,
 ) -> tuple[list[ai.messages.Message], list[ai.messages.HookPart[Any]], str]:
-    for hook_id, approval in (approvals or {}).items():
-        ai.resolve_hook(hook_id, approval)
-
     deferred: list[ai.messages.HookPart[Any]] = []
     text: list[str] = []
 
     async with agent.run(model, history) as stream:
+        # Pre-register the approvals before iterating, so the replayed
+        # hooks find them immediately.
+        for hook_id, approval in (approvals or {}).items():
+            ai.resolve_hook(hook_id, approval)
         async for event in stream:
             if isinstance(event, ai.events.TextDelta):
                 text.append(event.chunk)

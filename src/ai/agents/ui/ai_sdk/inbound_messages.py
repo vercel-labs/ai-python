@@ -538,8 +538,9 @@ def to_messages(
     :meth:`Agent.run` (which has the tool registry), not here.
 
     Returns ``(messages, approvals)``.  The caller can pre-register
-    resolutions via :func:`apply_approvals` before calling
-    :meth:`Agent.run` if the run should resume from a hook.
+    resolutions via :func:`apply_approvals` inside the
+    :meth:`Agent.run` block (before iterating the stream) if the run
+    should resume from a hook.
     """
     validate_context = (
         messages_.tool_context(tools) if tools is not None else None

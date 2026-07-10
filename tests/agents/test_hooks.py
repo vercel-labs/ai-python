@@ -95,8 +95,16 @@ async def test_cancel_live_hook() -> None:
 
 
 async def test_cancel_nonexistent_raises() -> None:
-    with pytest.raises(ValueError, match="No deferred hook"):
+    # Outside a run there is no current Runtime at all.
+    with pytest.raises(LookupError):
         await ai.cancel_hook("does_not_exist_xyz")
+
+    mock_llm([[text_msg("OK")]])
+    async with ai.Agent().run(MOCK_MODEL, [ai.user_message("go")]) as stream:
+        with pytest.raises(ValueError, match="No deferred hook"):
+            await ai.cancel_hook("does_not_exist_xyz")
+        async for _msg in stream:
+            pass
 
 
 # -- Pre-registration (serverless re-entry) --------------------------------
@@ -118,13 +126,124 @@ async def test_pre_registered_resolution_consumed() -> None:
 
     my_agent = MyAgent()
 
-    # Pre-register BEFORE run.
-    ai.resolve_hook("pre_reg_1", {"approved": True})
-
     mock_llm([[text_msg("OK")]])
     async with my_agent.run(MOCK_MODEL, [ai.user_message("go")]) as stream:
+        # Pre-register before iterating: the loop hasn't started yet.
+        ai.resolve_hook("pre_reg_1", {"approved": True})
         async for _msg in stream:
             pass
+
+    assert resolved_value is not None
+    assert resolved_value.approved is True
+
+
+# -- Explicit HookRegistry ---------------------------------------------------
+
+
+async def test_explicit_registry_isolates_live_hook() -> None:
+    """A hook created in an explicit registry is invisible to the run's."""
+    reg = ai.HookRegistry()
+    resolved_value: Confirmation | None = None
+
+    class MyAgent(ai.Agent):
+        async def loop(
+            self, context: ai.Context
+        ) -> AsyncGenerator[ai.events.Event]:
+            nonlocal resolved_value
+            async with ai.models.stream(context=context) as stream:
+                async for event in stream:
+                    yield event
+            resolved_value = await ai.hook(
+                "iso_1", payload=Confirmation, registry=reg
+            )
+
+    my_agent = MyAgent()
+
+    mock_llm([[text_msg("OK")]])
+
+    async with my_agent.run(MOCK_MODEL, [ai.user_message("go")]) as stream:
+        async for event in stream:
+            if not isinstance(event, agent_events_.HookEvent):
+                continue
+            if event.hook.status == "pending":
+                # The run's own registry doesn't know about this hook.
+                with pytest.raises(ValueError, match="No deferred hook"):
+                    await ai.cancel_hook("iso_1")
+                ai.resolve_hook("iso_1", {"approved": True}, registry=reg)
+
+    assert resolved_value is not None
+    assert resolved_value.approved is True
+
+
+async def test_run_with_explicit_registry() -> None:
+    """A caller-owned registry can pre-register before the run starts."""
+    reg = ai.HookRegistry()
+    resolved_value: Confirmation | None = None
+
+    class MyAgent(ai.Agent):
+        async def loop(
+            self, context: ai.Context
+        ) -> AsyncGenerator[ai.events.Event]:
+            nonlocal resolved_value
+            async with ai.models.stream(context=context) as stream:
+                async for event in stream:
+                    yield event
+            resolved_value = await ai.hook("pre_reg_rt", payload=Confirmation)
+
+    my_agent = MyAgent()
+
+    ai.resolve_hook("pre_reg_rt", {"approved": True}, registry=reg)
+
+    mock_llm([[text_msg("OK")]])
+    async with my_agent.run(
+        MOCK_MODEL, [ai.user_message("go")], hook_registry=reg
+    ) as stream:
+        assert stream.hook_registry is reg
+        async for _msg in stream:
+            pass
+
+    assert resolved_value is not None
+    assert resolved_value.approved is True
+
+
+# -- Nested runs ------------------------------------------------------------
+
+
+async def test_nested_run_joins_enclosing_registry() -> None:
+    """A nested run reuses the enclosing run's registry, so its hooks
+    are resolvable from the outermost consumer."""
+    resolved_value: Confirmation | None = None
+
+    class InnerAgent(ai.Agent):
+        async def loop(
+            self, context: ai.Context
+        ) -> AsyncGenerator[ai.events.Event]:
+            nonlocal resolved_value
+            async with ai.models.stream(context=context) as stream:
+                async for event in stream:
+                    yield event
+            resolved_value = await ai.hook("nested_1", payload=Confirmation)
+
+    class OuterAgent(ai.Agent):
+        async def loop(
+            self, context: ai.Context
+        ) -> AsyncGenerator[agent_events_.AgentEvent]:
+            inner = InnerAgent()
+            async with inner.run(MOCK_MODEL, [ai.user_message("sub")]) as s:
+                assert s.hook_registry is context_registry
+                async for event in s:
+                    yield event
+
+    mock_llm([[text_msg("OK")]])
+
+    async with OuterAgent().run(MOCK_MODEL, [ai.user_message("go")]) as stream:
+        context_registry = stream.hook_registry
+        async for event in stream:
+            if (
+                isinstance(event, agent_events_.HookEvent)
+                and event.hook.status == "pending"
+            ):
+                ai.resolve_hook("nested_1", {"approved": True})
 
     assert resolved_value is not None
     assert resolved_value.approved is True
@@ -292,9 +411,11 @@ async def test_cancelled_hook_span(recorder: Recorder) -> None:
 
 async def test_pre_registered_hook_is_replay_span(recorder: Recorder) -> None:
     my_agent = _HookAgent()
-    ai.resolve_hook(my_agent.label, {"approved": True}, payload=Confirmation)
     mock_llm([[text_msg("OK")]])
     async with my_agent.run(MOCK_MODEL, [ai.user_message("go")]) as stream:
+        ai.resolve_hook(
+            my_agent.label, {"approved": True}, payload=Confirmation
+        )
         async for _ in stream:
             pass
 
