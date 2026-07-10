@@ -51,6 +51,7 @@ async def llm_activity(
     model_data: dict[str, Any],
     messages_data: list[dict[str, Any]],
     tools_data: list[dict[str, Any]],
+    parent_ref: dict[str, Any] | None,
 ) -> dict[str, Any]:
     model = ai.Model.model_validate(model_data)
     messages = [
@@ -58,8 +59,18 @@ async def llm_activity(
     ]
     tools = [ai.Tool.model_validate(tool) for tool in tools_data]
 
+    # The activity runs in its own process, parenting under the ref
+    # carried in the args continues the workflow's trace.
+    parent = (
+        ai.telemetry.SpanRef.model_validate(parent_ref)
+        if parent_ref is not None
+        else None
+    )
     message: ai.messages.Message | None = None
-    async with ai.stream(model, messages, tools=tools) as model_stream:
+    async with (
+        ai.telemetry.span("llm_activity", parent=parent),
+        ai.stream(model, messages, tools=tools) as model_stream,
+    ):
         async for event in model_stream:
             if isinstance(event, ai.events.StreamEnd):
                 message = event.message
@@ -108,6 +119,10 @@ class DurableAgent(ai.Agent):
 
     async def loop(self, context: ai.Context) -> AsyncGenerator[ai.events.AgentEvent]:
         tools_data = [tool.model_dump(mode="json") for tool in context.tools]
+        # The loop runs inside the run span; its ref lets spans opened in
+        # the activity process parent under it.
+        ref = ai.telemetry.current_ref()
+        ref_data = ref.model_dump(mode="json") if ref is not None else None
 
         while context.keep_running():
             result = await temporalio.workflow.execute_activity(
@@ -116,6 +131,7 @@ class DurableAgent(ai.Agent):
                     context.model.model_dump(mode="json"),
                     [message.model_dump(mode="json") for message in context.messages],
                     tools_data,
+                    ref_data,
                 ],
                 start_to_close_timeout=datetime.timedelta(minutes=5),
                 retry_policy=NO_RETRIES,
@@ -171,11 +187,9 @@ async def _run_turn(turn_input: dict[str, Any]) -> TurnOutput:
 
 @temporalio.workflow.defn
 class RunTurn:
-    # Draw message/part ids from the workflow's deterministic RNG so they
-    # are stable across replay. ``workflow.random`` is passed as a factory
-    # (it's only valid inside the workflow) and resolved on each call.
     @temporalio.workflow.run
     @ai.messages.use_random(temporalio.workflow.random)
+    @ai.telemetry.use_clock(temporalio.workflow)
     async def run(self, turn_input: dict[str, Any]) -> dict[str, Any]:
         try:
             output = await _run_turn(turn_input)

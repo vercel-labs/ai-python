@@ -70,6 +70,7 @@ async def llm_step(
     model_data: dict[str, object],
     messages_data: list[dict[str, object]],
     tools_data: list[dict[str, object]],
+    parent_ref: dict[str, object] | None,
 ) -> dict[str, object]:
     model = ai.Model.model_validate(model_data)
     messages = [
@@ -77,8 +78,18 @@ async def llm_step(
     ]
     tools = [ai.Tool.model_validate(tool) for tool in tools_data]
 
+    # The step runs in its own process, parenting under the ref
+    # carried in the input continues the workflow's trace.
+    parent = (
+        ai.telemetry.SpanRef.model_validate(parent_ref)
+        if parent_ref is not None
+        else None
+    )
     message: ai.messages.Message | None = None
-    async with ai.stream(model, messages, tools=tools) as model_stream:
+    async with (
+        ai.telemetry.span("llm_step", parent=parent),
+        ai.stream(model, messages, tools=tools) as model_stream,
+    ):
         async for event in model_stream:
             if isinstance(event, ai.events.StreamEnd):
                 message = event.message
@@ -128,12 +139,17 @@ class DurableAgent(ai.Agent):
 
     async def loop(self, context: ai.Context) -> AsyncGenerator[ai.events.AgentEvent]:
         tools_data = [tool.model_dump(mode="json") for tool in context.tools]
+        # The loop runs inside the run span; its ref lets spans opened in
+        # the step process parent under it.
+        ref = ai.telemetry.current_ref()
+        ref_data = ref.model_dump(mode="json") if ref is not None else None
 
         while context.keep_running():
             result = await llm_step(
                 context.model.model_dump(mode="json"),
                 [message.model_dump(mode="json") for message in context.messages],
                 tools_data,
+                ref_data,
             )
             assistant_message = ai.messages.Message.model_validate(result)
             context.add(assistant_message)
