@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import random
 import traceback
 from collections.abc import AsyncGenerator
 from typing import Any, ClassVar
@@ -35,12 +36,33 @@ AGENT_EVENT_ADAPTER: pydantic.TypeAdapter[ai.events.AgentEvent] = pydantic.TypeA
 
 class TurnInput(pydantic.BaseModel):
     messages: list[ai.messages.Message]
+    # Time base for span timestamps inside the workflow, stamped by the
+    # server at start. Workflow inputs are recorded, so it is identical
+    # on every replay; workflow code itself cannot read the clock.
+    submitted_at_ns: int
 
 
 class TurnOutput(pydantic.BaseModel):
     messages: list[ai.messages.Message]
     events: list[dict[str, Any]] = pydantic.Field(default_factory=list)
     error: str | None = None
+
+
+class TickingClock:
+    """Replay-stable clock for span timestamps inside the workflow.
+
+    Starts at a recorded instant and ticks forward a fixed step per
+    reading — the same recipe the workflow runtime uses to derive ULIDs
+    from the run's started_at. Replays read identical timestamps.
+    """
+
+    def __init__(self, now_ns: int, tick_ns: int = 1_000_000) -> None:
+        self.now_ns = now_ns
+        self.tick_ns = tick_ns
+
+    def time_ns(self) -> int:
+        self.now_ns += self.tick_ns
+        return self.now_ns
 
 
 @workflow.step
@@ -140,24 +162,33 @@ async def _run_turn(turn_input: dict[str, Any]) -> TurnOutput:
     messages = _turn_input.messages
     events: list[dict[str, Any]] = []
 
-    try:
-        model = ai.get_model(MODEL_ID)
-        async with durable_agent.run(model, messages) as run:
-            async for event in run:
-                events.append(event.model_dump(mode="json"))
-            messages = run.messages
-    except Exception as error:
-        output = TurnOutput(
-            messages=messages,
-            events=events,
-            error=f"{type(error).__name__}: {error}",
-        )
-        print(
-            f"[durable_agent_workflows] error in run_turn:\n{traceback.format_exc()}",
-            flush=True,
-        )
-    else:
-        output = TurnOutput(messages=messages, events=events)
+    # Ids and span timestamps are the two ambient nondeterministic inputs
+    # of the ai package; replays must reproduce both. Ids draw from the
+    # sandbox's random module, which is seeded per run; timestamps count
+    # up from the recorded time base in the input.
+    with (
+        ai.messages.use_random(lambda: random.Random(random.getrandbits(64))),
+        ai.telemetry.use_clock(TickingClock(_turn_input.submitted_at_ns)),
+    ):
+        try:
+            model = ai.get_model(MODEL_ID)
+            async with durable_agent.run(model, messages) as run:
+                async for event in run:
+                    events.append(event.model_dump(mode="json"))
+                messages = run.messages
+        except Exception as error:
+            output = TurnOutput(
+                messages=messages,
+                events=events,
+                error=f"{type(error).__name__}: {error}",
+            )
+            print(
+                "[durable_agent_workflows] error in run_turn:\n"
+                f"{traceback.format_exc()}",
+                flush=True,
+            )
+        else:
+            output = TurnOutput(messages=messages, events=events)
 
     return output
 

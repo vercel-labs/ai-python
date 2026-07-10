@@ -11,6 +11,8 @@ from .span import (
     RESPONSE_COMPLETE,
     AiGenerateSpanData,
     AiStreamSpanData,
+    Clock,
+    ClockSource,
     CustomSpanData,
     HookSpanData,
     LoopTurnSpanData,
@@ -24,6 +26,7 @@ from .span import (
     register,
     span,
     unregister,
+    use_clock,
     wrap_span,
 )
 
@@ -35,6 +38,8 @@ __all__ = [
     "RESPONSE_COMPLETE",
     "AiGenerateSpanData",
     "AiStreamSpanData",
+    "Clock",
+    "ClockSource",
     "CustomSpanData",
     "HookSpanData",
     "LoopTurnSpanData",
@@ -48,5 +53,6 @@ __all__ = [
     "register",
     "span",
     "unregister",
+    "use_clock",
     "wrap_span",
 ]

@@ -29,10 +29,12 @@ requires-dist = [
     { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.18.0" },
     { name = "modelsdotdev", specifier = "==0.*" },
     { name = "openai", marker = "extra == 'openai'", specifier = ">=2.14.0" },
+    { name = "opentelemetry-sdk", marker = "extra == 'otel'", specifier = ">=1.30" },
     { name = "pydantic", specifier = ">=2.13" },
     { name = "typing-extensions", specifier = ">=4.15.0" },
+    { name = "vercel", marker = "extra == 'vercel'", specifier = ">=0.5.9" },
 ]
-provides-extras = ["anthropic", "mcp", "openai"]
+provides-extras = ["anthropic", "mcp", "openai", "otel", "vercel"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -41,6 +43,8 @@ dev = [
     { name = "mcp", specifier = ">=1.18.0" },
     { name = "mypy", specifier = "~=2.1.0" },
     { name = "openai", specifier = ">=2.14.0" },
+    { name = "opentelemetry-exporter-otlp-proto-http", specifier = ">=1.43.0" },
+    { name = "opentelemetry-sdk", specifier = ">=1.43.0" },
     { name = "pytest", specifier = ">=8.0" },
     { name = "pytest-asyncio", specifier = ">=0.24" },
     { name = "python-dotenv", specifier = ">=1.2.1" },

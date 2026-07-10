@@ -28,6 +28,10 @@ A :class:`SpanEvent` is a named, timestamped milestone inside a span's
 lifetime (``first_token``, ``hook_resolved``, ...), recorded with
 :meth:`Span.add_event`.
 
+Span timestamps come from the ambient clock; :func:`use_clock`
+overrides it per-context, e.g. with a deterministic clock inside a
+durable workflow.
+
 For bridging vendor SDKs, :func:`wrap_span` builds an adapter from
 a specially shaped function.
 """
@@ -48,21 +52,91 @@ from typing import (
     Literal,
     Protocol,
     overload,
+    runtime_checkable,
 )
 
 # ``typing.TypeVar`` lacks the ``default=`` kwarg on Python <3.13.
 # Use the typing_extensions backport so this works on 3.12 too.
 from typing_extensions import TypeVar
 
+from .. import util
 from ..types import messages as messages_
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, AsyncIterator, Callable
+    from collections.abc import (
+        AsyncGenerator,
+        AsyncIterator,
+        Callable,
+        Iterator,
+    )
 
     from ..models.core import params as params_
     from ..types import usage as usage_
 
 logger = logging.getLogger(__name__)
+
+
+# ── Clock ─────────────────────────────────────────────────────────
+
+
+@runtime_checkable
+class Clock(Protocol):
+    """Anything with ``time_ns() -> int``: nanoseconds since the epoch.
+
+    The stdlib ``time`` module itself satisfies it.
+    """
+
+    def time_ns(self) -> int: ...
+
+
+type ClockSource = Clock | Callable[[], Clock]
+"""A ``Clock``, or a zero-arg factory that produces one."""
+
+
+_span_clock: contextvars.ContextVar[Clock | None] = contextvars.ContextVar(
+    "span_clock", default=None
+)
+
+
+def _now_ns() -> int:
+    clock = _span_clock.get()
+    return clock.time_ns() if clock is not None else time.time_ns()
+
+
+def _resolve_clock(source: ClockSource) -> Clock:
+    return source if isinstance(source, Clock) else source()
+
+
+@util.contextmanager_with_async_decorator
+def use_clock(source: ClockSource) -> Iterator[None]:
+    """Read span timestamps from ``source`` within this context.
+
+    Every span timestamp flows through the current clock --
+    ``started_at``, ``ended_at``, and event stamps from
+    :meth:`Span.add_event`. The default is ``time.time_ns()``.
+
+    ``source`` is a :class:`Clock` or a zero-arg factory returning one.
+    A factory is resolved on entry, so a clock only constructible
+    inside a durable workflow can be passed and built lazily there --
+    the timestamp counterpart of ``ai.messages.use_random``, which does
+    the same for the ids spans draw. The override is scoped to the
+    calling task and tasks spawned from it, and restored on exit::
+
+        with ai.telemetry.use_clock(clock):
+            ...  # spans opened here read time from clock
+
+    This can also be used as a decorator on both sync and async
+    functions::
+
+        @ai.telemetry.use_clock(make_clock)
+        async def run(...):
+            ...
+    """
+    token = _span_clock.set(_resolve_clock(source))
+    try:
+        yield
+    finally:
+        _span_clock.reset(token)
 
 
 # span data types
@@ -226,7 +300,7 @@ class Span(Generic[DataT_co]):
     id: str
     trace_id: str
     parent_id: str | None
-    started_at: int  # time.time_ns()
+    started_at: int  # nanoseconds since the epoch, from the ambient clock
     ended_at: int | None = None
     error: BaseException | None = None
     replay: bool = False
@@ -260,7 +334,7 @@ class Span(Generic[DataT_co]):
         is better reported late than dropped.
         """
         event = SpanEvent(
-            name=name, time_ns=time.time_ns(), attributes=dict(attributes)
+            name=name, time_ns=_now_ns(), attributes=dict(attributes)
         )
         if self.ended_at is not None:
             logger.warning(
@@ -384,7 +458,7 @@ async def _span_impl(
         id=messages_.generate_id("span"),
         trace_id=parent.trace_id if parent else messages_.generate_id("trace"),
         parent_id=parent.id if parent else None,
-        started_at=time.time_ns(),
+        started_at=_now_ns(),
         replay=replay,
         set_as_current=set_as_current,
     )
@@ -414,7 +488,7 @@ async def _span_impl(
                 except ValueError:
                     # Token from a different task's context.
                     misordered = True
-        sp.ended_at = time.time_ns()
+        sp.ended_at = _now_ns()
         await _dispatch("on_span_end", sp)
         if misordered:
             raise RuntimeError(

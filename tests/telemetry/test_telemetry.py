@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import time
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -497,3 +498,67 @@ async def test_add_event_after_end_warns_and_appends(
     assert any(
         "already-ended" in record.getMessage() for record in caplog.records
     )
+
+
+# ── use_clock ─────────────────────────────────────────────────────
+
+
+class _TickingClock:
+    """Deterministic clock: starts at ``now_ns``, each reading ticks
+    forward by ``tick_ns``."""
+
+    def __init__(self, now_ns: int, tick_ns: int = 10) -> None:
+        self.now_ns = now_ns
+        self.tick_ns = tick_ns
+
+    def time_ns(self) -> int:
+        self.now_ns += self.tick_ns
+        return self.now_ns
+
+
+async def _stamps() -> tuple[int, int, int | None]:
+    async with ai.telemetry.span("s") as sp:
+        event = await sp.add_event("milestone")
+    return sp.started_at, event.time_ns, sp.ended_at
+
+
+async def test_use_clock_overrides_and_restores() -> None:
+    # A ticking clock gives a deterministic timestamp sequence; the
+    # override drives started_at, event stamps, and ended_at alike.
+    with ai.telemetry.use_clock(_TickingClock(1_000)):
+        first = await _stamps()
+    with ai.telemetry.use_clock(_TickingClock(1_000)):
+        second = await _stamps()
+
+    assert first == second == (1_010, 1_020, 1_030)
+
+    # A factory is resolved on entry (so e.g. a clock only
+    # constructible inside a durable workflow works).
+    with ai.telemetry.use_clock(lambda: _TickingClock(1_000)):
+        assert await _stamps() == first
+
+    # Restored on exit -- back to the wall clock.
+    async with ai.telemetry.span("s") as sp:
+        pass
+    assert sp.started_at > 1_030
+
+
+async def test_use_clock_decorator_handles_async_functions() -> None:
+    # Works as a decorator on an async fn, resolving the factory per call.
+    @ai.telemetry.use_clock(lambda: _TickingClock(1_000))
+    async def run() -> tuple[int, int, int | None]:
+        return await _stamps()
+
+    assert await run() == (1_010, 1_020, 1_030)
+    assert await run() == (1_010, 1_020, 1_030)
+
+
+async def test_use_clock_accepts_time_module() -> None:
+    before = time.time_ns()
+    # A module with time_ns satisfies Clock; ty can't check module-vs-
+    # protocol assignability yet (mypy can).
+    with ai.telemetry.use_clock(time):  # ty: ignore[invalid-argument-type]
+        async with ai.telemetry.span("s") as sp:
+            pass
+    assert sp.ended_at is not None
+    assert before <= sp.started_at <= sp.ended_at <= time.time_ns()
