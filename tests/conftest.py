@@ -201,7 +201,12 @@ async def collect_messages(
     """Collect terminal messages from an event stream."""
     result: list[messages_.Message] = []
     async for event in source:
-        if isinstance(event, agent_events_.TerminalEvent):
+        if isinstance(
+            event,
+            agent_events_.StreamEnd
+            | agent_events_.ToolCallResult
+            | agent_events_.HookEvent,
+        ):
             result.append(event.message)
     return result
 
