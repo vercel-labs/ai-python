@@ -31,16 +31,19 @@ _id_random: contextvars.ContextVar[random.Random | None] = (
 )
 
 
-def generate_id(prefix: str | None = None) -> str:
+def generate_id(prefix: str | None = None, *, bits: int = 48) -> str:
     """Generate a short id for messages and parts.
 
     Every message/part id flows through here, drawn from a ``Random``: a
     lazily-created module-global one by default, or whatever was installed
     for the current context with :func:`use_random` -- e.g. a
     deterministic, replay-safe generator inside a durable workflow.
+
+    ``bits`` sets the id width (a multiple of 4; the id is hex). Used for
+    telemetry ids e.g. to match OTel id size.
     """
     rng = _id_random.get() or _default_random()
-    raw = f"{rng.getrandbits(48):012x}"
+    raw = f"{rng.getrandbits(bits):0{bits // 4}x}"
     return f"{prefix}_{raw}" if prefix else raw
 
 

@@ -18,6 +18,7 @@ An adapter processes spans and decides what to do with them::
         async def on_span_start(self, span): ...
         async def on_span_end(self, span): ...
         async def on_span_event(self, span, event): ...
+        async def flush(self): ...  # push buffered spans out
 
     ai.telemetry.register(MyAdapter())
 
@@ -32,8 +33,8 @@ Span timestamps come from the ambient clock; :func:`use_clock`
 overrides it per-context, e.g. with a deterministic clock inside a
 durable workflow.
 
-For bridging vendor SDKs, :func:`wrap_span` builds an adapter from
-a specially shaped function.
+For bridging vendor SDKs without a class, :func:`wrap_span` builds an
+adapter from a free-standing async generator function.
 """
 
 from __future__ import annotations
@@ -54,6 +55,8 @@ from typing import (
     overload,
     runtime_checkable,
 )
+
+import pydantic
 
 # ``typing.TypeVar`` lacks the ``default=`` kwarg on Python <3.13.
 # Use the typing_extensions backport so this works on 3.12 too.
@@ -275,6 +278,33 @@ class SpanEvent:
     attributes: dict[str, Any]
 
 
+class SpanRef(pydantic.BaseModel):
+    """A serializable reference to a span: just enough to parent under it.
+
+    Capture with :func:`current_ref` or ``span.ref``; carry it across a
+    checkpoint, a queue, or the network like any pydantic model
+    (``model_dump`` / ``model_validate``); restore by opening a span
+    with ``parent=ref`` on the other side::
+
+        ref = ai.telemetry.current_ref()
+        job = {"task": task, "telemetry": ref.model_dump()}
+
+        # elsewhere:
+        ref = ai.telemetry.SpanRef.model_validate(job["telemetry"])
+        async with ai.telemetry.span("pickup", parent=ref):
+            ...  # everything inside continues the original trace
+
+    ``sampled`` is carried so refs round-trip sampling decisions
+    losslessly; the framework itself does not act on it yet.
+    """
+
+    model_config = pydantic.ConfigDict(frozen=True)
+
+    trace_id: str
+    span_id: str
+    sampled: bool = True
+
+
 @dataclasses.dataclass
 class Span(Generic[DataT_co]):
     """A record of a unit of work.
@@ -308,6 +338,11 @@ class Span(Generic[DataT_co]):
     span_events: list[SpanEvent] = dataclasses.field(default_factory=list)
 
     schema_version: ClassVar[int] = 1
+
+    @property
+    def ref(self) -> SpanRef:
+        """A serializable :class:`SpanRef` pointing at this span."""
+        return SpanRef(trace_id=self.trace_id, span_id=self.id)
 
     def set(self, **attributes: Any) -> None:
         """Attach attributes to a span created with ``span("name", ...)``."""
@@ -359,6 +394,17 @@ def current() -> Span | None:
     return _current.get()
 
 
+def current_ref() -> SpanRef | None:
+    """Return a :class:`SpanRef` to the current span, ``None`` outside one.
+
+    This is the capture side of crossing a process boundary: checkpoint
+    or send the ref, then open a span with ``parent=ref`` on the other
+    side.
+    """
+    sp = _current.get()
+    return sp.ref if sp is not None else None
+
+
 def register(adapter: Any) -> None:
     """Add an adapter.  Multiple adapters coexist independently."""
     _adapters.append(adapter)
@@ -369,13 +415,13 @@ def unregister(adapter: Any) -> None:
     _adapters.remove(adapter)
 
 
-async def _dispatch(method: str, span_: Span, *args: Any) -> None:
+async def _dispatch(method: str, *args: Any) -> None:
     for adapter in list(_adapters):
         fn = getattr(adapter, method, None)
         if fn is None:
             continue
         try:
-            result = fn(span_, *args)
+            result = fn(*args)
             if inspect.isawaitable(result):
                 await result
         except Exception:
@@ -384,11 +430,24 @@ async def _dispatch(method: str, span_: Span, *args: Any) -> None:
             )
 
 
+async def flush() -> None:
+    """Ask every adapter to push buffered telemetry out, and wait.
+
+    Dispatches the optional ``flush()`` adapter method with the usual
+    isolation (a raising adapter is logged and skipped).  Call it before
+    a process may be frozen or killed — the end of a serverless
+    invocation, a durable-workflow step handing back control — so spans
+    buffered in exporters are not lost.
+    """
+    await _dispatch("flush")
+
+
 @overload
 def span(
     name_or_data: str,
     /,
     *,
+    parent: Span | SpanRef | None = None,
     replay: bool = False,
     set_as_current: bool = True,
     **attributes: Any,
@@ -400,6 +459,7 @@ def span(
     name_or_data: DataT,
     /,
     *,
+    parent: Span | SpanRef | None = None,
     replay: bool = False,
     set_as_current: bool = True,
 ) -> contextlib.AbstractAsyncContextManager[Span[DataT]]: ...
@@ -409,6 +469,7 @@ def span(
     name_or_data: str | SpanData,
     /,
     *,
+    parent: Span | SpanRef | None = None,
     replay: bool = False,
     set_as_current: bool = True,
     **attributes: Any,
@@ -420,6 +481,11 @@ def span(
     assignments to ``sp.data`` fields are type checked.  Exceptions are
     recorded on the span and re-raised.
 
+    ``parent`` overrides the ambient parent for this span: a live
+    :class:`Span`, or a :class:`SpanRef` restored from another process
+    to continue its trace here.  The default parents under the current
+    span.
+
     ``set_as_current=False`` keeps the span from becoming current:
     work done while it is open parents to *its* parent instead. Used by
     ai.stream because of the context manager api.
@@ -428,6 +494,7 @@ def span(
     # ``asynccontextmanager`` to an overloaded function directly.
     return _span_impl(
         name_or_data,
+        parent=parent,
         replay=replay,
         set_as_current=set_as_current,
         **attributes,
@@ -439,6 +506,7 @@ async def _span_impl(
     name_or_data: str | SpanData,
     /,
     *,
+    parent: Span | SpanRef | None,
     replay: bool,
     set_as_current: bool,
     **attributes: Any,
@@ -451,13 +519,26 @@ async def _span_impl(
             raise TypeError("attributes only go with a str span name")
         name = name_or_data.span_name
         data = name_or_data
-    parent = _current.get()
+    if parent is None:
+        parent = _current.get()
+    parent_id: str | None
+    match parent:
+        case Span():
+            trace_id, parent_id = parent.trace_id, parent.id
+        case SpanRef():
+            trace_id, parent_id = parent.trace_id, parent.span_id
+        case None:
+            # 128/64-bit ids map 1:1 onto the otel wire format.
+            trace_id, parent_id = (
+                messages_.generate_id("trace", bits=128),
+                None,
+            )
     sp = Span(
         name=name,
         data=data,
-        id=messages_.generate_id("span"),
-        trace_id=parent.trace_id if parent else messages_.generate_id("trace"),
-        parent_id=parent.id if parent else None,
+        id=messages_.generate_id("span", bits=64),
+        trace_id=trace_id,
+        parent_id=parent_id,
         started_at=_now_ns(),
         replay=replay,
         set_as_current=set_as_current,
@@ -501,42 +582,71 @@ async def _span_impl(
             )
 
 
-class WrapSpanAdapter:
-    """Adapter built by :func:`wrap_span`."""
+class Adapter:
+    """Base class for adapters: the protocol, with the right defaults.
 
-    def __init__(self, fn: Callable[[Span], AsyncGenerator[None, Any]]) -> None:
-        self._fn = fn
-        self._live: dict[str, AsyncGenerator[None, Any]] = {}
+    class Vendor(telemetry.Adapter):
+        async def wrap_span(self, span):
+            with sdk.start_span(span.name) as v:
+                while (ev := (yield)) is not None:
+                    v.log_event(ev.name)
+                v.update(output=span.data)
 
-    def __repr__(self) -> str:
-        return f"wrap_span({getattr(self._fn, '__qualname__', self._fn)!r})"
+        async def flush(self):
+            sdk.drain()
+    """
 
-    async def on_span_start(self, span_: Span) -> None:
-        gen = self._fn(span_)
+    # Name-mangled so the driver's bookkeeping can never collide with
+    # a subclass attribute; created lazily so subclasses keep their
+    # ``__init__`` entirely to themselves.
+    __live: dict[str, AsyncGenerator[None, Any]] | None = None
+
+    # Positional-only params on all overridable methods, so subclasses
+    # are free to pick their own names (`span` shadows nothing there).
+    def wrap_span(self, span_: Span, /) -> AsyncGenerator[None, Any] | None:
+        """Return the generator frame for one span, or ``None``.
+
+        Override it as an async generator method (a ``yield`` loop, as
+        in the class docstring) — calling one *returns* the generator,
+        so the override satisfies this signature.  The default returns
+        ``None``: no per-span frame.
+        """
+        return None
+
+    async def flush(self) -> None:
+        """Push buffered telemetry out.  No-op unless the adapter buffers."""
+
+    async def on_span_start(self, span_: Span, /) -> None:
+        gen = self.wrap_span(span_)
+        if gen is None:
+            return
         try:
             await anext(gen)
         except StopAsyncIteration:
             return  # returned before yielding: opted out of this span
-        self._live[span_.id] = gen
+        if self.__live is None:
+            self.__live = {}
+        self.__live[span_.id] = gen
 
-    async def on_span_event(self, span_: Span, event: SpanEvent) -> None:
-        gen = self._live.get(span_.id)
-        if gen is None:  # opted out, span already ended, or start raised
-            return
+    async def on_span_event(self, span_: Span, event: SpanEvent, /) -> None:
+        live = self.__live
+        gen = live.get(span_.id) if live is not None else None
+        if live is None or gen is None:
+            return  # opted out, span already ended, or start raised
         try:
             await gen.asend(event)
         except StopAsyncIteration:
             # Finished mid-span: opted out of the rest of this span,
             # including its end.
-            del self._live[span_.id]
+            del live[span_.id]
         except BaseException:
             # The generator frame is dead, don't resume it again at
             # span end.  The error itself is logged by _dispatch.
-            del self._live[span_.id]
+            del live[span_.id]
             raise
 
-    async def on_span_end(self, span_: Span) -> None:
-        gen = self._live.pop(span_.id, None)
+    async def on_span_end(self, span_: Span, /) -> None:
+        gen = self.__live.pop(span_.id, None) if self.__live else None
         if gen is None:  # opted out, or start raised (and was logged)
             return
         try:
@@ -558,10 +668,27 @@ class WrapSpanAdapter:
         raise RuntimeError("wrap_span generator yielded again after span end")
 
 
+class _WrapSpanFn(Adapter):
+    """Adapter built by :func:`wrap_span`."""
+
+    def __init__(self, fn: Callable[[Span], AsyncGenerator[None, Any]]) -> None:
+        self._fn = fn
+
+    def __repr__(self) -> str:
+        return f"wrap_span({getattr(self._fn, '__qualname__', self._fn)!r})"
+
+    def wrap_span(self, span_: Span, /) -> AsyncGenerator[None, Any]:
+        return self._fn(span_)
+
+
 def wrap_span(
     fn: Callable[[Span], AsyncGenerator[None, Any]],
-) -> WrapSpanAdapter:
-    """Build an adapter from an async generator function.
+) -> Adapter:
+    """Build an adapter from a free-standing async generator function.
+
+    Sugar over subclassing :class:`Adapter` — same semantics as
+    overriding its ``wrap_span`` method, for bridges that need no
+    state or methods of their own.
 
     How to use to bridge a vendor SDKs:
     write the vendor's ``with``/``async with`` around one yield loop.
@@ -598,4 +725,4 @@ def wrap_span(
             "wrap_span requires an async generator function "
             "(`async def` containing a `yield` loop)"
         )
-    return WrapSpanAdapter(fn)
+    return _WrapSpanFn(fn)

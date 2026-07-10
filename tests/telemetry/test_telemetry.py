@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import random
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -142,6 +143,212 @@ async def test_async_adapter_methods_awaited() -> None:
     finally:
         ai.telemetry.unregister(adapter)
     assert ended == ["s"]
+
+
+# ── SpanRef + explicit parent ─────────────────────────────────────
+
+
+async def test_span_ref_and_current_ref() -> None:
+    assert ai.telemetry.current_ref() is None
+    async with ai.telemetry.span("s") as sp:
+        ref = ai.telemetry.current_ref()
+        assert ref is not None
+        assert ref == sp.ref
+        assert ref.trace_id == sp.trace_id
+        assert ref.span_id == sp.id
+        assert ref.sampled
+    assert ai.telemetry.current_ref() is None
+    # A ref round-trips like any pydantic model.
+    restored = ai.telemetry.SpanRef.model_validate(ref.model_dump())
+    assert restored == ref
+
+
+async def test_explicit_span_parent(recorder: Recorder) -> None:
+    async with ai.telemetry.span("elsewhere") as elsewhere:
+        pass
+    async with ai.telemetry.span("ambient"):
+        async with ai.telemetry.span("child", parent=elsewhere) as child:
+            # The explicit parent wins over the ambient one...
+            assert child.parent_id == elsewhere.id
+            assert child.trace_id == elsewhere.trace_id
+            # ...and only changes where the span hangs: it is still
+            # current inside the block.
+            async with ai.telemetry.span("grandchild") as grandchild:
+                assert grandchild.parent_id == child.id
+
+
+async def test_span_ref_parent_continues_trace(recorder: Recorder) -> None:
+    # "Process one": capture the position as plain data.
+    async with ai.telemetry.span("origin") as origin:
+        payload = origin.ref.model_dump()
+
+    # "Process two": restore and continue the same trace.
+    ref = ai.telemetry.SpanRef.model_validate(payload)
+    async with ai.telemetry.span("pickup", parent=ref) as pickup:
+        assert pickup.trace_id == origin.trace_id
+        assert pickup.parent_id == origin.id
+        async with ai.telemetry.span("nested") as nested:
+            assert nested.trace_id == origin.trace_id
+            assert nested.parent_id == pickup.id
+
+
+# ── span/trace ids ────────────────────────────────────────────────
+
+
+async def test_id_widths_match_otel_format() -> None:
+    async with ai.telemetry.span("s") as sp:
+        pass
+    # 64-bit span ids and 128-bit trace ids map 1:1 onto otel's.
+    assert len(sp.id.removeprefix("span_")) == 16
+    assert len(sp.trace_id.removeprefix("trace_")) == 32
+    int(sp.id.removeprefix("span_"), 16)
+    int(sp.trace_id.removeprefix("trace_"), 16)
+
+
+async def test_ids_deterministic_under_use_random() -> None:
+    async def run() -> tuple[str, str, str]:
+        with ai.messages.use_random(random.Random(7)):
+            async with ai.telemetry.span("outer") as outer:
+                async with ai.telemetry.span("inner") as inner:
+                    pass
+        return outer.trace_id, outer.id, inner.id
+
+    # The replay contract: re-running the same work under the same
+    # random source re-emits spans with identical identities.
+    assert await run() == await run()
+
+
+# ── flush ─────────────────────────────────────────────────────────
+
+
+async def test_flush_dispatches_with_isolation(recorder: Recorder) -> None:
+    flushed: list[str] = []
+
+    class SyncFlush:
+        def flush(self) -> None:
+            flushed.append("sync")
+
+    class Broken:
+        def flush(self) -> None:
+            raise RuntimeError("flush bug")
+
+    class AsyncFlush:
+        async def flush(self) -> None:
+            flushed.append("async")
+
+    adapters = [SyncFlush(), Broken(), AsyncFlush()]
+    for adapter in adapters:
+        ai.telemetry.register(adapter)
+    try:
+        # The recorder has no flush and is skipped; the broken adapter
+        # is logged and skipped; sync and async both run.
+        await ai.telemetry.flush()
+    finally:
+        for adapter in adapters:
+            ai.telemetry.unregister(adapter)
+    assert flushed == ["sync", "async"]
+
+
+# ── Adapter base class ────────────────────────────────────────────
+
+
+async def test_adapter_wrap_span_method_driven() -> None:
+    class Vendor(ai.telemetry.Adapter):
+        def __init__(self) -> None:
+            self.log: list[str] = []  # instance state, no __init__ chaining
+
+        async def wrap_span(
+            self, span: ai.telemetry.Span
+        ) -> AsyncGenerator[None, Any]:
+            if span.name == "boring":
+                return  # opt out before the first yield
+            self.log.append(f"start {span.name}")
+            while (ev := (yield)) is not None:
+                self.log.append(f"event {ev.name}")
+            self.log.append(f"end {span.name}")
+
+    vendor = Vendor()
+    async with _registered(vendor):
+        async with ai.telemetry.span("boring"):
+            pass
+        async with ai.telemetry.span("outer") as outer:
+            async with ai.telemetry.span("inner"):
+                pass
+            await outer.add_event("milestone")
+
+    # The base class's hooks drove one generator frame per span, with
+    # the same semantics as the wrap_span function.
+    assert vendor.log == [
+        "start outer",
+        "start inner",
+        "end inner",
+        "event milestone",
+        "end outer",
+    ]
+
+
+async def test_adapter_defaults_are_noops(recorder: Recorder) -> None:
+    # A bare Adapter is valid: no per-span frames, flush is a no-op.
+    async with _registered(ai.telemetry.Adapter()):
+        async with ai.telemetry.span("s") as sp:
+            await sp.add_event("e")
+        await ai.telemetry.flush()
+    assert [s.name for s in recorder.ended] == ["s"]
+
+
+async def test_adapter_hook_override_composes_with_super() -> None:
+    log: list[str] = []
+
+    class Both(ai.telemetry.Adapter):
+        async def wrap_span(
+            self, span: ai.telemetry.Span
+        ) -> AsyncGenerator[None, Any]:
+            while (yield) is not None:
+                pass
+            log.append(f"frame end {span.name}")
+
+        async def on_span_end(self, span: ai.telemetry.Span, /) -> None:
+            log.append(f"hook end {span.name}")
+            # Overriding a hook replaces the driver for that phase;
+            # super() plugs it back in.
+            await super().on_span_end(span)
+
+    async with _registered(Both()):
+        async with ai.telemetry.span("s"):
+            pass
+
+    assert log == ["hook end s", "frame end s"]
+
+
+async def test_adapter_subclass_state_cannot_collide_with_driver() -> None:
+    class Clashy(ai.telemetry.Adapter):
+        def __init__(self) -> None:
+            self._live = "mine"  # same name the driver mangles away
+            self.ended: list[str] = []
+
+        async def wrap_span(
+            self, span: ai.telemetry.Span
+        ) -> AsyncGenerator[None, Any]:
+            while (yield) is not None:
+                pass
+            self.ended.append(span.name)
+
+    clashy = Clashy()
+    async with _registered(clashy):
+        async with ai.telemetry.span("s"):
+            pass
+    assert clashy.ended == ["s"]
+    assert clashy._live == "mine"
+
+
+async def test_wrap_span_function_returns_adapter() -> None:
+    @ai.telemetry.wrap_span
+    async def vendor(span: ai.telemetry.Span) -> AsyncGenerator[None, Any]:
+        while (yield) is not None:
+            pass
+
+    assert isinstance(vendor, ai.telemetry.Adapter)
+    assert "wrap_span" in repr(vendor)
 
 
 # ── wrap_span ─────────────────────────────────────────────────────
