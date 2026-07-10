@@ -48,6 +48,7 @@ if TYPE_CHECKING:
     from ..types import events as events_
     from ..types.tools import Tool
     from .agent import Context
+    from .hooks import HookRegistry
 
 
 @dataclasses.dataclass(frozen=True)
@@ -99,6 +100,7 @@ class HookContext:
     payload: type[pydantic.BaseModel]
     metadata: dict[str, Any]
     tool_call_id: str | None = None
+    registry: HookRegistry | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "metadata", dict(self.metadata))

@@ -21,39 +21,111 @@ Cancellation::
 from __future__ import annotations
 
 import asyncio
-from typing import Any, cast
+import contextvars
+from typing import TYPE_CHECKING, Any, cast
 
 import pydantic
 
-from .. import telemetry, types
+from .. import telemetry, types, util
 from ..types import messages as messages_
 from . import _middleware as middleware_
 from . import runtime as runtime_
 
-# ---------------------------------------------------------------------------
-# Module-level hook registries
-#
-# _live_hooks:
-#   Populated by hook() when it suspends inside a running agent.
-#   Maps hook label -> (future, metadata dict, Runtime).
-#   Consumed by resolve_hook() / cancel_hook() to unblock the awaiting
-#   coroutine.  Entries are removed when the hook resolves, cancels, or
-#   the run completes.
-#
-# _pending_resolutions:
-#   Populated by resolve_hook() when no live hook exists yet (serverless
-#   re-entry: the user calls resolve_hook() *before* agent.run() replays).
-#   Maps hook label -> (payload type, validated resolution dict).
-#   Consumed by hook() at the start of execution — if a pre-registered
-#   resolution exists for the label, the hook returns immediately without
-#   suspending.  Entries are removed on consumption.
-# ---------------------------------------------------------------------------
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
-_live_hooks: dict[
-    str, tuple[asyncio.Future[dict[str, Any]], dict[str, Any], runtime_.Runtime]
-] = {}
 
-_pending_resolutions: dict[str, dict[str, Any] | BaseException] = {}
+class HookRegistry:
+    """Holds hook state: live suspensions and pre-registered resolutions.
+
+    ``_live_hooks``:
+        Populated by ``hook()`` when it suspends inside a running agent.
+        Maps hook label -> (future, metadata dict, Runtime).
+        Consumed by ``resolve_hook()`` / ``cancel_hook()`` to unblock the
+        awaiting coroutine.  Each entry is removed by the suspended hook
+        coroutine itself when it finishes -- resolved, cancelled, or torn
+        down with its run.
+
+    ``_pending_resolutions``:
+        Populated by ``resolve_hook()`` when no live hook exists yet
+        (serverless re-entry: the user calls ``resolve_hook()`` inside
+        the ``agent.run()`` block, before iterating the stream).  Maps
+        hook label -> resolution dict or exception.  Consumed by
+        ``hook()`` at the start of execution -- if a pre-registered
+        resolution exists for the label, the hook returns immediately
+        without suspending.  Entries are removed on consumption.
+
+    Every hook operation takes an optional ``registry`` argument; when
+    omitted, the current registry is used.  ``agent.run()`` makes its
+    registry current both for the agent loop and for the consumer's
+    ``async with`` block, and a nested run reuses the enclosing run's
+    registry, so hooks created anywhere in a run tree are resolvable
+    from the outermost consumer.  Create a ``HookRegistry`` and pass
+    it explicitly to resolve from outside the run's context (e.g. a
+    UI callback on another task) or to isolate a run's hooks.
+
+    Whoever owns a registry owns its contents: a pre-registered
+    resolution that no hook ever consumes stays until the registry is
+    dropped.  The default per-run registry dies with the run; if you
+    keep a long-lived one, avoid pre-registering labels that may never
+    run.
+    """
+
+    def __init__(self) -> None:
+        self._live_hooks: dict[
+            str,
+            tuple[
+                asyncio.Future[dict[str, Any]],
+                dict[str, Any],
+                runtime_.Runtime,
+            ],
+        ] = {}
+        self._pending_resolutions: dict[
+            str, dict[str, Any] | BaseException
+        ] = {}
+
+
+_hook_registry: contextvars.ContextVar[HookRegistry] = contextvars.ContextVar(
+    "hook_registry"
+)
+
+
+def _registry(registry: HookRegistry | None) -> HookRegistry:
+    """Return the registry a hook operation should use."""
+    if registry is not None:
+        return registry
+    try:
+        return _hook_registry.get()
+    except LookupError:
+        raise LookupError(
+            "no current HookRegistry: hook operations work inside an "
+            "agent.run() block, or pass an explicit registry"
+        ) from None
+
+
+def get_hook_registry() -> HookRegistry:
+    """Return the current HookRegistry.
+
+    Set inside an ``agent.run()`` block (and the run's loop) and within
+    a ``use_hook_registry()`` context.  Raises LookupError when there
+    is none.
+    """
+    return _registry(None)
+
+
+@util.contextmanager_any_sync
+def use_hook_registry(registry: HookRegistry) -> Iterator[None]:
+    """Make *registry* the current HookRegistry within this context.
+
+    Scoped to the calling task and tasks spawned from it, and restored
+    on exit.  ``agent.run()`` uses this to make the run's registry
+    current for the consumer's block.
+    """
+    token = _hook_registry.set(registry)
+    try:
+        yield
+    finally:
+        _hook_registry.reset(token)
 
 
 class HookDeferredException(Exception):  # noqa: N818
@@ -74,19 +146,13 @@ def _label(target: str | messages_.HookPart[Any]) -> str:
     return target.hook_id if isinstance(target, messages_.HookPart) else target
 
 
-def cleanup_run(labels: set[str]) -> None:
-    """Remove all registry entries associated with a finished run."""
-    for label in labels:
-        _live_hooks.pop(label, None)
-        _pending_resolutions.pop(label, None)
-
-
 async def hook[T: pydantic.BaseModel](
     hook: str | messages_.HookPart[Any],
     *,
     payload: type[T],
     metadata: dict[str, Any] | None = None,
     tool_call_id: str | None = None,
+    registry: HookRegistry | None = None,
 ) -> T:
     """Create a hook suspension point and await its resolution.
 
@@ -103,6 +169,8 @@ async def hook[T: pydantic.BaseModel](
             (run-blocked tracking, UIs) can attribute the suspension to
             its tool call.  Approval gating sets this automatically;
             custom gating wrappers should pass it too.
+        registry: The :class:`HookRegistry` to register the hook in.
+            Defaults to the current registry.
 
     """
     call = middleware_.HookContext(
@@ -110,6 +178,7 @@ async def hook[T: pydantic.BaseModel](
         payload=payload,
         metadata=metadata or {},
         tool_call_id=tool_call_id,
+        registry=registry,
     )
 
     chain = middleware_._build_hook_chain(_hook_impl)
@@ -120,6 +189,7 @@ async def hook[T: pydantic.BaseModel](
 async def _hook_impl(call: middleware_.HookContext) -> pydantic.BaseModel:
     """Core hook logic — the innermost ``next`` in the middleware chain."""
     rt = runtime_.get_runtime()
+    registry = _registry(call.registry)
     label = call.label
     payload = call.payload
     hook_metadata = call.metadata
@@ -129,7 +199,7 @@ async def _hook_impl(call: middleware_.HookContext) -> pydantic.BaseModel:
     )
 
     # Pre-registered resolution (serverless re-entry).
-    pre_registered = _pending_resolutions.pop(label, None)
+    pre_registered = registry._pending_resolutions.pop(label, None)
     if pre_registered is not None:
         async with telemetry.span(data, replay=True) as sp:
             if isinstance(pre_registered, BaseException):
@@ -142,8 +212,7 @@ async def _hook_impl(call: middleware_.HookContext) -> pydantic.BaseModel:
     async with telemetry.span(data) as sp:
         future: asyncio.Future[dict[str, Any]] = asyncio.Future()
 
-        _live_hooks[label] = (future, hook_metadata, rt)
-        rt.track_hook_label(label)
+        registry._live_hooks[label] = (future, hook_metadata, rt)
 
         # Emit pending signal.
         hook_part: messages_.HookPart[Any] = messages_.HookPart(
@@ -168,9 +237,10 @@ async def _hook_impl(call: middleware_.HookContext) -> pydantic.BaseModel:
                 attrs["reason"] = exc.args[0]
             await sp.add_event(telemetry.HOOK_CANCELLED, **attrs)
             raise
+        finally:
+            # Clean up live registry.
+            registry._live_hooks.pop(label, None)
 
-        # Clean up live registry.
-        _live_hooks.pop(label, None)
         sp.data.status = "resolved"
         await sp.add_event(telemetry.HOOK_RESOLVED)
 
@@ -194,6 +264,7 @@ def resolve_hook(
     data: pydantic.BaseModel | dict[str, Any] | BaseException,
     *,
     payload: type[pydantic.BaseModel] | None = None,
+    registry: HookRegistry | None = None,
 ) -> None:
     """Resolve a hook by label.
 
@@ -206,7 +277,9 @@ def resolve_hook(
     2. **No live hook yet** (serverless re-entry): stashes the resolution
        in the pre-registration registry.  When ``hook()`` executes during
        replay, it finds the pre-registered value and returns without
-       suspending.
+       suspending.  Pre-registration must target the run's registry:
+       either call this inside the ``async with agent.run(...)`` block
+       (before iterating the stream), or pass the registry explicitly.
 
     Passing an exception sends it to the awaiter (or stashes it for the
     next replay) so the awaiting ``ai.hook(...)`` call raises rather than
@@ -220,6 +293,10 @@ def resolve_hook(
             exception to raise in the awaiter.
         payload: Optional pydantic model class for validation.  Ignored
             when *data* is an exception.
+        registry: The :class:`HookRegistry` to resolve in.  Defaults to
+            the current registry.  Pass the run's registry explicitly
+            when resolving from a task outside the ``agent.run()`` block
+            (e.g. a UI callback).
 
     """
     label = _label(hook)
@@ -240,9 +317,11 @@ def resolve_hook(
             f"Expected dict or pydantic model, got {type(data).__name__}"
         )
 
+    reg = _registry(registry)
+
     # Path 1: live hook — resolve the future directly.
-    if label in _live_hooks:
-        future, _, _rt = _live_hooks[label]
+    if label in reg._live_hooks:
+        future, _, _rt = reg._live_hooks[label]
         if isinstance(resolution, BaseException):
             future.set_exception(resolution)
         else:
@@ -250,10 +329,14 @@ def resolve_hook(
         return
 
     # Path 2: no live hook — pre-register for later consumption.
-    _pending_resolutions[label] = resolution
+    reg._pending_resolutions[label] = resolution
 
 
-def defer_hook(hook_part: messages_.HookPart[Any]) -> None:
+def defer_hook(
+    hook_part: messages_.HookPart[Any],
+    *,
+    registry: HookRegistry | None = None,
+) -> None:
     """Defer the hook identified by ``hook_part.hook_id``.
 
     The deferred exception carries a :class:`HookDeferredException` wrapping
@@ -264,23 +347,31 @@ def defer_hook(hook_part: messages_.HookPart[Any]) -> None:
     from inbound conversion) and needs to surface it back through the
     awaiting ``ai.hook(...)`` site as a structured suspension.
     """
-    resolve_hook(hook_part.hook_id, HookDeferredException(hook_part))
+    resolve_hook(
+        hook_part.hook_id, HookDeferredException(hook_part), registry=registry
+    )
 
 
 async def cancel_hook(
-    hook: str | messages_.HookPart[Any], *, reason: str | None = None
+    hook: str | messages_.HookPart[Any],
+    *,
+    reason: str | None = None,
+    registry: HookRegistry | None = None,
 ) -> None:
     """Cancel a deferred hook.
 
     Only works for live hooks (long-running mode).  Raises ValueError
     if the hook is not currently deferred.  ``hook`` may be a label
-    string or a HookPart whose ``hook_id`` supplies it.
+    string or a HookPart whose ``hook_id`` supplies it.  ``registry``
+    selects the :class:`HookRegistry` to use, defaulting to the current
+    one.
     """
     label = _label(hook)
-    if label not in _live_hooks:
+    reg = _registry(registry)
+    if label not in reg._live_hooks:
         raise ValueError(f"No deferred hook with label: {label!r}")
 
-    future, hook_metadata, rt = _live_hooks.pop(label)
+    future, hook_metadata, rt = reg._live_hooks.pop(label)
     future.cancel(reason)
 
     # Emit cancelled signal.

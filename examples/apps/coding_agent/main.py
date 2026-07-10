@@ -306,6 +306,10 @@ class CodingAgentApp(textual.app.App[None]):
         # at a time so user/assistant alternation stays clean.
         self.pending: list[str] = []
         self._worker: textual.worker.Worker[None] | None = None
+        # Approval prompts resolve hooks from the UI task, outside the
+        # run's context, so runs use this app-owned registry and the
+        # prompt handler passes it to resolve_hook explicitly.
+        self._hook_registry = ai.HookRegistry()
 
     def compose(self) -> textual.app.ComposeResult:
         yield ChatView()
@@ -371,7 +375,9 @@ class CodingAgentApp(textual.app.App[None]):
     async def _run_turn(self) -> None:
         """Run one agent turn, rendering events into the transcript."""
         chat = self.chat
-        async with self.agent.run(self.model, self.messages) as stream:
+        async with self.agent.run(
+            self.model, self.messages, hook_registry=self._hook_registry
+        ) as stream:
             try:
                 async for event in stream:
                     if isinstance(event, ai.events.ReasoningDelta):
@@ -426,6 +432,7 @@ class CodingAgentApp(textual.app.App[None]):
                 if event.granted
                 else "denied by operator",
             ),
+            registry=self._hook_registry,
         )
         self.chat.push("system", "approved" if event.granted else "denied")
         self._drop_prompt(event.hook_id)

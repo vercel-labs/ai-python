@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, NamedTuple
 
 from ....types import messages as messages_
-from ...hooks import TOOL_APPROVAL_HOOK_TYPE, resolve_hook
+from ...hooks import TOOL_APPROVAL_HOOK_TYPE, HookRegistry, resolve_hook
 from . import ui_messages
 
 ToolPart = ui_messages.UIToolPart | ui_messages.UIDynamicToolPart
@@ -106,12 +106,22 @@ def extract_approvals(
     return approvals
 
 
-def apply_approvals(approvals: list[ApprovalResponse]) -> None:
-    """Pre-register each approval resolution with the hooks registry."""
+def apply_approvals(
+    approvals: list[ApprovalResponse],
+    *,
+    registry: HookRegistry | None = None,
+) -> None:
+    """Pre-register each approval resolution with a hook registry.
+
+    ``registry`` defaults to the current one, so either call this
+    inside the ``agent.run()`` block (before iterating the stream), or
+    pass the registry the run will use.
+    """
     for approval in approvals:
         resolve_hook(
             approval.hook_id,
             {"granted": approval.granted, "reason": approval.reason},
+            registry=registry,
         )
 
 

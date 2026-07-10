@@ -26,8 +26,10 @@ from .agent import (
 from .hooks import (
     TOOL_APPROVAL_HOOK_TYPE,
     HookDeferredException,
+    HookRegistry,
     cancel_hook,
     defer_hook,
+    get_hook_registry,
     hook,
     resolve_hook,
 )
@@ -42,6 +44,7 @@ __all__ = [
     "Context",
     "GatedToolCall",
     "HookDeferredException",
+    "HookRegistry",
     "LastAggregator",
     "MessageAggregator",
     "MessageBundle",
@@ -56,6 +59,7 @@ __all__ = [
     "cancel_hook",
     "defer_hook",
     "deferred_tool_result",
+    "get_hook_registry",
     "hook",
     "mcp",
     "resolve_hook",
