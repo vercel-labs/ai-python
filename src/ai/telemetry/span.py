@@ -110,7 +110,7 @@ def _resolve_clock(source: ClockSource) -> Clock:
     return source if isinstance(source, Clock) else source()
 
 
-@util.contextmanager_with_async_decorator
+@util.contextmanager_any_sync
 def use_clock(source: ClockSource) -> Iterator[None]:
     """Read span timestamps from ``source`` within this context.
 
