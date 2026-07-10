@@ -10,7 +10,7 @@ event-model namespace, and events are Pydantic models.
 
 ## Stream Events
 
-Model stream events inherit from `BaseEvent`.
+Model stream events inherit from `ModelEvent`.
 
 ```python
 event.message
@@ -42,16 +42,13 @@ Tool events:
 - `BuiltinToolEnd`
 - `BuiltinToolResult`
 
-File and hook events:
+File events:
 
 - `FileEvent`
-- `HookSuspension`
-- `HookResolution`
 
-Stream event unions:
+Stream event union:
 
 - `Event`
-- `DiscriminatedEvent`
 
 ## Agent Events
 
@@ -61,12 +58,11 @@ Agents can emit event values that are not raw provider stream events.
 - `PartialToolCallResult`: Carries values yielded by streaming tools and
   `yield_from`.
 - `HookEvent`: Carries an internal hook message and `HookPart`.
+- `RunBlocked`: Emitted when the run is blocked on deferred hooks.
 
-Agent event unions:
+Agent event union:
 
-- `AgentMessageEvent`
 - `AgentEvent`
-- `TerminalEvent`
 
 ## Aggregator
 
@@ -84,15 +80,3 @@ class MyAggregator(ai.events.Aggregator[Item, Result, ModelInput]):
 
 `snapshot()` is the rich value stored in tool results. `get_model_input()` is
 the value sent back to the model.
-
-## replay_message_events
-
-`replay_message_events` synthesizes stream events from a complete `Message`.
-
-```python
-async for event in ai.events.replay_message_events(message):
-    ...
-```
-
-Use it when cached, durable, or test messages need to flow through code that
-expects stream events.
