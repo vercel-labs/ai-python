@@ -48,7 +48,7 @@ File events:
 
 Stream event union:
 
-- `Event`
+- `Event`: union of all model stream events above.
 
 ## Agent Events
 
@@ -62,7 +62,11 @@ Agents can emit event values that are not raw provider stream events.
 
 Agent event union:
 
-- `AgentEvent`
+- `AgentEvent`: everything an agent run can yield: `Event` plus
+  `ToolCallResult`, `HookEvent`, `PartialToolCallResult`, and `RunBlocked`.
+  The union is annotated with a Pydantic discriminator on the `kind` field,
+  so use it as a field or `TypeAdapter` type when deserializing events and
+  Pydantic picks the right event class from `kind`.
 
 ## Aggregator
 

@@ -45,6 +45,14 @@ stream.messages
 stream.output
 ```
 
+- `stream.context`: the run's `ai.Context`, i.e. the live per-run state (model,
+  messages, tools, params). 
+- `stream.messages`: the message history, including messages added during the
+  run. Shorthand for `stream.context.messages`.
+- `stream.output`: the run's result. By default, the final assistant message's
+  text. When `output_type` is set, the text is validated as JSON against that
+  Pydantic model and the parsed instance is returned.
+
 ## loop
 
 Override `Agent.loop(context)` to customize control flow. The default loop uses
@@ -57,5 +65,7 @@ class CustomAgent(ai.Agent):
             ...
 ```
 
-Keep messages as the durable boundary. Streams, tool runners, hook futures, and
-provider clients are runtime state.
+When persisting a run (for durability or serverless execution), save and
+restore the message history only. Everything else the loop touches, e.g. streams,
+tool runners, hook futures, provider clients, is runtime state that is
+recreated on every run and cannot be serialized.
