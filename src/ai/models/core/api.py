@@ -606,12 +606,15 @@ async def _stream(
             await s.aclose()
 
 
-async def generate(
+async def experimental_generate(
     model: model_.Model,
     messages: list[types.messages.Message],
     params: params_.GenerateParams,
 ) -> types.messages.Message:
-    """Generate a non-streaming response (images, video, etc.)."""
+    """Generate a non-streaming response (images, video, etc.).
+
+    Experimental: not part of the stable API, may change or be removed.
+    """
     request = _GenerateRequest(model, list(messages), params)
     async with telemetry.span(
         telemetry.AiGenerateSpanData(

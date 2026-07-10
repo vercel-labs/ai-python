@@ -86,7 +86,7 @@ def main() -> None:
 
     original_get_model = _model.get_model
     original_stream = _api.stream
-    original_generate = _api.generate
+    original_generate = _api.experimental_generate
 
     def selected_protocol() -> ai.ProviderProtocol[Any] | None:
         if protocol_factory is None:
@@ -203,10 +203,7 @@ def main() -> None:
         cast("Any", core).stream = patched_stream
         cast("Any", _api).stream = patched_stream
 
-        cast("Any", ai).generate = patched_generate
-        cast("Any", models).generate = patched_generate
-        cast("Any", core).generate = patched_generate
-        cast("Any", _api).generate = patched_generate
+        cast("Any", _api).experimental_generate = patched_generate
 
     sys.argv = [args.file]
     runpy.run_path(args.file, run_name="__main__")

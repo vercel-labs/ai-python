@@ -1,10 +1,11 @@
-"""Video generation — dedicated video model via generate()."""
+"""Video generation — dedicated video model via experimental_generate()."""
 
 import asyncio
 import base64
 import pathlib
 
 import ai
+from ai.models.core import api
 
 model = ai.get_model("google/veo-3.0-generate-001")
 
@@ -19,7 +20,7 @@ messages = [
 async def main() -> None:
     print("Generating video (this may take a minute or two)...")
 
-    result = await ai.generate(
+    result = await api.experimental_generate(
         model,
         messages,
         ai.VideoParams(aspect_ratio="16:9", duration=8),

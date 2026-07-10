@@ -4,7 +4,6 @@ from ...providers.base import Provider
 from . import helpers
 from .api import (
     Stream,
-    generate,
     probe,
     stream,
 )
@@ -82,7 +81,6 @@ __all__ = [
     "TopPSamplerParams",
     "Unset",
     "VideoParams",
-    "generate",
     "get_model",
     "helpers",
     "probe",

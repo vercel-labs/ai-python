@@ -8,6 +8,7 @@ import pytest
 
 import ai
 from ai import models
+from ai.models.core import api
 from ai.types import events as events_
 from ai.types import messages as messages_
 
@@ -346,7 +347,7 @@ async def test_generate_dispatches_to_provider() -> None:
 
     provider._generate_impl = _generate
 
-    result = await models.generate(
+    result = await api.experimental_generate(
         model,
         [ai.user_message("A cat")],
         models.ImageParams(n=1),
@@ -379,7 +380,7 @@ async def test_generate_uses_model_protocol() -> None:
             _ = client, model, messages, params, provider
             return sentinel
 
-    result = await models.generate(
+    result = await api.experimental_generate(
         MOCK_MODEL.with_protocol(OverrideProtocol()),
         [ai.user_message("A cat")],
         models.ImageParams(n=1),

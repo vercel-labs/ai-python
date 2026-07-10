@@ -10,6 +10,7 @@ import base64
 import pathlib
 
 import ai
+from ai.models.core import api
 
 model = ai.get_model("openai/gpt-image-1")
 
@@ -32,7 +33,7 @@ async def main() -> None:
         ),
     ]
 
-    result = await ai.generate(
+    result = await api.experimental_generate(
         model, messages, ai.ImageParams(size="1024x1024")
     )
 

@@ -136,15 +136,3 @@ async with ai.stream(model, messages) as stream:
 for f in stream.message.files:
     print(f.media_type)
 ```
-
-Use `ai.generate` for dedicated image and video models:
-
-```python
-result = await ai.generate(
-    model,
-    [ai.user_message("A watercolor mothership over a quiet city.")],
-    ai.ImageParams(n=1, aspect_ratio="16:9"),
-)
-
-image = result.images[0]
-```
