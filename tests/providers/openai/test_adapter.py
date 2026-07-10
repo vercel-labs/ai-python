@@ -701,3 +701,48 @@ async def test_model_404_is_mapped_to_model_not_found(
     assert exc.http_context.request is response.request
     assert exc.http_context.response is response
     assert exc.__cause__ is sdk_error
+
+
+async def test_messages_to_openai_repairs_history() -> None:
+    """Conversion runs history_utils.repair: internal messages are dropped
+    and orphaned tool calls get a synthetic error result."""
+    msgs = [
+        messages.Message(
+            role="internal",
+            parts=[messages.TextPart(text="app-only")],
+        ),
+        messages.Message(
+            role="assistant",
+            parts=[
+                messages.ToolCallPart(
+                    tool_call_id="tc-1", tool_name="search", tool_args="{}"
+                )
+            ],
+        ),
+    ]
+    wire = await protocol._messages_to_openai(msgs)
+    assert [m["role"] for m in wire] == ["assistant", "tool"]
+    assert wire[1]["tool_call_id"] == "tc-1"
+
+
+async def test_messages_to_responses_repairs_history() -> None:
+    msgs = [
+        messages.Message(
+            role="internal",
+            parts=[messages.TextPart(text="app-only")],
+        ),
+        messages.Message(
+            role="assistant",
+            parts=[
+                messages.ToolCallPart(
+                    tool_call_id="tc-1", tool_name="search", tool_args="{}"
+                )
+            ],
+        ),
+    ]
+    wire = await protocol._messages_to_responses(
+        msgs, use_item_references=False
+    )
+    assert wire[0]["type"] == "function_call"
+    assert wire[1]["type"] == "function_call_output"
+    assert wire[1]["call_id"] == "tc-1"

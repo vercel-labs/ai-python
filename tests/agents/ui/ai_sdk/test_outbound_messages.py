@@ -12,7 +12,7 @@ from ai.agents.ui.ai_sdk.ui_messages import (
     UIToolApproval,
     UIToolPart,
 )
-from ai.types import integrity
+from ai.providers import history_utils
 from ai.types import messages as messages_
 
 
@@ -584,7 +584,7 @@ def test_common_id_upsert_persistence_is_idempotent_after_reload() -> None:
     store.save_full_history(second_run_result)
 
     loaded = store.load()
-    integrity.prepare_messages(loaded)
+    history_utils.validate(loaded)
 
     counts = _tool_counts(loaded)
     assert counts["tool_call", "tc-bash"] == 1
@@ -602,7 +602,7 @@ def test_duplicate_tool_copies_do_not_reach_model_integrity() -> None:
     reloaded_ui = ai_sdk.to_ui_messages(history)
     next_request_history, _ = ai_sdk.to_messages(reloaded_ui)
 
-    integrity.prepare_messages(next_request_history)
+    history_utils.validate(next_request_history)
 
 
 def _parked_turn(*, hook_id: str, tool_call_id: str) -> list[messages_.Message]:

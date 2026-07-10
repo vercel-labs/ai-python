@@ -17,3 +17,47 @@ provider-specific namespaces.
 - `OpenAICompatibleProvider`
 - `AnthropicCompatibleProvider`
 - `GatewayProvider`
+- `history_utils`
+
+## ai.providers.history_utils
+
+Message-history repair utilities. `ai.stream` passes history to the
+provider as-is; provider implementations call these before converting
+messages to their wire format.
+
+```python
+from ai.providers import history_utils
+
+
+repaired = history_utils.repair(messages)
+```
+
+`repair` strips internal messages, removes non-model parts, replaces
+invalid tool args with `{}`, and inserts error results for missing tool
+calls, logging a warning for every fix. It raises `IntegrityError` on
+duplicate tool ids and orphaned tool results — those have no safe
+automatic fix. The individual fix functions (`drop_internal`,
+`fix_tool_args`, `close_orphaned_tool_calls`) each return a new message
+list plus the issues they fixed — use them when a provider needs
+different choices or the issues themselves — and `check_tool_ids`
+detects the unfixable issues without raising.
+
+Validate a history yourself when you want issues to raise instead of
+being repaired.
+
+```python
+history_utils.validate(messages)  # raises IntegrityError on any issue
+issues = history_utils.inspect(messages)  # or just report them
+```
+
+APIs:
+
+- `repair`
+- `drop_internal`
+- `fix_tool_args`
+- `close_orphaned_tool_calls`
+- `check_tool_ids`
+- `inspect`
+- `validate`
+- `Issue`
+- `IntegrityError`

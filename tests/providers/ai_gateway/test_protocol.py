@@ -223,10 +223,14 @@ class TestMessagesToPrompt:
         assert part["data"].startswith("data:image/png;base64,")
         assert part["filename"] == "pic.png"
 
-    async def test_pending_tool_call_no_tool_message(self) -> None:
-        """A tool call without a corresponding tool-result message
-        should NOT produce a tool-result in the prompt."""
+    async def test_repairs_history(self) -> None:
+        """Conversion runs history_utils.repair: internal messages are
+        dropped and orphaned tool calls get a synthetic error result."""
         msgs = [
+            messages.Message(
+                role="internal",
+                parts=[messages.TextPart(text="app-only")],
+            ),
             messages.Message(
                 role="assistant",
                 parts=[
@@ -236,11 +240,15 @@ class TestMessagesToPrompt:
                         tool_args="{}",
                     )
                 ],
-            )
+            ),
         ]
         result = await protocol._messages_to_prompt(msgs)
-        assert len(result) == 1
+        assert len(result) == 2
         assert result[0]["role"] == "assistant"
+        assert result[1]["role"] == "tool"
+        (tool_result,) = result[1]["content"]
+        assert tool_result["toolCallId"] == "tc-1"
+        assert tool_result["output"]["type"] == "error-text"
 
 
 class TestBuildRequestBody:

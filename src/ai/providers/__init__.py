@@ -1,5 +1,6 @@
 """Provider implementations and factories."""
 
+from . import history_utils
 from .ai_gateway import GatewayProvider
 from .anthropic import AnthropicCompatibleProvider
 from .base import Provider, ProviderProtocol, get_provider
@@ -12,4 +13,5 @@ __all__ = [
     "Provider",
     "ProviderProtocol",
     "get_provider",
+    "history_utils",
 ]

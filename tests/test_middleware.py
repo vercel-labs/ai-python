@@ -11,6 +11,7 @@ import pytest
 
 import ai
 from ai.agents import _middleware as middleware
+from ai.providers import history_utils
 from ai.types import events as agent_events_
 
 from .conftest import (
@@ -207,8 +208,9 @@ async def test_wrap_tool_rewriting_tool_call_id_breaks_history() -> None:
             async for _m in stream:
                 pass
 
-    assert len(exc_info.value.exceptions) == 1
-    assert "orphaned-tool-result" in str(exc_info.value.exceptions[0])
+    assert exc_info.group_contains(
+        history_utils.IntegrityError, match="orphaned-tool-result"
+    )
 
 
 # ── Context snapshot isolation ──────────────────────────────────
