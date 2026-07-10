@@ -3,12 +3,7 @@
 from ...providers.base import Provider
 from . import helpers
 from .api import (
-    Executor,
-    GenerateExecutor,
-    GenerateRequest,
     Stream,
-    StreamExecutor,
-    StreamRequest,
     generate,
     probe,
     stream,
@@ -58,10 +53,7 @@ __all__ = [
     "CacheParams",
     "CloudRegion",
     "ContextManagementParams",
-    "Executor",
-    "GenerateExecutor",
     "GenerateParams",
-    "GenerateRequest",
     "GeoRegion",
     "ImageParams",
     "InferenceRequestParams",
@@ -80,8 +72,6 @@ __all__ = [
     "RoutingTargetChain",
     "SeedSamplerParams",
     "Stream",
-    "StreamExecutor",
-    "StreamRequest",
     "TemperatureSamplerParams",
     "TokenThreshold",
     "ToolCallingParams",
