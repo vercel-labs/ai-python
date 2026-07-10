@@ -5,7 +5,7 @@ import base64
 import pathlib
 
 import ai
-from ai.models.core import api
+from ai.models.core import api, params
 
 model = ai.get_model("google/imagen-4.0-generate-001")
 
@@ -20,7 +20,7 @@ messages = [
 
 async def main() -> None:
     result = await api.experimental_generate(
-        model, messages, ai.ImageParams(n=2, aspect_ratio="16:9")
+        model, messages, params.ImageParams(n=2, aspect_ratio="16:9")
     )
 
     print(f"Generated {len(result.images)} image(s)")
