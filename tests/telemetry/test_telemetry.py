@@ -16,7 +16,7 @@ import ai
 from ..conftest import Recorder
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, AsyncIterator
+    from collections.abc import AsyncGenerator, AsyncIterator, Callable
 
 
 async def test_nesting_and_ids(recorder: Recorder) -> None:
@@ -195,16 +195,6 @@ async def test_span_ref_parent_continues_trace(recorder: Recorder) -> None:
 # ── span/trace ids ────────────────────────────────────────────────
 
 
-async def test_id_widths_match_otel_format() -> None:
-    async with ai.telemetry.span("s") as sp:
-        pass
-    # 64-bit span ids and 128-bit trace ids map 1:1 onto otel's.
-    assert len(sp.id.removeprefix("span_")) == 16
-    assert len(sp.trace_id.removeprefix("trace_")) == 32
-    int(sp.id.removeprefix("span_"), 16)
-    int(sp.trace_id.removeprefix("trace_"), 16)
-
-
 async def test_ids_deterministic_under_use_random() -> None:
     async def run() -> tuple[str, str, str]:
         with ai.messages.use_random(random.Random(7)):
@@ -216,37 +206,6 @@ async def test_ids_deterministic_under_use_random() -> None:
     # The replay contract: re-running the same work under the same
     # random source re-emits spans with identical identities.
     assert await run() == await run()
-
-
-# ── flush ─────────────────────────────────────────────────────────
-
-
-async def test_flush_dispatches_with_isolation(recorder: Recorder) -> None:
-    flushed: list[str] = []
-
-    class SyncFlush:
-        def flush(self) -> None:
-            flushed.append("sync")
-
-    class Broken:
-        def flush(self) -> None:
-            raise RuntimeError("flush bug")
-
-    class AsyncFlush:
-        async def flush(self) -> None:
-            flushed.append("async")
-
-    adapters = [SyncFlush(), Broken(), AsyncFlush()]
-    for adapter in adapters:
-        ai.telemetry.register(adapter)
-    try:
-        # The recorder has no flush and is skipped; the broken adapter
-        # is logged and skipped; sync and async both run.
-        await ai.telemetry.flush()
-    finally:
-        for adapter in adapters:
-            ai.telemetry.unregister(adapter)
-    assert flushed == ["sync", "async"]
 
 
 # ── Adapter base class ────────────────────────────────────────────
@@ -288,11 +247,10 @@ async def test_adapter_wrap_span_method_driven() -> None:
 
 
 async def test_adapter_defaults_are_noops(recorder: Recorder) -> None:
-    # A bare Adapter is valid: no per-span frames, flush is a no-op.
+    # A bare Adapter is valid: no per-span frames.
     async with _registered(ai.telemetry.Adapter()):
         async with ai.telemetry.span("s") as sp:
             await sp.add_event("e")
-        await ai.telemetry.flush()
     assert [s.name for s in recorder.ended] == ["s"]
 
 
@@ -710,17 +668,15 @@ async def test_add_event_after_end_warns_and_appends(
 # ── use_clock ─────────────────────────────────────────────────────
 
 
-class _TickingClock:
-    """Deterministic clock: starts at ``now_ns``, each reading ticks
-    forward by ``tick_ns``."""
+def _ticking_clock(now_ns: int, tick_ns: int = 10) -> Callable[[], int]:
+    """Deterministic clock: each reading ticks forward by ``tick_ns``."""
 
-    def __init__(self, now_ns: int, tick_ns: int = 10) -> None:
-        self.now_ns = now_ns
-        self.tick_ns = tick_ns
+    def time_ns() -> int:
+        nonlocal now_ns
+        now_ns += tick_ns
+        return now_ns
 
-    def time_ns(self) -> int:
-        self.now_ns += self.tick_ns
-        return self.now_ns
+    return time_ns
 
 
 async def _stamps() -> tuple[int, int, int | None]:
@@ -732,17 +688,12 @@ async def _stamps() -> tuple[int, int, int | None]:
 async def test_use_clock_overrides_and_restores() -> None:
     # A ticking clock gives a deterministic timestamp sequence; the
     # override drives started_at, event stamps, and ended_at alike.
-    with ai.telemetry.use_clock(_TickingClock(1_000)):
+    with ai.telemetry.use_clock(_ticking_clock(1_000)):
         first = await _stamps()
-    with ai.telemetry.use_clock(_TickingClock(1_000)):
+    with ai.telemetry.use_clock(_ticking_clock(1_000)):
         second = await _stamps()
 
     assert first == second == (1_010, 1_020, 1_030)
-
-    # A factory is resolved on entry (so e.g. a clock only
-    # constructible inside a durable workflow works).
-    with ai.telemetry.use_clock(lambda: _TickingClock(1_000)):
-        assert await _stamps() == first
 
     # Restored on exit -- back to the wall clock.
     async with ai.telemetry.span("s") as sp:
@@ -751,20 +702,19 @@ async def test_use_clock_overrides_and_restores() -> None:
 
 
 async def test_use_clock_decorator_handles_async_functions() -> None:
-    # Works as a decorator on an async fn, resolving the factory per call.
-    @ai.telemetry.use_clock(lambda: _TickingClock(1_000))
+    # Works as a decorator on an async fn; the clock is shared across
+    # calls, so the second call continues where the first left off.
+    @ai.telemetry.use_clock(_ticking_clock(1_000))
     async def run() -> tuple[int, int, int | None]:
         return await _stamps()
 
     assert await run() == (1_010, 1_020, 1_030)
-    assert await run() == (1_010, 1_020, 1_030)
+    assert await run() == (1_040, 1_050, 1_060)
 
 
-async def test_use_clock_accepts_time_module() -> None:
+async def test_use_clock_accepts_time_time_ns() -> None:
     before = time.time_ns()
-    # A module with time_ns satisfies Clock; ty can't check module-vs-
-    # protocol assignability yet (mypy can).
-    with ai.telemetry.use_clock(time):  # ty: ignore[invalid-argument-type]
+    with ai.telemetry.use_clock(time.time_ns):
         async with ai.telemetry.span("s") as sp:
             pass
     assert sp.ended_at is not None

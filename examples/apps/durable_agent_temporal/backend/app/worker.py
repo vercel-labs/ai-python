@@ -51,7 +51,6 @@ async def llm_activity(
     model_data: dict[str, Any],
     messages_data: list[dict[str, Any]],
     tools_data: list[dict[str, Any]],
-    parent_ref: dict[str, Any] | None,
 ) -> dict[str, Any]:
     model = ai.Model.model_validate(model_data)
     messages = [
@@ -59,18 +58,8 @@ async def llm_activity(
     ]
     tools = [ai.Tool.model_validate(tool) for tool in tools_data]
 
-    # The activity runs in its own process, parenting under the ref
-    # carried in the args continues the workflow's trace.
-    parent = (
-        ai.telemetry.SpanRef.model_validate(parent_ref)
-        if parent_ref is not None
-        else None
-    )
     message: ai.messages.Message | None = None
-    async with (
-        ai.telemetry.span("llm_activity", parent=parent),
-        ai.stream(model, messages, tools=tools) as model_stream,
-    ):
+    async with ai.stream(model, messages, tools=tools) as model_stream:
         async for event in model_stream:
             if isinstance(event, ai.events.StreamEnd):
                 message = event.message
@@ -78,9 +67,6 @@ async def llm_activity(
         if message is None:
             message = model_stream.message
 
-    # The worker can stop between activities; push buffered spans out
-    # while we still can.
-    await ai.telemetry.flush()
     return message.model_dump(mode="json")
 
 
@@ -122,10 +108,6 @@ class DurableAgent(ai.Agent):
 
     async def loop(self, context: ai.Context) -> AsyncGenerator[ai.events.AgentEvent]:
         tools_data = [tool.model_dump(mode="json") for tool in context.tools]
-        # The loop runs inside the run span; its ref lets spans opened in
-        # the activity process parent under it.
-        ref = ai.telemetry.current_ref()
-        ref_data = ref.model_dump(mode="json") if ref is not None else None
 
         while context.keep_running():
             result = await temporalio.workflow.execute_activity(
@@ -134,7 +116,6 @@ class DurableAgent(ai.Agent):
                     context.model.model_dump(mode="json"),
                     [message.model_dump(mode="json") for message in context.messages],
                     tools_data,
-                    ref_data,
                 ],
                 start_to_close_timeout=datetime.timedelta(minutes=5),
                 retry_policy=NO_RETRIES,
@@ -190,11 +171,11 @@ async def _run_turn(turn_input: dict[str, Any]) -> TurnOutput:
 
 @temporalio.workflow.defn
 class RunTurn:
+    # Draw message/part ids from the workflow's deterministic RNG so they
+    # are stable across replay. ``workflow.random`` is passed as a factory
+    # (it's only valid inside the workflow) and resolved on each call.
     @temporalio.workflow.run
     @ai.messages.use_random(temporalio.workflow.random)
-    # The workflow module satisfies Clock (module-level ``time_ns``);
-    # ty does not yet accept modules as protocol implementations.
-    @ai.telemetry.use_clock(temporalio.workflow)  # ty: ignore[invalid-argument-type]
     async def run(self, turn_input: dict[str, Any]) -> dict[str, Any]:
         try:
             output = await _run_turn(turn_input)
@@ -207,38 +188,7 @@ class RunTurn:
             raise
 
 
-def _install_telemetry() -> None:
-    """Export spans over OTLP when a collector endpoint is configured.
-
-    For local development: ``uv run python -m ai.telemetry.utils.viewer``
-    and set ``OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318``.
-
-    The otel imports stay inside this function: it only runs in the
-    host (``main``), so the workflow sandbox never re-imports the otel
-    SDK, which does not load under its restrictions. Workflow code
-    still reaches the adapter through the passed-through ``ai`` module.
-    """
-    if "OTEL_EXPORTER_OTLP_ENDPOINT" not in os.environ:
-        return
-    from ai.telemetry import otel
-    from opentelemetry import trace
-    from opentelemetry.exporter.otlp.proto.http import trace_exporter
-    from opentelemetry.sdk import resources
-    from opentelemetry.sdk import trace as sdk_trace
-    from opentelemetry.sdk.trace import export
-
-    provider = sdk_trace.TracerProvider(
-        resource=resources.Resource.create({"service.name": "durable-agent-temporal"})
-    )
-    provider.add_span_processor(
-        export.BatchSpanProcessor(trace_exporter.OTLPSpanExporter())
-    )
-    trace.set_tracer_provider(provider)
-    otel.install()
-
-
 async def main() -> None:
-    _install_telemetry()
     client = await temporalio.client.Client.connect(
         os.environ.get("TEMPORAL_ADDRESS", "localhost:7233")
     )

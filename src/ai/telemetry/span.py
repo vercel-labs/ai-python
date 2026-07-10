@@ -18,7 +18,6 @@ An adapter processes spans and decides what to do with them::
         async def on_span_start(self, span): ...
         async def on_span_end(self, span): ...
         async def on_span_event(self, span, event): ...
-        async def flush(self): ...  # push buffered spans out
 
     ai.telemetry.register(MyAdapter())
 
@@ -53,7 +52,6 @@ from typing import (
     Literal,
     Protocol,
     overload,
-    runtime_checkable,
 )
 
 import pydantic
@@ -81,61 +79,40 @@ logger = logging.getLogger(__name__)
 
 # ── Clock ─────────────────────────────────────────────────────────
 
-
-@runtime_checkable
-class Clock(Protocol):
-    """Anything with ``time_ns() -> int``: nanoseconds since the epoch.
-
-    The stdlib ``time`` module itself satisfies it.
-    """
-
-    def time_ns(self) -> int: ...
-
-
-type ClockSource = Clock | Callable[[], Clock]
-"""A ``Clock``, or a zero-arg factory that produces one."""
-
-
-_span_clock: contextvars.ContextVar[Clock | None] = contextvars.ContextVar(
-    "span_clock", default=None
+_span_clock: contextvars.ContextVar[Callable[[], int] | None] = (
+    contextvars.ContextVar("span_clock", default=None)
 )
 
 
 def _now_ns() -> int:
     clock = _span_clock.get()
-    return clock.time_ns() if clock is not None else time.time_ns()
-
-
-def _resolve_clock(source: ClockSource) -> Clock:
-    return source if isinstance(source, Clock) else source()
+    return clock() if clock is not None else time.time_ns()
 
 
 @util.contextmanager_any_sync
-def use_clock(source: ClockSource) -> Iterator[None]:
-    """Read span timestamps from ``source`` within this context.
+def use_clock(now_ns: Callable[[], int]) -> Iterator[None]:
+    """Read span timestamps from ``now_ns`` within this context.
 
     Every span timestamp flows through the current clock --
     ``started_at``, ``ended_at``, and event stamps from
-    :meth:`Span.add_event`. The default is ``time.time_ns()``.
+    :meth:`Span.add_event`. ``now_ns`` returns nanoseconds since the
+    epoch; the default is ``time.time_ns``.  Pass e.g. a deterministic
+    clock inside a durable workflow -- the timestamp counterpart of
+    ``ai.messages.use_random``, which does the same for the ids spans
+    draw. The override is scoped to the calling task and tasks spawned
+    from it, and restored on exit::
 
-    ``source`` is a :class:`Clock` or a zero-arg factory returning one.
-    A factory is resolved on entry, so a clock only constructible
-    inside a durable workflow can be passed and built lazily there --
-    the timestamp counterpart of ``ai.messages.use_random``, which does
-    the same for the ids spans draw. The override is scoped to the
-    calling task and tasks spawned from it, and restored on exit::
-
-        with ai.telemetry.use_clock(clock):
-            ...  # spans opened here read time from clock
+        with ai.telemetry.use_clock(workflow.time_ns):
+            ...  # spans opened here read time from workflow.time_ns
 
     This can also be used as a decorator on both sync and async
     functions::
 
-        @ai.telemetry.use_clock(make_clock)
+        @ai.telemetry.use_clock(clock.time_ns)
         async def run(...):
             ...
     """
-    token = _span_clock.set(_resolve_clock(source))
+    token = _span_clock.set(now_ns)
     try:
         yield
     finally:
@@ -415,31 +392,19 @@ def unregister(adapter: Any) -> None:
     _adapters.remove(adapter)
 
 
-async def _dispatch(method: str, *args: Any) -> None:
+async def _dispatch(method: str, span_: Span, *args: Any) -> None:
     for adapter in list(_adapters):
         fn = getattr(adapter, method, None)
         if fn is None:
             continue
         try:
-            result = fn(*args)
+            result = fn(span_, *args)
             if inspect.isawaitable(result):
                 await result
         except Exception:
             logger.exception(
                 "telemetry adapter %r raised in %s", adapter, method
             )
-
-
-async def flush() -> None:
-    """Ask every adapter to push buffered telemetry out, and wait.
-
-    Dispatches the optional ``flush()`` adapter method with the usual
-    isolation (a raising adapter is logged and skipped).  Call it before
-    a process may be frozen or killed — the end of a serverless
-    invocation, a durable-workflow step handing back control — so spans
-    buffered in exporters are not lost.
-    """
-    await _dispatch("flush")
 
 
 @overload
@@ -528,15 +493,11 @@ async def _span_impl(
         case SpanRef():
             trace_id, parent_id = parent.trace_id, parent.span_id
         case None:
-            # 128/64-bit ids map 1:1 onto the otel wire format.
-            trace_id, parent_id = (
-                messages_.generate_id("trace", bits=128),
-                None,
-            )
+            trace_id, parent_id = messages_.generate_id("trace"), None
     sp = Span(
         name=name,
         data=data,
-        id=messages_.generate_id("span", bits=64),
+        id=messages_.generate_id("span"),
         trace_id=trace_id,
         parent_id=parent_id,
         started_at=_now_ns(),
@@ -591,9 +552,6 @@ class Adapter:
                 while (ev := (yield)) is not None:
                     v.log_event(ev.name)
                 v.update(output=span.data)
-
-        async def flush(self):
-            sdk.drain()
     """
 
     # Name-mangled so the driver's bookkeeping can never collide with
@@ -612,9 +570,6 @@ class Adapter:
         ``None``: no per-span frame.
         """
         return None
-
-    async def flush(self) -> None:
-        """Push buffered telemetry out.  No-op unless the adapter buffers."""
 
     async def on_span_start(self, span_: Span, /) -> None:
         gen = self.wrap_span(span_)

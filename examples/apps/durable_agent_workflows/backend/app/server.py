@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import collections.abc
 import os
-import time
 
 _BACKEND_DIR = os.path.dirname(os.path.dirname(__file__))
 os.environ.setdefault(
@@ -49,7 +48,6 @@ async def post_chat(request: ChatRequest) -> fastapi.responses.StreamingResponse
         worker.run_turn,
         worker.TurnInput(
             messages=_with_system_message(messages),
-            submitted_at_ns=time.time_ns(),
         ).model_dump(mode="json"),
     )
     output = worker.TurnOutput.model_validate(await run.return_value())
