@@ -34,3 +34,23 @@ vercel dev
 
 `TEMPORAL_ADDRESS` overrides the Temporal server address for both the worker
 and the API server (default `localhost:7233`).
+
+## Telemetry
+
+The worker exports spans over OTLP when `OTEL_EXPORTER_OTLP_ENDPOINT` is
+set. For a local terminal viewer, run in another terminal:
+
+```bash
+cd backend && uv run python -m ai.telemetry.utils.viewer
+```
+
+and start the worker with the endpoint set:
+
+```bash
+cd backend && OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318 uv run worker
+```
+
+Each turn prints one trace tree — the agent run, the per-turn LLM calls
+(parented across the activity boundary), and tool executions. Any other
+OTLP backend (Jaeger, an LLM-aware viewer) works the same way; span
+attributes follow the `gen_ai` semantic conventions.

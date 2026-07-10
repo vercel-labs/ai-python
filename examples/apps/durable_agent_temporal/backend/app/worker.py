@@ -78,6 +78,9 @@ async def llm_activity(
         if message is None:
             message = model_stream.message
 
+    # The worker can stop between activities; push buffered spans out
+    # while we still can.
+    await ai.telemetry.flush()
     return message.model_dump(mode="json")
 
 
@@ -189,7 +192,9 @@ async def _run_turn(turn_input: dict[str, Any]) -> TurnOutput:
 class RunTurn:
     @temporalio.workflow.run
     @ai.messages.use_random(temporalio.workflow.random)
-    @ai.telemetry.use_clock(temporalio.workflow)
+    # The workflow module satisfies Clock (module-level ``time_ns``);
+    # ty does not yet accept modules as protocol implementations.
+    @ai.telemetry.use_clock(temporalio.workflow)  # ty: ignore[invalid-argument-type]
     async def run(self, turn_input: dict[str, Any]) -> dict[str, Any]:
         try:
             output = await _run_turn(turn_input)
@@ -202,7 +207,38 @@ class RunTurn:
             raise
 
 
+def _install_telemetry() -> None:
+    """Export spans over OTLP when a collector endpoint is configured.
+
+    For local development: ``uv run python -m ai.telemetry.utils.viewer``
+    and set ``OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318``.
+
+    The otel imports stay inside this function: it only runs in the
+    host (``main``), so the workflow sandbox never re-imports the otel
+    SDK, which does not load under its restrictions. Workflow code
+    still reaches the adapter through the passed-through ``ai`` module.
+    """
+    if "OTEL_EXPORTER_OTLP_ENDPOINT" not in os.environ:
+        return
+    from ai.telemetry import otel
+    from opentelemetry import trace
+    from opentelemetry.exporter.otlp.proto.http import trace_exporter
+    from opentelemetry.sdk import resources
+    from opentelemetry.sdk import trace as sdk_trace
+    from opentelemetry.sdk.trace import export
+
+    provider = sdk_trace.TracerProvider(
+        resource=resources.Resource.create({"service.name": "durable-agent-temporal"})
+    )
+    provider.add_span_processor(
+        export.BatchSpanProcessor(trace_exporter.OTLPSpanExporter())
+    )
+    trace.set_tracer_provider(provider)
+    otel.install()
+
+
 async def main() -> None:
+    _install_telemetry()
     client = await temporalio.client.Client.connect(
         os.environ.get("TEMPORAL_ADDRESS", "localhost:7233")
     )

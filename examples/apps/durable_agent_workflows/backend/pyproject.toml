@@ -8,6 +8,8 @@ dependencies = [
     "vercel>=0.5.9",
     "vercel-workers>=0.0.22",
     "ai",
+    "opentelemetry-sdk>=1.43.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.43.0",
 ]
 
 [tool.mypy]

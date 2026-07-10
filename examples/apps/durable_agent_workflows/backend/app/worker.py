@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import random
 import traceback
 from collections.abc import AsyncGenerator
@@ -21,6 +22,38 @@ import vercel.workflow  # noqa: E402
 # The app uses one registry for all workflow decorators so queue messages
 # are dispatched by the same Workflows instance.
 workflow = vercel.workflow.Workflows()
+
+
+def _install_telemetry() -> None:
+    """Export spans over OTLP when a collector endpoint is configured.
+
+    For local development: ``uv run python -m ai.telemetry.utils.viewer``
+    and set ``OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318``.
+    """
+    if "OTEL_EXPORTER_OTLP_ENDPOINT" not in os.environ:
+        return
+    from ai.telemetry import otel
+    from opentelemetry import trace
+    from opentelemetry.exporter.otlp.proto.http import trace_exporter
+    from opentelemetry.sdk import resources
+    from opentelemetry.sdk import trace as sdk_trace
+    from opentelemetry.sdk.trace import export
+
+    provider = sdk_trace.TracerProvider(
+        resource=resources.Resource.create({"service.name": "durable-agent-workflows"})
+    )
+    provider.add_span_processor(
+        export.BatchSpanProcessor(trace_exporter.OTLPSpanExporter())
+    )
+    trace.set_tracer_provider(provider)
+    otel.install()
+
+
+# Host only: the sandbox re-imports this module for the workflow, and
+# the otel SDK does not load under its restrictions. Workflow code
+# still reaches the adapter through the passed-through ``ai`` module.
+if not vercel._internal.workflow.py_sandbox.in_sandbox():
+    _install_telemetry()
 
 MODEL_ID = "gateway:anthropic/claude-sonnet-4.6"
 SYSTEM_PROMPT = """\
@@ -97,6 +130,9 @@ async def llm_step(
         if message is None:
             message = model_stream.message
 
+    # The worker can be frozen once the step hands back control; push
+    # buffered spans out while we still can.
+    await ai.telemetry.flush()
     return message.model_dump(mode="json")
 
 
