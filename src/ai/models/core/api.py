@@ -36,7 +36,7 @@ StreamOutputT = TypeVar("StreamOutputT", default=str)
 
 
 @dataclasses.dataclass(frozen=True)
-class StreamRequest:
+class _StreamRequest:
     model: model_.Model
     messages: list[types.messages.Message]
     tools: Sequence[types.tools.Tool] | None = None
@@ -45,33 +45,33 @@ class StreamRequest:
 
 
 @dataclasses.dataclass(frozen=True)
-class GenerateRequest:
+class _GenerateRequest:
     model: model_.Model
     messages: list[types.messages.Message]
     params: params_.GenerateParams
 
 
 @runtime_checkable
-class StreamExecutor(Protocol):
+class _StreamExecutor(Protocol):
     def _do_stream(
         self,
-        request: StreamRequest,
+        request: _StreamRequest,
     ) -> AsyncGenerator[types.events.Event]: ...
 
 
 @runtime_checkable
-class GenerateExecutor(Protocol):
+class _GenerateExecutor(Protocol):
     async def _do_generate(
-        self, request: GenerateRequest
+        self, request: _GenerateRequest
     ) -> types.messages.Message: ...
 
 
-class Executor:
+class _Executor:
     """Default executor: dispatches to the model's provider instance."""
 
     async def _do_stream(
         self,
-        request: StreamRequest,
+        request: _StreamRequest,
     ) -> AsyncGenerator[types.events.Event]:
         async for ev in request.model.provider.stream(
             request.model,
@@ -83,7 +83,7 @@ class Executor:
             yield ev
 
     async def _do_generate(
-        self, request: GenerateRequest
+        self, request: _GenerateRequest
     ) -> types.messages.Message:
         return await request.model.provider.generate(
             request.model,
@@ -92,7 +92,7 @@ class Executor:
         )
 
 
-_default_executor = Executor()
+_default_executor = _Executor()
 
 
 class Stream(Generic[StreamOutputT]):
@@ -477,7 +477,6 @@ def stream(
     *,
     context: StreamContext,
     params: params_.InferenceRequestParams | None = None,
-    executor: StreamExecutor = _default_executor,
 ) -> AbstractAsyncContextManager[Stream[str]]: ...
 @overload
 def stream[T: pydantic.BaseModel](
@@ -485,7 +484,6 @@ def stream[T: pydantic.BaseModel](
     context: StreamContext,
     output_type: type[T],
     params: params_.InferenceRequestParams | None = None,
-    executor: StreamExecutor = _default_executor,
 ) -> AbstractAsyncContextManager[Stream[T]]: ...
 @overload
 def stream(
@@ -494,7 +492,6 @@ def stream(
     *,
     tools: Sequence[types.tools.Tool] | None = None,
     params: params_.InferenceRequestParams | None = None,
-    executor: StreamExecutor = _default_executor,
 ) -> AbstractAsyncContextManager[Stream[str]]: ...
 @overload
 def stream[T: pydantic.BaseModel](
@@ -504,7 +501,6 @@ def stream[T: pydantic.BaseModel](
     tools: Sequence[types.tools.Tool] | None = None,
     output_type: type[T],
     params: params_.InferenceRequestParams | None = None,
-    executor: StreamExecutor = _default_executor,
 ) -> AbstractAsyncContextManager[Stream[T]]: ...
 def stream(
     model: model_.Model | None = None,
@@ -514,7 +510,6 @@ def stream(
     tools: Sequence[types.tools.Tool] | None = None,
     output_type: type[pydantic.BaseModel] | None = None,
     params: params_.InferenceRequestParams | None = None,
-    executor: StreamExecutor = _default_executor,
 ) -> AbstractAsyncContextManager[Stream[Any]]:
     """Stream an LLM response.
 
@@ -553,7 +548,7 @@ def stream(
         tools=tools,
         output_type=output_type,
         params=params,
-        executor=executor,
+        executor=_default_executor,
     )
 
 
@@ -565,7 +560,7 @@ async def _stream(
     tools: Sequence[types.tools.Tool] | None,
     output_type: type[pydantic.BaseModel] | None,
     params: params_.InferenceRequestParams | None,
-    executor: StreamExecutor,
+    executor: _StreamExecutor,
 ) -> AsyncIterator[Stream[Any]]:
     if messages and messages[-1].replay:
         last = messages[-1]
@@ -584,7 +579,7 @@ async def _stream(
         replay = True
     else:
         prepared = integrity.prepare_messages(messages)
-        request = StreamRequest(
+        request = _StreamRequest(
             model=model,
             messages=prepared,
             tools=tools,
@@ -617,18 +612,16 @@ async def generate(
     model: model_.Model,
     messages: list[types.messages.Message],
     params: params_.GenerateParams,
-    *,
-    executor: GenerateExecutor = _default_executor,
 ) -> types.messages.Message:
     """Generate a non-streaming response (images, video, etc.)."""
     messages = integrity.prepare_messages(messages)
-    request = GenerateRequest(model, messages, params)
+    request = _GenerateRequest(model, messages, params)
     async with telemetry.span(
         telemetry.AiGenerateSpanData(
             model=model.id, messages=messages, params=params
         )
     ) as sp:
-        message = await executor._do_generate(request)
+        message = await _default_executor._do_generate(request)
         sp.data.message = message
         return message
 
