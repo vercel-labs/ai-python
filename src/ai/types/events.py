@@ -11,19 +11,14 @@ from . import usage as usage_
 # serialization border in the case of durable execution
 
 
-# Placeholder so BaseEvent.message is typed as Message (not Message | None).
+# Placeholder so ModelEvent.message is typed as Message (not Message | None).
 # Stream.__anext__ stamps the real in-progress message before yielding,
 # so consumers never see this value.
 _DUMMY_MESSAGE = messages.Message(id="<unset>", role="assistant", parts=[])
 
 
 class BaseEvent(pydantic.BaseModel):
-    """Common fields stamped onto every event by the streaming wrapper.
-
-    ``message`` carries the in-progress (or final) assistant message; the
-    streaming layer aggregates parts into it as deltas arrive and stamps
-    a reference onto each yielded event. ``usage`` carries the latest
-    usage value reported by the provider (latest-wins across the stream).
+    """Anything ``ai.stream`` or ``Agent.run`` yields.
 
     ``replay`` is set on synthetic events emitted when ``models.stream``
     short-circuits an existing assistant turn (resume-after-approval
@@ -32,103 +27,115 @@ class BaseEvent(pydantic.BaseModel):
     internally.  Excluded from JSON: it's a control flag, not data.
     """
 
-    message: messages.Message = _DUMMY_MESSAGE
-    usage: usage_.Usage | None = None
-    provider_metadata: dict[str, Any] | None = None
     replay: bool = pydantic.Field(default=False, exclude=True, repr=False)
 
     model_config = pydantic.ConfigDict(frozen=True)
 
 
-class StreamStart(BaseEvent):
+class ModelEvent(BaseEvent):
+    """Streamed out of a model request (``ai.stream``).
+
+    ``message`` carries the in-progress (or final) assistant message; the
+    streaming layer aggregates parts into it as deltas arrive and stamps
+    a reference onto each yielded event (``Stream.__anext__``). ``usage``
+    carries the latest usage value reported by the provider (latest-wins
+    across the stream).
+    """
+
+    message: messages.Message = _DUMMY_MESSAGE
+    usage: usage_.Usage | None = None
+    provider_metadata: dict[str, Any] | None = None
+
+
+class StreamStart(ModelEvent):
     kind: Literal["stream_start"] = "stream_start"
 
 
-class StreamEnd(BaseEvent):
+class StreamEnd(ModelEvent):
     kind: Literal["stream_end"] = "stream_end"
 
 
-class TextStart(BaseEvent):
+class TextStart(ModelEvent):
     block_id: str = ""
 
     kind: Literal["text_start"] = "text_start"
 
 
-class TextDelta(BaseEvent):
+class TextDelta(ModelEvent):
     chunk: str
     block_id: str = ""
 
     kind: Literal["text_delta"] = "text_delta"
 
 
-class TextEnd(BaseEvent):
+class TextEnd(ModelEvent):
     block_id: str = ""
 
     kind: Literal["text_end"] = "text_end"
 
 
-class ReasoningStart(BaseEvent):
+class ReasoningStart(ModelEvent):
     block_id: str = ""
 
     kind: Literal["reasoning_start"] = "reasoning_start"
 
 
-class ReasoningDelta(BaseEvent):
+class ReasoningDelta(ModelEvent):
     chunk: str
     block_id: str = ""
 
     kind: Literal["reasoning_delta"] = "reasoning_delta"
 
 
-class ReasoningEnd(BaseEvent):
+class ReasoningEnd(ModelEvent):
     block_id: str = ""
 
     kind: Literal["reasoning_end"] = "reasoning_end"
 
 
-class ToolStart(BaseEvent):
+class ToolStart(ModelEvent):
     tool_call_id: str = ""
     tool_name: str = ""
 
     kind: Literal["tool_start"] = "tool_start"
 
 
-class ToolDelta(BaseEvent):
+class ToolDelta(ModelEvent):
     chunk: str
     tool_call_id: str = ""
 
     kind: Literal["tool_delta"] = "tool_delta"
 
 
-class ToolEnd(BaseEvent):
+class ToolEnd(ModelEvent):
     tool_call: messages.ToolCallPart
     tool_call_id: str = ""
 
     kind: Literal["tool_end"] = "tool_end"
 
 
-class BuiltinToolStart(BaseEvent):
+class BuiltinToolStart(ModelEvent):
     tool_call_id: str = ""
     tool_name: str = ""
 
     kind: Literal["builtin_tool_start"] = "builtin_tool_start"
 
 
-class BuiltinToolDelta(BaseEvent):
+class BuiltinToolDelta(ModelEvent):
     chunk: str
     tool_call_id: str = ""
 
     kind: Literal["builtin_tool_delta"] = "builtin_tool_delta"
 
 
-class BuiltinToolEnd(BaseEvent):
+class BuiltinToolEnd(ModelEvent):
     tool_call: messages.BuiltinToolCallPart
     tool_call_id: str = ""
 
     kind: Literal["builtin_tool_end"] = "builtin_tool_end"
 
 
-class BuiltinToolResult(BaseEvent):
+class BuiltinToolResult(ModelEvent):
     """Provider returned a result for a built-in tool call."""
 
     result: messages.BuiltinToolReturnPart
@@ -137,7 +144,7 @@ class BuiltinToolResult(BaseEvent):
     kind: Literal["builtin_tool_result"] = "builtin_tool_result"
 
 
-class FileEvent(BaseEvent):
+class FileEvent(ModelEvent):
     """A complete generated file from the LLM."""
 
     block_id: str = ""
@@ -166,11 +173,6 @@ Event = (
     | BuiltinToolResult
     | FileEvent
 )
-
-DiscriminatedEvent = Annotated[
-    Event,
-    pydantic.Field(discriminator="kind"),
-]
 
 
 async def _replay_message_events(
@@ -274,7 +276,7 @@ class Aggregator[Item, Result, ModelInput]:
         ...
 
 
-class PartialToolCallResult(pydantic.BaseModel):
+class PartialToolCallResult(BaseEvent):
     """Emitted when tool calls or other yield_from callers yield values."""
 
     tool_call_id: str | None = None
@@ -292,7 +294,7 @@ class PartialToolCallResult(pydantic.BaseModel):
     kind: Literal["partial_tool_call_result"] = "partial_tool_call_result"
 
 
-class ToolCallResult(pydantic.BaseModel):
+class ToolCallResult(BaseEvent):
     """Emitted after tool calls execute — carries the result message.
 
     When the framework auto-catches an exception raised by the tool,
@@ -313,7 +315,7 @@ class ToolCallResult(pydantic.BaseModel):
     kind: Literal["tool_call_result"] = "tool_call_result"
 
 
-class HookEvent(pydantic.BaseModel):
+class HookEvent(BaseEvent):
     """Emitted when a hook suspends, resolves, or is cancelled."""
 
     message: messages.Message
@@ -322,7 +324,7 @@ class HookEvent(pydantic.BaseModel):
     kind: Literal["hook"] = "hook"
 
 
-class RunBlocked(pydantic.BaseModel):
+class RunBlocked(BaseEvent):
     """The run is blocked on hooks.
 
     Emitted when the run stops being able to make progress without
@@ -348,13 +350,10 @@ class RunBlocked(pydantic.BaseModel):
     kind: Literal["run_blocked"] = "run_blocked"
 
 
-AgentMessageEvent = Event | ToolCallResult | HookEvent
-
-AgentEvent = (
-    Event | ToolCallResult | HookEvent | PartialToolCallResult | RunBlocked
-)
-
-TerminalEvent = StreamEnd | ToolCallResult | HookEvent
+AgentEvent = Annotated[
+    Event | ToolCallResult | HookEvent | PartialToolCallResult | RunBlocked,
+    pydantic.Field(discriminator="kind"),
+]
 
 
 class RunStateTracker:

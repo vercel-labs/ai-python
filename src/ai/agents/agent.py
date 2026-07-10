@@ -1394,9 +1394,7 @@ class Agent:
                     # signal for the loop's tool dispatcher (which already
                     # ran by the time we see the event here), not user-
                     # facing output.
-                    if not (
-                        isinstance(event, events_.BaseEvent) and event.replay
-                    ):
+                    if not event.replay:
                         yield event
                     if transition is not None:
                         yield transition

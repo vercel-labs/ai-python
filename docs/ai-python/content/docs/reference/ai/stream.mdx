@@ -74,6 +74,14 @@ If the last input message has `replay=True`, `ai.stream` does not call the
 provider. It emits replay tool-end events from the existing assistant message
 so resumable agent flows can dispatch the same tool calls again.
 
+`Stream.replay_message` synthesizes stream events from a complete `Message`.
+
+```python
+async with ai.Stream.replay_message(message) as stream:
+    async for event in stream:
+        ...
+```
+
 ## Errors
 
 If the provider stream ends before a finish event, iteration raises
