@@ -47,7 +47,7 @@ async def test_resolve_live_future() -> None:
             if not isinstance(event, agent_events_.HookEvent):
                 continue
             # When we see the deferred hook, resolve it.
-            if event.hook.status == "deferred":
+            if event.hook.status == "pending":
                 ai.resolve_hook(
                     "confirm_1", {"approved": True, "reason": "looks good"}
                 )
@@ -85,7 +85,7 @@ async def test_cancel_live_hook() -> None:
         async for event in stream:
             if not isinstance(event, agent_events_.HookEvent):
                 continue
-            if event.hook.status == "deferred":
+            if event.hook.status == "pending":
                 await ai.cancel_hook("cancel_me", reason="denied")
 
     assert was_cancelled
@@ -169,7 +169,7 @@ async def test_resolved_hook_emits_message() -> None:
             if not isinstance(event, agent_events_.HookEvent):
                 continue
             hooks.append(event.hook)
-            if event.hook.status == "deferred":
+            if event.hook.status == "pending":
                 ai.resolve_hook("emit_test", {"approved": False})
 
     resolved = [h for h in hooks if h.status == "resolved"]
@@ -205,7 +205,7 @@ async def test_hook_metadata_in_deferred() -> None:
         async for event in stream:
             if isinstance(event, agent_events_.HookEvent):
                 hooks.append(event.hook)
-                if event.hook.status == "deferred":
+                if event.hook.status == "pending":
                     ai.defer_hook(event.hook)
 
     assert len(hooks) >= 1
@@ -240,7 +240,7 @@ async def test_live_hook_span(recorder: Recorder) -> None:
         async for event in stream:
             if (
                 isinstance(event, agent_events_.HookEvent)
-                and event.hook.status == "deferred"
+                and event.hook.status == "pending"
             ):
                 ai.resolve_hook(my_agent.label, {"approved": True})
 
@@ -277,7 +277,7 @@ async def test_cancelled_hook_span(recorder: Recorder) -> None:
         async for event in stream:
             if (
                 isinstance(event, agent_events_.HookEvent)
-                and event.hook.status == "deferred"
+                and event.hook.status == "pending"
             ):
                 await ai.cancel_hook(my_agent.label, reason="denied")
 

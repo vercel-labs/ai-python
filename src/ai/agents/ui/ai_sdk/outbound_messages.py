@@ -229,7 +229,7 @@ def merge_approval_signals(
         is_automatic = part.metadata.get("isAutomatic")
         is_automatic = is_automatic if isinstance(is_automatic, bool) else None
         match part.status:
-            case "deferred":
+            case "pending":
                 updates["state"] = "approval-requested"
                 updates["approval"] = ui_messages.UIToolApproval.model_validate(
                     {

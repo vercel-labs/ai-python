@@ -28,7 +28,7 @@ async def live(messages: list[ai.messages.Message]) -> None:
                 print(event.chunk, end="", flush=True)
             elif (
                 isinstance(event, ai.events.HookEvent)
-                and event.hook.status == "deferred"
+                and event.hook.status == "pending"
             ):
                 print(f"\n[deferred] {event.hook.hook_id}")
                 ai.resolve_hook(
@@ -58,7 +58,7 @@ async def stateless(
                 print(event.chunk, end="", flush=True)
             elif (
                 isinstance(event, ai.events.HookEvent)
-                and event.hook.status == "deferred"
+                and event.hook.status == "pending"
             ):
                 deferred.append(event.hook)
                 print(f"\n[deferred] {event.hook.hook_id}")

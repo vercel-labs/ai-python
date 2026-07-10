@@ -45,7 +45,7 @@ def hook_part_from_tool_part(tp: ToolPart) -> messages_.HookPart[Any] | None:
         return messages_.HookPart(
             hook_id=approval.id,
             hook_type=TOOL_APPROVAL_HOOK_TYPE,
-            status="deferred",
+            status="pending",
             metadata=metadata,
             tool_call_id=tp.tool_call_id,
         )

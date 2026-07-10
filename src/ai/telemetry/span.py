@@ -148,7 +148,7 @@ class HookSpanData:
     label: str
     hook_type: str
     metadata: dict[str, Any]
-    status: Literal["deferred", "resolved", "cancelled"] = "deferred"
+    status: Literal["pending", "resolved", "cancelled"] = "pending"
 
     span_name: ClassVar[str] = "hook"
 

@@ -409,7 +409,7 @@ class CodingAgentApp(textual.app.App[None]):
 
     def _on_hook(self, hook: ai.messages.HookPart[Any]) -> None:
         """Mount or dismiss an approval prompt for a hook signal."""
-        if hook.status == "deferred":
+        if hook.status == "pending":
             prompt = ApprovalPrompt(hook)
             self.query_one("#dock").mount(prompt, before=self.composer)
             if not isinstance(self.focused, ApprovalPrompt):

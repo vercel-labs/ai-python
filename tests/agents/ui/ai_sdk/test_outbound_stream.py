@@ -185,7 +185,7 @@ async def test_finish_metadata_tracks_tool_and_internal_messages() -> None:
         id="hook-1",
         hook_id="approve_tc1",
         hook_type="ToolApproval",
-        status="deferred",
+        status="pending",
     )
     internal = messages_.Message(
         id="internal-1",
@@ -333,7 +333,7 @@ async def test_tool_result_without_streaming_emits_input_start() -> None:
 
 
 async def test_approval_request_hook_emits_approval_event() -> None:
-    """HookEvent with deferred status emits a UIToolApprovalRequestEvent."""
+    """HookEvent with pending status emits a UIToolApprovalRequestEvent."""
     out = await _collect(
         [
             # Streaming tool events first
@@ -355,7 +355,7 @@ async def test_approval_request_hook_emits_approval_event() -> None:
                         messages_.HookPart(
                             hook_id="approve_tc1",
                             hook_type="ToolApproval",
-                            status="deferred",
+                            status="pending",
                             tool_call_id="tc1",
                         )
                     ],
@@ -363,7 +363,7 @@ async def test_approval_request_hook_emits_approval_event() -> None:
                 hook=messages_.HookPart(
                     hook_id="approve_tc1",
                     hook_type="ToolApproval",
-                    status="deferred",
+                    status="pending",
                     tool_call_id="tc1",
                 ),
             ),
