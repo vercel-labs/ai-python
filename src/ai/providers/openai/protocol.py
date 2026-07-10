@@ -15,7 +15,7 @@ from ... import errors as ai_errors
 from ... import types
 from ...models import core
 from ...models.core import params as params_
-from .. import base
+from .. import base, history_utils
 from . import _sdk, errors
 
 if TYPE_CHECKING:
@@ -149,7 +149,7 @@ async def _messages_to_openai(
     * tool results as separate ``role: "tool"`` messages
     """
     result: list[dict[str, Any]] = []
-    for msg in messages:
+    for msg in history_utils.repair(messages):
         match msg.role:
             case "assistant":
                 content = ""
@@ -923,7 +923,7 @@ async def _messages_to_responses(
 ) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
 
-    for msg in messages:
+    for msg in history_utils.repair(messages):
         match msg.role:
             case "system":
                 text = "".join(
@@ -1015,9 +1015,6 @@ async def _messages_to_responses(
                                 ),
                             }
                         )
-
-            case "internal":
-                continue
 
     return result
 

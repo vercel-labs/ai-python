@@ -171,14 +171,16 @@ print(stream.message.usage)
 
 ## Validate message history
 
-Before provider calls, the SDK prepares message history by stripping internal
-messages, removing non-model parts, repairing invalid tool args to `{}`, and
-inserting error results for missing tool calls when possible. Use strict
-validation in tests or import pipelines:
+`ai.stream` passes message history to the provider as-is. Providers repair
+it before the wire call: they strip internal messages, remove non-model
+parts, replace invalid tool args with `{}`, and insert error results for
+missing tool calls. To fail fast instead — in tests or import pipelines —
+validate the history yourself:
 
 ```python
-from ai.types import integrity
+from ai.providers import history_utils
 
 
-integrity.prepare_messages(messages, mode="strict")
+history_utils.validate(messages)  # raises IntegrityError on any issue
+issues = history_utils.inspect(messages)  # or just report them
 ```

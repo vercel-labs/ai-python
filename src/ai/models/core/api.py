@@ -21,7 +21,6 @@ import pydantic
 from typing_extensions import TypeVar
 
 from ... import errors, telemetry, types
-from ...types import integrity
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, AsyncIterator, Sequence
@@ -578,10 +577,9 @@ async def _stream(
         )
         replay = True
     else:
-        prepared = integrity.prepare_messages(messages)
         request = _StreamRequest(
             model=model,
-            messages=prepared,
+            messages=list(messages),
             tools=tools,
             output_type=output_type,
             params=params,
@@ -591,7 +589,7 @@ async def _stream(
             output_type=cast("type[Any] | None", output_type),
         )
         data = telemetry.AiStreamSpanData(
-            model=model.id, messages=prepared, params=params
+            model=model.id, messages=list(messages), params=params
         )
         replay = False
     # Not set as current: the caller's work while the stream is open
@@ -614,8 +612,7 @@ async def generate(
     params: params_.GenerateParams,
 ) -> types.messages.Message:
     """Generate a non-streaming response (images, video, etc.)."""
-    messages = integrity.prepare_messages(messages)
-    request = _GenerateRequest(model, messages, params)
+    request = _GenerateRequest(model, list(messages), params)
     async with telemetry.span(
         telemetry.AiGenerateSpanData(
             model=model.id, messages=messages, params=params

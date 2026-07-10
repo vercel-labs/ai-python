@@ -8,6 +8,7 @@ import pytest
 
 import ai
 from ai import models
+from ai.providers import history_utils
 from ai.types import builders
 from ai.types import events as agent_events_
 from ai.types import events as events_
@@ -177,6 +178,8 @@ class MockAdapter:
     ) -> AsyncGenerator[events_.Event]:
         if self._call_index >= len(self._responses):
             raise RuntimeError("MockAdapter: no more responses configured")
+        # real providers repair history before wire conversion; mirror that
+        history_utils.repair(messages)
         self.call_count += 1
         seq = self._responses[self._call_index]
         self._call_index += 1

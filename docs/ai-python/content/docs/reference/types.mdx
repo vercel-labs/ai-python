@@ -32,30 +32,6 @@ Media type helpers:
 - `detect_image_media_type`
 - `detect_audio_media_type`
 
-## ai.types.integrity
-
-Before provider calls, the SDK prepares message history. It strips internal
-messages, removes non-model parts, repairs invalid tool args to `{}`, and
-inserts error results for missing tool calls when possible.
-
-```python
-from ai.types import integrity
-
-
-prepared = integrity.prepare_messages(messages)
-```
-
-Use strict validation when you want repairable issues to raise.
-
-```python
-integrity.prepare_messages(messages, mode="strict")
-```
-
-APIs:
-
-- `prepare_messages`
-- `IntegrityError`
-
 ## ai.types.usage
 
 `Usage` is normalized token usage from a single model call.

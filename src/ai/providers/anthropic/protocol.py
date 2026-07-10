@@ -15,7 +15,7 @@ import pydantic
 from ... import types
 from ...models.core import params as params_
 from ...types import events
-from .. import base
+from .. import base, history_utils
 from . import _sdk, errors
 from . import tools as anthropic_tools
 
@@ -229,7 +229,7 @@ async def _messages_to_anthropic(
     system_prompt: str | None = None
     result: list[dict[str, Any]] = []
 
-    for msg in messages:
+    for msg in history_utils.repair(messages):
         match msg.role:
             case "system":
                 system_prompt = "".join(

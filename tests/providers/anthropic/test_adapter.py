@@ -317,3 +317,28 @@ async def test_model_404_is_mapped_to_model_not_found(
     assert exc.http_context.request is response.request
     assert exc.http_context.response is response
     assert exc.__cause__ is sdk_error
+
+
+async def test_messages_to_anthropic_repairs_history() -> None:
+    """Conversion runs history_utils.repair: internal messages are dropped
+    and orphaned tool calls get a synthetic error result."""
+    msgs = [
+        messages.Message(
+            role="internal",
+            parts=[messages.TextPart(text="app-only")],
+        ),
+        messages.Message(
+            role="assistant",
+            parts=[
+                messages.ToolCallPart(
+                    tool_call_id="tc-1", tool_name="search", tool_args="{}"
+                )
+            ],
+        ),
+    ]
+    _, wire = await protocol._messages_to_anthropic(msgs)
+    assert [m["role"] for m in wire] == ["assistant", "user"]
+    (tool_result,) = wire[1]["content"]
+    assert tool_result["type"] == "tool_result"
+    assert tool_result["tool_use_id"] == "tc-1"
+    assert tool_result["is_error"] is True

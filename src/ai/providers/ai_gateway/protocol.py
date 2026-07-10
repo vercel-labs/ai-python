@@ -16,7 +16,7 @@ from pydantic.alias_generators import to_camel
 from ... import types
 from ...models import core
 from ...models.core import params as params_
-from .. import base
+from .. import base, history_utils
 from . import client as gateway_client
 from . import errors
 from . import params as gateway_params
@@ -168,7 +168,7 @@ async def _messages_to_prompt(
     """Convert ``Message`` list to the v3 prompt wire format."""
     result: list[dict[str, Any]] = []
 
-    for msg in messages:
+    for msg in history_utils.repair(messages):
         match msg.role:
             case "system":
                 text = "".join(
