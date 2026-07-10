@@ -22,10 +22,19 @@ if TYPE_CHECKING:
     from types import TracebackType
 
 
-class ContextManagerWithAsyncDecorator[T](Protocol):
+class ContextManagerAnySync[T](Protocol):
     def __enter__(self) -> T: ...
 
     def __exit__(
+        self,
+        typ: type[BaseException] | None,
+        value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> bool | None: ...
+
+    async def __aenter__(self) -> T: ...
+
+    async def __aexit__(
         self,
         typ: type[BaseException] | None,
         value: BaseException | None,
@@ -141,9 +150,20 @@ class MultiWaiter[T]:
         return False
 
 
-class _GeneratorContextManagerWithAsyncDecorator[T](
+class _GeneratorContextManagerAnySync[T](
     contextlib._GeneratorContextManager[T]
 ):
+    async def __aenter__(self) -> T:
+        return self.__enter__()
+
+    async def __aexit__(
+        self,
+        typ: type[BaseException] | None,
+        value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> bool | None:
+        return self.__exit__(typ, value, traceback)
+
     def __call__[_F: Callable[..., Any]](self, func: _F) -> _F:
         if inspect.iscoroutinefunction(func):
 
@@ -161,16 +181,16 @@ class _GeneratorContextManagerWithAsyncDecorator[T](
         return cast("_F", inner)
 
 
-def contextmanager_with_async_decorator[**P, T](
+def contextmanager_any_sync[**P, T](
     func: Callable[P, Iterator[T]],
-) -> Callable[P, ContextManagerWithAsyncDecorator[T]]:
-    """@contextmanager decorator but the result can be a decorator for async."""
+) -> Callable[P, ContextManagerAnySync[T]]:
+    """@contextmanager decorator but the result is also usable in async."""
 
     @functools.wraps(func)
     def helper(
         *args: P.args, **kwds: P.kwargs
-    ) -> _GeneratorContextManagerWithAsyncDecorator[T]:
-        return _GeneratorContextManagerWithAsyncDecorator(
+    ) -> _GeneratorContextManagerAnySync[T]:
+        return _GeneratorContextManagerAnySync(
             cast("Callable[..., Generator[T, None, None]]", func), args, kwds
         )
 

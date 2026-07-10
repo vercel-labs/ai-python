@@ -48,7 +48,7 @@ def _resolve_random(source: RandomSource) -> random.Random:
     return source if isinstance(source, random.Random) else source()
 
 
-@util.contextmanager_with_async_decorator
+@util.contextmanager_any_sync
 def use_random(source: RandomSource) -> Iterator[None]:
     """Draw message/part ids from ``source`` within this context.
 
