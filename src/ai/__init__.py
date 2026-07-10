@@ -90,6 +90,7 @@ from .models import (
     stream,
 )
 from .providers import get_provider
+from .testing import TestProtocol, TestProvider, test_model
 from .types import events, messages, tools
 from .types.builders import (
     assistant_message,
@@ -163,6 +164,8 @@ __all__ = [
     "StreamingTextTool",
     "SubAgentTool",
     "TemperatureSamplerParams",
+    "TestProtocol",
+    "TestProvider",
     "TokenThreshold",
     "Tool",
     "ToolCall",
@@ -198,6 +201,7 @@ __all__ = [
     "stream",
     "system_message",
     "telemetry",
+    "test_model",
     "text_part",
     "thinking",
     "tool",
