@@ -4,7 +4,6 @@ from ...providers.base import Provider
 from . import helpers
 from .api import (
     Stream,
-    generate,
     probe,
     stream,
 )
@@ -17,9 +16,7 @@ from .params import (
     CacheParams,
     CloudRegion,
     ContextManagementParams,
-    GenerateParams,
     GeoRegion,
-    ImageParams,
     InferenceRequestParams,
     MinPSamplerParams,
     ModelProviderDefault,
@@ -42,7 +39,6 @@ from .params import (
     TopKSamplerParams,
     TopPSamplerParams,
     Unset,
-    VideoParams,
 )
 
 __all__ = [
@@ -53,9 +49,7 @@ __all__ = [
     "CacheParams",
     "CloudRegion",
     "ContextManagementParams",
-    "GenerateParams",
     "GeoRegion",
-    "ImageParams",
     "InferenceRequestParams",
     "MinPSamplerParams",
     "Model",
@@ -81,8 +75,6 @@ __all__ = [
     "TopKSamplerParams",
     "TopPSamplerParams",
     "Unset",
-    "VideoParams",
-    "generate",
     "get_model",
     "helpers",
     "probe",

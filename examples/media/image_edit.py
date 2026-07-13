@@ -10,6 +10,7 @@ import base64
 import pathlib
 
 import ai
+from ai.models.core import api, params
 
 model = ai.get_model("openai/gpt-image-1")
 
@@ -32,8 +33,8 @@ async def main() -> None:
         ),
     ]
 
-    result = await ai.generate(
-        model, messages, ai.ImageParams(size="1024x1024")
+    result = await api.experimental_generate(
+        model, messages, params.ImageParams(size="1024x1024")
     )
 
     print(f"Generated {len(result.images)} edited image(s)")

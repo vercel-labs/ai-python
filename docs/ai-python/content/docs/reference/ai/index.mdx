@@ -21,8 +21,6 @@ These top-level exports have their own pages under `ai`.
 
 - [`stream`](/docs/reference/ai/stream): Call a model and iterate response
   events. The same page documents `Stream`.
-- [`generate`](/docs/reference/ai/generate): Call non-streaming media
-  generation models.
 - [`get_model`](/docs/reference/ai/get-model): Resolve a model id into a
   `Model`.
 - [`get_provider`](/docs/reference/ai/get-provider): Resolve and configure a
@@ -124,8 +122,7 @@ await protocol.generate(client, model, messages, params, provider=provider.name)
 
 Model params are top-level `ai` types.
 
-Use `InferenceRequestParams` with `stream` and `Agent.run`. Use `ImageParams`
-and `VideoParams` with `generate`.
+Use `InferenceRequestParams` with `stream` and `Agent.run`.
 
 ```python
 params = ai.InferenceRequestParams().with_temperature(0)
@@ -175,28 +172,6 @@ Routing params:
 - `CloudRegion`
 - `ProviderRankingStrategy`
 - `GLOBAL`
-
-Media generation params:
-
-```python
-ai.ImageParams(
-    n=1,
-    size=None,
-    aspect_ratio=None,
-    seed=None,
-    provider_options={},
-)
-
-ai.VideoParams(
-    n=1,
-    aspect_ratio=None,
-    resolution=None,
-    duration=None,
-    fps=None,
-    seed=None,
-    provider_options={},
-)
-```
 
 ## Messages
 

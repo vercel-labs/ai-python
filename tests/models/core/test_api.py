@@ -8,6 +8,7 @@ import pytest
 
 import ai
 from ai import models
+from ai.models.core import api, params
 from ai.types import events as events_
 from ai.types import messages as messages_
 
@@ -338,7 +339,7 @@ async def test_generate_dispatches_to_provider() -> None:
     async def _generate(
         model: models.Model,
         messages: list[messages_.Message],
-        params: models.GenerateParams,
+        params: params.GenerateParams,
     ) -> messages_.Message:
         nonlocal called
         called = True
@@ -346,10 +347,10 @@ async def test_generate_dispatches_to_provider() -> None:
 
     provider._generate_impl = _generate
 
-    result = await models.generate(
+    result = await api.experimental_generate(
         model,
         [ai.user_message("A cat")],
-        models.ImageParams(n=1),
+        params.ImageParams(n=1),
     )
 
     assert called
@@ -372,17 +373,17 @@ async def test_generate_uses_model_protocol() -> None:
             client: Any,
             model: models.Model,
             messages: list[messages_.Message],
-            params: models.GenerateParams,
+            params: params.GenerateParams,
             *,
             provider: str,
         ) -> messages_.Message:
             _ = client, model, messages, params, provider
             return sentinel
 
-    result = await models.generate(
+    result = await api.experimental_generate(
         MOCK_MODEL.with_protocol(OverrideProtocol()),
         [ai.user_message("A cat")],
-        models.ImageParams(n=1),
+        params.ImageParams(n=1),
     )
 
     assert result is sentinel

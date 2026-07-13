@@ -8,6 +8,7 @@ import pytest
 
 import ai
 from ai import models
+from ai.models.core import params
 from ai.providers import history_utils
 from ai.types import builders
 from ai.types import events as agent_events_
@@ -71,7 +72,7 @@ class MockProvider(models.Provider):
         self,
         model: models.Model,
         messages: list[messages_.Message],
-        params: models.GenerateParams,
+        params: params.GenerateParams,
     ) -> messages_.Message:
         if model.protocol is not None:
             return await model.protocol.generate(
@@ -229,7 +230,7 @@ class MockGenerateAdapter:
         self,
         model: models.Model,
         messages: list[messages_.Message],
-        params: models.GenerateParams,
+        params: params.GenerateParams,
     ) -> messages_.Message:
         if self._call_index >= len(self._responses):
             raise RuntimeError(

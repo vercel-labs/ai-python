@@ -1060,7 +1060,7 @@ async def _generate_image(
     gateway: gateway_client.GatewayClient,
     model: core.model.Model,
     messages: list[types.messages.Message],
-    params: core.ImageParams,
+    params: params_.ImageParams,
 ) -> types.messages.Message:
     """Hit ``/image-model`` and return a Message with FileParts."""
     prompt = _extract_prompt(messages)
@@ -1101,7 +1101,7 @@ async def _generate_video(
     gateway: gateway_client.GatewayClient,
     model: core.model.Model,
     messages: list[types.messages.Message],
-    params: core.VideoParams,
+    params: params_.VideoParams,
 ) -> types.messages.Message:
     """Hit ``/video-model`` (SSE) and return a Message with FileParts."""
     prompt = _extract_prompt(messages)
@@ -1168,11 +1168,11 @@ async def generate(
     gateway: gateway_client.GatewayClient,
     model: core.model.Model,
     messages: list[types.messages.Message],
-    params: core.GenerateParams,
+    params: params_.GenerateParams,
 ) -> types.messages.Message:
     """Generate media through the AI Gateway."""
     try:
-        if isinstance(params, core.VideoParams):
+        if isinstance(params, params_.VideoParams):
             return await _generate_video(gateway, model, messages, params)
         return await _generate_image(gateway, model, messages, params)
     except client_errors.GatewayError as exc:
@@ -1210,7 +1210,7 @@ class GatewayV3Protocol(base.ProviderProtocol[gateway_client.GatewayClient]):
         client: gateway_client.GatewayClient,
         model: core.model.Model,
         messages: list[types.messages.Message],
-        params: core.GenerateParams,
+        params: params_.GenerateParams,
         *,
         provider: str,
     ) -> types.messages.Message:
