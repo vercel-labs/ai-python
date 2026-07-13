@@ -101,9 +101,9 @@ an instance of that Pydantic model after the stream finishes.
 
 ## Pass tools
 
-`ai.stream` accepts a list of `ai.Tool`, however, it does not have any 
-framework-side tool execution machinery. Use an agent when you want the SDK to 
-execute requested tools and continue the loop.
+`ai.stream` accepts a list of `ai.Tool`, however, it does not execute function
+tools locally. Use an agent when you want the SDK to execute requested tools
+and continue the loop.
 
 Provider-executed tools run on provider's side. They appear in the
 stream as built-in tool events and do not need a Python function:

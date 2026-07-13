@@ -17,4 +17,20 @@ async for part in ai.agents.ui.ai_sdk.to_stream(agent_stream):
     yield part
 ```
 
-Return `UI_MESSAGE_STREAM_HEADERS` on streamed AI SDK UI responses.
+Set `UI_MESSAGE_STREAM_HEADERS` as the HTTP response headers when serving the
+stream. It is a plain `dict` with the headers the AI SDK UI client expects:
+
+- `x-vercel-ai-ui-message-stream: v1` tells the client the response is a UI
+message stream;
+- `Content-Type: text/event-stream` marks the response as
+server-sent events; 
+- `Cache-Control: no-cache`, `Connection: keep-alive`, `x-accel-buffering: no`
+keep proxies from buffering or caching the response so chunks reach the client
+as they are produced.
+
+```python
+return fastapi.responses.StreamingResponse(
+    stream_response(),
+    headers=ai.agents.ui.ai_sdk.UI_MESSAGE_STREAM_HEADERS,
+)
+```
