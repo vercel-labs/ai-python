@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import Any, NamedTuple
 
-from ....types import messages as messages_
-from ...hooks import TOOL_APPROVAL_HOOK_TYPE, HookRegistry, resolve_hook
+from ...agents.hooks import TOOL_APPROVAL_HOOK_TYPE, HookRegistry, resolve_hook
+from ...types import messages as messages_
 from . import ui_messages
 
 ToolPart = ui_messages.UIToolPart | ui_messages.UIDynamicToolPart

@@ -6,7 +6,7 @@ import os
 import uuid
 
 import ai
-import ai.agents.ui.ai_sdk as ai_sdk
+import ai.ui.ai_sdk as ai_sdk
 import fastapi
 import fastapi.middleware.cors
 import fastapi.responses

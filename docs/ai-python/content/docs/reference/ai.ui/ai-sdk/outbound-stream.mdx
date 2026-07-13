@@ -1,5 +1,5 @@
 ---
-title: "ai.agents.ui.ai_sdk outbound stream"
+title: "ai.ui.ai_sdk outbound stream"
 description: Convert agent streams to AI SDK UI stream parts.
 type: reference
 summary: Reference for to_sse, to_stream, and UI_MESSAGE_STREAM_HEADERS.
@@ -8,12 +8,12 @@ summary: Reference for to_sse, to_stream, and UI_MESSAGE_STREAM_HEADERS.
 Use outbound stream helpers to send an agent run to an AI SDK UI client.
 
 ```python
-async for chunk in ai.agents.ui.ai_sdk.to_sse(agent_stream):
+async for chunk in ai.ui.ai_sdk.to_sse(agent_stream):
     yield chunk
 ```
 
 ```python
-async for part in ai.agents.ui.ai_sdk.to_stream(agent_stream):
+async for part in ai.ui.ai_sdk.to_stream(agent_stream):
     yield part
 ```
 
@@ -31,6 +31,6 @@ as they are produced.
 ```python
 return fastapi.responses.StreamingResponse(
     stream_response(),
-    headers=ai.agents.ui.ai_sdk.UI_MESSAGE_STREAM_HEADERS,
+    headers=ai.ui.ai_sdk.UI_MESSAGE_STREAM_HEADERS,
 )
 ```

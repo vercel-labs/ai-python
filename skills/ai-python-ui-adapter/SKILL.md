@@ -23,10 +23,10 @@ Backend request:
 
 ```python
 class ChatRequest(pydantic.BaseModel):
-    messages: list[ai.agents.ui.ai_sdk.UIMessage]
+    messages: list[ai.ui.ai_sdk.UIMessage]
 
-messages, approvals = ai.agents.ui.ai_sdk.to_messages(request.messages)
-ai.agents.ui.ai_sdk.apply_approvals(approvals)
+messages, approvals = ai.ui.ai_sdk.to_messages(request.messages)
+ai.ui.ai_sdk.apply_approvals(approvals)
 ```
 
 Backend stream:
@@ -43,12 +43,12 @@ async def body():
                     ai.defer_hook(event.hook)
                 yield event
 
-        async for chunk in ai.agents.ui.ai_sdk.to_sse(events()):
+        async for chunk in ai.ui.ai_sdk.to_sse(events()):
             yield chunk
 
 return StreamingResponse(
     body(),
-    headers=ai.agents.ui.ai_sdk.UI_MESSAGE_STREAM_HEADERS,
+    headers=ai.ui.ai_sdk.UI_MESSAGE_STREAM_HEADERS,
 )
 ```
 
@@ -61,5 +61,5 @@ and when to defer hooks.
 For saved UI history, use:
 
 ```python
-ui_messages = ai.agents.ui.ai_sdk.to_ui_messages(messages)
+ui_messages = ai.ui.ai_sdk.to_ui_messages(messages)
 ```

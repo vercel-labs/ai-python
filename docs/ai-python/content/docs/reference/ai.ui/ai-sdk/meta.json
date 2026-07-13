@@ -1,5 +1,5 @@
 {
-  "title": "ai.agents.ui.ai_sdk",
+  "title": "ai.ui.ai_sdk",
   "description": "Reference for AI SDK UI adapters.",
   "pages": [
     "ui-message",

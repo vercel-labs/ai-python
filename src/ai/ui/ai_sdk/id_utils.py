@@ -18,7 +18,7 @@ from __future__ import annotations
 import dataclasses
 from typing import Literal, cast
 
-from ....types import messages as messages_
+from ...types import messages as messages_
 
 ADAPTER_METADATA_KEY = "aiPython"
 SOURCE_MESSAGES_KEY = "sourceMessages"

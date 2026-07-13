@@ -1,15 +1,15 @@
 ---
-title: "ai.agents.ui.ai_sdk.UIMessage"
+title: "ai.ui.ai_sdk.UIMessage"
 description: Parse AI SDK UI messages.
 type: reference
-summary: Reference for ai.agents.ui.ai_sdk.UIMessage.
+summary: Reference for ai.ui.ai_sdk.UIMessage.
 ---
 
 Use `UIMessage` as the request model for AI SDK UI clients.
 
 ```python
 class ChatRequest(pydantic.BaseModel):
-    messages: list[ai.agents.ui.ai_sdk.UIMessage]
+    messages: list[ai.ui.ai_sdk.UIMessage]
 ```
 
 AI SDK UI messages use a `parts` array. Tool parts can carry approval state and

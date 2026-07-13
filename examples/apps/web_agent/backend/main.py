@@ -55,19 +55,19 @@ async def health() -> dict[str, str]:
 class ChatRequest(pydantic.BaseModel):
     """Request body for the chat endpoint."""
 
-    messages: list[ai.agents.ui.ai_sdk.UIMessage]
+    messages: list[ai.ui.ai_sdk.UIMessage]
 
 
 @app.post("/chat")
 async def chat(request: ChatRequest) -> fastapi.responses.StreamingResponse:
     """Handle chat requests and stream responses."""
-    messages, approvals = ai.agents.ui.ai_sdk.to_messages(request.messages)
+    messages, approvals = ai.ui.ai_sdk.to_messages(request.messages)
 
     async def stream_response() -> AsyncGenerator[str]:
         async with agent_.chat_agent.run(agent_.MODEL, messages) as result:
             # Pre-register hook resolutions so the agent loop's hooks
             # find them immediately on the resume turn.
-            ai.agents.ui.ai_sdk.apply_approvals(approvals)
+            ai.ui.ai_sdk.apply_approvals(approvals)
 
             # We need to monitor the stream for HookEvents to abort;
             # since ui.ai_sdk.to_sse consumes a stream, we have a wrapper
@@ -81,10 +81,10 @@ async def chat(request: ChatRequest) -> fastapi.responses.StreamingResponse:
                         ai.defer_hook(event.hook)
                     yield event
 
-            async for chunk in ai.agents.ui.ai_sdk.to_sse(process()):
+            async for chunk in ai.ui.ai_sdk.to_sse(process()):
                 yield chunk
 
     return fastapi.responses.StreamingResponse(
         stream_response(),
-        headers=ai.agents.ui.ai_sdk.UI_MESSAGE_STREAM_HEADERS,
+        headers=ai.ui.ai_sdk.UI_MESSAGE_STREAM_HEADERS,
     )
