@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import random
+import time
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -14,7 +16,7 @@ import ai
 from ..conftest import Recorder
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, AsyncIterator
+    from collections.abc import AsyncGenerator, AsyncIterator, Callable
 
 
 async def test_nesting_and_ids(recorder: Recorder) -> None:
@@ -141,6 +143,170 @@ async def test_async_adapter_methods_awaited() -> None:
     finally:
         ai.telemetry.unregister(adapter)
     assert ended == ["s"]
+
+
+# ── SpanRef + explicit parent ─────────────────────────────────────
+
+
+async def test_span_ref_and_current_ref() -> None:
+    assert ai.telemetry.current_ref() is None
+    async with ai.telemetry.span("s") as sp:
+        ref = ai.telemetry.current_ref()
+        assert ref is not None
+        assert ref == sp.ref
+        assert ref.trace_id == sp.trace_id
+        assert ref.span_id == sp.id
+        assert ref.sampled
+    assert ai.telemetry.current_ref() is None
+    # A ref round-trips like any pydantic model.
+    restored = ai.telemetry.SpanRef.model_validate(ref.model_dump())
+    assert restored == ref
+
+
+async def test_explicit_span_parent(recorder: Recorder) -> None:
+    async with ai.telemetry.span("elsewhere") as elsewhere:
+        pass
+    async with ai.telemetry.span("ambient"):
+        async with ai.telemetry.span("child", parent=elsewhere) as child:
+            # The explicit parent wins over the ambient one...
+            assert child.parent_id == elsewhere.id
+            assert child.trace_id == elsewhere.trace_id
+            # ...and only changes where the span hangs: it is still
+            # current inside the block.
+            async with ai.telemetry.span("grandchild") as grandchild:
+                assert grandchild.parent_id == child.id
+
+
+async def test_span_ref_parent_continues_trace(recorder: Recorder) -> None:
+    # "Process one": capture the position as plain data.
+    async with ai.telemetry.span("origin") as origin:
+        payload = origin.ref.model_dump()
+
+    # "Process two": restore and continue the same trace.
+    ref = ai.telemetry.SpanRef.model_validate(payload)
+    async with ai.telemetry.span("pickup", parent=ref) as pickup:
+        assert pickup.trace_id == origin.trace_id
+        assert pickup.parent_id == origin.id
+        async with ai.telemetry.span("nested") as nested:
+            assert nested.trace_id == origin.trace_id
+            assert nested.parent_id == pickup.id
+
+
+# ── span/trace ids ────────────────────────────────────────────────
+
+
+async def test_ids_deterministic_under_use_random() -> None:
+    async def run() -> tuple[str, str, str]:
+        with ai.messages.use_random(random.Random(7)):
+            async with ai.telemetry.span("outer") as outer:
+                async with ai.telemetry.span("inner") as inner:
+                    pass
+        return outer.trace_id, outer.id, inner.id
+
+    # The replay contract: re-running the same work under the same
+    # random source re-emits spans with identical identities.
+    assert await run() == await run()
+
+
+# ── Adapter base class ────────────────────────────────────────────
+
+
+async def test_adapter_wrap_span_method_driven() -> None:
+    class Vendor(ai.telemetry.Adapter):
+        def __init__(self) -> None:
+            self.log: list[str] = []  # instance state, no __init__ chaining
+
+        async def wrap_span(
+            self, span: ai.telemetry.Span
+        ) -> AsyncGenerator[None, Any]:
+            if span.name == "boring":
+                return  # opt out before the first yield
+            self.log.append(f"start {span.name}")
+            while (ev := (yield)) is not None:
+                self.log.append(f"event {ev.name}")
+            self.log.append(f"end {span.name}")
+
+    vendor = Vendor()
+    async with _registered(vendor):
+        async with ai.telemetry.span("boring"):
+            pass
+        async with ai.telemetry.span("outer") as outer:
+            async with ai.telemetry.span("inner"):
+                pass
+            await outer.add_event("milestone")
+
+    # The base class's hooks drove one generator frame per span, with
+    # the same semantics as the wrap_span function.
+    assert vendor.log == [
+        "start outer",
+        "start inner",
+        "end inner",
+        "event milestone",
+        "end outer",
+    ]
+
+
+async def test_adapter_defaults_are_noops(recorder: Recorder) -> None:
+    # A bare Adapter is valid: no per-span frames.
+    async with _registered(ai.telemetry.Adapter()):
+        async with ai.telemetry.span("s") as sp:
+            await sp.add_event("e")
+    assert [s.name for s in recorder.ended] == ["s"]
+
+
+async def test_adapter_hook_override_composes_with_super() -> None:
+    log: list[str] = []
+
+    class Both(ai.telemetry.Adapter):
+        async def wrap_span(
+            self, span: ai.telemetry.Span
+        ) -> AsyncGenerator[None, Any]:
+            while (yield) is not None:
+                pass
+            log.append(f"frame end {span.name}")
+
+        async def on_span_end(self, span: ai.telemetry.Span, /) -> None:
+            log.append(f"hook end {span.name}")
+            # Overriding a hook replaces the driver for that phase;
+            # super() plugs it back in.
+            await super().on_span_end(span)
+
+    async with _registered(Both()):
+        async with ai.telemetry.span("s"):
+            pass
+
+    assert log == ["hook end s", "frame end s"]
+
+
+async def test_adapter_subclass_state_cannot_collide_with_driver() -> None:
+    class Clashy(ai.telemetry.Adapter):
+        def __init__(self) -> None:
+            self._live = "mine"  # same name the driver mangles away
+            self.ended: list[str] = []
+
+        async def wrap_span(
+            self, span: ai.telemetry.Span
+        ) -> AsyncGenerator[None, Any]:
+            while (yield) is not None:
+                pass
+            self.ended.append(span.name)
+
+    clashy = Clashy()
+    async with _registered(clashy):
+        async with ai.telemetry.span("s"):
+            pass
+    assert clashy.ended == ["s"]
+    assert clashy._live == "mine"
+
+
+async def test_wrap_span_function_returns_adapter() -> None:
+    @ai.telemetry.wrap_span
+    async def vendor(span: ai.telemetry.Span) -> AsyncGenerator[None, Any]:
+        while (yield) is not None:
+            pass
+
+    assert isinstance(vendor, ai.telemetry.Adapter)
+    assert "wrap_span" in repr(vendor)
 
 
 # ── wrap_span ─────────────────────────────────────────────────────
@@ -497,3 +663,59 @@ async def test_add_event_after_end_warns_and_appends(
     assert any(
         "already-ended" in record.getMessage() for record in caplog.records
     )
+
+
+# ── use_clock ─────────────────────────────────────────────────────
+
+
+def _ticking_clock(now_ns: int, tick_ns: int = 10) -> Callable[[], int]:
+    """Deterministic clock: each reading ticks forward by ``tick_ns``."""
+
+    def time_ns() -> int:
+        nonlocal now_ns
+        now_ns += tick_ns
+        return now_ns
+
+    return time_ns
+
+
+async def _stamps() -> tuple[int, int, int | None]:
+    async with ai.telemetry.span("s") as sp:
+        event = await sp.add_event("milestone")
+    return sp.started_at, event.time_ns, sp.ended_at
+
+
+async def test_use_clock_overrides_and_restores() -> None:
+    # A ticking clock gives a deterministic timestamp sequence; the
+    # override drives started_at, event stamps, and ended_at alike.
+    with ai.telemetry.use_clock(_ticking_clock(1_000)):
+        first = await _stamps()
+    with ai.telemetry.use_clock(_ticking_clock(1_000)):
+        second = await _stamps()
+
+    assert first == second == (1_010, 1_020, 1_030)
+
+    # Restored on exit -- back to the wall clock.
+    async with ai.telemetry.span("s") as sp:
+        pass
+    assert sp.started_at > 1_030
+
+
+async def test_use_clock_decorator_handles_async_functions() -> None:
+    # Works as a decorator on an async fn; the clock is shared across
+    # calls, so the second call continues where the first left off.
+    @ai.telemetry.use_clock(_ticking_clock(1_000))
+    async def run() -> tuple[int, int, int | None]:
+        return await _stamps()
+
+    assert await run() == (1_010, 1_020, 1_030)
+    assert await run() == (1_040, 1_050, 1_060)
+
+
+async def test_use_clock_accepts_time_time_ns() -> None:
+    before = time.time_ns()
+    with ai.telemetry.use_clock(time.time_ns):
+        async with ai.telemetry.span("s") as sp:
+            pass
+    assert sp.ended_at is not None
+    assert before <= sp.started_at <= sp.ended_at <= time.time_ns()

@@ -111,7 +111,7 @@ def _attributes(sp: telemetry.Span) -> dict[str, Any]:
 
 def install(
     *, tracer_provider: otel_trace.TracerProvider | None = None
-) -> telemetry.WrapSpanAdapter:
+) -> telemetry.Adapter:
     """Create the otel adapter, register it, and return it.
 
     Uses the global tracer provider unless one is passed.
