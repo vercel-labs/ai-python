@@ -324,7 +324,7 @@ async def test_stream_uses_model_protocol() -> None:
     assert stream.text == "override"
 
 
-async def test_generate_dispatches_to_provider() -> None:
+async def test_generate_dispatches_to_provider(recorder: Recorder) -> None:
     provider = MockProvider()
     model = models.Model(
         id="generate-model",
@@ -333,6 +333,7 @@ async def test_generate_dispatches_to_provider() -> None:
     sentinel = messages_.Message(
         role="assistant",
         parts=[messages_.FilePart(data=b"\x89PNG", media_type="image/png")],
+        usage=ai.types.usage.Usage(input_tokens=3, output_tokens=7),
     )
     called = False
 
@@ -355,6 +356,12 @@ async def test_generate_dispatches_to_provider() -> None:
 
     assert called
     assert result is sentinel
+
+    (span,) = [s for s in recorder.ended if s.name == "ai_generate"]
+    assert isinstance(span.data, ai.telemetry.AiGenerateSpanData)
+    assert span.data.provider == "mock"
+    assert span.data.message is sentinel
+    assert span.data.usage is sentinel.usage
 
 
 async def test_generate_uses_model_protocol() -> None:
@@ -605,6 +612,9 @@ async def test_stream_span_milestones(recorder: Recorder) -> None:
 
     (call,) = [s for s in recorder.ended if s.name == "ai_stream"]
     assert stream.span is call
+    assert isinstance(call.data, ai.telemetry.AiStreamSpanData)
+    assert call.data.provider == "mock"
+    assert call.data.tool_names is None  # no tools were sent
     assert [e.name for e in call.span_events] == [
         ai.telemetry.FIRST_TOKEN,
         ai.telemetry.RESPONSE_COMPLETE,

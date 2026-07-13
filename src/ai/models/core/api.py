@@ -561,6 +561,13 @@ async def _stream(
     params: params_.InferenceRequestParams | None,
     executor: _StreamExecutor,
 ) -> AsyncIterator[Stream[Any]]:
+    data = telemetry.AiStreamSpanData(
+        model=model.id,
+        messages=list(messages),
+        params=params,
+        provider=model.provider.name,
+        tool_names=[t.name for t in tools] if tools is not None else None,
+    )
     if messages and messages[-1].replay:
         last = messages[-1]
         s: Stream[Any] = Stream(
@@ -572,9 +579,6 @@ async def _stream(
         # demand a finish event from the synthetic replay generator
         # (it yields nothing when the turn has no tool calls).
         s._ended = True
-        data = telemetry.AiStreamSpanData(
-            model=model.id, messages=list(messages), params=params
-        )
         replay = True
     else:
         request = _StreamRequest(
@@ -587,9 +591,6 @@ async def _stream(
         s = Stream(
             executor._do_stream(request),
             output_type=cast("type[Any] | None", output_type),
-        )
-        data = telemetry.AiStreamSpanData(
-            model=model.id, messages=list(messages), params=params
         )
         replay = False
     # Not set as current: the caller's work while the stream is open
@@ -618,11 +619,15 @@ async def experimental_generate(
     request = _GenerateRequest(model, list(messages), params)
     async with telemetry.span(
         telemetry.AiGenerateSpanData(
-            model=model.id, messages=messages, params=params
+            model=model.id,
+            messages=messages,
+            params=params,
+            provider=model.provider.name,
         )
     ) as sp:
         message = await _default_executor._do_generate(request)
         sp.data.message = message
+        sp.data.usage = message.usage
         return message
 
 

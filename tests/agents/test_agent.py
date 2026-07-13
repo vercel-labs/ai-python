@@ -55,6 +55,12 @@ async def test_agent_run_span_tree(recorder: Recorder) -> None:
     assert isinstance(run.data, ai.telemetry.RunSpanData)
     assert run.data.agent == "Agent"
     assert run.data.model == "mock-model"
+    assert run.data.provider == "mock"
+    assert run.data.tool_names == ["lookup"]
+    assert run.data.output_type is None
+    assert not run.data.blocked
+    assert run.data.final_message is not None
+    assert run.data.final_message.text == "done"
 
     assert isinstance(tool_span.data, ai.telemetry.ToolExecutionSpanData)
     assert tool_span.data.tool_name == "lookup"
@@ -62,6 +68,9 @@ async def test_agent_run_span_tree(recorder: Recorder) -> None:
     assert tool_span.data.result == "ok"
     assert not tool_span.data.is_error
 
+    assert isinstance(calls[0].data, ai.telemetry.AiStreamSpanData)
+    assert calls[0].data.provider == "mock"
+    assert calls[0].data.tool_names == ["lookup"]
     assert isinstance(calls[1].data, ai.telemetry.AiStreamSpanData)
     assert calls[1].data.message is not None
     assert calls[1].data.message.text == "done"

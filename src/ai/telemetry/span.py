@@ -153,11 +153,23 @@ DataT = TypeVar("DataT", bound=SpanData)
 
 @dataclasses.dataclass
 class RunSpanData:
-    """One ``Agent.run``: the whole loop."""
+    """One ``Agent.run``: the whole loop.
+
+    ``blocked``/``final_message`` are set at span end: ``blocked`` is
+    True when the run ended suspended on an unresolved hook (see
+    ``AgentStream.blocked``), ``final_message`` is the last assistant
+    message produced, if any.
+    """
 
     agent: str
     model: str
     messages: list[messages_.Message]
+    provider: str | None = None
+    tool_names: list[str] | None = None
+    output_type: str | None = None
+    params: params_.InferenceRequestParams | None = None
+    blocked: bool = False
+    final_message: messages_.Message | None = None
 
     span_name: ClassVar[str] = "run"
 
@@ -180,6 +192,8 @@ class AiStreamSpanData:
     model: str
     messages: list[messages_.Message]
     params: params_.InferenceRequestParams | None = None
+    provider: str | None = None
+    tool_names: list[str] | None = None
     message: messages_.Message | None = None
     usage: usage_.Usage | None = None
 
@@ -188,24 +202,34 @@ class AiStreamSpanData:
 
 @dataclasses.dataclass
 class AiGenerateSpanData:
-    """One non-streaming generation call (images, video, ...)."""
+    """One non-streaming generation call (images, video, ...).
+
+    ``message``/``usage`` are set at span end.
+    """
 
     model: str
     messages: list[messages_.Message]
     params: params_.GenerateParams | None = None
+    provider: str | None = None
     message: messages_.Message | None = None
+    usage: usage_.Usage | None = None
 
     span_name: ClassVar[str] = "ai_generate"
 
 
 @dataclasses.dataclass
 class ToolExecutionSpanData:
-    """One tool execution, from dispatch to result."""
+    """One tool execution, from dispatch to result.
+
+    ``model_input`` is the value the LLM sees on its next turn, set
+    only when it differs from ``result`` (aggregator-backed tools).
+    """
 
     tool_name: str
     tool_call_id: str
     args: dict[str, Any] | None = None
     result: Any = None
+    model_input: Any = None
     is_error: bool = False
 
     span_name: ClassVar[str] = "tool_execution"
@@ -213,12 +237,19 @@ class ToolExecutionSpanData:
 
 @dataclasses.dataclass
 class HookSpanData:
-    """One hook suspension, from deferred until resolved or cancelled."""
+    """One hook suspension, from deferred until resolved or cancelled.
+
+    ``tool_call_id`` links the hook to the tool call it suspends, if
+    any (e.g. approval gating).  ``resolution`` carries the resolution
+    data when the hook resolves.
+    """
 
     label: str
     hook_type: str
     metadata: dict[str, Any]
+    tool_call_id: str | None = None
     status: Literal["pending", "resolved", "cancelled"] = "pending"
+    resolution: dict[str, Any] | None = None
 
     span_name: ClassVar[str] = "hook"
 

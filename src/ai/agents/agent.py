@@ -1441,8 +1441,16 @@ class Agent:
                     agent=type(self).__name__,
                     model=model.id,
                     messages=list(messages),
+                    provider=model.provider.name,
+                    tool_names=[t.name for t in context.tools],
+                    output_type=(
+                        output_type.__name__
+                        if output_type is not None
+                        else None
+                    ),
+                    params=params,
                 )
-            ):
+            ) as sp:
                 mw_token: middleware_.Token | None = None
                 if _middleware is not None:
                     parent = middleware_.get()
@@ -1451,10 +1459,30 @@ class Agent:
                     chain = middleware_._build_agent_run_chain(_real)
                     async with contextlib.aclosing(chain(context)) as events:
                         async for event in events:
+                            # a blocked run can only resume via a hook
+                            # resolution or cancellation, so a non-pending
+                            # HookEvent is also the unblock signal.
+                            if isinstance(event, events_.RunBlocked):
+                                sp.data.blocked = True
+                            elif (
+                                isinstance(event, events_.HookEvent)
+                                and event.hook.status != "pending"
+                            ):
+                                sp.data.blocked = False
                             yield event
                 finally:
                     if mw_token is not None:
                         middleware_.deactivate(mw_token)
+                    # Record whatever got produced, even on error or
+                    # early close.
+                    sp.data.final_message = next(
+                        (
+                            msg
+                            for msg in reversed(context.messages)
+                            if msg.role == "assistant"
+                        ),
+                        None,
+                    )
 
         async with (
             hooks_.use_hook_registry(registry),

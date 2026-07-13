@@ -22,7 +22,7 @@ import ai
 from ai.types import events as events_
 from ai.types import messages as messages_
 
-from ..conftest import MOCK_MODEL, mock_llm, text_msg, tool_call_msg
+from ..conftest import MOCK_MODEL, Recorder, mock_llm, text_msg, tool_call_msg
 
 
 class Confirmation(pydantic.BaseModel):
@@ -55,7 +55,7 @@ def _multi_call_msg(*tc: tuple[str, str]) -> messages_.Message:
     )
 
 
-async def test_gated_tool_block_cycle() -> None:
+async def test_gated_tool_block_cycle(recorder: Recorder) -> None:
     """Park on approval -> RunBlocked; the resolved HookEvent unblocks."""
     my_agent = ai.Agent(tools=[gated])
     mock_llm(
@@ -106,6 +106,16 @@ async def test_gated_tool_block_cycle() -> None:
     assert deferred_idx < blocked_idx < resolved_idx
 
     assert stream.output == "done"
+
+    # The block/unblock cycle lands on the spans: the run resolved, so
+    # it ends unblocked; the hook records its tool call and resolution.
+    (run_span,) = [s for s in recorder.ended if s.name == "run"]
+    assert isinstance(run_span.data, ai.telemetry.RunSpanData)
+    assert not run_span.data.blocked
+    (hook_span,) = [s for s in recorder.ended if s.name == "hook"]
+    assert isinstance(hook_span.data, ai.telemetry.HookSpanData)
+    assert hook_span.data.tool_call_id == "tc-1"
+    assert hook_span.data.resolution == {"granted": True, "reason": "ok"}
 
 
 async def test_busy_tool_defers_block_signal() -> None:
@@ -201,7 +211,7 @@ async def test_loop_level_hook() -> None:
     assert not stream.blocked
 
 
-async def test_abort_leaves_blocked() -> None:
+async def test_abort_leaves_blocked(recorder: Recorder) -> None:
     """Serverless abort: the run ends still blocked, hooks still deferred."""
     my_agent = ai.Agent(tools=[gated])
     mock_llm([[tool_call_msg(name="gated", args='{"x": 1}')]])
@@ -223,6 +233,11 @@ async def test_abort_leaves_blocked() -> None:
     assert stream.blocked
     assert len(stream.deferred_hooks) == 1
     assert stream.messages[-1].tool_results[0].is_hook_deferred
+
+    # The run span ends still blocked, mirroring ``stream.blocked``.
+    (run_span,) = [s for s in recorder.ended if s.name == "run"]
+    assert isinstance(run_span.data, ai.telemetry.RunSpanData)
+    assert run_span.data.blocked
 
 
 async def test_no_hooks_no_block_events() -> None:

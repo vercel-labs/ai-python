@@ -366,6 +366,8 @@ async def test_live_hook_span(recorder: Recorder) -> None:
     (hook_span,) = _hook_spans(recorder)
     assert isinstance(hook_span.data, ai.telemetry.HookSpanData)
     assert hook_span.data.status == "resolved"
+    assert hook_span.data.resolution == {"approved": True}
+    assert hook_span.data.tool_call_id is None
     assert not hook_span.replay
     # The suspension's timeline: deferred once resolvers can see it,
     # resolved when the external input arrived.
@@ -403,6 +405,7 @@ async def test_cancelled_hook_span(recorder: Recorder) -> None:
     (hook_span,) = _hook_spans(recorder)
     assert isinstance(hook_span.data, ai.telemetry.HookSpanData)
     assert hook_span.data.status == "cancelled"
+    assert hook_span.data.resolution is None
     deferred, cancelled = hook_span.span_events
     assert deferred.name == ai.telemetry.HOOK_DEFERRED
     assert cancelled.name == ai.telemetry.HOOK_CANCELLED
@@ -423,5 +426,8 @@ async def test_pre_registered_hook_is_replay_span(recorder: Recorder) -> None:
     assert hook_span.replay
     assert isinstance(hook_span.data, ai.telemetry.HookSpanData)
     assert hook_span.data.status == "resolved"
+    # Pre-registration validated against the payload type, so the
+    # recorded resolution is the full model dump, defaults included.
+    assert hook_span.data.resolution == {"approved": True, "reason": ""}
     # A replayed suspension gets no synthetic timeline.
     assert hook_span.span_events == []
