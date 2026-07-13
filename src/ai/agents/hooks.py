@@ -195,7 +195,10 @@ async def _hook_impl(call: middleware_.HookContext) -> pydantic.BaseModel:
     hook_metadata = call.metadata
 
     data = telemetry.HookSpanData(
-        label=label, hook_type=payload.__name__, metadata=hook_metadata
+        label=label,
+        hook_type=payload.__name__,
+        metadata=hook_metadata,
+        tool_call_id=call.tool_call_id,
     )
 
     # Pre-registered resolution (serverless re-entry).
@@ -205,6 +208,7 @@ async def _hook_impl(call: middleware_.HookContext) -> pydantic.BaseModel:
             if isinstance(pre_registered, BaseException):
                 raise pre_registered
             sp.data.status = "resolved"
+            sp.data.resolution = pre_registered
             return payload(**pre_registered)
 
     # No resolution available — suspend.  The span covers the whole
@@ -242,6 +246,7 @@ async def _hook_impl(call: middleware_.HookContext) -> pydantic.BaseModel:
             registry._live_hooks.pop(label, None)
 
         sp.data.status = "resolved"
+        sp.data.resolution = resolution
         await sp.add_event(telemetry.HOOK_RESOLVED)
 
         # Emit resolved signal.
