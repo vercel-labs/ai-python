@@ -5,15 +5,15 @@ from collections.abc import AsyncGenerator
 from typing import Any
 
 import ai
-from ai.agents.ui.ai_sdk import to_sse, to_stream, ui_events
-from ai.agents.ui.ai_sdk.outbound_stream import (
+from ai.types import events as agent_events_
+from ai.types import events as events_
+from ai.types import messages as messages_
+from ai.ui.ai_sdk import to_sse, to_stream, ui_events
+from ai.ui.ai_sdk.outbound_stream import (
     format_done_sse,
     format_sse,
     serialize_event,
 )
-from ai.types import events as agent_events_
-from ai.types import events as events_
-from ai.types import messages as messages_
 
 
 async def _gen(

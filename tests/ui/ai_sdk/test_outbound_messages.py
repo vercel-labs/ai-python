@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from collections import Counter
 
-from ai.agents.ui import ai_sdk
-from ai.agents.ui.ai_sdk import outbound_messages, to_ui_messages
-from ai.agents.ui.ai_sdk.ui_messages import (
+from ai.providers import history_utils
+from ai.types import messages as messages_
+from ai.ui import ai_sdk
+from ai.ui.ai_sdk import outbound_messages, to_ui_messages
+from ai.ui.ai_sdk.ui_messages import (
     UIDynamicToolPart,
     UIFilePart,
     UIReasoningPart,
@@ -12,8 +14,6 @@ from ai.agents.ui.ai_sdk.ui_messages import (
     UIToolApproval,
     UIToolPart,
 )
-from ai.providers import history_utils
-from ai.types import messages as messages_
 
 
 def _parallel_tool_turn(

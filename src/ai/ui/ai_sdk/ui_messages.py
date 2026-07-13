@@ -12,7 +12,7 @@ from typing import Any, Literal, cast
 
 import pydantic
 
-from ....types import messages as messages_
+from ...types import messages as messages_
 
 _UI_MODEL_CONFIG = pydantic.ConfigDict(populate_by_name=True, extra="allow")
 

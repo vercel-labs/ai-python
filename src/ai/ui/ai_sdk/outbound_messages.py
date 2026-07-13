@@ -5,8 +5,8 @@ from __future__ import annotations
 import json
 from typing import Any, cast
 
-from ....types import media
-from ....types import messages as messages_
+from ...types import media
+from ...types import messages as messages_
 from . import approvals, id_utils, ui_messages
 from .tool_utils import normalize_tool_input
 

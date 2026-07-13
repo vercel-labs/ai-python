@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from ai.agents.ui.ai_sdk import approvals
-from ai.agents.ui.ai_sdk.ui_messages import UIMessage
 from ai.types import messages as messages_
+from ai.ui.ai_sdk import approvals
+from ai.ui.ai_sdk.ui_messages import UIMessage
 
 
 def _ui(role: str, *parts: dict[str, Any], id: str = "m1") -> UIMessage:

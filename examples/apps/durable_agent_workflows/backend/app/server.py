@@ -10,7 +10,7 @@ os.environ.setdefault(
 )
 
 import ai  # noqa: E402
-import ai.agents.ui.ai_sdk as ai_sdk  # noqa: E402
+import ai.ui.ai_sdk as ai_sdk  # noqa: E402
 import fastapi  # noqa: E402
 import fastapi.middleware.cors  # noqa: E402
 import fastapi.responses  # noqa: E402

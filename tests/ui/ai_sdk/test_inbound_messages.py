@@ -7,11 +7,11 @@ import pydantic
 import pytest
 
 import ai
-from ai.agents.ui.ai_sdk import to_messages, to_ui_messages
-from ai.agents.ui.ai_sdk.inbound_messages import _normalize_ui_messages
-from ai.agents.ui.ai_sdk.ui_messages import UIMessage, UIToolPart
 from ai.types import messages as messages_
 from ai.types.messages import MessageBundle
+from ai.ui.ai_sdk import to_messages, to_ui_messages
+from ai.ui.ai_sdk.inbound_messages import _normalize_ui_messages
+from ai.ui.ai_sdk.ui_messages import UIMessage, UIToolPart
 
 
 class InboundWeather(pydantic.BaseModel):

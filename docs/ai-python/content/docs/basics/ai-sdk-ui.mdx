@@ -25,17 +25,17 @@ Use `to_sse` to convert agent events to AI SDK UI stream chunks:
 ```python
 @app.post("/chat")
 async def chat(request: ChatRequest) -> fastapi.responses.StreamingResponse:
-    messages, approvals = ai.agents.ui.ai_sdk.to_messages(request.messages)
-    ai.agents.ui.ai_sdk.apply_approvals(approvals)
+    messages, approvals = ai.ui.ai_sdk.to_messages(request.messages)
+    ai.ui.ai_sdk.apply_approvals(approvals)
 
     async def stream_response():
         async with chat_agent.run(model, messages) as stream:
-            async for chunk in ai.agents.ui.ai_sdk.to_sse(stream):
+            async for chunk in ai.ui.ai_sdk.to_sse(stream):
                 yield chunk
 
     return fastapi.responses.StreamingResponse(
         stream_response(),
-        headers=ai.agents.ui.ai_sdk.UI_MESSAGE_STREAM_HEADERS,
+        headers=ai.ui.ai_sdk.UI_MESSAGE_STREAM_HEADERS,
     )
 ```
 
@@ -46,7 +46,7 @@ endpoints:
 @app.get("/chat/{session_id}")
 async def get_chat(session_id: str):
     saved = await load_messages(session_id)
-    return ai.agents.ui.ai_sdk.to_ui_messages(saved)
+    return ai.ui.ai_sdk.to_ui_messages(saved)
 ```
 
 The adapter groups assistant, tool, and internal hook messages into one
@@ -75,12 +75,12 @@ runtime messages:
 
 ```python
 class ChatRequest(pydantic.BaseModel):
-    messages: list[ai.agents.ui.ai_sdk.UIMessage]
+    messages: list[ai.ui.ai_sdk.UIMessage]
 
 
 @app.post("/chat")
 async def chat(request: ChatRequest):
-    messages, approvals = ai.agents.ui.ai_sdk.to_messages(request.messages)
+    messages, approvals = ai.ui.ai_sdk.to_messages(request.messages)
 ```
 
 `to_messages` also extracts approval responses from tool parts.
@@ -90,7 +90,7 @@ tool results against each tool's declared return type. Without it, tool
 results parsed from UI history stay plain JSON:
 
 ```python
-messages, approvals = ai.agents.ui.ai_sdk.to_messages(
+messages, approvals = ai.ui.ai_sdk.to_messages(
     request.messages, tools=chat_agent.tools
 )
 ```
@@ -100,8 +100,8 @@ messages, approvals = ai.agents.ui.ai_sdk.to_messages(
 Register extracted approvals before resuming the agent:
 
 ```python
-messages, approvals = ai.agents.ui.ai_sdk.to_messages(request.messages)
-ai.agents.ui.ai_sdk.apply_approvals(approvals)
+messages, approvals = ai.ui.ai_sdk.to_messages(request.messages)
+ai.ui.ai_sdk.apply_approvals(approvals)
 
 async with chat_agent.run(model, messages) as stream:
     ...

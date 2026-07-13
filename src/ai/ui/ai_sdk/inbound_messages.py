@@ -10,15 +10,15 @@ import json
 import logging
 from typing import TYPE_CHECKING, Any
 
-from ....types import messages as messages_
-from ....types.messages import MessageBundle
+from ...types import messages as messages_
+from ...types.messages import MessageBundle
 from . import approvals, id_utils
 from . import ui_messages as ui_messages_
 from .approvals import ApprovalResponse, extract_approvals
 from .tool_utils import normalize_tool_args
 
 if TYPE_CHECKING:
-    from ...agent import AgentTool
+    from ...agents.agent import AgentTool
 
 logger = logging.getLogger(__name__)
 

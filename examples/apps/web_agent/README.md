@@ -24,7 +24,7 @@ tool is gated behind user confirmation before execution.
 4. When the user clicks a button, `addToolApprovalResponse()` patches
    the message and sends a new request with the decision
 5. The backend pre-registers the decision via
-   `ai.agents.ui.ai_sdk.apply_approvals(...)` and re-runs the turn: the
+   `ai.ui.ai_sdk.apply_approvals(...)` and re-runs the turn: the
    resumed run either executes the tool or records a denied tool result
 
 Tool results are appended as separate `role="tool"` messages. The

@@ -5,6 +5,7 @@
     "ai",
     "ai.providers",
     "ai.agents",
+    "ai.ui",
     "tools",
     "messages",
     "events",

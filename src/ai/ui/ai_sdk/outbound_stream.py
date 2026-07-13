@@ -8,10 +8,10 @@ from typing import TYPE_CHECKING, Any
 
 import pydantic
 
-from ....types import events as events_
-from ....types import media
-from ....types import messages as messages_
-from ....types.messages import MessageBundle
+from ...types import events as events_
+from ...types import media
+from ...types import messages as messages_
+from ...types.messages import MessageBundle
 from . import approvals, outbound_messages, ui_events
 from .tool_utils import normalize_tool_input
 
