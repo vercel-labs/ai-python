@@ -93,14 +93,9 @@ def _now_ns() -> int:
 def use_clock(now_ns: Callable[[], int]) -> Iterator[None]:
     """Read span timestamps from ``now_ns`` within this context.
 
-    Every span timestamp flows through the current clock --
-    ``started_at``, ``ended_at``, and event stamps from
-    :meth:`Span.add_event`. ``now_ns`` returns nanoseconds since the
-    epoch; the default is ``time.time_ns``.  Pass e.g. a deterministic
-    clock inside a durable workflow -- the timestamp counterpart of
-    ``ai.messages.use_random``, which does the same for the ids spans
-    draw. The override is scoped to the calling task and tasks spawned
-    from it, and restored on exit::
+    Framework's observability creates timestamps. This API can be
+    used to plug an approved clock function in durable execution
+    settings::
 
         with ai.telemetry.use_clock(workflow.time_ns):
             ...  # spans opened here read time from workflow.time_ns
