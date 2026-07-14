@@ -12,7 +12,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
 )
 
 import ai
-from ai.telemetry import otel
+from ai.experimental_telemetry import otel
 
 from ..conftest import MOCK_MODEL, mock_llm, text_msg, tool_call_msg
 
@@ -27,15 +27,15 @@ def otel_env() -> Iterator[tuple[InMemorySpanExporter, TracerProvider]]:
     provider.add_span_processor(SimpleSpanProcessor(exporter))
     adapter = otel.install(tracer_provider=provider)
     yield exporter, provider
-    ai.telemetry.unregister(adapter)
+    ai.experimental_telemetry.unregister(adapter)
 
 
 async def test_nesting_names_and_attributes(
     otel_env: tuple[InMemorySpanExporter, TracerProvider],
 ) -> None:
     exporter, _ = otel_env
-    async with ai.telemetry.span("outer", foo="bar"):
-        async with ai.telemetry.span("inner"):
+    async with ai.experimental_telemetry.span("outer", foo="bar"):
+        async with ai.experimental_telemetry.span("inner"):
             pass
 
     spans = {s.name: s for s in exporter.get_finished_spans()}
@@ -68,7 +68,7 @@ async def test_error_status(
 ) -> None:
     exporter, _ = otel_env
     with pytest.raises(ValueError, match="boom"):
-        async with ai.telemetry.span("failing"):
+        async with ai.experimental_telemetry.span("failing"):
             raise ValueError("boom")
 
     (span,) = exporter.get_finished_spans()
@@ -114,7 +114,7 @@ async def test_span_events_exported_with_original_timestamps(
 ) -> None:
     exporter, _ = otel_env
     marker = object()
-    async with ai.telemetry.span("s") as sp:
+    async with ai.experimental_telemetry.span("s") as sp:
         first = await sp.add_event("first_token", event_type="TextStart")
         second = await sp.add_event("custom", obj=marker)
 
@@ -150,7 +150,7 @@ async def test_raw_otel_span_nests_under_ours(
 ) -> None:
     exporter, provider = otel_env
     tracer = provider.get_tracer("test")
-    async with ai.telemetry.span("outer"):
+    async with ai.experimental_telemetry.span("outer"):
         with tracer.start_as_current_span("raw"):
             pass
 
@@ -165,8 +165,10 @@ async def test_non_current_span_not_attached_to_otel_context(
 ) -> None:
     exporter, provider = otel_env
     tracer = provider.get_tracer("test")
-    async with ai.telemetry.span("outer"):
-        async with ai.telemetry.span("overlapping", set_as_current=False):
+    async with ai.experimental_telemetry.span("outer"):
+        async with ai.experimental_telemetry.span(
+            "overlapping", set_as_current=False
+        ):
             # A raw otel span opened while the non-current span is
             # open parents like our own spans do: under the outer
             # span, not under the overlapping one.
@@ -192,7 +194,7 @@ async def test_our_root_nests_under_raw_otel_span(
     exporter, provider = otel_env
     tracer = provider.get_tracer("test")
     with tracer.start_as_current_span("raw"):
-        async with ai.telemetry.span("inner"):
+        async with ai.experimental_telemetry.span("inner"):
             pass
 
     spans = {s.name: s for s in exporter.get_finished_spans()}

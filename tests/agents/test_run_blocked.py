@@ -110,10 +110,10 @@ async def test_gated_tool_block_cycle(recorder: Recorder) -> None:
     # The block/unblock cycle lands on the spans: the run resolved, so
     # it ends unblocked; the hook records its tool call and resolution.
     (run_span,) = [s for s in recorder.ended if s.name == "run"]
-    assert isinstance(run_span.data, ai.telemetry.RunSpanData)
+    assert isinstance(run_span.data, ai.experimental_telemetry.RunSpanData)
     assert not run_span.data.blocked
     (hook_span,) = [s for s in recorder.ended if s.name == "hook"]
-    assert isinstance(hook_span.data, ai.telemetry.HookSpanData)
+    assert isinstance(hook_span.data, ai.experimental_telemetry.HookSpanData)
     assert hook_span.data.tool_call_id == "tc-1"
     assert hook_span.data.resolution == {"granted": True, "reason": "ok"}
 
@@ -236,7 +236,7 @@ async def test_abort_leaves_blocked(recorder: Recorder) -> None:
 
     # The run span ends still blocked, mirroring ``stream.blocked``.
     (run_span,) = [s for s in recorder.ended if s.name == "run"]
-    assert isinstance(run_span.data, ai.telemetry.RunSpanData)
+    assert isinstance(run_span.data, ai.experimental_telemetry.RunSpanData)
     assert run_span.data.blocked
 
 

@@ -1,8 +1,10 @@
 """Terminal trace viewer: an OTLP/HTTP server that prints span trees.
 
+Experimental: not part of the stable API, may change or be removed.
+
 Run::
 
-    python -m ai.telemetry.utils.viewer [--port 4318]
+    python -m ai.experimental_telemetry.utils.viewer [--port 4318]
 
 and point any OTLP/HTTP exporter at ``http://127.0.0.1:4318/v1/traces``::
 
@@ -18,7 +20,7 @@ and point any OTLP/HTTP exporter at ``http://127.0.0.1:4318/v1/traces``::
         BatchSpanProcessor(OTLPSpanExporter("http://127.0.0.1:4318/v1/traces"))
     )
     trace.set_tracer_provider(provider)
-    ai.telemetry.otel.install()
+    ai.experimental_telemetry.otel.install()
 
 Spans are buffered per trace, and the tree is printed when the trace's
 root span arrives (roots end — and therefore export — last).

@@ -1,9 +1,11 @@
 """Console adapter: prints spans to a terminal as they happen.
 
+Experimental: not part of the stable API, may change or be removed.
+
 Register it like any adapter::
 
-    from ai.telemetry.utils import console
-    ai.telemetry.register(console.ConsoleAdapter())
+    from ai.experimental_telemetry.utils import console
+    ai.experimental_telemetry.register(console.ConsoleAdapter())
 
 Prints one ``▸`` line when a span starts (so long runs are visible
 live) and, when a trace's root span ends, the whole tree with
@@ -15,7 +17,7 @@ from __future__ import annotations
 import sys
 from typing import TYPE_CHECKING
 
-from ... import telemetry
+from ... import experimental_telemetry as telemetry
 
 if TYPE_CHECKING:
     from typing import TextIO

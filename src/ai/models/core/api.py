@@ -20,7 +20,8 @@ import pydantic
 # Use the typing_extensions backport so this works on 3.12 too.
 from typing_extensions import TypeVar
 
-from ... import errors, telemetry, types
+from ... import errors, types
+from ... import experimental_telemetry as telemetry
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, AsyncIterator, Sequence
@@ -243,8 +244,13 @@ class Stream(Generic[StreamOutputT]):
         return event.model_copy(update={"message": self._message, **updates})
 
     @property
-    def span(self) -> telemetry.Span[telemetry.AiStreamSpanData] | None:
+    def experimental_span(
+        self,
+    ) -> telemetry.Span[telemetry.AiStreamSpanData] | None:
         """The telemetry span bracketing this stream.
+
+        Experimental: not part of the stable API, may change or be
+        removed.
 
         Set when the stream came from :func:`stream` (live and replay
         both); ``None`` for directly constructed streams.  Lets
