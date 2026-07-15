@@ -26,8 +26,12 @@ An adapter processes spans and decides what to do with them::
 Adapters dispatch on the type of ``span.data``.  An adapter that crashes
 is logged and skipped, it never kills the run.
 
-A :class:`SpanEvent` is a named, timestamped milestone inside a span's
-lifetime (``first_token``, ``hook_resolved``, ...), recorded with
+If no adapters are registered, telemetry doesn't create span ids, doesn't
+read the clock, and doesn't dispatch anything. This is to avoid doing
+non-deterministic work and interfering with durable execution.
+
+A :class:`SpanEvent` an event inside a span's lifetime
+(``first_token``, ``hook_resolved``, ...), recorded with
 :meth:`Span.add_event`.
 
 Span timestamps come from the ambient clock; :func:`use_clock`
@@ -322,6 +326,10 @@ class Span(Generic[DataT_co]):
     ``replay=True`` marks work that is being replayed (resume,
     serverless re-entry) rather than performed live.
 
+    A span opened while no adapter was registered has empty ``id``,
+    zero timestamps, doesn't set itself as current, and
+    ``add_event`` records nothing.
+
     ``set_as_current=False`` marks a span that does not set itself
     as a current. This is used by ai.stream's span that stays open for
     the duration of a loop turn because of the context manager api.
@@ -374,6 +382,9 @@ class Span(Generic[DataT_co]):
         but still records and dispatches the event, a late milestone
         is better reported late than dropped.
         """
+        if not self.id:
+            # noop span (no adapters were registered when it opened):
+            return SpanEvent(name=name, time_ns=0, attributes=dict(attributes))
         event = SpanEvent(
             name=name, time_ns=_now_ns(), attributes=dict(attributes)
         )
@@ -513,6 +524,19 @@ async def _span_impl(
             raise TypeError("attributes only go with a str span name")
         name = name_or_data.span_name
         data = name_or_data
+    if not _adapters:
+        # telemetry is off: yield noop span (empty id)
+        yield Span(
+            name=name,
+            data=data,
+            id="",
+            trace_id="",
+            parent_id=None,
+            started_at=0,
+            replay=replay,
+            set_as_current=False,
+        )
+        return
     if parent is None:
         parent = _current.get()
     parent_id: str | None
