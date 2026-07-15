@@ -348,7 +348,7 @@ class _HookAgent(ai.Agent):
         await ai.hook(self.label, payload=Confirmation)
 
 
-def _hook_spans(recorder: Recorder) -> list[ai.telemetry.Span]:
+def _hook_spans(recorder: Recorder) -> list[ai.experimental_telemetry.Span]:
     return [s for s in recorder.ended if s.name == "hook"]
 
 
@@ -364,7 +364,7 @@ async def test_live_hook_span(recorder: Recorder) -> None:
                 ai.resolve_hook(my_agent.label, {"approved": True})
 
     (hook_span,) = _hook_spans(recorder)
-    assert isinstance(hook_span.data, ai.telemetry.HookSpanData)
+    assert isinstance(hook_span.data, ai.experimental_telemetry.HookSpanData)
     assert hook_span.data.status == "resolved"
     assert hook_span.data.resolution == {"approved": True}
     assert hook_span.data.tool_call_id is None
@@ -372,8 +372,8 @@ async def test_live_hook_span(recorder: Recorder) -> None:
     # The suspension's timeline: deferred once resolvers can see it,
     # resolved when the external input arrived.
     deferred, resolved = hook_span.span_events
-    assert deferred.name == ai.telemetry.HOOK_DEFERRED
-    assert resolved.name == ai.telemetry.HOOK_RESOLVED
+    assert deferred.name == ai.experimental_telemetry.HOOK_DEFERRED
+    assert resolved.name == ai.experimental_telemetry.HOOK_RESOLVED
     assert deferred.time_ns <= resolved.time_ns
 
 
@@ -403,12 +403,12 @@ async def test_cancelled_hook_span(recorder: Recorder) -> None:
                 await ai.cancel_hook(my_agent.label, reason="denied")
 
     (hook_span,) = _hook_spans(recorder)
-    assert isinstance(hook_span.data, ai.telemetry.HookSpanData)
+    assert isinstance(hook_span.data, ai.experimental_telemetry.HookSpanData)
     assert hook_span.data.status == "cancelled"
     assert hook_span.data.resolution is None
     deferred, cancelled = hook_span.span_events
-    assert deferred.name == ai.telemetry.HOOK_DEFERRED
-    assert cancelled.name == ai.telemetry.HOOK_CANCELLED
+    assert deferred.name == ai.experimental_telemetry.HOOK_DEFERRED
+    assert cancelled.name == ai.experimental_telemetry.HOOK_CANCELLED
     assert cancelled.attributes == {"reason": "denied"}
 
 
@@ -424,7 +424,7 @@ async def test_pre_registered_hook_is_replay_span(recorder: Recorder) -> None:
 
     (hook_span,) = _hook_spans(recorder)
     assert hook_span.replay
-    assert isinstance(hook_span.data, ai.telemetry.HookSpanData)
+    assert isinstance(hook_span.data, ai.experimental_telemetry.HookSpanData)
     assert hook_span.data.status == "resolved"
     # Pre-registration validated against the payload type, so the
     # recorded resolution is the full model dump, defaults included.

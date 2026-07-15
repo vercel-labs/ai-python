@@ -1,5 +1,7 @@
 """Telemetry: spans, adapters, and the ambient current span.
 
+Experimental: not part of the stable API, may change or be removed.
+
 See :mod:`.span` for the full story.
 """
 

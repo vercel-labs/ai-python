@@ -35,7 +35,8 @@ import pydantic
 # Use the typing_extensions backport so this works on 3.12 too.
 from typing_extensions import TypeVar
 
-from .. import models, telemetry, type_utils, types, util
+from .. import experimental_telemetry as telemetry
+from .. import models, type_utils, types, util
 from ..types import builders
 from ..types import events as events_
 from ..types.messages import MessageBundle

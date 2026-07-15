@@ -358,7 +358,7 @@ async def test_generate_dispatches_to_provider(recorder: Recorder) -> None:
     assert result is sentinel
 
     (span,) = [s for s in recorder.ended if s.name == "ai_generate"]
-    assert isinstance(span.data, ai.telemetry.AiGenerateSpanData)
+    assert isinstance(span.data, ai.experimental_telemetry.AiGenerateSpanData)
     assert span.data.provider == "mock"
     assert span.data.message is sentinel
     assert span.data.usage is sentinel.usage
@@ -605,19 +605,19 @@ async def test_stream_span_milestones(recorder: Recorder) -> None:
     mock_llm([[text_msg("Hello world")]])
 
     async with models.stream(MOCK_MODEL, [ai.user_message("Hi")]) as stream:
-        assert stream.span is not None
-        assert stream.span.span_events == []
+        assert stream.experimental_span is not None
+        assert stream.experimental_span.span_events == []
         async for _ in stream:
             pass
 
     (call,) = [s for s in recorder.ended if s.name == "ai_stream"]
-    assert stream.span is call
-    assert isinstance(call.data, ai.telemetry.AiStreamSpanData)
+    assert stream.experimental_span is call
+    assert isinstance(call.data, ai.experimental_telemetry.AiStreamSpanData)
     assert call.data.provider == "mock"
     assert call.data.tool_names is None  # no tools were sent
     assert [e.name for e in call.span_events] == [
-        ai.telemetry.FIRST_TOKEN,
-        ai.telemetry.RESPONSE_COMPLETE,
+        ai.experimental_telemetry.FIRST_TOKEN,
+        ai.experimental_telemetry.RESPONSE_COMPLETE,
     ]
     first, complete = call.span_events
     # The milestone says what kind of output arrived first.
@@ -645,9 +645,9 @@ async def test_stream_first_token_fires_on_delta_without_start() -> None:
         async for _ in stream:
             pass
 
-    assert stream.span is not None
-    first = stream.span.span_events[0]
-    assert first.name == ai.telemetry.FIRST_TOKEN
+    assert stream.experimental_span is not None
+    first = stream.experimental_span.span_events[0]
+    assert first.name == ai.experimental_telemetry.FIRST_TOKEN
     assert first.attributes == {"event_type": "TextDelta"}
 
 
@@ -671,7 +671,7 @@ async def test_replay_stream_has_no_milestones(recorder: Recorder) -> None:
 
     assert events, "replay should still emit ToolEnd events"
     (call,) = [s for s in recorder.ended if s.name == "ai_stream"]
-    assert stream.span is call
+    assert stream.experimental_span is call
     assert call.span_events == []
 
 
@@ -685,14 +685,16 @@ async def test_early_close_no_response_complete(recorder: Recorder) -> None:
                 break
 
     (call,) = [s for s in recorder.ended if s.name == "ai_stream"]
-    assert [e.name for e in call.span_events] == [ai.telemetry.FIRST_TOKEN]
+    assert [e.name for e in call.span_events] == [
+        ai.experimental_telemetry.FIRST_TOKEN
+    ]
 
 
 async def test_directly_constructed_stream_has_no_span() -> None:
     async with ai.Stream.replay_message(text_msg("hi")) as stream:
         async for _ in stream:
             pass
-    assert stream.span is None
+    assert stream.experimental_span is None
 
 
 async def test_replayed_turn_gets_replay_span(recorder: Recorder) -> None:
@@ -705,6 +707,6 @@ async def test_replayed_turn_gets_replay_span(recorder: Recorder) -> None:
 
     (call,) = [s for s in recorder.ended if s.name == "ai_stream"]
     assert call.replay
-    assert isinstance(call.data, ai.telemetry.AiStreamSpanData)
+    assert isinstance(call.data, ai.experimental_telemetry.AiStreamSpanData)
     assert call.data.message is not None
     assert call.data.message.text == "prior turn"

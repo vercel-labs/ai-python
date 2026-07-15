@@ -1,8 +1,10 @@
 """OpenTelemetry adapter: forwards spans to an otel tracer.
 
+Experimental: not part of the stable API, may change or be removed.
+
 ::
 
-    from ai.telemetry import otel
+    from ai.experimental_telemetry import otel
     otel.install()  # uses the global TracerProvider
 
 Span names and attributes follow the ``gen_ai`` semantic conventions,
@@ -22,7 +24,8 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Any
 
-from .. import errors, telemetry
+from .. import errors
+from .. import experimental_telemetry as telemetry
 
 try:
     from opentelemetry import context as otel_context

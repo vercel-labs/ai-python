@@ -1,11 +1,13 @@
 """Telemetry: spans, adapters, and the ambient current span.
 
+Experimental: not part of the stable API, may change or be removed.
+
 :class:`Span` is a record of work done by the application. It carries
 start, end, parent, and typed data.
 
 Same API is used to instrument the framework and define custom spans::
 
-    async with ai.telemetry.span("retrieval", query=q) as sp:
+    async with ai.experimental_telemetry.span("retrieval", query=q) as sp:
         docs = await search(q)
         sp.set(count=len(docs))
 
@@ -19,7 +21,7 @@ An adapter processes spans and decides what to do with them::
         async def on_span_end(self, span): ...
         async def on_span_event(self, span, event): ...
 
-    ai.telemetry.register(MyAdapter())
+    ai.experimental_telemetry.register(MyAdapter())
 
 Adapters dispatch on the type of ``span.data``.  An adapter that crashes
 is logged and skipped, it never kills the run.
@@ -97,13 +99,13 @@ def use_clock(now_ns: Callable[[], int]) -> Iterator[None]:
     used to plug an approved clock function in durable execution
     settings::
 
-        with ai.telemetry.use_clock(workflow.time_ns):
+        with ai.experimental_telemetry.use_clock(workflow.time_ns):
             ...  # spans opened here read time from workflow.time_ns
 
     This can also be used as a decorator on both sync and async
     functions::
 
-        @ai.telemetry.use_clock(clock.time_ns)
+        @ai.experimental_telemetry.use_clock(clock.time_ns)
         async def run(...):
             ...
     """
@@ -131,7 +133,8 @@ class SpanData(Protocol):
 
             span_name: ClassVar[str] = "retrieval"
 
-        async with ai.telemetry.span(RetrievalSpanData(query=q)) as sp:
+        data = RetrievalSpanData(query=q)
+        async with ai.experimental_telemetry.span(data) as sp:
             docs = await search(q)
             sp.data.count = len(docs)  # typed
 
@@ -289,12 +292,12 @@ class SpanRef(pydantic.BaseModel):
     (``model_dump`` / ``model_validate``); restore by opening a span
     with ``parent=ref`` on the other side::
 
-        ref = ai.telemetry.current_ref()
+        ref = ai.experimental_telemetry.current_ref()
         job = {"task": task, "telemetry": ref.model_dump()}
 
         # elsewhere:
-        ref = ai.telemetry.SpanRef.model_validate(job["telemetry"])
-        async with ai.telemetry.span("pickup", parent=ref):
+        ref = ai.experimental_telemetry.SpanRef.model_validate(job["telemetry"])
+        async with ai.experimental_telemetry.span("pickup", parent=ref):
             ...  # everything inside continues the original trace
 
     ``sampled`` is carried so refs round-trip sampling decisions
@@ -685,7 +688,7 @@ def wrap_span(
                     v.log_event(ev.name, timestamp=ev.time_ns)
                 v.update(output=span.data)           # span end
 
-        ai.telemetry.register(vendor)
+        ai.experimental_telemetry.register(vendor)
 
     - A span that ends with an error is thrown into the generator at
       the ``yield``, so the vendor context manager sees the failure.

@@ -5,19 +5,19 @@ from __future__ import annotations
 import io
 
 import ai
-from ai.telemetry.utils import console
+from ai.experimental_telemetry.utils import console
 
 
 async def test_console_prints_tree() -> None:
     out = io.StringIO()
     adapter = console.ConsoleAdapter(out=out)
-    ai.telemetry.register(adapter)
+    ai.experimental_telemetry.register(adapter)
     try:
-        async with ai.telemetry.span("outer"):
-            async with ai.telemetry.span("inner", k=1):
+        async with ai.experimental_telemetry.span("outer"):
+            async with ai.experimental_telemetry.span("inner", k=1):
                 pass
     finally:
-        ai.telemetry.unregister(adapter)
+        ai.experimental_telemetry.unregister(adapter)
 
     text = out.getvalue()
     assert "▸ outer" in text
@@ -29,12 +29,12 @@ async def test_console_prints_tree() -> None:
 async def test_console_prints_live_span_events() -> None:
     out = io.StringIO()
     adapter = console.ConsoleAdapter(out=out)
-    ai.telemetry.register(adapter)
+    ai.experimental_telemetry.register(adapter)
     try:
-        async with ai.telemetry.span("outer") as sp:
+        async with ai.experimental_telemetry.span("outer") as sp:
             await sp.add_event("first_token", event_type="TextStart")
     finally:
-        ai.telemetry.unregister(adapter)
+        ai.experimental_telemetry.unregister(adapter)
 
     text = out.getvalue()
     assert "·   first_token +" in text
@@ -44,17 +44,17 @@ async def test_console_prints_live_span_events() -> None:
 async def test_console_tree_uses_response_complete_duration() -> None:
     out = io.StringIO()
     adapter = console.ConsoleAdapter(out=out)
-    span = ai.telemetry.Span(
+    span = ai.experimental_telemetry.Span(
         name="ai_stream",
-        data=ai.telemetry.AiStreamSpanData(model="m", messages=[]),
+        data=ai.experimental_telemetry.AiStreamSpanData(model="m", messages=[]),
         id="span-1",
         trace_id="trace-1",
         parent_id=None,
         started_at=0,
         ended_at=5_000_000_000,
         span_events=[
-            ai.telemetry.SpanEvent(
-                name=ai.telemetry.RESPONSE_COMPLETE,
+            ai.experimental_telemetry.SpanEvent(
+                name=ai.experimental_telemetry.RESPONSE_COMPLETE,
                 time_ns=1_500_000_000,
                 attributes={},
             )

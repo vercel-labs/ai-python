@@ -303,19 +303,19 @@ class Recorder:
     """Telemetry adapter that records every span start/end it sees."""
 
     def __init__(self) -> None:
-        self.started: list[ai.telemetry.Span] = []
-        self.ended: list[ai.telemetry.Span] = []
+        self.started: list[ai.experimental_telemetry.Span] = []
+        self.ended: list[ai.experimental_telemetry.Span] = []
 
-    def on_span_start(self, span: ai.telemetry.Span) -> None:
+    def on_span_start(self, span: ai.experimental_telemetry.Span) -> None:
         self.started.append(span)
 
-    def on_span_end(self, span: ai.telemetry.Span) -> None:
+    def on_span_end(self, span: ai.experimental_telemetry.Span) -> None:
         self.ended.append(span)
 
 
 @pytest.fixture
 def recorder() -> Iterator[Recorder]:
     r = Recorder()
-    ai.telemetry.register(r)
+    ai.experimental_telemetry.register(r)
     yield r
-    ai.telemetry.unregister(r)
+    ai.experimental_telemetry.unregister(r)
