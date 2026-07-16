@@ -371,7 +371,7 @@ async def test_live_hook_span(recorder: Recorder) -> None:
     assert not hook_span.replay
     # The suspension's timeline: deferred once resolvers can see it,
     # resolved when the external input arrived.
-    deferred, resolved = hook_span.span_events
+    deferred, resolved = hook_span.events
     assert deferred.name == ai.experimental_telemetry.HOOK_DEFERRED
     assert resolved.name == ai.experimental_telemetry.HOOK_RESOLVED
     assert deferred.time_ns <= resolved.time_ns
@@ -406,7 +406,7 @@ async def test_cancelled_hook_span(recorder: Recorder) -> None:
     assert isinstance(hook_span.data, ai.experimental_telemetry.HookSpanData)
     assert hook_span.data.status == "cancelled"
     assert hook_span.data.resolution is None
-    deferred, cancelled = hook_span.span_events
+    deferred, cancelled = hook_span.events
     assert deferred.name == ai.experimental_telemetry.HOOK_DEFERRED
     assert cancelled.name == ai.experimental_telemetry.HOOK_CANCELLED
     assert cancelled.attributes == {"reason": "denied"}
@@ -430,4 +430,4 @@ async def test_pre_registered_hook_is_replay_span(recorder: Recorder) -> None:
     # recorded resolution is the full model dump, defaults included.
     assert hook_span.data.resolution == {"approved": True, "reason": ""}
     # A replayed suspension gets no synthetic timeline.
-    assert hook_span.span_events == []
+    assert hook_span.events == []

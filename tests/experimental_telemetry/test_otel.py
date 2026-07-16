@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 from opentelemetry.sdk.trace import TracerProvider
@@ -73,8 +73,10 @@ async def test_error_status(
 
     (span,) = exporter.get_finished_spans()
     assert not span.status.is_ok
-    events = [e.name for e in span.events]
-    assert "exception" in events
+    # The error arrives as serializable data (never a live exception —
+    # the span may have failed in another process), so it exports as
+    # the status description.
+    assert span.status.description == "ValueError: boom"
 
 
 async def test_tool_exception_recorded(
@@ -99,24 +101,38 @@ async def test_tool_exception_recorded(
         if s.name == "execute_tool boom"
     ]
     # The tool exception is caught by the framework, but the span still
-    # records it: ERROR status plus a standard otel exception event.
+    # records it: ERROR status carrying the failure's type and message.
     assert not span.status.is_ok
-    events = {e.name: e for e in span.events}
-    assert "exception" in events
-    attrs = events["exception"].attributes
-    assert attrs is not None
-    assert attrs["exception.type"] == "ValueError"
-    assert attrs["exception.message"] == "nope"
+    assert span.status.description == "ValueError: nope"
 
 
 async def test_span_events_exported_with_original_timestamps(
     otel_env: tuple[InMemorySpanExporter, TracerProvider],
 ) -> None:
     exporter, _ = otel_env
-    marker = object()
+
+    class Marker:
+        # A stable repr: pushes snapshot the span, so the adapter sees
+        # a copy of this value, not the original object.
+        def __repr__(self) -> str:
+            return "<marker>"
+
+    marker = Marker()
     async with ai.experimental_telemetry.span("s") as sp:
-        first = await sp.add_event("first_token", event_type="TextStart")
-        second = await sp.add_event("custom", obj=marker)
+        first = ai.experimental_telemetry.SpanEvent(
+            name="first_token",
+            time_ns=ai.experimental_telemetry.now_ns(),
+            attributes={"event_type": "TextStart"},
+        )
+        sp.events.append(first)
+        await sp.push()
+        second = ai.experimental_telemetry.SpanEvent(
+            name="custom",
+            time_ns=ai.experimental_telemetry.now_ns(),
+            attributes={"obj": marker},
+        )
+        sp.events.append(second)
+        await sp.push()
 
     (span,) = exporter.get_finished_spans()
     events = {e.name: e for e in span.events}
@@ -201,3 +217,85 @@ async def test_our_root_nests_under_raw_otel_span(
     inner, raw = spans["inner"], spans["raw"]
     assert inner.parent is not None
     assert inner.parent.span_id == raw.context.span_id
+
+
+async def test_span_finished_elsewhere_exports_and_parents(
+    otel_env: tuple[InMemorySpanExporter, TracerProvider],
+) -> None:
+    exporter, _ = otel_env
+    # "Process one": mint the span and carry it as data.  No push —
+    # the record is delivered whole once the work completes.
+    turn = ai.experimental_telemetry.create_span("turn")
+    turn.started_at = ai.experimental_telemetry.now_ns()
+    payload = turn.model_dump(mode="json")
+
+    # "Process two": live children under the restored span.
+    restored = ai.experimental_telemetry.Span.model_validate(payload)
+    with ai.experimental_telemetry.use_span(restored):
+        async with ai.experimental_telemetry.span("child"):
+            pass
+
+    # "Process three": finish the span and push the complete record.
+    done = ai.experimental_telemetry.Span.model_validate(payload)
+    done.ended_at = ai.experimental_telemetry.now_ns()
+    done.error = ai.experimental_telemetry.SpanError(
+        type="TurnError", message="nope"
+    )
+    await done.push()
+
+    spans = {s.name: s for s in exporter.get_finished_spans()}
+    child, turn_span = spans["child"], spans["turn"]
+    # The child parented on ids derived from the framework's before the
+    # turn span existed anywhere in otel; the finished record exports
+    # under those exact ids, so the tree lines up.
+    assert child.parent is not None
+    assert child.parent.span_id == turn_span.context.span_id
+    assert child.context.trace_id == turn_span.context.trace_id
+    # Timestamps and outcome come from the record, not the clock here.
+    assert turn_span.start_time == turn.started_at
+    assert turn_span.end_time == done.ended_at
+    assert not turn_span.status.is_ok
+    assert turn_span.status.description == "TurnError: nope"
+
+
+async def test_otel_ids_derived_from_framework_ids(
+    otel_env: tuple[InMemorySpanExporter, TracerProvider],
+) -> None:
+    exporter, _ = otel_env
+    async with ai.experimental_telemetry.span("s") as sp:
+        pass
+
+    (span,) = exporter.get_finished_spans()
+    # Deterministic identity: replays and cross-process re-emission of
+    # the same framework span come out under the same otel ids.
+    assert span.context.span_id == otel._derive_span_id(sp.id)
+    assert span.context.trace_id == otel._derive_trace_id(sp.trace_id)
+
+
+async def test_subclass_can_enrich_names_and_attributes() -> None:
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+
+    class Enriched(otel.OtelAdapter):
+        def span_name(self, span_: ai.experimental_telemetry.Span, /) -> str:
+            return f"seal:{super().span_name(span_)}"
+
+        def span_attributes(
+            self, span_: ai.experimental_telemetry.Span, /
+        ) -> dict[str, Any]:
+            return super().span_attributes(span_) | {"extra": True}
+
+    adapter = Enriched(tracer_provider=provider)
+    ai.experimental_telemetry.register(adapter)
+    try:
+        async with ai.experimental_telemetry.span("s", foo="bar"):
+            pass
+    finally:
+        ai.experimental_telemetry.unregister(adapter)
+
+    (span,) = exporter.get_finished_spans()
+    assert span.name == "seal:s"
+    assert span.attributes is not None
+    assert span.attributes["foo"] == "bar"
+    assert span.attributes["extra"] is True
