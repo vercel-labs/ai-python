@@ -2,6 +2,9 @@
 
 A toolkit for building LLM-powered applications and agent loops.
 
+> [!NOTE]
+> The AI SDK for Python is in public beta.
+
 ## Installation
 
 ```bash
