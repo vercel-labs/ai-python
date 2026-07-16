@@ -152,7 +152,7 @@ async def test_async_adapter_methods_awaited() -> None:
 # ── SpanRef + explicit parent ─────────────────────────────────────
 
 
-async def test_span_ref_and_current_ref() -> None:
+async def test_span_ref_and_current_ref(recorder: Recorder) -> None:
     assert ai.experimental_telemetry.current_ref() is None
     async with ai.experimental_telemetry.span("s") as sp:
         ref = ai.experimental_telemetry.current_ref()
@@ -205,7 +205,7 @@ async def test_span_ref_parent_continues_trace(recorder: Recorder) -> None:
 # ── span/trace ids ────────────────────────────────────────────────
 
 
-async def test_ids_deterministic_under_use_random() -> None:
+async def test_ids_deterministic_under_use_random(recorder: Recorder) -> None:
     async def run() -> tuple[str, str, str]:
         with ai.messages.use_random(random.Random(7)):
             async with ai.experimental_telemetry.span("outer") as outer:
@@ -608,7 +608,9 @@ async def test_wrap_span_drain_loop() -> None:
 # ── span events ───────────────────────────────────────────────────
 
 
-async def test_add_event_appends_stamps_and_returns() -> None:
+async def test_add_event_appends_stamps_and_returns(
+    recorder: Recorder,
+) -> None:
     async with ai.experimental_telemetry.span("s") as sp:
         first = await sp.add_event("first", a=1)
         second = await sp.add_event("second")
@@ -690,6 +692,7 @@ async def test_span_event_raising_handler_isolated(
 
 
 async def test_add_event_after_end_warns_and_appends(
+    recorder: Recorder,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     async with ai.experimental_telemetry.span("s") as sp:
@@ -705,6 +708,86 @@ async def test_add_event_after_end_warns_and_appends(
     assert any(
         "already-ended" in record.getMessage() for record in caplog.records
     )
+
+
+# ── inert spans (no adapters registered) ──────────────────────────
+
+
+async def test_span_without_adapters_is_inert() -> None:
+    async with ai.experimental_telemetry.span("outer", a=1) as sp:
+        assert sp.id == ""
+        assert sp.trace_id == ""
+        assert sp.parent_id is None
+        assert sp.started_at == 0
+        # Never current: nothing to parent under, nothing to ref.
+        assert ai.experimental_telemetry.current() is None
+        assert ai.experimental_telemetry.current_ref() is None
+        # Attribute writes still work; they are just never observed.
+        sp.set(b=2)
+        event = await sp.add_event("milestone", c=3)
+    # add_event returned an inert event and retained nothing.
+    assert event.name == "milestone"
+    assert event.time_ns == 0
+    assert event.attributes == {"c": 3}
+    assert sp.span_events == []
+    assert sp.ended_at is None
+
+
+async def test_inert_span_reraises_without_recording() -> None:
+    with pytest.raises(ValueError, match="boom"):
+        async with ai.experimental_telemetry.span("s") as sp:
+            raise ValueError("boom")
+    assert sp.error is None
+
+
+async def test_no_clock_reads_without_adapters(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def forbidden() -> int:
+        raise AssertionError("clock read while telemetry is off")
+
+    monkeypatch.setattr(time, "time_ns", forbidden)
+    # The durable-execution contract: unused telemetry makes no
+    # non-deterministic calls, so no use_clock setup is needed.
+    async with ai.experimental_telemetry.span("outer") as sp:
+        await sp.add_event("milestone")
+        async with ai.experimental_telemetry.span(
+            ai.experimental_telemetry.LoopTurnSpanData()
+        ):
+            pass
+
+
+async def test_no_rng_draws_without_adapters() -> None:
+    async def id_after_spans(spans: int) -> str:
+        with ai.messages.use_random(random.Random(7)):
+            for _ in range(spans):
+                async with ai.experimental_telemetry.span("s"):
+                    pass
+            return ai.messages.generate_id()
+
+    # Inert spans consume nothing from the ambient random source, so
+    # ids drawn afterwards are unaffected by how many spans opened.
+    assert await id_after_spans(0) == await id_after_spans(5)
+
+
+async def test_register_mid_span_keeps_open_span_inert() -> None:
+    r = Recorder()
+    async with ai.experimental_telemetry.span("before") as before:
+        ai.experimental_telemetry.register(r)
+        try:
+            # The inert decision is snapshotted at span open.
+            assert before.id == ""
+            await before.add_event("late")
+            async with ai.experimental_telemetry.span("after") as after:
+                # Live, but starts its own trace: the inert span
+                # cannot parent it.
+                assert after.id
+                assert after.parent_id is None
+        finally:
+            ai.experimental_telemetry.unregister(r)
+
+    assert [s.name for s in r.started] == ["after"]
+    assert [s.name for s in r.ended] == ["after"]
 
 
 # ── use_clock ─────────────────────────────────────────────────────
@@ -727,7 +810,7 @@ async def _stamps() -> tuple[int, int, int | None]:
     return sp.started_at, event.time_ns, sp.ended_at
 
 
-async def test_use_clock_overrides_and_restores() -> None:
+async def test_use_clock_overrides_and_restores(recorder: Recorder) -> None:
     # A ticking clock gives a deterministic timestamp sequence; the
     # override drives started_at, event stamps, and ended_at alike.
     with ai.experimental_telemetry.use_clock(_ticking_clock(1_000)):
@@ -743,7 +826,9 @@ async def test_use_clock_overrides_and_restores() -> None:
     assert sp.started_at > 1_030
 
 
-async def test_use_clock_decorator_handles_async_functions() -> None:
+async def test_use_clock_decorator_handles_async_functions(
+    recorder: Recorder,
+) -> None:
     # Works as a decorator on an async fn; the clock is shared across
     # calls, so the second call continues where the first left off.
     @ai.experimental_telemetry.use_clock(_ticking_clock(1_000))
@@ -754,7 +839,7 @@ async def test_use_clock_decorator_handles_async_functions() -> None:
     assert await run() == (1_040, 1_050, 1_060)
 
 
-async def test_use_clock_accepts_time_time_ns() -> None:
+async def test_use_clock_accepts_time_time_ns(recorder: Recorder) -> None:
     before = time.time_ns()
     with ai.experimental_telemetry.use_clock(time.time_ns):
         async with ai.experimental_telemetry.span("s") as sp:

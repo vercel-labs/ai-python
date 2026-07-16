@@ -627,7 +627,9 @@ async def test_stream_span_milestones(recorder: Recorder) -> None:
     assert complete.time_ns <= call.ended_at
 
 
-async def test_stream_first_token_fires_on_delta_without_start() -> None:
+async def test_stream_first_token_fires_on_delta_without_start(
+    recorder: Recorder,
+) -> None:
     """A provider that skips start events still gets a first_token."""
 
     async def _no_starts_stream(
