@@ -5,6 +5,9 @@ Bug reports and ideas are very welcome: please open an issue or start a discussi
 
 ## Releasing
 
+Every PR needs to be labeled as `breaking`, `feature`, `fix`, or
+`internal`. Release notes are generated from those labels.
+
 1. Draft the release:
 
    ```bash
