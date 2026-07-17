@@ -55,6 +55,9 @@ into a list to be pushed later, or discarded.
 
 :func:`use_sink` sets the current sink.
 
+If telemetry is off, i.e. no adapters registered and no sink used, the module
+doesn't use random or read the clock.
+
 A :class:`SpanEvent` is a named, timestamped milestone inside a span's
 lifetime (``first_token``, ``hook_resolved``, ...): append it to
 ``span.events`` and push.
@@ -374,6 +377,9 @@ class Span(pydantic.BaseModel, Generic[DataT_co]):
     ``replay=True`` marks work that is being replayed (resume,
     serverless re-entry) rather than performed live.
 
+    A span created while telemetry was off (see :func:`enabled`) has an
+    empty ``id`` and is a noop: :meth:`push` delivers nothing.
+
     ``set_as_current=False`` marks a span that does not set itself
     as a current. This is used by ai.stream's span that stays open for
     the duration of a loop turn because of the context manager api.
@@ -434,7 +440,8 @@ class Span(pydantic.BaseModel, Generic[DataT_co]):
         """
         event = SpanEvent(
             name=name,
-            time_ns=now_ns(),
+            # a noop span (telemetry off at creation) reads no clock
+            time_ns=now_ns() if self.id else 0,
             attributes={**(attributes or {}), **kwargs},
         )
         self.events.append(event)
@@ -482,6 +489,8 @@ class Span(pydantic.BaseModel, Generic[DataT_co]):
         Telemetry never kills the run: a sink (or adapter) failure is
         logged and swallowed.
         """
+        if not self.id:
+            return  # noop: telemetry was off at creation
         sink = _current_sink.get() or _registry_sink
         try:
             await sink.emit(self.model_copy(deep=True))
@@ -752,6 +761,9 @@ def create_span(
     The span has no timestamps yet: :meth:`Span.stamp_start` and
     :meth:`Span.push` when the work begins, or hand the whole
     lifecycle to the :func:`span` context manager.
+
+    While telemetry is off (see :func:`enabled`) this returns a noop
+    span instead.
     """
     if isinstance(name_or_data, str):
         name = name_or_data
@@ -763,6 +775,16 @@ def create_span(
             raise TypeError("attributes only go with a str span name")
         name = name_or_data.kind
         data = name_or_data
+    if not enabled():
+        return Span(
+            name=name,
+            data=data,
+            id="",
+            trace_id="",
+            parent_id=None,
+            replay=replay,
+            set_as_current=False,
+        )
     if parent is None:
         parent = _current.get()
     if parent is None:
@@ -875,6 +897,10 @@ async def _span_impl(
         )
         if attributes is not None or kwargs:
             raise TypeError("attributes only go with a str span name")
+    if not sp.id:
+        # noop: no timestamps, no pushes, never current
+        yield sp
+        return
     sp.stamp_start()
     await sp.push()
     token = _current.set(sp) if set_as_current else None

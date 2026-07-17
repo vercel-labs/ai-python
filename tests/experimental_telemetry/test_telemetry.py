@@ -892,7 +892,7 @@ async def test_wrap_span_drain_loop() -> None:
 # ── span events ───────────────────────────────────────────────────
 
 
-async def test_events_appended_and_stamped() -> None:
+async def test_events_appended_and_stamped(recorder: Recorder) -> None:
     async with ai.experimental_telemetry.span("s") as sp:
         first = await _add_event(sp, "first", a=1)
         second = await _add_event(sp, "second")
@@ -1003,6 +1003,74 @@ async def test_span_event_raising_handler_isolated(
     assert [s.name for s in recorder.ended] == ["s"]
 
 
+# ── noop spans (telemetry off) ───────────────────────────────────
+
+
+async def test_span_without_adapters_is_noop() -> None:
+    async with ai.experimental_telemetry.span("outer", a=1) as sp:
+        assert sp.id == ""
+        assert sp.trace_id == ""
+        assert sp.parent_id is None
+        assert sp.started_at is None
+        # Never current: nothing to parent under.
+        assert ai.experimental_telemetry.current() is None
+        # Attribute writes still work; they are just never observed.
+        sp.set(b=2)
+        event = sp.add_event("milestone", c=3)
+    assert event.name == "milestone"
+    assert event.time_ns == 0
+    assert event.attributes == {"c": 3}
+    assert sp.events == [event]
+    assert sp.ended_at is None
+
+
+async def test_noop_span_reraises_without_recording() -> None:
+    with pytest.raises(ValueError, match="boom"):
+        async with ai.experimental_telemetry.span("s") as sp:
+            raise ValueError("boom")
+    assert sp.error is None
+
+
+async def test_no_clock_reads_without_adapters(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def forbidden() -> int:
+        raise AssertionError("clock read while telemetry is off")
+
+    monkeypatch.setattr(time, "time_ns", forbidden)
+    # The durable-execution contract: unused telemetry makes no
+    # non-deterministic calls, so no use_clock setup is needed.
+    async with ai.experimental_telemetry.span("outer") as sp:
+        sp.add_event("milestone")
+        await sp.push()
+        async with ai.experimental_telemetry.span(
+            ai.experimental_telemetry.LoopTurnSpanData()
+        ):
+            pass
+
+
+async def test_no_rng_draws_without_adapters() -> None:
+    async def id_after_spans(spans: int) -> str:
+        with ai.messages.use_random(random.Random(7)):
+            for _ in range(spans):
+                async with ai.experimental_telemetry.span("s"):
+                    pass
+            return ai.messages.generate_id()
+
+    # Noop spans consume nothing from the ambient random source, so
+    # ids drawn afterwards are unaffected by how many spans opened.
+    assert await id_after_spans(0) == await id_after_spans(5)
+
+
+async def test_routed_sink_keeps_spans_live_without_adapters() -> None:
+    collector = ai.experimental_telemetry.Collector()
+    with ai.experimental_telemetry.use_sink(collector):
+        async with ai.experimental_telemetry.span("s") as sp:
+            pass
+    assert sp.id
+    assert [s.name for s in collector.finished] == ["s"]
+
+
 # ── use_clock ─────────────────────────────────────────────────────
 
 
@@ -1023,7 +1091,7 @@ async def _stamps() -> tuple[int | None, int, int | None]:
     return sp.started_at, event.time_ns, sp.ended_at
 
 
-async def test_use_clock_overrides_and_restores() -> None:
+async def test_use_clock_overrides_and_restores(recorder: Recorder) -> None:
     # A ticking clock gives a deterministic timestamp sequence; the
     # override drives started_at, event stamps, and ended_at alike.
     with ai.experimental_telemetry.use_clock(_ticking_clock(1_000)):
@@ -1040,7 +1108,9 @@ async def test_use_clock_overrides_and_restores() -> None:
     assert sp.started_at > 1_030
 
 
-async def test_use_clock_decorator_handles_async_functions() -> None:
+async def test_use_clock_decorator_handles_async_functions(
+    recorder: Recorder,
+) -> None:
     # Works as a decorator on an async fn; the clock is shared across
     # calls, so the second call continues where the first left off.
     @ai.experimental_telemetry.use_clock(_ticking_clock(1_000))
@@ -1051,7 +1121,7 @@ async def test_use_clock_decorator_handles_async_functions() -> None:
     assert await run() == (1_040, 1_050, 1_060)
 
 
-async def test_use_clock_accepts_time_time_ns() -> None:
+async def test_use_clock_accepts_time_time_ns(recorder: Recorder) -> None:
     before = time.time_ns()
     with ai.experimental_telemetry.use_clock(time.time_ns):
         async with ai.experimental_telemetry.span("s") as sp:
