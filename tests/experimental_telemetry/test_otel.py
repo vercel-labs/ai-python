@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -10,9 +11,13 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
+from opentelemetry.trace import SpanKind
 
 import ai
 from ai.experimental_telemetry import otel
+from ai.models.core import params as core_params
+from ai.types import messages as messages_
+from ai.types import usage as usage_
 
 from ..conftest import MOCK_MODEL, mock_llm, text_msg, tool_call_msg
 
@@ -25,7 +30,7 @@ def otel_env() -> Iterator[tuple[InMemorySpanExporter, TracerProvider]]:
     exporter = InMemorySpanExporter()
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
-    adapter = otel.install(tracer_provider=provider)
+    adapter = otel.install(tracer_provider=provider, capture_content=True)
     yield exporter, provider
     ai.experimental_telemetry.unregister(adapter)
 
@@ -57,10 +62,27 @@ async def test_model_call_attributes(
 
     (span,) = exporter.get_finished_spans()
     assert span.name == "chat mock-model"
-    assert span.attributes is not None
-    assert span.attributes["gen_ai.operation.name"] == "chat"
-    assert span.attributes["gen_ai.request.model"] == "mock-model"
-    assert "hello" in str(span.attributes["gen_ai.output.messages"])
+    # Inference spans are CLIENT per semconv.
+    assert span.kind is SpanKind.CLIENT
+    attrs = span.attributes
+    assert attrs is not None
+    assert attrs["gen_ai.operation.name"] == "chat"
+    assert attrs["gen_ai.provider.name"] == "mock"
+    assert attrs["gen_ai.request.model"] == "mock-model"
+    assert attrs["gen_ai.request.stream"] is True
+    ttfc = attrs["gen_ai.response.time_to_first_chunk"]
+    assert isinstance(ttfc, float) and ttfc >= 0
+    # Content in the semconv message shape, not our native model dump.
+    assert json.loads(str(attrs["gen_ai.input.messages"])) == [
+        {"role": "user", "parts": [{"type": "text", "content": "hi"}]}
+    ]
+    assert json.loads(str(attrs["gen_ai.output.messages"])) == [
+        {
+            "role": "assistant",
+            "parts": [{"type": "text", "content": "hello"}],
+            "finish_reason": "stop",
+        }
+    ]
 
 
 async def test_error_status(
@@ -101,9 +123,13 @@ async def test_tool_exception_recorded(
         if s.name == "execute_tool boom"
     ]
     # The tool exception is caught by the framework, but the span still
-    # records it: ERROR status carrying the failure's type and message.
+    # records it: ERROR status carrying the failure's type and message,
+    # plus the semconv ``error.type`` attribute.
     assert not span.status.is_ok
     assert span.status.description == "ValueError: nope"
+    assert span.attributes is not None
+    assert span.attributes["error.type"] == "ValueError"
+    assert span.attributes["gen_ai.tool.type"] == "function"
 
 
 async def test_span_events_exported_with_original_timestamps(
@@ -299,3 +325,269 @@ async def test_subclass_can_enrich_names_and_attributes() -> None:
     assert span.attributes is not None
     assert span.attributes["foo"] == "bar"
     assert span.attributes["extra"] is True
+
+
+async def test_content_capture_off_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(otel.CAPTURE_CONTENT_ENV, raising=False)
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    adapter = otel.install(tracer_provider=provider)
+    try:
+        mock_llm([[text_msg("hello")]])
+        async with ai.stream(MOCK_MODEL, [ai.user_message("hi")]) as stream:
+            async for _ in stream:
+                pass
+    finally:
+        ai.experimental_telemetry.unregister(adapter)
+
+    (span,) = exporter.get_finished_spans()
+    attrs = span.attributes
+    assert attrs is not None
+    # Telemetry attributes still export; content is Opt-In per semconv.
+    assert attrs["gen_ai.request.model"] == "mock-model"
+    assert "gen_ai.input.messages" not in attrs
+    assert "gen_ai.output.messages" not in attrs
+    assert "gen_ai.system_instructions" not in attrs
+    assert "gen_ai.tool.definitions" not in attrs
+
+
+async def test_content_capture_env_opt_in(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(otel.CAPTURE_CONTENT_ENV, "span_only")
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    adapter = otel.install(tracer_provider=provider)
+    try:
+        mock_llm([[text_msg("hello")]])
+        async with ai.stream(MOCK_MODEL, [ai.user_message("hi")]) as stream:
+            async for _ in stream:
+                pass
+    finally:
+        ai.experimental_telemetry.unregister(adapter)
+
+    (span,) = exporter.get_finished_spans()
+    assert span.attributes is not None
+    assert "gen_ai.input.messages" in span.attributes
+
+
+def _stream_span(
+    **data_kwargs: Any,
+) -> ai.experimental_telemetry.Span[Any]:
+    data_kwargs.setdefault("messages", [ai.user_message("hi")])
+    data = ai.experimental_telemetry.AiStreamSpanData(
+        model="mock-model", **data_kwargs
+    )
+    return ai.experimental_telemetry.Span(
+        name="ai_stream", data=data, id="span-1", trace_id="trace-1"
+    )
+
+
+def test_request_and_usage_attributes() -> None:
+    params = core_params.InferenceRequestParams(
+        sampling={
+            core_params.TemperatureSamplerParams: (
+                core_params.TemperatureSamplerParams(temperature=0.5)
+            ),
+            core_params.TopPSamplerParams: (
+                core_params.TopPSamplerParams(top_p=0.9)
+            ),
+            # Left at the provider-default sentinel: must not export.
+            core_params.TopKSamplerParams: core_params.TopKSamplerParams(),
+        },
+        reasoning=core_params.ReasoningParams(effort="high"),
+        output=core_params.OutputParams(max_tokens=128),
+    )
+    usage = usage_.Usage(
+        input_tokens=10,
+        output_tokens=5,
+        reasoning_tokens=2,
+        cache_read_tokens=3,
+        cache_write_tokens=4,
+    )
+    sp = _stream_span(params=params, usage=usage, provider="mock")
+
+    attrs = otel._attributes(sp, capture_content=False)
+    assert attrs["gen_ai.provider.name"] == "mock"
+    assert attrs["gen_ai.request.temperature"] == 0.5
+    assert attrs["gen_ai.request.top_p"] == 0.9
+    assert "gen_ai.request.top_k" not in attrs
+    assert attrs["gen_ai.request.max_tokens"] == 128
+    assert attrs["gen_ai.request.reasoning.level"] == "high"
+    assert attrs["gen_ai.usage.input_tokens"] == 10
+    assert attrs["gen_ai.usage.output_tokens"] == 5
+    assert attrs["gen_ai.usage.reasoning.output_tokens"] == 2
+    assert attrs["gen_ai.usage.cache_read.input_tokens"] == 3
+    assert attrs["gen_ai.usage.cache_creation.input_tokens"] == 4
+    assert "gen_ai.input.messages" not in attrs
+
+
+def test_request_attributes_from_json_restored_params() -> None:
+    # A span restored from JSON carries params as plain dicts.
+    sp = _stream_span(
+        params={
+            "sampling": {"temperature": {"temperature": 0.25}},
+            "output": {"max_tokens": 64},
+            "reasoning": {"effort": "low"},
+        }
+    )
+    attrs = otel._attributes(sp, capture_content=False)
+    assert attrs["gen_ai.request.temperature"] == 0.25
+    assert attrs["gen_ai.request.max_tokens"] == 64
+    assert attrs["gen_ai.request.reasoning.level"] == "low"
+
+
+def test_semconv_message_content_shapes() -> None:
+    messages = [
+        messages_.Message(
+            role="system", parts=[messages_.TextPart(text="be nice")]
+        ),
+        messages_.Message(
+            role="user",
+            parts=[
+                messages_.TextPart(text="hi"),
+                messages_.FilePart(
+                    data="https://e.com/a.png", media_type="image/png"
+                ),
+                messages_.FilePart(data="QUJD", media_type="application/pdf"),
+            ],
+        ),
+        messages_.Message(
+            role="assistant",
+            parts=[
+                messages_.ReasoningPart(text="hmm"),
+                messages_.BuiltinToolCallPart(
+                    tool_call_id="b1",
+                    tool_name="web_search",
+                    tool_args='{"q": "x"}',
+                ),
+                messages_.BuiltinToolReturnPart(
+                    tool_call_id="b1",
+                    tool_name="web_search",
+                    result={"hits": 1},
+                ),
+            ],
+        ),
+        messages_.Message(
+            role="tool",
+            parts=[
+                messages_.ToolResultPart(
+                    tool_call_id="t1", tool_name="lookup", result={"ok": True}
+                )
+            ],
+        ),
+    ]
+    sp = _stream_span(messages=messages, message=tool_call_msg(name="lookup"))
+
+    attrs = otel._attributes(sp, capture_content=True)
+    # System messages move out of input.messages, as a flat parts list.
+    assert json.loads(attrs["gen_ai.system_instructions"]) == [
+        {"type": "text", "content": "be nice"}
+    ]
+    inputs = json.loads(attrs["gen_ai.input.messages"])
+    assert [m["role"] for m in inputs] == ["user", "assistant", "tool"]
+    assert inputs[0]["parts"] == [
+        {"type": "text", "content": "hi"},
+        {
+            "type": "uri",
+            "modality": "image",
+            "mime_type": "image/png",
+            "uri": "https://e.com/a.png",
+        },
+        {
+            "type": "blob",
+            "modality": "document",
+            "mime_type": "application/pdf",
+            "content": "QUJD",
+        },
+    ]
+    assert inputs[1]["parts"] == [
+        {"type": "reasoning", "content": "hmm"},
+        {
+            "type": "server_tool_call",
+            "id": "b1",
+            "name": "web_search",
+            "server_tool_call": {
+                "type": "web_search",
+                "arguments": {"q": "x"},
+            },
+        },
+        {
+            "type": "server_tool_call_response",
+            "id": "b1",
+            "server_tool_call_response": {
+                "type": "web_search",
+                "response": {"hits": 1},
+            },
+        },
+    ]
+    assert inputs[2]["parts"] == [
+        {"type": "tool_call_response", "id": "t1", "response": {"ok": True}}
+    ]
+    (out,) = json.loads(attrs["gen_ai.output.messages"])
+    assert out["finish_reason"] == "tool_call"
+    assert out["parts"] == [
+        {"type": "tool_call", "id": "tc-1", "name": "lookup", "arguments": {}}
+    ]
+
+
+def test_generate_span_attributes() -> None:
+    data = ai.experimental_telemetry.AiGenerateSpanData(
+        model="mock-model",
+        messages=[ai.user_message("draw")],
+        params=core_params.ImageParams(n=2, seed=7),
+        provider="mock",
+    )
+    sp = ai.experimental_telemetry.Span(
+        name="ai_generate", data=data, id="span-1", trace_id="trace-1"
+    )
+    attrs = otel._attributes(sp, capture_content=False)
+    assert attrs["gen_ai.operation.name"] == "generate_content"
+    assert attrs["gen_ai.provider.name"] == "mock"
+    assert attrs["gen_ai.request.choice.count"] == 2
+    assert attrs["gen_ai.request.seed"] == 7
+    assert attrs["gen_ai.output.type"] == "image"
+
+    data = ai.experimental_telemetry.AiGenerateSpanData(
+        model="mock-model",
+        messages=[ai.user_message("film")],
+        params=core_params.VideoParams(),
+        provider="mock",
+    )
+    sp = ai.experimental_telemetry.Span(
+        name="ai_generate", data=data, id="span-2", trace_id="trace-1"
+    )
+    attrs = otel._attributes(sp, capture_content=False)
+    assert attrs["gen_ai.output.type"] == "video"
+    assert "gen_ai.request.choice.count" not in attrs
+
+
+def test_run_span_attributes() -> None:
+    data = ai.experimental_telemetry.RunSpanData(
+        agent="MyAgent",
+        model="anthropic/claude-x",
+        messages=[ai.user_message("hi")],
+        provider="ai-gateway",
+        tool_names=["lookup"],
+        output_type="MyModel",
+    )
+    sp = ai.experimental_telemetry.Span(
+        name="run", data=data, id="span-1", trace_id="trace-1"
+    )
+    attrs = otel._attributes(sp, capture_content=True)
+    assert attrs["gen_ai.operation.name"] == "invoke_agent"
+    assert attrs["gen_ai.agent.name"] == "MyAgent"
+    # Gateway model ids carry the actual provider as their prefix.
+    assert attrs["gen_ai.provider.name"] == "anthropic"
+    assert attrs["gen_ai.request.model"] == "anthropic/claude-x"
+    # Structured output requested: the semconv output kind, not the
+    # Python type name.
+    assert attrs["gen_ai.output.type"] == "json"
+    assert json.loads(attrs["gen_ai.tool.definitions"]) == [
+        {"type": "function", "name": "lookup"}
+    ]
+    assert "gen_ai.input.messages" in attrs
