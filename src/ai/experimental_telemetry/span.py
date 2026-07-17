@@ -1,16 +1,9 @@
-"""Telemetry: spans, sinks, adapters, and the ambient current span.
+"""Telemetry API: spans, sinks, and adapters.
 
 Experimental: not part of the stable API, may change or be removed.
 
-:class:`Span` is a serializable record of work done by the application.
-It carries ids, timestamps, parentage, and typed data — lifecycle is
-data (``started_at``/``ended_at`` fields), not object state, so a span
-can start in one process and end in another.
-
-The one lifecycle verb is :meth:`Span.push`: set fields, then push the
-updated span. A push delivers a frozen snapshot to the current *sink*.
-By default that sink drives the adapter registry, so the plain case
-works exactly like classic start/end callbacks::
+:class:`Span` is a record of work. It carries ids, timestamps, parent id, and
+work-specific data::
 
     async with ai.experimental_telemetry.span("retrieval", query=q) as sp:
         docs = await search(q)
@@ -18,19 +11,26 @@ works exactly like classic start/end callbacks::
 
 Nesting is automatic: the current span is tracked using a context var.
 
-The lower-level api the context manager is built on::
+In cases where the high-level API doesn't work (e.g. durable execution),
+selectively using low-level API may be a better fit.
 
-    sp = create_span("turn", session=sid)   # identity only, reports nothing
-    sp.started_at = now_ns()
+1. make a span using `create_span`
+2. set `.started_at`, `ended_at`, and necessary data fields
+3. push updates to the sink one or more times
+
+:meth:`Span.push` delivers a snapshot of the span to the current *sink*.
+The default sink is the adapter registry, meaning on push all registered
+adapters will get the updated version of the span::
+
+    sp = create_span("turn", session=sid)    # identity only, reports nothing
+    sp.stamp_start()                         # writes started_at
     await sp.push()                          # visible to sinks/adapters
     ...                                      # possibly elsewhere, later:
-    sp.ended_at = now_ns()
-    await sp.push()                          # complete
+    await sp.stamp_end().push()              # complete
 
 Because ``Span`` is a pydantic model it crosses process boundaries like
-any other data (``model_dump`` / ``model_validate``); restore it and
-keep going — open children under it with ``parent=sp`` or
-:func:`use_span`, or finish it and push.
+any other data (``model_dump`` / ``model_validate``); you can restore it
+and set it as current using :func:`use_span` or pass to a child span explicity.
 
 An adapter processes spans and decides what to do with them::
 
@@ -45,10 +45,15 @@ An adapter processes spans and decides what to do with them::
 Adapters dispatch on the type of ``span.data``.  An adapter that crashes
 is logged and skipped, it never kills the run.
 
-A :class:`Sink` receives raw pushed snapshots instead. :func:`use_sink`
-reroutes pushes within a context — e.g. a :class:`Collector` inside a
-durable workflow body gathers spans as data so a step can re-push them
-to the real adapters exactly once.
+:func:`wrap_span` builds an adapter from an async generator function, using
+the pytest fixture-style trick.
+
+A :class:`Sink` is what sits *before* the adapters and routes span snapshots.
+It exists, again, because of the durable execution case: the user can control
+whether spans in the current context get sent to telemetry adapters, collected
+into a list to be pushed later, or discarded.
+
+:func:`use_sink` sets the current sink.
 
 A :class:`SpanEvent` is a named, timestamped milestone inside a span's
 lifetime (``first_token``, ``hook_resolved``, ...): append it to
@@ -57,9 +62,6 @@ lifetime (``first_token``, ``hook_resolved``, ...): append it to
 Span timestamps come from the ambient clock (:func:`now_ns`);
 :func:`use_clock` overrides it per-context, e.g. with a deterministic
 clock inside a durable workflow.
-
-For bridging vendor SDKs without a class, :func:`wrap_span` builds an
-adapter from a free-standing async generator function.
 """
 
 from __future__ import annotations
@@ -77,6 +79,7 @@ from typing import (
     Generic,
     Literal,
     Protocol,
+    Self,
     overload,
 )
 
@@ -95,16 +98,14 @@ if TYPE_CHECKING:
         AsyncGenerator,
         AsyncIterator,
         Callable,
+        Iterable,
         Iterator,
+        Mapping,
     )
 
     from ..models.core import params as params_
 
-    # Real types for checkers; ``Any`` at runtime.  The params module
-    # lives under ``ai.models``, which imports back into this module —
-    # and rehydrating them wouldn't be faithful anyway
-    # (``provider_params`` is keyed by type objects, which don't
-    # round-trip through JSON).
+    # these are ``Any`` at runtime
     _InferenceParams = params_.InferenceRequestParams
     _GenerateParams = params_.GenerateParams
 else:
@@ -114,7 +115,8 @@ else:
 logger = logging.getLogger(__name__)
 
 
-# ── Clock ─────────────────────────────────────────────────────────
+# this api is for plugging a deterministic clock in, so that the sdk
+# could be used inside a deterministic workflow body
 
 _span_clock: contextvars.ContextVar[Callable[[], int] | None] = (
     contextvars.ContextVar("span_clock", default=None)
@@ -125,8 +127,7 @@ def now_ns() -> int:
     """Nanoseconds since the epoch, from the ambient span clock.
 
     The wall clock by default; whatever :func:`use_clock` installed
-    otherwise.  Use it to stamp ``started_at``/``ended_at`` and span
-    events.
+    otherwise.
     """
     clock = _span_clock.get()
     return clock() if clock is not None else time.time_ns()
@@ -164,8 +165,7 @@ def use_clock(now_ns: Callable[[], int]) -> Iterator[None]:
 class SpanData(Protocol):
     """Anything with a ``kind`` is span data.
 
-    Implement it with a pydantic model to make your own typed spans —
-    no base class, no registration::
+    Implement it with a pydantic model to make your own typed spans.
 
         class RetrievalSpanData(pydantic.BaseModel):
             kind: Literal["retrieval"] = "retrieval"
@@ -177,14 +177,9 @@ class SpanData(Protocol):
             docs = await search(q)
             sp.data.count = len(docs)  # typed
 
-    ``kind`` says what kind of work the span records: it doubles as
-    the span's default name and travels with the serialized data.  On
-    a bare ``Span.model_validate`` a user-defined type stays a plain
-    dict (only the framework's own kinds are rebuilt); restore with
-    ``Span[RetrievalSpanData].model_validate(...)`` to get it typed.
-
-    Adapters match on it the same way they match on framework types:
-    ``case RetrievalSpanData() as d: ...``.
+    ``kind`` is what travels with the serialized data. Restore with
+    ``Span[RetrievalSpanData].model_validate(...)`` to get it typed, otherwise
+    you'll get a plain dict.
     """
 
     @property
@@ -302,10 +297,10 @@ HOOK_CANCELLED = "hook_cancelled"
 class SpanEvent(pydantic.BaseModel):
     """A named, timestamped milestone inside a span's lifetime.
 
-    Append to ``span.events`` and push; the next push delivers it::
+    Lives in ``span.events``; the next push delivers it.
+    :meth:`Span.add_event` is the shorthand for the common case::
 
-        sp.events.append(SpanEvent(name=FIRST_TOKEN, time_ns=now_ns(),
-                                   attributes={}))
+        sp.add_event(FIRST_TOKEN)
         await sp.push()
 
     Ordering: events on one span are delivered in list order; there is
@@ -332,9 +327,6 @@ class SpanError(pydantic.BaseModel):
         return cls(type=type(exc).__name__, message=str(exc))
 
 
-# The serialized ``kind`` field identifies framework span data, so
-# pydantic rebuilds the typed form natively when a dumped span is
-# validated (the union discriminates on it).
 _FrameworkData = Annotated[
     RunSpanData
     | LoopTurnSpanData
@@ -346,26 +338,17 @@ _FrameworkData = Annotated[
     pydantic.Field(discriminator="kind"),
 ]
 
-# Covariant: adapters take ``Span`` (= ``Span[SpanData]``) and must
-# accept any concretely-typed span.  They read ``data``, never replace
-# it, so the widened reference is safe in practice.
-#
-# The runtime default is the framework union with an ``Any`` fallback:
-# a bare ``Span`` rebuilds framework data by its ``kind`` tag and
-# passes everything else through untouched — a live user-typed data
-# instance stays itself, an unrecognized dumped dict stays a dict (a
-# restored span must never fail on its data).  A parametrized
-# ``Span[MyData]`` rebuilds the user type instead.  The bare schema is
-# built here, at import: sandboxed callers (durable workflow bodies)
-# can validate but not build.
+# adapters only read the data, they don't swap it out, so it's safe to make it
+# covariant.
 if TYPE_CHECKING:
     DataT_co = TypeVar(
         "DataT_co", bound=SpanData, default=SpanData, covariant=True
     )
 else:
+    # try to deserialize to _FrameworkData and fallback to Any
     DataT_co = TypeVar("DataT_co", default=_FrameworkData | Any)
-# Function-scoped variant for ``span()``: a covariant variable can't
-# appear as a parameter.
+# covariant type can't be used for a function's input parameter, and we need
+# to type span()
 DataT = TypeVar("DataT", bound=SpanData)
 
 
@@ -376,18 +359,17 @@ class Span(pydantic.BaseModel, Generic[DataT_co]):
     ``Span[RetrievalSpanData]``, so late assignments to ``sp.data``
     fields are type checked.  A bare ``Span`` is ``Span[SpanData]``.
 
-    Lifecycle is carried by the timestamp fields: a span with
-    ``started_at=None`` hasn't started; one with ``ended_at`` set is
-    complete.  Mutate fields, then :meth:`push` to report the new
-    state.  Nothing is reported except by pushing.
+    Lifecycle is encoded in timestamp fields:
+
+    - if ``started_at=None``, this span hasn't started,
+    - if ``ended_at`` is set, the span is complete.
+
+    Mutate fields, then :meth:`push` to report the new state. Nothing is
+    reported except by pushing.
 
     A span round-trips through ``model_dump``/``model_validate`` like
-    any pydantic model.  Restoring rebuilds typed ``data`` for the
-    framework's span types, matched by the ``kind`` tag serialized
-    inside the data itself; data of user-defined span types stays a
-    plain dict unless restored with ``Span[MyData].model_validate(...)``.
-    Adapters receiving re-pushed spans should treat dict data as the
-    fallback it is.
+    any pydantic model. Use ``Span[MyData].model_validate(...)`` to restore
+    custom data types.
 
     ``replay=True`` marks work that is being replayed (resume,
     serverless re-entry) rather than performed live.
@@ -415,14 +397,78 @@ class Span(pydantic.BaseModel, Generic[DataT_co]):
 
     schema_version: ClassVar[int] = 3
 
-    def set(self, **attributes: Any) -> None:
-        """Attach attributes to a span created with ``span("name", ...)``."""
+    def set(
+        self, attributes: Mapping[str, Any] | None = None, /, **kwargs: Any
+    ) -> None:
+        """Attach attributes to a span created with ``span("name", ...)``.
+
+        Attribute names that aren't valid Python keywords (viewers use
+        dotted names like ``"output.value"``) go in the positional
+        mapping; it merges with the keyword arguments::
+
+            sp.set({"output.value": title}, model="haiku")
+        """
         if not isinstance(self.data, CustomSpanData):
             raise TypeError(
                 "set() only works on user spans; framework spans carry "
-                "typed data — assign its fields directly"
+                "typed data, assign its fields directly"
             )
-        self.data.attributes.update(attributes)
+        self.data.attributes.update({**(attributes or {}), **kwargs})
+
+    def add_event(
+        self,
+        name: str,
+        attributes: Mapping[str, Any] | None = None,
+        /,
+        **kwargs: Any,
+    ) -> SpanEvent:
+        """Append a named event stamped with the ambient clock.
+
+        Appends only; the event is delivered by the next :meth:`push`, or when
+        exiting the ``span()`` context manager::
+
+            sp.add_event(FIRST_TOKEN)
+            await sp.push()
+
+        Returns the appended event.
+        """
+        event = SpanEvent(
+            name=name,
+            time_ns=now_ns(),
+            attributes={**(attributes or {}), **kwargs},
+        )
+        self.events.append(event)
+        return event
+
+    def stamp_start(self) -> Self:
+        """Set ``started_at`` from the ambient clock; return the span.
+
+        Only writes the field; nothing is reported until :meth:`push`.
+        Returns the span so minting reads as one expression::
+
+            payload = create_span("turn").stamp_start().model_dump()
+        """
+        self.started_at = now_ns()
+        return self
+
+    def stamp_end(
+        self, *, error: SpanError | BaseException | None = None
+    ) -> Self:
+        """Set ``ended_at`` from the ambient clock; return the span.
+
+        Also records ``error`` when one is given by converting an exception
+        to a serializable :class:`SpanError`.  ``error=None``
+        keeps any error already on the span.  Only writes fields;
+        push to report::
+
+            await sp.stamp_end(error=exc).push()
+        """
+        self.ended_at = now_ns()
+        if isinstance(error, BaseException):
+            self.error = SpanError.from_exception(error)
+        elif error is not None:
+            self.error = error
+        return self
 
     async def push(self) -> None:
         """Deliver a frozen copy of this span to the current sink.
@@ -430,7 +476,7 @@ class Span(pydantic.BaseModel, Generic[DataT_co]):
         The default sink drives the registered adapters (see
         :func:`register`); :func:`use_sink` reroutes pushes within a
         context.  Each push snapshots the whole span, so keep mutating
-        and push again as the work progresses — the last push with
+        and push again as the work progresses. The last push with
         ``ended_at`` set is the complete record.
 
         Telemetry never kills the run: a sink (or adapter) failure is
@@ -443,7 +489,7 @@ class Span(pydantic.BaseModel, Generic[DataT_co]):
             logger.exception("telemetry sink %r raised in emit", sink)
 
 
-# ── Current span ──────────────────────────────────────────────────
+# utilities for managing the current span
 
 _current: contextvars.ContextVar[Span | None] = contextvars.ContextVar(
     "current_span", default=None
@@ -456,17 +502,22 @@ def current() -> Span | None:
 
 
 @util.contextmanager_any_sync
-def use_span(span_: Span) -> Iterator[None]:
+def use_span(span_: Span | None) -> Iterator[None]:
     """Make ``span_`` the current span within this context.
 
-    Unlike :func:`span` this is pure context plumbing — no timestamps,
-    no pushes.  Use it to continue a trace around existing work, e.g.
+    Unlike :func:`span` this is pure context plumbing with no timestamps
+    and no pushes.  Use it to continue a trace around existing work, e.g.
     parenting under a span restored from another process::
 
         turn_span = Span.model_validate(payload["turn_span"])
         with ai.experimental_telemetry.use_span(turn_span):
             ...  # spans opened here parent under turn_span
+
+    ``None`` is a no-op.
     """
+    if span_ is None:
+        yield
+        return
     token = _current.set(span_)
     try:
         yield
@@ -474,7 +525,10 @@ def use_span(span_: Span) -> Iterator[None]:
         _current.reset(token)
 
 
-# ── Sinks ─────────────────────────────────────────────────────────
+# sinks are used to control where spans go within the current context.
+# that could be the adapter registry (so they immediately get sent to the
+# observability backend; or it could be a Collector that allows us to defer
+# sending them until later.
 
 
 class Sink(Protocol):
@@ -493,9 +547,9 @@ def use_sink(sink: Sink) -> Iterator[None]:
     """Route span pushes to ``sink`` within this context.
 
     The default (outside any ``use_sink``) is the adapter registry.
-    Inside a durable workflow body, route to a :class:`Collector`
-    instead and re-push the collected spans from a step — the body
-    re-runs on every replay, the step doesn't.
+    Inside a durable workflow body where side effects are not allowed, you
+    can route to a :class:`Collector` instead and re-push the collected spans
+    from a step / activity.
     """
     token = _current_sink.set(sink)
     try:
@@ -508,17 +562,16 @@ class Collector:
     """A sink that keeps the latest snapshot of every span pushed to it.
 
     ``spans`` maps span id to the most recent snapshot, in first-push
-    order.  Scoop them out as data (``model_dump``) and re-push them
-    where the real sink is available::
+    order.  Scoop the complete ones out as data (:attr:`finished`) and
+    re-push them where the real sink is available::
 
         collector = Collector()
         with use_sink(collector):
             ...  # replayed / suspendable code
-        payload = [s.model_dump(mode="json") for s in collector.spans.values()]
+        payload = [s.model_dump(mode="json") for s in collector.finished]
 
         # elsewhere (a workflow step, another process):
-        for data in payload:
-            await Span.model_validate(data).push()
+        await push_all(payload)
     """
 
     def __init__(self) -> None:
@@ -527,15 +580,30 @@ class Collector:
     async def emit(self, span_: Span, /) -> None:
         self.spans[span_.id] = span_
 
+    @property
+    def finished(self) -> list[Span]:
+        """The collected spans that have ended, in first-push order."""
+        return [s for s in self.spans.values() if s.ended_at is not None]
+
+
+async def push_all(spans: Iterable[Span | Mapping[str, Any]]) -> None:
+    """Push each span, in order; dumped spans are validated first.
+
+    This is a utility that can be used with :class:`Collector` to push
+    a bunch of collected spans all at once::
+
+        await push_all(payload)
+    """
+    for item in spans:
+        span_ = item if isinstance(item, Span) else Span.model_validate(item)
+        await span_.push()
+
 
 class _RegistrySink:
     """The default sink: drives registered adapters.
 
-    Translates a stream of span snapshots into the classic
+    Translates a stream of span snapshots into
     ``on_span_start`` / ``on_span_event`` / ``on_span_end`` callbacks.
-    One live *view* object is kept per span id and updated in place on
-    every push, so an adapter holding the span between callbacks reads
-    current data at span end.
 
     Rules:
 
@@ -543,13 +611,12 @@ class _RegistrySink:
       hasn't started);
     - the first snapshot of an id fires ``on_span_start``, then
       ``on_span_event`` per event, then ``on_span_end`` if the snapshot
-      is already complete — so a span that lived elsewhere and arrives
+      is already complete; so a span that lived elsewhere and arrives
       finished is delivered whole;
     - later snapshots fire ``on_span_event`` for events not seen
       before, and ``on_span_end`` once ``ended_at`` appears;
     - after the end the id is forgotten: pushing a completed span again
-      re-delivers it in full (the durable re-emission path — dedup, if
-      any, belongs to the backend, keyed on the span id).
+      re-delivers it in full.
     """
 
     def __init__(self) -> None:
@@ -578,7 +645,7 @@ class _RegistrySink:
 _registry_sink = _RegistrySink()
 
 
-# ── Adapter registry ──────────────────────────────────────────────
+# adapter registry utilities
 
 _adapters: list[Any] = []
 
@@ -591,6 +658,15 @@ def register(adapter: Any) -> None:
 def unregister(adapter: Any) -> None:
     """Remove a previously registered adapter."""
     _adapters.remove(adapter)
+
+
+def enabled() -> bool:
+    """Whether anything is listening for spans.
+
+    True when a sink is routed with :func:`use_sink` or at least one
+    adapter is registered.
+    """
+    return _current_sink.get() is not None or bool(_adapters)
 
 
 async def _dispatch(method: str, span_: Span, *args: Any) -> None:
@@ -630,18 +706,19 @@ async def flush() -> None:
             logger.exception("telemetry flush of %r raised", target)
 
 
-# ── Creating spans ────────────────────────────────────────────────
+# span building utilities
 
 
 @overload
 def create_span(
     name_or_data: str,
+    attributes: Mapping[str, Any] | None = None,
     /,
     *,
     parent: Span | None = None,
     replay: bool = False,
     set_as_current: bool = True,
-    **attributes: Any,
+    **kwargs: Any,
 ) -> Span[CustomSpanData]: ...
 
 
@@ -658,29 +735,31 @@ def create_span(
 
 def create_span(
     name_or_data: str | SpanData,
+    attributes: Mapping[str, Any] | None = None,
     /,
     *,
     parent: Span | None = None,
     replay: bool = False,
     set_as_current: bool = True,
-    **attributes: Any,
+    **kwargs: Any,
 ) -> Span[Any]:
     """Create a span: identity only, nothing is reported.
 
     Mints the span id, and takes trace id and parentage from ``parent``
     (default: the current span; a fresh trace when there is none).
-    ``parent`` may be a span restored from another process — that is
-    how a trace continues across a boundary.
+    ``parent`` may be a span restored from JSON.
 
-    The span has no timestamps yet: stamp ``started_at`` (see
-    :func:`now_ns`) and :meth:`Span.push` when the work begins, or
-    hand the whole lifecycle to the :func:`span` context manager.
+    The span has no timestamps yet: :meth:`Span.stamp_start` and
+    :meth:`Span.push` when the work begins, or hand the whole
+    lifecycle to the :func:`span` context manager.
     """
     if isinstance(name_or_data, str):
         name = name_or_data
-        data: SpanData = CustomSpanData(attributes=dict(attributes))
+        data: SpanData = CustomSpanData(
+            attributes={**(attributes or {}), **kwargs}
+        )
     else:
-        if attributes:
+        if attributes is not None or kwargs:
             raise TypeError("attributes only go with a str span name")
         name = name_or_data.kind
         data = name_or_data
@@ -704,12 +783,13 @@ def create_span(
 @overload
 def span(
     name_or_data: str,
+    attributes: Mapping[str, Any] | None = None,
     /,
     *,
     parent: Span | None = None,
     replay: bool = False,
     set_as_current: bool = True,
-    **attributes: Any,
+    **kwargs: Any,
 ) -> contextlib.AbstractAsyncContextManager[Span[CustomSpanData]]: ...
 
 
@@ -726,23 +806,24 @@ def span(
 
 def span(
     name_or_data: str | SpanData,
+    attributes: Mapping[str, Any] | None = None,
     /,
     *,
     parent: Span | None = None,
     replay: bool = False,
     set_as_current: bool = True,
-    **attributes: Any,
+    **kwargs: Any,
 ) -> contextlib.AbstractAsyncContextManager[Span[Any]]:
-    """Open a span; it is "current" (parents new spans) inside the block.
+    """Open a span; it sets itself as current inside the block.
 
     Sugar over the data api: creates the span, stamps ``started_at``
     and pushes on enter; stamps ``ended_at`` (and ``error``, if the
     block raised) and pushes on exit.
 
-    Pass a name plus attributes for a user span, or a :class:`SpanData`
-    instance for a typed one — the span is generic in it, so late
-    assignments to ``sp.data`` fields are type checked.  Exceptions are
-    recorded on the span and re-raised.
+    Pass a name plus attributes for a user span (a mapping for dotted
+    attribute names, keywords for the rest), or a :class:`SpanData`
+    instance for a typed one. Exceptions are recorded on the span
+    and re-raised.
 
     ``parent`` overrides the ambient parent for this span: a live
     :class:`Span`, or one restored from another process to continue its
@@ -752,51 +833,61 @@ def span(
     work done while it is open parents to *its* parent instead. Used by
     ai.stream because of the context manager api.
     """
-    # The indirection exists because type checkers can't apply
-    # ``asynccontextmanager`` to an overloaded function directly.
+    # type checkers can't apply asynccontextmanager
+    # to an overloaded function directly.
     return _span_impl(
         name_or_data,
+        attributes,
         parent=parent,
         replay=replay,
         set_as_current=set_as_current,
-        **attributes,
+        **kwargs,
     )
 
 
 @contextlib.asynccontextmanager
 async def _span_impl(
     name_or_data: str | SpanData,
+    attributes: Mapping[str, Any] | None,
     /,
     *,
     parent: Span | None,
     replay: bool,
     set_as_current: bool,
-    **attributes: Any,
+    **kwargs: Any,
 ) -> AsyncIterator[Span[Any]]:
-    sp = create_span(
-        name_or_data,
-        parent=parent,
-        replay=replay,
-        set_as_current=set_as_current,
-        **attributes,
-    )
-    sp.started_at = now_ns()
+    sp: Span[Any]
+    if isinstance(name_or_data, str):
+        sp = create_span(
+            name_or_data,
+            attributes,
+            parent=parent,
+            replay=replay,
+            set_as_current=set_as_current,
+            **kwargs,
+        )
+    else:
+        sp = create_span(
+            name_or_data,
+            parent=parent,
+            replay=replay,
+            set_as_current=set_as_current,
+        )
+        if attributes is not None or kwargs:
+            raise TypeError("attributes only go with a str span name")
+    sp.stamp_start()
     await sp.push()
     token = _current.set(sp) if set_as_current else None
     try:
         yield sp
     except BaseException as exc:
-        # GeneratorExit is how a consumer closes a stream early —
-        # normal control flow, not a failure of the spanned work.
+        # GeneratorExit is how a consumer closes a stream early.
         if not isinstance(exc, GeneratorExit) and sp.error is None:
             sp.error = SpanError.from_exception(exc)
         raise
     finally:
-        # A span that set itself as current must be closed while it is
-        # still current, in the task that opened it.  Otherwise
-        # resetting the context token would silently corrupt the
-        # current-span state (new spans would parent under an already-
-        # closed span) — end the span for adapters, then raise loudly.
+        # a span that set itself as current must be closed while it is
+        # still current, in the task that opened it.
         misordered = False
         if token is not None:
             if _current.get() is not sp:
@@ -805,7 +896,7 @@ async def _span_impl(
                 try:
                     _current.reset(token)
                 except ValueError:
-                    # Token from a different task's context.
+                    # token from a different task's context.
                     misordered = True
         sp.ended_at = now_ns()
         await sp.push()

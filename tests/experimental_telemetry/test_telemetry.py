@@ -25,13 +25,8 @@ async def _add_event(
     name: str,
     **attributes: Any,
 ) -> ai.experimental_telemetry.SpanEvent:
-    """The manual event pattern: stamp, append, push."""
-    event = ai.experimental_telemetry.SpanEvent(
-        name=name,
-        time_ns=ai.experimental_telemetry.now_ns(),
-        attributes=attributes,
-    )
-    sp.events.append(event)
+    """The event pattern: append, then push for live delivery."""
+    event = sp.add_event(name, **attributes)
     await sp.push()
     return event
 
@@ -1064,3 +1059,118 @@ async def test_use_clock_accepts_time_time_ns() -> None:
     assert sp.started_at is not None
     assert sp.ended_at is not None
     assert before <= sp.started_at <= sp.ended_at <= time.time_ns()
+
+
+# ── Sugar: stamps, add_event, enabled, shipping helpers ───────────
+
+
+async def test_use_span_accepts_none(recorder: Recorder) -> None:
+    # "no span" is a normal state in gated instrumentation; None means
+    # no reparenting, no separate code path at the callsite.
+    with ai.experimental_telemetry.use_span(None):
+        assert ai.experimental_telemetry.current() is None
+        async with ai.experimental_telemetry.span("child") as child:
+            pass
+    assert child.parent_id is None
+
+
+async def test_enabled_reflects_sinks_and_adapters() -> None:
+    # No adapters registered here (no recorder fixture), default sink.
+    assert not ai.experimental_telemetry.enabled()
+    collector = ai.experimental_telemetry.Collector()
+    with ai.experimental_telemetry.use_sink(collector):
+        assert ai.experimental_telemetry.enabled()
+    assert not ai.experimental_telemetry.enabled()
+
+
+async def test_enabled_with_adapter_registered(recorder: Recorder) -> None:
+    assert ai.experimental_telemetry.enabled()
+
+
+async def test_stamp_start_and_end(recorder: Recorder) -> None:
+    clock = _ticking_clock(100)
+    with ai.experimental_telemetry.use_clock(clock):
+        sp = ai.experimental_telemetry.create_span("turn").stamp_start()
+        assert sp.started_at == 110
+        assert sp.stamp_end(error=ValueError("boom")) is sp
+    assert sp.ended_at == 120
+    assert sp.error == ai.experimental_telemetry.SpanError(
+        type="ValueError", message="boom"
+    )
+    # Stamps only write fields; nothing was pushed.
+    assert recorder.started == []
+
+    # A SpanError passes through as-is; error=None keeps an existing one.
+    err = ai.experimental_telemetry.SpanError(type="TurnError", message="m")
+    sp2 = ai.experimental_telemetry.create_span("t").stamp_start()
+    sp2.stamp_end(error=err)
+    assert sp2.error is err
+    sp2.stamp_end()
+    assert sp2.error is err
+
+
+async def test_add_event_appends_without_pushing() -> None:
+    collector = ai.experimental_telemetry.Collector()
+    with ai.experimental_telemetry.use_sink(collector):
+        async with ai.experimental_telemetry.span("s") as sp:
+            event = sp.add_event("cache_hit", {"cache.key": "k"}, size=3)
+            assert event.attributes == {"cache.key": "k", "size": 3}
+            assert sp.events == [event]
+            # Append only: the latest snapshot (from the start push)
+            # doesn't have it yet.
+            assert collector.spans[sp.id].events == []
+    # The end push delivered it.
+    assert [e.name for e in collector.spans[sp.id].events] == ["cache_hit"]
+
+
+async def test_collector_finished_and_push_all(recorder: Recorder) -> None:
+    collector = ai.experimental_telemetry.Collector()
+    with ai.experimental_telemetry.use_sink(collector):
+        async with ai.experimental_telemetry.span("done"):
+            pass
+        dangling = ai.experimental_telemetry.create_span("open").stamp_start()
+        await dangling.push()
+    # Only complete records are safe to ship.
+    assert [s.name for s in collector.finished] == ["done"]
+
+    # The ship step: re-deliver dumped payloads where the adapters are.
+    payload = [s.model_dump(mode="json") for s in collector.finished]
+    await ai.experimental_telemetry.push_all(payload)
+    assert [s.name for s in recorder.started] == ["done"]
+    assert [s.name for s in recorder.ended] == ["done"]
+
+    # Live spans are accepted alongside dumped ones.
+    await ai.experimental_telemetry.push_all([dangling.stamp_end()])
+    assert [s.name for s in recorder.ended] == ["done", "open"]
+
+
+async def test_attribute_mappings_for_dotted_names(
+    recorder: Recorder,
+) -> None:
+    # Viewer attribute names ("session.id") aren't valid keywords, so
+    # span()/set() take a positional mapping merged with keywords.
+    async with ai.experimental_telemetry.span(
+        "generate_title", {"session.id": "s1"}, model="haiku"
+    ) as sp:
+        sp.set({"output.value": "t"}, plain=1)
+    assert sp.data.attributes == {
+        "session.id": "s1",
+        "model": "haiku",
+        "output.value": "t",
+        "plain": 1,
+    }
+
+
+async def test_attribute_mapping_rejected_for_typed_data() -> None:
+    data = ai.experimental_telemetry.LoopTurnSpanData()
+    with pytest.raises(TypeError):
+        ai.experimental_telemetry.create_span(
+            data,  # ty: ignore[invalid-argument-type]
+            {"a": 1},  # type: ignore[call-overload]
+        )
+    with pytest.raises(TypeError):
+        async with ai.experimental_telemetry.span(
+            data,  # ty: ignore[invalid-argument-type]
+            {"a": 1},  # type: ignore[call-overload]
+        ):
+            pass

@@ -229,13 +229,7 @@ async def _hook_impl(call: middleware_.HookContext) -> pydantic.BaseModel:
         )
 
         await rt.put_hook(hook_part)
-        sp.events.append(
-            telemetry.SpanEvent(
-                name=telemetry.HOOK_DEFERRED,
-                time_ns=telemetry.now_ns(),
-                attributes={},
-            )
-        )
+        sp.add_event(telemetry.HOOK_DEFERRED)
         await sp.push()
 
         # Await resolution — may be resolved externally or cancelled.
@@ -247,13 +241,7 @@ async def _hook_impl(call: middleware_.HookContext) -> pydantic.BaseModel:
             attrs: dict[str, Any] = {}
             if exc.args and exc.args[0] is not None:
                 attrs["reason"] = exc.args[0]
-            sp.events.append(
-                telemetry.SpanEvent(
-                    name=telemetry.HOOK_CANCELLED,
-                    time_ns=telemetry.now_ns(),
-                    attributes=attrs,
-                )
-            )
+            sp.add_event(telemetry.HOOK_CANCELLED, attrs)
             await sp.push()
             raise
         finally:
@@ -262,13 +250,7 @@ async def _hook_impl(call: middleware_.HookContext) -> pydantic.BaseModel:
 
         sp.data.status = "resolved"
         sp.data.resolution = resolution
-        sp.events.append(
-            telemetry.SpanEvent(
-                name=telemetry.HOOK_RESOLVED,
-                time_ns=telemetry.now_ns(),
-                attributes={},
-            )
-        )
+        sp.add_event(telemetry.HOOK_RESOLVED)
         await sp.push()
 
         # Emit resolved signal.
