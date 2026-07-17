@@ -1,8 +1,3 @@
-# Contributing
-
-We're not accepting community pull requests at this time.
-Bug reports and ideas are very welcome: please open an issue or start a discussion instead.
-
 ## Releasing
 
 Every PR needs to be labeled as `breaking`, `feature`, `fix`, or
