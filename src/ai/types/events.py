@@ -1,7 +1,9 @@
+from __future__ import annotations
+
 import abc
 import contextvars
-from collections.abc import AsyncGenerator, Callable, Sequence
-from typing import Annotated, Any, Literal
+from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
+from typing import Annotated, Any, Literal, cast
 
 import pydantic
 
@@ -608,13 +610,82 @@ class ToolCallResult(BaseEvent):
     kind: Literal["tool_call_result"] = "tool_call_result"
 
 
+def _get(obj: Any, key: Any) -> Any | None:
+    return obj.get(key) if isinstance(obj, dict) else getattr(obj, key, None)
+
+
 class HookEvent(BaseEvent):
-    """Emitted when a hook suspends, resolves, or is cancelled."""
+    """Emitted when a hook suspends, resolves, or is cancelled.
+
+    Every instance is one of the per-status subclasses —
+    :class:`PendingHookEvent`, :class:`ResolvedHookEvent`, or
+    :class:`CancelledHookEvent` — matching ``hook.status``.  Construct
+    via :meth:`for_hook` (or a subclass directly); the base class
+    cannot be instantiated, and validating against it dispatches to
+    the matching subclass.
+    """
 
     message: messages.Message
     hook: messages.HookPart[Any]
 
     kind: Literal["hook"] = "hook"
+
+    def __init__(self, /, **data: Any) -> None:
+        if type(self) is HookEvent:
+            raise TypeError(
+                "HookEvent cannot be instantiated directly; use "
+                "HookEvent.for_hook() or a per-status subclass"
+            )
+        super().__init__(**data)
+
+    @classmethod
+    def for_hook(
+        cls, message: messages.Message, hook: messages.HookPart[Any]
+    ) -> HookEvent:
+        """Construct the per-status subclass matching ``hook.status``."""
+        return _HOOK_EVENTS[hook.status](message=message, hook=hook)
+
+    @pydantic.model_validator(mode="wrap")
+    @classmethod
+    def _dispatch_status(
+        cls, value: Any, handler: pydantic.ValidatorFunctionWrapHandler
+    ) -> HookEvent:
+        if cls is not HookEvent or not isinstance(value, Mapping):
+            return cast("HookEvent", handler(value))
+        hook = _get(value, "hook")
+        status = _get(hook, "status") if hook is not None else None
+        # On an invalid status, we validate against PendingHookEvent, but
+        # pydantic will report the missing fields.
+        sub = _HOOK_EVENTS.get(status, PendingHookEvent)
+        return sub.model_validate(value)
+
+    @pydantic.model_validator(mode="after")
+    def _check_status(self) -> HookEvent:
+        if not isinstance(self, _HOOK_EVENTS[self.hook.status]):
+            raise ValueError(
+                f"{type(self).__name__} cannot carry a "
+                f"{self.hook.status!r} hook"
+            )
+        return self
+
+
+class PendingHookEvent(HookEvent):
+    """The hook suspended; the run needs its resolution to proceed."""
+
+
+class ResolvedHookEvent(HookEvent):
+    """The hook resolved; ``hook.resolution`` carries the value."""
+
+
+class CancelledHookEvent(HookEvent):
+    """The hook was cancelled without a resolution."""
+
+
+_HOOK_EVENTS: dict[object, type[HookEvent]] = {
+    "pending": PendingHookEvent,
+    "resolved": ResolvedHookEvent,
+    "cancelled": CancelledHookEvent,
+}
 
 
 class RunBlocked(BaseEvent):
@@ -631,11 +702,11 @@ class RunBlocked(BaseEvent):
 
     There is no mirror "unblocked" event because it would be redundant:
     a blocked run can only resume via a hook resolution (or
-    cancellation), so the next ``HookEvent`` with a non-``pending``
-    status *is* the unblock signal.  Note the converse does not hold —
-    a ``ToolCallResult`` carrying an ``is_hook_deferred`` placeholder
-    (serverless abort) arrives while the run stays blocked, and the run
-    then ends still blocked.
+    cancellation), so the next :class:`ResolvedHookEvent` or
+    :class:`CancelledHookEvent` *is* the unblock signal.  Note the
+    converse does not hold — a ``ToolCallResult`` carrying an
+    ``is_hook_deferred`` placeholder (serverless abort) arrives while
+    the run stays blocked, and the run then ends still blocked.
     """
 
     hooks: tuple[messages.HookPart[Any], ...] = ()
@@ -681,8 +752,9 @@ class RunStateTracker:
 
     The fold reads three things:
 
-    * hook state from :class:`HookEvent` (``pending`` adds, ``resolved``
-      / ``cancelled`` removes);
+    * hook state from :class:`HookEvent` (:class:`PendingHookEvent`
+      adds, :class:`ResolvedHookEvent` / :class:`CancelledHookEvent`
+      remove);
     * model-stream activity from :class:`StreamStart` / :class:`StreamEnd`;
     * in-flight tool calls from the assistant message on
       :class:`StreamEnd` (scheduled) and :class:`ToolCallResult`
@@ -743,11 +815,10 @@ class RunStateTracker:
                 self._in_flight.difference_update(
                     r.tool_call_id for r in event.results
                 )
+            case PendingHookEvent():
+                self._deferred[event.hook.hook_id] = event.hook
             case HookEvent():
-                if event.hook.status == "pending":
-                    self._deferred[event.hook.hook_id] = event.hook
-                else:
-                    self._deferred.pop(event.hook.hook_id, None)
+                self._deferred.pop(event.hook.hook_id, None)
             case _:
                 return None
 

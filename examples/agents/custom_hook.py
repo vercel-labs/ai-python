@@ -44,10 +44,7 @@ async def main() -> None:
         async for event in stream:
             if isinstance(event, ai.events.TextDelta):
                 print(event.chunk, end="", flush=True)
-            elif (
-                isinstance(event, ai.events.HookEvent)
-                and event.hook.status == "pending"
-            ):
+            elif isinstance(event, ai.events.PendingHookEvent):
                 print(f"\n[deferred] {event.hook.hook_id}")
                 ai.resolve_hook(
                     event.hook,
@@ -57,10 +54,7 @@ async def main() -> None:
                         reason="change window is open",
                     ),
                 )
-            elif (
-                isinstance(event, ai.events.HookEvent)
-                and event.hook.status == "resolved"
-            ):
+            elif isinstance(event, ai.events.ResolvedHookEvent):
                 print(f"[resolved] {event.hook.hook_id}")
     print()
 

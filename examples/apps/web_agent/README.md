@@ -16,7 +16,7 @@ tool is gated behind user confirmation before execution.
 `ToolApproval` hook before executing it. The flow is:
 
 1. LLM emits a call to the gated tool
-2. The runtime emits a `HookEvent` with a deferred `HookPart`; the
+2. The runtime emits a `PendingHookEvent` with a deferred `HookPart`; the
    backend aborts the deferred hook (`ai.defer_hook`) so the turn
    ends and the deferred approval streams to the client
 3. The frontend renders Approve / Reject buttons via the

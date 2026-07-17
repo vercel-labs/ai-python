@@ -206,7 +206,7 @@ async def test_finish_metadata_tracks_tool_and_internal_messages() -> None:
                 message=tool,
                 results=tool.tool_results,
             ),
-            agent_events_.HookEvent(message=internal, hook=hook),
+            agent_events_.HookEvent.for_hook(message=internal, hook=hook),
         ]
     )
 
@@ -435,7 +435,7 @@ async def test_approval_request_hook_emits_approval_event() -> None:
                 ),
             ),
             # Hook requesting approval
-            agent_events_.HookEvent(
+            agent_events_.HookEvent.for_hook(
                 message=messages_.Message(
                     role="internal",
                     parts=[
@@ -638,7 +638,7 @@ async def test_resolved_approval_hook_emits_response_event() -> None:
 
     out = await _collect(
         [
-            agent_events_.HookEvent(
+            agent_events_.HookEvent.for_hook(
                 message=messages_.Message(
                     id="turn-1:internal:0",
                     turn_id="turn-1",

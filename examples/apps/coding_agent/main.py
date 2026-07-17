@@ -402,8 +402,10 @@ class CodingAgentApp(textual.app.App[None]):
                                         part.result, is_error=part.is_error
                                     ),
                                 )
+                    elif isinstance(event, ai.events.PendingHookEvent):
+                        self._mount_prompt(event.hook)
                     elif isinstance(event, ai.events.HookEvent):
-                        self._on_hook(event.hook)
+                        self._drop_prompt(event.hook.hook_id)
             finally:
                 # ``stream.messages`` is always a clean prefix of
                 # completed rounds — keep it even on interrupt/error so
@@ -413,15 +415,12 @@ class CodingAgentApp(textual.app.App[None]):
 
     # -- approval hooks ------------------------------------------------------
 
-    def _on_hook(self, hook: ai.messages.HookPart[Any]) -> None:
-        """Mount or dismiss an approval prompt for a hook signal."""
-        if hook.status == "pending":
-            prompt = ApprovalPrompt(hook)
-            self.query_one("#dock").mount(prompt, before=self.composer)
-            if not isinstance(self.focused, ApprovalPrompt):
-                prompt.focus()
-        else:
-            self._drop_prompt(hook.hook_id)
+    def _mount_prompt(self, hook: ai.messages.HookPart[Any]) -> None:
+        """Mount an approval prompt for a pending hook."""
+        prompt = ApprovalPrompt(hook)
+        self.query_one("#dock").mount(prompt, before=self.composer)
+        if not isinstance(self.focused, ApprovalPrompt):
+            prompt.focus()
 
     def on_approval_prompt_decided(self, event: ApprovalPrompt.Decided) -> None:
         ai.resolve_hook(

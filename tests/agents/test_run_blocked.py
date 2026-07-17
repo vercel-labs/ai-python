@@ -328,7 +328,7 @@ async def test_unattributed_hook_in_tool_fails_closed() -> None:
 
 
 def _hook_event(hook: messages_.HookPart[Any]) -> events_.HookEvent:
-    return events_.HookEvent(
+    return events_.HookEvent.for_hook(
         message=messages_.Message(role="internal", parts=[hook]), hook=hook
     )
 
