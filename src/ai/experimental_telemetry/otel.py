@@ -174,14 +174,15 @@ def _content_attributes(
     output: messages_.Message | None,
     *,
     error: bool,
+    finish_reason: str | None = None,
 ) -> dict[str, str]:
     """gen_ai message content attributes, in the semconv message shape.
 
     System messages are excluded from ``input.messages`` and carried as
     ``gen_ai.system_instructions`` (a flat parts list), per semconv.
-    The schema requires ``finish_reason`` on output messages but the
-    span data doesn't capture it yet (see NEW_DATA_CAPTURE.md), so it
-    is inferred: ``error`` when the span errored, ``tool_call`` when
+    The schema requires ``finish_reason`` on output messages; when the
+    span data doesn't carry one (replay, spans recorded before capture)
+    it is inferred: ``error`` when the span errored, ``tool_call`` when
     the output requests a tool call, ``stop`` otherwise.
     """
     system_parts: list[dict[str, Any]] = []
@@ -197,7 +198,9 @@ def _content_attributes(
         attrs["gen_ai.system_instructions"] = json.dumps(system_parts)
     if output is not None:
         role, parts = _semconv_parts(output)
-        if error:
+        if finish_reason is not None:
+            finish = finish_reason
+        elif error:
             finish = "error"
         elif any(p["type"] == "tool_call" for p in parts):
             finish = "tool_call"
@@ -309,10 +312,20 @@ def _attributes(sp: telemetry.Span, *, capture_content: bool) -> dict[str, Any]:
                 attrs["gen_ai.provider.name"] = provider
             attrs["gen_ai.request.model"] = d.model
             attrs["gen_ai.request.stream"] = True
+            if d.output_type is not None:
+                # Structured output was requested; the semconv value is
+                # the output kind, not the Python type name.
+                attrs["gen_ai.output.type"] = "json"
             attrs |= _request_attributes(d.params)
             ttfc = _time_to_first_chunk(sp)
             if ttfc is not None:
                 attrs["gen_ai.response.time_to_first_chunk"] = ttfc
+            if d.finish_reason is not None:
+                attrs["gen_ai.response.finish_reasons"] = [d.finish_reason]
+            if d.response_id is not None:
+                attrs["gen_ai.response.id"] = d.response_id
+            if d.response_model is not None:
+                attrs["gen_ai.response.model"] = d.response_model
             if d.usage is not None:
                 attrs |= _usage_attributes(d.usage)
             if capture_content:
@@ -321,7 +334,10 @@ def _attributes(sp: telemetry.Span, *, capture_content: bool) -> dict[str, Any]:
                         d.tool_names
                     )
                 attrs |= _content_attributes(
-                    d.messages, d.message, error=sp.error is not None
+                    d.messages,
+                    d.message,
+                    error=sp.error is not None,
+                    finish_reason=d.finish_reason,
                 )
         case telemetry.AiGenerateSpanData() as d:
             attrs["gen_ai.operation.name"] = "generate_content"
@@ -351,6 +367,8 @@ def _attributes(sp: telemetry.Span, *, capture_content: bool) -> dict[str, Any]:
             attrs["gen_ai.tool.name"] = d.tool_name
             attrs["gen_ai.tool.type"] = "function"
             attrs["gen_ai.tool.call.id"] = d.tool_call_id
+            if d.tool_description is not None:
+                attrs["gen_ai.tool.description"] = d.tool_description
             if d.is_error:
                 # The exception type is not captured when the error is
                 # only a model-facing result (see NEW_DATA_CAPTURE.md);
@@ -378,6 +396,8 @@ def _attributes(sp: telemetry.Span, *, capture_content: bool) -> dict[str, Any]:
                 # the output kind, not the Python type name.
                 attrs["gen_ai.output.type"] = "json"
             attrs |= _request_attributes(d.params)
+            if d.usage is not None:
+                attrs |= _usage_attributes(d.usage)
             if capture_content:
                 if d.tool_names:
                     attrs["gen_ai.tool.definitions"] = _tool_definitions(

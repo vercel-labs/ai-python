@@ -631,9 +631,11 @@ class BoundToolCall:
 
     async def __call__(self, **overrides: Any) -> events_.ToolCallResult:
         """Execute the tool and return a :class:`ToolCallResult`."""
+        spec = self._tool.tool.spec
         data = telemetry.ToolExecutionSpanData(
             tool_name=self._part.tool_name,
             tool_call_id=self._part.tool_call_id,
+            tool_description=spec.description if spec is not None else None,
         )
 
         # Replay-from-deferred-hook short-circuit: if a prior run already
@@ -1453,6 +1455,7 @@ class Agent:
                     params=params,
                 )
             ) as sp:
+                initial_count = len(context.messages)
                 mw_token: middleware_.Token | None = None
                 if _middleware is not None:
                     parent = middleware_.get()
@@ -1485,6 +1488,15 @@ class Agent:
                         ),
                         None,
                     )
+                    total: types.usage.Usage | None = None
+                    for msg in context.messages[initial_count:]:
+                        if msg.usage is not None:
+                            total = (
+                                msg.usage
+                                if total is None
+                                else total + msg.usage
+                            )
+                    sp.data.usage = total
 
         async with (
             hooks_.use_hook_registry(registry),

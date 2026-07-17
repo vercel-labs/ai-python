@@ -822,6 +822,18 @@ def _expand_tool_call(
     ]
 
 
+# AI SDK finish reasons → the framework's finish reasons (the gen_ai
+# semconv vocabulary, see ``types.events.StreamEnd``); unmapped values
+# (``other``, ``unknown``) pass through raw.
+_FINISH_REASONS: dict[str, str] = {
+    "stop": "stop",
+    "length": "length",
+    "content-filter": "content_filter",
+    "tool-calls": "tool_call",
+    "error": "error",
+}
+
+
 def _parse_usage(data: Any) -> types.usage.Usage:
     """Parse v3 usage data into an internal ``Usage``."""
     if not isinstance(data, dict):
@@ -994,7 +1006,17 @@ def _parse_stream_part(
         case "finish":
             usage_data = data.get("usage")
             usage = _parse_usage(usage_data) if usage_data else None
-            return [types.events.StreamEnd(usage=usage)]
+            finish = data.get("finishReason")
+            return [
+                types.events.StreamEnd(
+                    usage=usage,
+                    finish_reason=(
+                        _FINISH_REASONS.get(finish, finish)
+                        if isinstance(finish, str)
+                        else None
+                    ),
+                )
+            ]
 
         case _:
             return []

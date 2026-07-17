@@ -441,6 +441,39 @@ def test_request_attributes_from_json_restored_params() -> None:
     assert attrs["gen_ai.request.reasoning.level"] == "low"
 
 
+def test_response_identity_attributes() -> None:
+    sp = _stream_span(
+        output_type="MyModel",
+        message=text_msg("truncated"),
+        finish_reason="length",
+        response_id="resp-1",
+        response_model="mock-model-v2",
+    )
+    attrs = otel._attributes(sp, capture_content=True)
+    assert attrs["gen_ai.response.finish_reasons"] == ["length"]
+    assert attrs["gen_ai.response.id"] == "resp-1"
+    assert attrs["gen_ai.response.model"] == "mock-model-v2"
+    # Structured output requested: the semconv output kind, not the
+    # Python type name.
+    assert attrs["gen_ai.output.type"] == "json"
+    # The captured finish reason wins over the inferred fallback.
+    (out,) = json.loads(attrs["gen_ai.output.messages"])
+    assert out["finish_reason"] == "length"
+
+
+def test_tool_span_description() -> None:
+    data = ai.experimental_telemetry.ToolExecutionSpanData(
+        tool_name="lookup",
+        tool_call_id="tc-1",
+        tool_description="Look things up.",
+    )
+    sp = ai.experimental_telemetry.Span(
+        name="tool_execution", data=data, id="span-1", trace_id="trace-1"
+    )
+    attrs = otel._attributes(sp, capture_content=False)
+    assert attrs["gen_ai.tool.description"] == "Look things up."
+
+
 def test_semconv_message_content_shapes() -> None:
     messages = [
         messages_.Message(
@@ -574,6 +607,7 @@ def test_run_span_attributes() -> None:
         provider="ai-gateway",
         tool_names=["lookup"],
         output_type="MyModel",
+        usage=usage_.Usage(input_tokens=30, output_tokens=5),
     )
     sp = ai.experimental_telemetry.Span(
         name="run", data=data, id="span-1", trace_id="trace-1"
@@ -587,6 +621,8 @@ def test_run_span_attributes() -> None:
     # Structured output requested: the semconv output kind, not the
     # Python type name.
     assert attrs["gen_ai.output.type"] == "json"
+    assert attrs["gen_ai.usage.input_tokens"] == 30
+    assert attrs["gen_ai.usage.output_tokens"] == 5
     assert json.loads(attrs["gen_ai.tool.definitions"]) == [
         {"type": "function", "name": "lookup"}
     ]

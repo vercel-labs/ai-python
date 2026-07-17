@@ -355,6 +355,70 @@ async def test_responses_streams_text_and_usage() -> None:
     }
 
 
+@pytest.mark.parametrize(
+    ("response", "finish_reason"),
+    [
+        (
+            {"id": "resp_1", "model": "gpt-5.4-turbo", "status": "completed"},
+            "stop",
+        ),
+        (
+            {
+                "id": "resp_1",
+                "model": "gpt-5.4-turbo",
+                "status": "completed",
+                "output": [{"type": "function_call", "name": "lookup"}],
+            },
+            "tool_call",
+        ),
+        (
+            {
+                "id": "resp_1",
+                "model": "gpt-5.4-turbo",
+                "status": "incomplete",
+                "incomplete_details": {"reason": "max_output_tokens"},
+            },
+            "length",
+        ),
+        (
+            {
+                "id": "resp_1",
+                "model": "gpt-5.4-turbo",
+                "status": "incomplete",
+                "incomplete_details": {"reason": "content_filter"},
+            },
+            "content_filter",
+        ),
+        (
+            {"id": "resp_1", "model": "gpt-5.4-turbo", "status": "failed"},
+            "error",
+        ),
+    ],
+)
+async def test_responses_stream_end_response_identity(
+    response: dict[str, Any], finish_reason: str
+) -> None:
+    """The final response's identity and finish reason land on StreamEnd."""
+    fake, _ = _patch_responses(
+        [{"type": f"response.{response['status']}", "response": response}]
+    )
+
+    collected = [
+        event
+        async for event in protocol.OpenAIResponsesProtocol().stream(
+            fake,
+            _MODEL,
+            [ai.user_message("Hi")],
+            provider="openai",
+        )
+    ]
+    end = collected[-1]
+    assert isinstance(end, events.StreamEnd)
+    assert end.finish_reason == finish_reason
+    assert end.response_id == "resp_1"
+    assert end.response_model == "gpt-5.4-turbo"
+
+
 async def test_responses_streams_function_tool_call() -> None:
     fake, _ = _patch_responses(
         [

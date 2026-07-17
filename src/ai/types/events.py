@@ -52,7 +52,24 @@ class StreamStart(ModelEvent):
 
 
 class StreamEnd(ModelEvent):
+    """End of a model response.
+
+    ``finish_reason`` is why the model stopped.  The framework adopts
+    the OpenTelemetry gen_ai finish-reason vocabulary as its own:
+    ``stop``, ``length``, ``content_filter``, ``tool_call``, ``error``.
+    Provider adapters normalize their native stop reasons into it;
+    provider values with no equivalent pass through verbatim.
+
+    ``response_id``/``response_model`` identify the provider response —
+    ``response_model`` can differ from the requested model under
+    gateway routing or fallbacks.  All are ``None`` when the provider
+    doesn't report them.
+    """
+
     kind: Literal["stream_end"] = "stream_end"
+    finish_reason: str | None = None
+    response_id: str | None = None
+    response_model: str | None = None
 
 
 class TextStart(ModelEvent):

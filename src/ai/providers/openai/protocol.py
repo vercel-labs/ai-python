@@ -22,6 +22,17 @@ if TYPE_CHECKING:
     import openai
     import pydantic
 
+# OpenAI finish reasons → the framework's finish reasons (the gen_ai
+# semconv vocabulary, see ``types.events.StreamEnd``); unmapped values
+# pass through raw.
+_FINISH_REASONS: dict[str, str] = {
+    "stop": "stop",
+    "length": "length",
+    "content_filter": "content_filter",
+    "tool_calls": "tool_call",
+    "function_call": "tool_call",
+}
+
 # ---------------------------------------------------------------------------
 # Message / tool conversion — internal types → OpenAI wire format
 # ---------------------------------------------------------------------------
@@ -591,10 +602,17 @@ async def stream(
         reasoning_started = False
         tc_state: dict[int, dict[str, Any]] = {}
         usage: types.usage.Usage | None = None
+        finish_reason: str | None = None
+        response_id: str | None = None
+        response_model: str | None = None
 
         yield types.events.StreamStart()
 
         async for chunk in sdk_stream:
+            if chunk.id:
+                response_id = chunk.id
+            if chunk.model:
+                response_model = chunk.model
             if chunk.usage is not None:
                 raw = chunk.usage.model_dump(exclude_none=True)
                 reasoning_tokens: int | None = None
@@ -682,6 +700,9 @@ async def stream(
                                 )
 
             if choice.finish_reason is not None:
+                finish_reason = _FINISH_REASONS.get(
+                    choice.finish_reason, choice.finish_reason
+                )
                 if reasoning_started:
                     yield types.events.ReasoningEnd(block_id="reasoning")
                     reasoning_started = False
@@ -696,7 +717,12 @@ async def stream(
                         )
                         tc["started"] = False
 
-        yield types.events.StreamEnd(usage=usage)
+        yield types.events.StreamEnd(
+            usage=usage,
+            finish_reason=finish_reason,
+            response_id=response_id,
+            response_model=response_model,
+        )
     except openai_sdk.OpenAIError as exc:
         raise errors.map_error(
             exc,
@@ -822,6 +848,41 @@ def _provider_metadata_for_response(
         **({"status": status} if isinstance(status, str) else {}),
     }
     return {_OPENAI_METADATA_KEY: data} if data else {}
+
+
+def _finish_reason_from_response(
+    response: Mapping[str, Any] | None,
+) -> str | None:
+    """Derive the framework finish reason from a final Responses payload.
+
+    The Responses API has no finish_reason field: it is derived from
+    the terminal status, the incomplete reason, and whether the output
+    contains function calls.
+    """
+    if response is None:
+        return None
+    match response.get("status"):
+        case "failed":
+            return "error"
+        case "incomplete":
+            details = response.get("incomplete_details")
+            reason = (
+                details.get("reason") if isinstance(details, Mapping) else None
+            )
+            if reason == "max_output_tokens":
+                return "length"
+            return reason if isinstance(reason, str) else None
+        case "completed":
+            output = response.get("output")
+            if isinstance(output, list) and any(
+                isinstance(item, Mapping)
+                and item.get("type") == "function_call"
+                for item in output
+            ):
+                return "tool_call"
+            return "stop"
+        case _:
+            return None
 
 
 def _maybe_item_reference(
@@ -1346,6 +1407,7 @@ async def _stream_responses(
     builtin_states_by_index: dict[str, dict[str, Any]] = {}
     usage: types.usage.Usage | None = None
     response_metadata: dict[str, Any] | None = None
+    final_response: Mapping[str, Any] | None = None
 
     try:
         sdk_stream = await sdk_client.responses.create(**api_kwargs)
@@ -1370,6 +1432,7 @@ async def _stream_responses(
                     response_metadata = _provider_metadata_for_response(
                         response
                     )
+                    final_response = response
                 continue
 
             if event_type == "response.failed":
@@ -1379,6 +1442,7 @@ async def _stream_responses(
                     response_metadata = _provider_metadata_for_response(
                         response
                     )
+                    final_response = response
                 continue
 
             if event_type == "error":
@@ -1786,9 +1850,18 @@ async def _stream_responses(
         for block_id in list(reasoning_blocks):
             yield types.events.ReasoningEnd(block_id=block_id)
 
+        response_id = response_model = None
+        if final_response is not None:
+            rid = final_response.get("id")
+            response_id = rid if isinstance(rid, str) else None
+            rmodel = final_response.get("model")
+            response_model = rmodel if isinstance(rmodel, str) else None
         yield types.events.StreamEnd(
             usage=usage,
             provider_metadata=response_metadata,
+            finish_reason=_finish_reason_from_response(final_response),
+            response_id=response_id,
+            response_model=response_model,
         )
     except openai_sdk.OpenAIError as exc:
         raise errors.map_error(
