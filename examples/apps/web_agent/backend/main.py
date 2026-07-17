@@ -46,7 +46,7 @@ async def log_validation_errors(
     )
 
 
-@app.get("/health")
+@app.get("/api/health")
 async def health() -> dict[str, str]:
     """Health check endpoint."""
     return {"status": "ok"}
@@ -58,7 +58,7 @@ class ChatRequest(pydantic.BaseModel):
     messages: list[ai.ui.ai_sdk.UIMessage]
 
 
-@app.post("/chat")
+@app.post("/api/chat")
 async def chat(request: ChatRequest) -> fastapi.responses.StreamingResponse:
     """Handle chat requests and stream responses."""
     messages, approvals = ai.ui.ai_sdk.to_messages(request.messages)

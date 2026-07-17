@@ -82,13 +82,17 @@ export default function App() {
                       // Handle tool parts (type starts with "tool-")
                       if (part.type.startsWith("tool-")) {
                         const toolPart = part as ToolUIPart;
+                        const needsApproval =
+                          toolPart.state === "approval-requested";
                         const isComplete =
                           toolPart.state === "output-available";
 
                         return (
                           <Tool
                             key={`${message.id}-${partIndex}`}
-                            defaultOpen={isComplete}
+                            {...(needsApproval
+                              ? { open: true }
+                              : { defaultOpen: isComplete })}
                           >
                             <ToolHeader
                               type={toolPart.type}
