@@ -1,0 +1,19 @@
+name: Changelog label
+
+"on":
+  pull_request:
+    types: [opened, reopened, synchronize, labeled, unlabeled]
+
+permissions:
+  pull-requests: read
+
+jobs:
+  changelog-label:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: mheap/github-action-required-labels@v5
+        with:
+          mode: exactly
+          count: 1
+          labels: breaking, feature, fix, internal
+          message: "Label this PR with exactly one of: `breaking`, `feature`, `fix`, `internal` (see CONTRIBUTING.md). Release notes are generated from these labels; use `internal` for changes that should not appear in them."

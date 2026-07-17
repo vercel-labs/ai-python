@@ -14,7 +14,6 @@ classifiers = [
     "Intended Audience :: Information Technology",
     "License :: OSI Approved :: Apache Software License",
     "Operating System :: OS Independent",
-    "Operating System :: OS Independent",
     "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",
@@ -44,6 +43,12 @@ otel = [
 vercel = [
     "vercel>=0.5.9",
 ]
+
+[project.urls]
+Homepage = "https://ai-python.dev"
+Repository = "https://github.com/vercel-labs/ai-python"
+Issues = "https://github.com/vercel-labs/ai-python/issues"
+Changelog = "https://github.com/vercel-labs/ai-python/releases"
 
 [build-system]
 requires = ["hatchling", "uv-dynamic-versioning>=0.7.0"]

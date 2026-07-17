@@ -105,7 +105,7 @@ async with agent.run(model, [ai.user_message("Robot uprising?")]) as s:
 const HomePage = () => (
   <div className="container mx-auto max-w-5xl">
     <Hero
-      badge="Now in Alpha"
+      badge="Now in Beta"
       description={description}
       title={title}
     >
