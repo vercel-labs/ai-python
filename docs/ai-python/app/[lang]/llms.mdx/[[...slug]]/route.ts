@@ -3,5 +3,5 @@ import { geistdocsSource } from "@/lib/geistdocs/source";
 
 export const { GET, generateStaticParams, revalidate } =
   createDocsMarkdownRoute({
-    source: geistdocsSource,
+    sources: [geistdocsSource],
   });

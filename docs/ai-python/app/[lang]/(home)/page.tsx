@@ -10,7 +10,7 @@ import {
   CommandPromptTrigger,
   CommandPromptTriggerDivider,
   CommandPromptViewport,
-} from "@/components/ui/command-prompt";
+} from "@vercel/geistdocs/components/command-prompt";
 import { CenteredSection } from "./components/centered-section";
 import { CTA } from "./components/cta";
 import { Hero } from "./components/hero";
