@@ -216,6 +216,7 @@ def _messages_to_google(
                         case types.messages.ToolCallPart():
                             call_entry: dict[str, Any] = {
                                 "function_call": {
+                                    "id": part.tool_call_id,
                                     "name": part.tool_name,
                                     "args": json.loads(part.tool_args)
                                     if part.tool_args
@@ -264,6 +265,7 @@ def _messages_to_google(
                         tool_parts.append(
                             {
                                 "function_response": {
+                                    "id": part.tool_call_id,
                                     "name": part.tool_name,
                                     "response": _tool_result_to_google(part),
                                 }

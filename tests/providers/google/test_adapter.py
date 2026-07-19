@@ -241,6 +241,7 @@ async def test_tool_round_trip_and_result_wrapping() -> None:
             "parts": [
                 {
                     "function_call": {
+                        "id": "fc_1",
                         "name": "get_weather",
                         "args": {"city": "Tokyo"},
                     }
@@ -252,6 +253,7 @@ async def test_tool_round_trip_and_result_wrapping() -> None:
             "parts": [
                 {
                     "function_response": {
+                        "id": "fc_1",
                         "name": "get_weather",
                         "response": {"output": "sunny"},
                     }
@@ -298,6 +300,7 @@ async def test_dict_tool_result_passes_through_unwrapped() -> None:
     assert tool_content["parts"] == [
         {
             "function_response": {
+                "id": "fc_1",
                 "name": "get_weather",
                 "response": {"condition": "sunny", "temp_c": 30},
             }
@@ -713,7 +716,11 @@ async def test_tool_call_signature_round_trips() -> None:
     )
     assert model_content["parts"] == [
         {
-            "function_call": {"name": "get_weather", "args": {}},
+            "function_call": {
+                "id": "fc_1",
+                "name": "get_weather",
+                "args": {},
+            },
             "thought_signature": b"sig-bytes",
         }
     ]
