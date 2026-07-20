@@ -552,6 +552,8 @@ async def stream(
     text_signature: str | None = None
     reasoning_signature: str | None = None
     file_index = 0
+    # Fallback pairing for code execution results when the server does
+    # not populate part ids (Vertex AI never does).
     last_exec_tool_id = ""
 
     try:
@@ -633,7 +635,9 @@ async def stream(
                         ),
                     )
                 elif part.executable_code is not None:
-                    tool_id = types.messages.generate_id("call")
+                    tool_id = part.executable_code.id or (
+                        types.messages.generate_id("call")
+                    )
                     last_exec_tool_id = tool_id
                     exec_args = json.dumps(
                         part.executable_code.model_dump(
@@ -667,10 +671,11 @@ async def stream(
                     result_payload = part.code_execution_result.model_dump(
                         mode="json", exclude_none=True
                     )
+                    tool_id = part.code_execution_result.id or last_exec_tool_id
                     yield events.BuiltinToolResult(
-                        tool_call_id=last_exec_tool_id,
+                        tool_call_id=tool_id,
                         result=types.messages.BuiltinToolReturnPart(
-                            tool_call_id=last_exec_tool_id,
+                            tool_call_id=tool_id,
                             tool_name=_CODE_EXECUTION_TOOL,
                             result=result_payload,
                             is_error=result_payload.get("outcome")

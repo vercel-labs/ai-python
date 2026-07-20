@@ -171,6 +171,54 @@ async def test_code_execution_parts_emit_builtin_events() -> None:
     assert ret.is_error is False
 
 
+async def test_code_execution_results_pair_by_id() -> None:
+    s = await _drain(
+        [
+            chunk(
+                [
+                    genai_types.Part(
+                        executable_code=genai_types.ExecutableCode(
+                            code="print(1)",
+                            language=genai_types.Language.PYTHON,
+                            id="exec_1",
+                        )
+                    ),
+                    genai_types.Part(
+                        executable_code=genai_types.ExecutableCode(
+                            code="print(2)",
+                            language=genai_types.Language.PYTHON,
+                            id="exec_2",
+                        )
+                    ),
+                    genai_types.Part(
+                        code_execution_result=genai_types.CodeExecutionResult(
+                            outcome=genai_types.Outcome.OUTCOME_OK,
+                            output="1\n",
+                            id="exec_1",
+                        )
+                    ),
+                    genai_types.Part(
+                        code_execution_result=genai_types.CodeExecutionResult(
+                            outcome=genai_types.Outcome.OUTCOME_OK,
+                            output="2\n",
+                            id="exec_2",
+                        )
+                    ),
+                ]
+            )
+        ]
+    )
+
+    calls = s.message.builtin_tool_calls
+    assert [c.tool_call_id for c in calls] == ["exec_1", "exec_2"]
+
+    returns = s.message.builtin_tool_returns
+    assert {r.tool_call_id: r.result["output"] for r in returns} == {
+        "exec_1": "1\n",
+        "exec_2": "2\n",
+    }
+
+
 async def test_inline_data_emits_file_event() -> None:
     fake = FakeGoogleClient(
         chunks=[
