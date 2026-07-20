@@ -1,12 +1,15 @@
+import { MobileDocsBar } from "@vercel/geistdocs/mobile-docs-bar";
 import { createDocsPage } from "@vercel/geistdocs/pages/docs";
 import { getMDXComponents } from "@/components/geistdocs/mdx-components";
-import { MobileDocsBar } from "@/components/geistdocs/mobile-docs-bar";
 import { config } from "@/lib/geistdocs/config";
 import { geistdocsSource } from "@/lib/geistdocs/source";
 
 const docsPage = createDocsPage({
   config,
   mdx: ({ link }) => getMDXComponents({ a: link }),
+  openGraph: {
+    images: true,
+  },
   source: geistdocsSource,
   tableOfContentPopover: {
     enabled: false,
