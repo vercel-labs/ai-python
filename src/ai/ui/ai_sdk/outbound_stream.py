@@ -16,7 +16,12 @@ from . import approvals, outbound_messages, ui_events
 from .tool_utils import normalize_tool_input
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, AsyncIterable
+    from collections.abc import AsyncGenerator, AsyncIterable, Callable
+
+
+def _default_error_text(_: Exception) -> str:
+    """Return a safe client-facing message for stream failures."""
+    return "An error occurred."
 
 
 def _tool_error_text(part: messages_.ToolResultPart) -> str:
@@ -621,8 +626,18 @@ async def to_stream(
 
 async def to_sse(
     events: AsyncIterable[events_.AgentEvent],
+    *,
+    on_error: Callable[[Exception], str] = _default_error_text,
 ) -> AsyncGenerator[str]:
-    """Convert an internal event stream into SSE strings."""
-    async for event in to_stream(events):
-        yield format_sse(event)
+    """Convert an internal event stream into SSE strings.
+
+    Stream failures become AI SDK UI ``error`` events.  The default message
+    avoids exposing server-side details; use ``on_error`` to log the exception
+    or return a more specific client-facing message.
+    """
+    try:
+        async for event in to_stream(events):
+            yield format_sse(event)
+    except Exception as error:
+        yield format_sse(ui_events.UIErrorEvent(error_text=on_error(error)))
     yield format_done_sse()
