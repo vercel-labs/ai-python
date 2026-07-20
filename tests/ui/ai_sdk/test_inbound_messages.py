@@ -71,6 +71,39 @@ def test_to_messages_splits_at_tool_boundary() -> None:
     assert messages[1].tool_results[0].tool_call_id == "tc1"
 
 
+@pytest.mark.parametrize(
+    "tool_part",
+    [
+        _tool("search", "tc1", "input-streaming", input={"q": "par"}),
+        {
+            "type": "dynamic-tool",
+            "toolName": "search",
+            "toolCallId": "tc1",
+            "state": "input-streaming",
+            "input": {"q": "par"},
+        },
+        {
+            "type": "tool-invocation",
+            "toolName": "search",
+            "toolInvocationId": "tc1",
+            "state": "input-streaming",
+            "args": {"q": "par"},
+        },
+    ],
+)
+def test_to_messages_skips_incomplete_tool_calls(
+    tool_part: dict[str, Any],
+) -> None:
+    messages, approvals = to_messages(
+        [_ui("assistant", _text("Searching"), tool_part)]
+    )
+
+    assert approvals == []
+    assert len(messages) == 1
+    assert messages[0].text == "Searching"
+    assert messages[0].tool_calls == []
+
+
 def test_to_messages_keeps_deferred_approval_tombstone() -> None:
     """Deferred approvals carry no response — leave the tombstone in history."""
     messages, _ = to_messages(
