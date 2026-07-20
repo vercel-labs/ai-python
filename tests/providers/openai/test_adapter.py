@@ -355,6 +355,100 @@ async def test_responses_streams_text_and_usage() -> None:
     }
 
 
+@pytest.mark.parametrize(
+    ("code", "message", "is_retryable"),
+    [
+        ("invalid_prompt", "The prompt could not be processed.", False),
+        ("rate_limit_exceeded", "Too many requests.", True),
+    ],
+)
+async def test_responses_failed_raises_provider_error(
+    code: str, message: str, is_retryable: bool
+) -> None:
+    fake, _ = _patch_responses(
+        [
+            {
+                "type": "response.failed",
+                "response": {
+                    "id": "resp_1",
+                    "status": "failed",
+                    "error": {
+                        "code": code,
+                        "message": message,
+                    },
+                },
+            }
+        ]
+    )
+
+    with pytest.raises(ai.ProviderResponseError) as exc_info:
+        await _drain(
+            protocol.OpenAIResponsesProtocol().stream(
+                fake,
+                _MODEL,
+                [ai.user_message("Hi")],
+                provider="openai",
+            )
+        )
+
+    exc = exc_info.value
+    assert exc.provider == "openai"
+    assert exc.code == code
+    assert exc.message == message
+    assert exc.is_retryable is is_retryable
+    assert exc.body == {
+        "code": code,
+        "message": message,
+    }
+
+
+async def test_responses_failed_preserves_partial_message() -> None:
+    fake, _ = _patch_responses(
+        [
+            {
+                "type": "response.output_item.added",
+                "output_index": 0,
+                "item": {
+                    "id": "msg_1",
+                    "type": "message",
+                    "role": "assistant",
+                },
+            },
+            {
+                "type": "response.output_text.delta",
+                "item_id": "msg_1",
+                "delta": "partial",
+            },
+            {
+                "type": "response.failed",
+                "response": {
+                    "id": "resp_1",
+                    "status": "failed",
+                    "error": {
+                        "code": "server_error",
+                        "message": "The model failed to generate a response.",
+                    },
+                },
+            },
+        ]
+    )
+    stream = ai.Stream(
+        protocol.OpenAIResponsesProtocol().stream(
+            fake,
+            _MODEL,
+            [ai.user_message("Hi")],
+            provider="openai",
+        )
+    )
+
+    with pytest.raises(ai.ProviderResponseError) as exc_info:
+        async for _ in stream:
+            pass
+
+    assert stream.text == "partial"
+    assert exc_info.value.is_retryable is True
+
+
 async def test_responses_streams_function_tool_call() -> None:
     fake, _ = _patch_responses(
         [

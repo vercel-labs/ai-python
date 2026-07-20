@@ -22,6 +22,10 @@ if TYPE_CHECKING:
     import openai
     import pydantic
 
+_RETRYABLE_RESPONSE_ERROR_CODES = frozenset(
+    {"rate_limit_exceeded", "server_error", "vector_store_timeout"}
+)
+
 # ---------------------------------------------------------------------------
 # Message / tool conversion — internal types → OpenAI wire format
 # ---------------------------------------------------------------------------
@@ -1379,7 +1383,25 @@ async def _stream_responses(
                     response_metadata = _provider_metadata_for_response(
                         response
                     )
-                continue
+                    error = response.get("error")
+                else:
+                    error = None
+                if isinstance(error, Mapping):
+                    body: object = dict(error)
+                    message = error.get("message") or error.get("code") or error
+                    error_code = error.get("code")
+                    code = error_code if isinstance(error_code, str) else None
+                else:
+                    body = error if error is not None else response
+                    message = error or "OpenAI response failed"
+                    code = None
+                raise ai_errors.ProviderResponseError(
+                    str(message),
+                    provider=provider,
+                    body=body,
+                    code=code,
+                    is_retryable=(code in _RETRYABLE_RESPONSE_ERROR_CODES),
+                )
 
             if event_type == "error":
                 error = data.get("error")
