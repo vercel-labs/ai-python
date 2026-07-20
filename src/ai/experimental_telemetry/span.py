@@ -569,14 +569,19 @@ _current_sink: contextvars.ContextVar[Sink | None] = contextvars.ContextVar(
 
 
 @util.contextmanager_any_sync
-def use_sink(sink: Sink) -> Iterator[None]:
+def use_sink(sink: Sink | None) -> Iterator[None]:
     """Route span pushes to ``sink`` within this context.
 
     The default (outside any ``use_sink``) is the adapter registry.
     Inside a durable workflow body where side effects are not allowed, you
     can route to a :class:`Collector` instead and re-push the collected spans
     from a step / activity.
+
+    ``None`` is a no-op.
     """
+    if sink is None:
+        yield
+        return
     token = _current_sink.set(sink)
     try:
         yield
