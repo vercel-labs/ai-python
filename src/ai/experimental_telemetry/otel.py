@@ -1,4 +1,4 @@
-"""OpenTelemetry adapter: forwards spans to an otel tracer.
+"""OpenTelemetry adapter.
 
 Experimental: not part of the stable API, may change or be removed.
 
@@ -7,48 +7,31 @@ Experimental: not part of the stable API, may change or be removed.
     from ai.experimental_telemetry import otel
     otel.install()  # uses the global TracerProvider
 
-Span names and attributes follow the ``gen_ai`` semantic conventions,
-so LLM-aware viewers (Phoenix, Braintrust, Langfuse, Datadog, ...)
-render them natively.
+Follows the ``gen_ai`` semantic conventions.
 
-The adapter also attaches each current-setting otel span to the otel
-context in the task that opened it, so raw otel spans a user creates
-inside a tool still parent correctly under ours — and our root spans
-nest under any raw otel span the caller already has open.  Spans
-opened with ``set_as_current=False`` are never attached: they don't
-parent concurrent work in our tree, so they must not do it in otel's.
-
-Identity: otel ids are derived deterministically from the framework's
-span/trace ids (a truncated hash), via an id generator installed on the
-SDK tracer provider.  That is what makes spans that cross processes
-line up: a span finished and pushed in a different process than it
-started in exports under the same otel identity its children already
-parented to, and a re-emitted span comes out under the same ids instead
-of duplicating the tree.  A span whose parent is not live in this
-process is parented through those derived ids directly.
-
-With a non-SDK tracer provider (no id generator to install) the
-adapter still works for in-process traces, but ids fall back to
-whatever the tracer mints, so cross-process parenting degrades; a
-warning is logged once if that comes up.
+There's a certain amount of jank in this adapter, because we want it to work in
+the durable execution case, which conflicts with the OTel spec.
 """
 
 from __future__ import annotations
 
+import contextlib
 import contextvars
 import hashlib
 import json
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+
+import pydantic
 
 from .. import errors
 from .. import experimental_telemetry as telemetry
+from ..types import messages as messages_
 
 try:
-    from opentelemetry import context as otel_context
-    from opentelemetry import trace as otel_trace
-    from opentelemetry.sdk import trace as sdk_trace
-    from opentelemetry.sdk.trace import id_generator as sdk_id_generator
+    import opentelemetry.context
+    import opentelemetry.sdk.trace.id_generator
+    import opentelemetry.trace
 except ModuleNotFoundError as exc:  # pragma: no cover
     raise errors.InstallationError(
         "could not import `opentelemetry`, which is required for the otel "
@@ -59,13 +42,14 @@ except ModuleNotFoundError as exc:  # pragma: no cover
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
-    from ..types import messages as messages_
-
 logger = logging.getLogger(__name__)
+
+_MESSAGES_ADAPTER = pydantic.TypeAdapter(list[messages_.Message])
 
 
 def _messages_json(messages: list[messages_.Message]) -> str:
-    return "[" + ",".join(m.model_dump_json() for m in messages) + "]"
+    # turn messages into a string to put it into an otel attribute
+    return _MESSAGES_ADAPTER.dump_json(messages).decode()
 
 
 def _name(sp: telemetry.Span) -> str:
@@ -125,6 +109,7 @@ def _attributes(sp: telemetry.Span) -> dict[str, Any]:
             attrs["ai.hook.status"] = d.status
         case telemetry.CustomSpanData() as d:
             for key, value in d.attributes.items():
+                # otel only allows scalar attribute values or lists of them
                 attrs[key] = (
                     value
                     if isinstance(value, str | bool | int | float)
@@ -134,57 +119,84 @@ def _attributes(sp: telemetry.Span) -> dict[str, Any]:
 
 
 def _derive_trace_id(id_: str) -> int:
-    """Derive a stable, nonzero otel trace id (128 bits) from one of ours."""
-    return int.from_bytes(hashlib.sha256(id_.encode()).digest()[:16]) or 1
+    """Derive a stable otel trace id (128 bits) from one of ours."""
+    return int.from_bytes(hashlib.sha256(id_.encode()).digest()[:16])
 
 
 def _derive_span_id(id_: str) -> int:
-    """Derive a stable, nonzero otel span id (64 bits) from one of ours."""
-    return int.from_bytes(hashlib.sha256(id_.encode()).digest()[:8]) or 1
+    """Derive a stable otel span id (64 bits) from one of ours."""
+    return int.from_bytes(hashlib.sha256(id_.encode()).digest()[:8])
 
 
-# The otel Tracer offers no way to dictate a span's ids, but derived
-# ids must come out exactly (see module docstring); the generator
-# installed on the SDK provider honors a preset while it is set.
-_preset_ids: contextvars.ContextVar[tuple[int, int] | None] = (
-    contextvars.ContextVar("otel_preset_ids", default=None)
+# otel spec requires ids to be always minted by the otel sdk. we can't have
+# that because of the durable execution case, where we can't always emit the
+# span right where we created it. that's why we're using a smuggling hack to
+# smuggle our ids in via a contextvar. fable is telling me that's a classic
+# trick.
+_smuggled_ids: contextvars.ContextVar[tuple[int, int] | None] = (
+    contextvars.ContextVar("otel_smuggled_ids", default=None)
 )
 
 
-class _PresetIdGenerator(sdk_id_generator.RandomIdGenerator):
-    """Uses the preset ids when set; defers to ``inner`` otherwise."""
+class _SmugglingIdGenerator(
+    opentelemetry.sdk.trace.id_generator.RandomIdGenerator
+):
+    """Fake id generator for smuggling ids via a contextvar."""
 
-    def __init__(self, inner: sdk_id_generator.IdGenerator) -> None:
-        self._inner = inner
+    def __init__(
+        self, inner: opentelemetry.sdk.trace.id_generator.IdGenerator
+    ) -> None:
+        self._inner = inner  # stock id generator
 
     def generate_trace_id(self) -> int:
-        preset = _preset_ids.get()
+        smuggled = _smuggled_ids.get()
         return (
-            preset[0] if preset is not None else self._inner.generate_trace_id()
+            smuggled[0]
+            if smuggled is not None
+            else self._inner.generate_trace_id()
         )
 
     def generate_span_id(self) -> int:
-        preset = _preset_ids.get()
+        smuggled = _smuggled_ids.get()
         return (
-            preset[1] if preset is not None else self._inner.generate_span_id()
+            smuggled[1]
+            if smuggled is not None
+            else self._inner.generate_span_id()
         )
 
 
+@runtime_checkable
+class _Flushable(Protocol):
+    """Duck type whether tracer provider can flush."""
+
+    def force_flush(self) -> bool: ...
+    def shutdown(self) -> None: ...
+
+
 class OtelAdapter(telemetry.Adapter):
-    """Maps framework spans onto otel spans; see the module docstring."""
+    """Maps framework spans onto otel spans."""
 
     def __init__(
-        self, *, tracer_provider: otel_trace.TracerProvider | None = None
+        self,
+        *,
+        tracer_provider: opentelemetry.trace.TracerProvider | None = None,
     ) -> None:
-        provider = tracer_provider or otel_trace.get_tracer_provider()
+        provider = tracer_provider or opentelemetry.trace.get_tracer_provider()
         self._provider = provider
-        self._live: dict[str, otel_trace.Span] = {}
-        self._deterministic_ids = False
-        self._warned_random_ids = False
-        if isinstance(provider, sdk_trace.TracerProvider):
-            provider.id_generator = _PresetIdGenerator(provider.id_generator)
-            self._deterministic_ids = True
-        self._tracer = otel_trace.get_tracer("ai", tracer_provider=provider)
+        self._live: dict[str, opentelemetry.trace.Span] = {}
+
+        self._is_smuggling_ids = False
+        # printed a warning once when failing to smuggle ids
+        self._warning_issued = False
+
+        # swap TracerProvider's id generator with a smuggling one
+        if isinstance(provider, opentelemetry.sdk.trace.TracerProvider):
+            provider.id_generator = _SmugglingIdGenerator(provider.id_generator)
+            self._is_smuggling_ids = True
+
+        self._tracer = opentelemetry.trace.get_tracer(
+            "ai", tracer_provider=provider
+        )
 
     def span_name(self, span_: telemetry.Span, /) -> str:
         """Return the exported otel span name.  Override to customize."""
@@ -202,56 +214,64 @@ class OtelAdapter(telemetry.Adapter):
         return _attributes(span_)
 
     def flush(self) -> None:
-        """Flush the provider's exporters, when it has any (SDK provider)."""
-        force_flush = getattr(self._provider, "force_flush", None)
-        if force_flush is not None:
-            force_flush()
+        """Flush the provider's exporters."""
+        # otel *api protocol* doesn't assume the tracer provider would have
+        # a buffer, so it doesn't declare a flush method.
+        # otel *sdk's* tracer provider DOES have a buffer, and therefore needs
+        # to flush. users may also pass their own tracer providers modelled
+        # after the stock one.
+        if isinstance(self._provider, _Flushable):
+            self._provider.force_flush()
 
     def shutdown(self) -> None:
         """Flush and stop the provider; spans pushed after this are lost."""
-        shutdown = getattr(self._provider, "shutdown", None)
-        if shutdown is not None:
-            shutdown()
+        if isinstance(self._provider, _Flushable):
+            self._provider.shutdown()
 
     def _parent_context(
         self, span_: telemetry.Span
-    ) -> otel_context.Context | None:
-        # ``None`` means the ambient otel context: the parent's otel
-        # span is attached there when it is live in this process, and
-        # for our roots it lets any raw otel span the caller holds
-        # adopt the trace.
+    ) -> opentelemetry.context.Context | None:
+        # sometimes we need to set a parent span that isn't currently live.
         if span_.parent_id is None or span_.parent_id in self._live:
+            # here the parent span is actually live, proceed as normal
             return None
-        # The parent is not live here — it started in another process,
-        # or this span arrived as a finished record.  Parent on the
-        # derived identity in an empty context so the pieces line up
-        # when the parent itself exports.
-        if not self._deterministic_ids and not self._warned_random_ids:
-            self._warned_random_ids = True
+
+        # parent is indeed not live
+        # opentelemetry.io/docs/languages/python/cookbook/
+        # 1. wrap the ids in a ``SpanContext``
+        # 2. wrap that in a ``NonRecordingSpan``
+        # 3. set it in a *fresh* ``Context()``
+
+        if not self._is_smuggling_ids and not self._warning_issued:
+            # trying to restore a parent when not smuggling ids
+            # will result in a broken tree
+            self._warning_issued = True
             logger.warning(
                 "otel adapter: continuing a trace from another process "
                 "needs an SDK tracer provider to control span ids; ids "
                 "will not line up across processes"
             )
-        return otel_trace.set_span_in_context(
-            otel_trace.NonRecordingSpan(
-                otel_trace.SpanContext(
+        return opentelemetry.trace.set_span_in_context(
+            opentelemetry.trace.NonRecordingSpan(
+                opentelemetry.trace.SpanContext(
                     trace_id=_derive_trace_id(span_.trace_id),
                     span_id=_derive_span_id(span_.parent_id),
-                    is_remote=True,
-                    trace_flags=otel_trace.TraceFlags(
-                        otel_trace.TraceFlags.SAMPLED
+                    is_remote=True,  # marks the parent as living elsewhere
+                    trace_flags=opentelemetry.trace.TraceFlags(
+                        opentelemetry.trace.TraceFlags.SAMPLED
                     ),
                 )
             ),
-            otel_context.Context(),
+            opentelemetry.context.Context(),
         )
 
     async def wrap_span(
         self, span_: telemetry.Span, /
     ) -> AsyncGenerator[None, Any]:
         parent_context = self._parent_context(span_)
-        preset_token = _preset_ids.set(
+
+        # convert framework's span ids into otel's and prepare for smuggling
+        smuggled_token = _smuggled_ids.set(
             (_derive_trace_id(span_.trace_id), _derive_span_id(span_.id))
         )
         try:
@@ -261,43 +281,51 @@ class OtelAdapter(telemetry.Adapter):
                 start_time=span_.started_at,
             )
         finally:
-            _preset_ids.reset(preset_token)
+            _smuggled_ids.reset(smuggled_token)
+
         self._live[span_.id] = otel_span
-        token = (
-            otel_context.attach(otel_trace.set_span_in_context(otel_span))
-            if span_.set_as_current
-            else None
-        )
+
         try:
-            # span end resumes with None
-            while (ev := (yield)) is not None:
-                otel_span.add_event(
-                    ev.name,
-                    # otel attribute values must be str | bool | int | float
-                    {
-                        k: v
-                        if isinstance(v, str | bool | int | float)
-                        else repr(v)
-                        for k, v in ev.attributes.items()
-                    },
-                    timestamp=ev.time_ns,
+            # set live span as otel's current, so raw spans user opens in their
+            # code can nest under it.
+            with (
+                opentelemetry.trace.use_span(
+                    otel_span,
+                    end_on_exit=False,  # we end it ourselves below
+                    # errors come it via span_.error, not via raising, because
+                    # we need them to serialize
+                    record_exception=False,
+                    set_status_on_exception=False,
                 )
+                if span_.set_as_current
+                else contextlib.nullcontext()
+            ):
+                # span end resumes with None
+                while (ev := (yield)) is not None:
+                    otel_span.add_event(
+                        ev.name,
+                        {
+                            k: v  # squash everything into scalars
+                            if isinstance(v, str | bool | int | float)
+                            else repr(v)
+                            for k, v in ev.attributes.items()
+                        },
+                        timestamp=ev.time_ns,
+                    )
         finally:
-            if token is not None:
-                otel_context.detach(token)
             self._live.pop(span_.id, None)
             for key, value in self.span_attributes(span_).items():
                 otel_span.set_attribute(key, value)
             if span_.error is not None:
                 otel_span.set_status(
-                    otel_trace.StatusCode.ERROR,
+                    opentelemetry.trace.StatusCode.ERROR,
                     f"{span_.error.type}: {span_.error.message}",
                 )
             otel_span.end(end_time=span_.ended_at)
 
 
 def install(
-    *, tracer_provider: otel_trace.TracerProvider | None = None
+    *, tracer_provider: opentelemetry.trace.TracerProvider | None = None
 ) -> OtelAdapter:
     """Create the otel adapter, register it, and return it.
 

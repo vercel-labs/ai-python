@@ -108,7 +108,15 @@ if TYPE_CHECKING:
 
     from ..models.core import params as params_
 
-    # these are ``Any`` at runtime
+    # 1. RunSpanData and friends are pydantic models. RunSpanData.params is
+    #    typed as InferenceRequestParams.
+    # 2. InferenceRequestParams.sampling (and other fields) have
+    #    a ModelProviderDefault annotation.
+    # 3. ModelProviderDefault is a plain setinel class that causes pydantic to
+    #    freak out when building a schema.
+
+    # also, importing without a guard would cause a circular import
+    # in models/core/api.py
     _InferenceParams = params_.InferenceRequestParams
     _GenerateParams = params_.GenerateParams
 else:
@@ -642,6 +650,8 @@ class _RegistrySink:
             fresh = list(view.events)
         else:
             seen = len(view.events)
+            # we need to preserve the view's identity
+            # but update all of the fields
             view.__dict__.update(span_.__dict__)
             fresh = view.events[seen:]
         for event in fresh:
