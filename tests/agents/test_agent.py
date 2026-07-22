@@ -38,8 +38,8 @@ async def test_agent_run_span_tree(recorder: Recorder) -> None:
 
     spans = _by_name(recorder)
     (run,) = spans["run"]
-    steps = sorted(spans["loop_turn"], key=lambda s: s.started_at)
-    calls = sorted(spans["ai_stream"], key=lambda s: s.started_at)
+    steps = sorted(spans["loop_turn"], key=lambda s: s.started_at or 0)
+    calls = sorted(spans["ai_stream"], key=lambda s: s.started_at or 0)
     (tool_span,) = spans["tool_execution"]
     (user_span,) = spans["user_work"]
 
@@ -131,7 +131,9 @@ async def test_tool_error_marked_on_span(recorder: Recorder) -> None:
         tool_span.data, ai.experimental_telemetry.ToolExecutionSpanData
     )
     # The framework converts the exception into an error result (the
-    # run keeps going), but the real exception is threaded onto the span.
-    assert isinstance(tool_span.error, ValueError)
-    assert str(tool_span.error) == "nope"
+    # run keeps going), but the failure is threaded onto the span as
+    # serializable data.
+    assert tool_span.error is not None
+    assert tool_span.error.type == "ValueError"
+    assert tool_span.error.message == "nope"
     assert tool_span.data.is_error

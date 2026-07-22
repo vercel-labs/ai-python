@@ -32,7 +32,14 @@ async def test_console_prints_live_span_events() -> None:
     ai.experimental_telemetry.register(adapter)
     try:
         async with ai.experimental_telemetry.span("outer") as sp:
-            await sp.add_event("first_token", event_type="TextStart")
+            sp.events.append(
+                ai.experimental_telemetry.SpanEvent(
+                    name="first_token",
+                    time_ns=ai.experimental_telemetry.now_ns(),
+                    attributes={"event_type": "TextStart"},
+                )
+            )
+            await sp.push()
     finally:
         ai.experimental_telemetry.unregister(adapter)
 
@@ -52,7 +59,7 @@ async def test_console_tree_uses_response_complete_duration() -> None:
         parent_id=None,
         started_at=0,
         ended_at=5_000_000_000,
-        span_events=[
+        events=[
             ai.experimental_telemetry.SpanEvent(
                 name=ai.experimental_telemetry.RESPONSE_COMPLETE,
                 time_ns=1_500_000_000,

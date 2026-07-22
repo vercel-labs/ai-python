@@ -231,16 +231,18 @@ class Stream(Generic[StreamOutputT]):
                 # ``ended_at`` on the span includes whatever the
                 # consumer did while the stream was open (tool
                 # dispatch, ...); this marks the true model latency.
-                await self._span.add_event(telemetry.RESPONSE_COMPLETE)
+                self._span.add_event(telemetry.RESPONSE_COMPLETE)
+                await self._span.push()
             elif not self._first_output_seen and not isinstance(
                 event, types.events.StreamStart
             ):
                 # Any first output — a start, a delta when the provider
                 # skips starts, a file, a builtin tool result.
                 self._first_output_seen = True
-                await self._span.add_event(
+                self._span.add_event(
                     telemetry.FIRST_TOKEN, event_type=type(event).__name__
                 )
+                await self._span.push()
         return event.model_copy(update={"message": self._message, **updates})
 
     @property

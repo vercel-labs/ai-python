@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import logging
+import dataclasses
 import random
 import time
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
+import pydantic
 import pytest
 
 import ai
@@ -17,6 +18,17 @@ from ..conftest import Recorder
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, AsyncIterator, Callable
+
+
+async def _add_event(
+    sp: ai.experimental_telemetry.Span,
+    name: str,
+    **attributes: Any,
+) -> ai.experimental_telemetry.SpanEvent:
+    """The event pattern: append, then push for live delivery."""
+    event = sp.add_event(name, **attributes)
+    await sp.push()
+    return event
 
 
 async def test_nesting_and_ids(recorder: Recorder) -> None:
@@ -50,7 +62,10 @@ async def test_error_recorded_and_reraised(recorder: Recorder) -> None:
         async with ai.experimental_telemetry.span("failing"):
             raise ValueError("boom")
     (span,) = recorder.ended
-    assert isinstance(span.error, ValueError)
+    # The error is serializable data, not a live exception.
+    assert span.error == ai.experimental_telemetry.SpanError(
+        type="ValueError", message="boom"
+    )
     assert span.ended_at is not None
 
 
@@ -149,24 +164,7 @@ async def test_async_adapter_methods_awaited() -> None:
     assert ended == ["s"]
 
 
-# ── SpanRef + explicit parent ─────────────────────────────────────
-
-
-async def test_span_ref_and_current_ref(recorder: Recorder) -> None:
-    assert ai.experimental_telemetry.current_ref() is None
-    async with ai.experimental_telemetry.span("s") as sp:
-        ref = ai.experimental_telemetry.current_ref()
-        assert ref is not None
-        assert ref == sp.ref
-        assert ref.trace_id == sp.trace_id
-        assert ref.span_id == sp.id
-        assert ref.sampled
-    assert ai.experimental_telemetry.current_ref() is None
-    # A ref round-trips like any pydantic model.
-    restored = ai.experimental_telemetry.SpanRef.model_validate(
-        ref.model_dump()
-    )
-    assert restored == ref
+# ── Serializable spans + explicit parent ──────────────────────────
 
 
 async def test_explicit_span_parent(recorder: Recorder) -> None:
@@ -187,14 +185,18 @@ async def test_explicit_span_parent(recorder: Recorder) -> None:
                 assert grandchild.parent_id == child.id
 
 
-async def test_span_ref_parent_continues_trace(recorder: Recorder) -> None:
-    # "Process one": capture the position as plain data.
+async def test_restored_span_parent_continues_trace(
+    recorder: Recorder,
+) -> None:
+    # "Process one": the span itself is the serializable position.
     async with ai.experimental_telemetry.span("origin") as origin:
-        payload = origin.ref.model_dump()
+        payload = origin.model_dump(mode="json")
 
     # "Process two": restore and continue the same trace.
-    ref = ai.experimental_telemetry.SpanRef.model_validate(payload)
-    async with ai.experimental_telemetry.span("pickup", parent=ref) as pickup:
+    restored = ai.experimental_telemetry.Span.model_validate(payload)
+    async with ai.experimental_telemetry.span(
+        "pickup", parent=restored
+    ) as pickup:
         assert pickup.trace_id == origin.trace_id
         assert pickup.parent_id == origin.id
         async with ai.experimental_telemetry.span("nested") as nested:
@@ -202,10 +204,315 @@ async def test_span_ref_parent_continues_trace(recorder: Recorder) -> None:
             assert nested.parent_id == pickup.id
 
 
+async def test_use_span_parents_without_lifecycle(
+    recorder: Recorder,
+) -> None:
+    # ``use_span`` is pure context plumbing: no pushes, no timestamps.
+    outer = ai.experimental_telemetry.create_span("outer")
+    with ai.experimental_telemetry.use_span(outer):
+        assert ai.experimental_telemetry.current() is outer
+        async with ai.experimental_telemetry.span("child") as child:
+            assert child.parent_id == outer.id
+            assert child.trace_id == outer.trace_id
+    assert ai.experimental_telemetry.current() is None
+    # Only the child was reported; outer was never pushed.
+    assert [s.name for s in recorder.started] == ["child"]
+
+
+async def test_span_round_trips_typed_data() -> None:
+    data = ai.experimental_telemetry.ToolExecutionSpanData(
+        tool_name="lookup", tool_call_id="tc-1", args={"x": 1}
+    )
+    async with ai.experimental_telemetry.span(data) as sp:
+        sp.data.result = "ok"
+    payload = sp.model_dump(mode="json")
+
+    # A bare restore rebuilds the framework data type (matched by the
+    # ``kind`` tag serialized in the data), so adapters dispatch on
+    # re-pushed spans like live ones.
+    restored = ai.experimental_telemetry.Span.model_validate(payload)
+    assert restored.data == ai.experimental_telemetry.ToolExecutionSpanData(
+        tool_name="lookup",
+        tool_call_id="tc-1",
+        args={"x": 1},
+        result="ok",
+    )
+    assert restored.id == sp.id
+    assert restored.started_at == sp.started_at
+    assert restored.ended_at == sp.ended_at
+
+
+async def test_restored_user_span_data() -> None:
+    # A user span made with span("name", **attrs) restores typed...
+    async with ai.experimental_telemetry.span("turn", session="s1") as sp:
+        pass
+    restored = ai.experimental_telemetry.Span.model_validate(
+        sp.model_dump(mode="json")
+    )
+    assert restored.data == ai.experimental_telemetry.CustomSpanData(
+        attributes={"session": "s1"}
+    )
+    restored.set(extra=1)  # typed data means set() works after a restore
+
+    # ...even when its name collides with a framework kind: the type
+    # travels in the data, not the span name.
+    async with ai.experimental_telemetry.span("loop_turn", foo=1) as sp2:
+        pass
+    collided = ai.experimental_telemetry.Span.model_validate(
+        sp2.model_dump(mode="json")
+    )
+    assert collided.data == ai.experimental_telemetry.CustomSpanData(
+        attributes={"foo": 1}
+    )
+
+    # ...while a user-defined span data type stays a dict on a bare
+    # restore (its type isn't in the framework's tagged union);
+    # parametrized validation returns the typed form.
+    class RetrievalSpanData(pydantic.BaseModel):
+        kind: Literal["retrieval"] = "retrieval"
+        query: str
+
+    async with ai.experimental_telemetry.span(
+        RetrievalSpanData(query="q")
+    ) as sp3:
+        pass
+    payload = sp3.model_dump(mode="json")
+    bare = ai.experimental_telemetry.Span.model_validate(payload)
+    assert isinstance(bare.data, dict)
+    assert bare.data == {"kind": "retrieval", "query": "q"}
+    typed = ai.experimental_telemetry.Span[RetrievalSpanData].model_validate(
+        payload
+    )
+    assert typed.data == RetrievalSpanData(query="q")
+
+    # A plain dataclass with a ``kind`` ClassVar also works as span
+    # data; the ClassVar isn't serialized, so its dump has no tag.
+    @dataclasses.dataclass
+    class LegacySpanData:
+        query: str
+
+        kind: ClassVar[str] = "legacy"
+
+    async with ai.experimental_telemetry.span(LegacySpanData("q")) as sp4:
+        pass
+    assert sp4.name == "legacy"
+    bare = ai.experimental_telemetry.Span.model_validate(
+        sp4.model_dump(mode="json")
+    )
+    assert isinstance(bare.data, dict)
+    assert bare.data == {"query": "q"}
+
+
+# ── create_span + push ────────────────────────────────────────────
+
+
+async def test_create_span_reports_nothing(recorder: Recorder) -> None:
+    sp = ai.experimental_telemetry.create_span("quiet")
+    assert sp.started_at is None
+    assert sp.ended_at is None
+    # Even a push reports nothing before the span started.
+    await sp.push()
+    assert recorder.started == []
+    assert recorder.ended == []
+
+
+async def test_push_lifecycle_split_across_pushes(
+    recorder: Recorder,
+) -> None:
+    sp = ai.experimental_telemetry.create_span("turn", session="s1")
+    sp.started_at = ai.experimental_telemetry.now_ns()
+    await sp.push()
+    assert [s.name for s in recorder.started] == ["turn"]
+    assert recorder.ended == []
+
+    sp.ended_at = ai.experimental_telemetry.now_ns()
+    await sp.push()
+    (ended,) = recorder.ended
+    assert ended.name == "turn"
+    assert ended.ended_at == sp.ended_at
+
+
+async def test_push_snapshots_are_frozen(recorder: Recorder) -> None:
+    collector = ai.experimental_telemetry.Collector()
+    data = ai.experimental_telemetry.ToolExecutionSpanData(
+        tool_name="t", tool_call_id="tc", args={"x": 1}
+    )
+    with ai.experimental_telemetry.use_sink(collector):
+        sp = ai.experimental_telemetry.create_span(data)
+        sp.started_at = ai.experimental_telemetry.now_ns()
+        await sp.push()
+        # Mutations after a push don't leak into the snapshot.
+        sp.data.args = {"x": 2}
+    snapshot = collector.spans[sp.id]
+    assert isinstance(
+        snapshot.data, ai.experimental_telemetry.ToolExecutionSpanData
+    )
+    assert snapshot.data.args == {"x": 1}
+
+
+async def test_finished_span_delivered_whole(recorder: Recorder) -> None:
+    order: list[str] = []
+
+    class Adapter:
+        def on_span_start(self, span: ai.experimental_telemetry.Span) -> None:
+            order.append(f"start {span.name}")
+
+        def on_span_event(
+            self,
+            span: ai.experimental_telemetry.Span,
+            event: ai.experimental_telemetry.SpanEvent,
+        ) -> None:
+            order.append(f"event {event.name}")
+
+        def on_span_end(self, span: ai.experimental_telemetry.Span) -> None:
+            order.append(f"end {span.name} error={span.error is not None}")
+
+    # A span that lived elsewhere arrives as one complete record...
+    sp = ai.experimental_telemetry.create_span("done-elsewhere")
+    sp.started_at = ai.experimental_telemetry.now_ns()
+    sp.events.append(
+        ai.experimental_telemetry.SpanEvent(
+            name="milestone",
+            time_ns=ai.experimental_telemetry.now_ns(),
+            attributes={},
+        )
+    )
+    sp.ended_at = ai.experimental_telemetry.now_ns()
+    sp.error = ai.experimental_telemetry.SpanError(type="E", message="m")
+    payload = sp.model_dump(mode="json")
+
+    adapter = Adapter()
+    async with _registered(adapter):
+        # ...and one push fires the full callback sequence.
+        await ai.experimental_telemetry.Span.model_validate(payload).push()
+
+    assert order == [
+        "start done-elsewhere",
+        "event milestone",
+        "end done-elsewhere error=True",
+    ]
+
+
+async def test_adapter_view_updated_in_place() -> None:
+    starts: list[ai.experimental_telemetry.Span] = []
+    ends: list[ai.experimental_telemetry.Span] = []
+
+    class Holder:
+        def on_span_start(self, span: ai.experimental_telemetry.Span) -> None:
+            starts.append(span)
+
+        def on_span_end(self, span: ai.experimental_telemetry.Span) -> None:
+            ends.append(span)
+
+    async with _registered(Holder()):
+        async with ai.experimental_telemetry.span("s") as sp:
+            sp.set(a=1)
+
+    # The adapter holds one object across callbacks; by span end it
+    # shows the final data, like the live object it used to be handed.
+    (start_view,) = starts
+    (end_view,) = ends
+    assert start_view is end_view
+    assert isinstance(end_view.data, ai.experimental_telemetry.CustomSpanData)
+    assert end_view.data.attributes == {"a": 1}
+    assert end_view.ended_at is not None
+
+
+async def test_repush_after_end_redelivers(recorder: Recorder) -> None:
+    async with ai.experimental_telemetry.span("s") as sp:
+        pass
+    assert [s.name for s in recorder.ended] == ["s"]
+    # Re-pushing a completed span re-delivers it whole (the durable
+    # re-emission path); dedup belongs to the backend, keyed on id.
+    await sp.push()
+    assert [s.name for s in recorder.started] == ["s", "s"]
+    assert [s.name for s in recorder.ended] == ["s", "s"]
+    assert recorder.ended[0].id == recorder.ended[1].id
+
+
+# ── Sinks ─────────────────────────────────────────────────────────
+
+
+async def test_use_sink_reroutes_pushes(recorder: Recorder) -> None:
+    collector = ai.experimental_telemetry.Collector()
+    with ai.experimental_telemetry.use_sink(collector):
+        async with ai.experimental_telemetry.span("inside") as sp:
+            sp.events.append(
+                ai.experimental_telemetry.SpanEvent(
+                    name="milestone",
+                    time_ns=ai.experimental_telemetry.now_ns(),
+                    attributes={},
+                )
+            )
+            await sp.push()
+    # Adapters saw nothing; the collector kept the latest snapshot.
+    assert recorder.started == []
+    assert recorder.ended == []
+    (snapshot,) = collector.spans.values()
+    assert snapshot.name == "inside"
+    assert snapshot.ended_at is not None
+    assert [e.name for e in snapshot.events] == ["milestone"]
+    # Outside the context pushes reach adapters again.
+    async with ai.experimental_telemetry.span("outside"):
+        pass
+    assert [s.name for s in recorder.ended] == ["outside"]
+
+
+async def test_collector_ships_to_adapters_exactly_as_pushed(
+    recorder: Recorder,
+) -> None:
+    # The durable-body pattern: collect inside, re-push from a "step".
+    collector = ai.experimental_telemetry.Collector()
+    with ai.experimental_telemetry.use_sink(collector):
+        async with ai.experimental_telemetry.span("outer"):
+            async with ai.experimental_telemetry.span("inner"):
+                pass
+    payload = [s.model_dump(mode="json") for s in collector.spans.values()]
+
+    for item in payload:
+        await ai.experimental_telemetry.Span.model_validate(item).push()
+
+    assert {s.name for s in recorder.ended} == {"outer", "inner"}
+    inner = next(s for s in recorder.ended if s.name == "inner")
+    outer = next(s for s in recorder.ended if s.name == "outer")
+    assert inner.parent_id == outer.id
+    assert inner.trace_id == outer.trace_id
+
+
+async def test_push_never_raises(recorder: Recorder) -> None:
+    class BrokenSink:
+        async def emit(self, span: ai.experimental_telemetry.Span) -> None:
+            raise RuntimeError("sink bug")
+
+    with ai.experimental_telemetry.use_sink(BrokenSink()):
+        async with ai.experimental_telemetry.span("s"):
+            pass  # both pushes hit the broken sink; neither raises
+
+
+async def test_flush_reaches_sink_and_adapters() -> None:
+    flushed: list[str] = []
+
+    class FlushingAdapter:
+        def flush(self) -> None:
+            flushed.append("adapter")
+
+    class FlushingSink:
+        async def emit(self, span: ai.experimental_telemetry.Span) -> None:
+            pass
+
+        async def flush(self) -> None:
+            flushed.append("sink")
+
+    async with _registered(FlushingAdapter()):
+        with ai.experimental_telemetry.use_sink(FlushingSink()):
+            await ai.experimental_telemetry.flush()
+    assert flushed == ["sink", "adapter"]
+
+
 # ── span/trace ids ────────────────────────────────────────────────
 
 
-async def test_ids_deterministic_under_use_random(recorder: Recorder) -> None:
+async def test_ids_deterministic_under_use_random() -> None:
     async def run() -> tuple[str, str, str]:
         with ai.messages.use_random(random.Random(7)):
             async with ai.experimental_telemetry.span("outer") as outer:
@@ -243,7 +550,7 @@ async def test_adapter_wrap_span_method_driven() -> None:
         async with ai.experimental_telemetry.span("outer") as outer:
             async with ai.experimental_telemetry.span("inner"):
                 pass
-            await outer.add_event("milestone")
+            await _add_event(outer, "milestone")
 
     # The base class's hooks drove one generator frame per span, with
     # the same semantics as the wrap_span function.
@@ -260,7 +567,7 @@ async def test_adapter_defaults_are_noops(recorder: Recorder) -> None:
     # A bare Adapter is valid: no per-span frames.
     async with _registered(ai.experimental_telemetry.Adapter()):
         async with ai.experimental_telemetry.span("s") as sp:
-            await sp.add_event("e")
+            await _add_event(sp, "e")
     assert [s.name for s in recorder.ended] == ["s"]
 
 
@@ -366,26 +673,19 @@ async def test_wrap_span_locals_across_yield() -> None:
     ]
 
 
-async def test_wrap_span_vendor_context_manager_sees_error() -> None:
-    seen: list[BaseException | None] = []
-
-    @contextlib.asynccontextmanager
-    async def vendor_span() -> AsyncIterator[None]:
-        try:
-            yield
-        except BaseException as exc:
-            seen.append(exc)
-            raise
-        else:
-            seen.append(None)
+async def test_wrap_span_reads_error_after_loop() -> None:
+    seen: list[ai.experimental_telemetry.SpanError | None] = []
 
     @ai.experimental_telemetry.wrap_span
     async def adapter(
         span: ai.experimental_telemetry.Span,
     ) -> AsyncGenerator[None, Any]:
-        async with vendor_span():
-            while (yield) is not None:
-                pass
+        while (yield) is not None:
+            pass
+        # A failed span ends the loop like any other: the failure is
+        # data on the span, never a live exception (the span may have
+        # failed in another process).
+        seen.append(span.error)
 
     error = ValueError("boom")
     async with _registered(adapter):
@@ -394,30 +694,16 @@ async def test_wrap_span_vendor_context_manager_sees_error() -> None:
                 raise error
         # The app still gets the original exception...
         assert excinfo.value is error
-        # ...and the vendor context manager saw the very same object,
-        # as if it had wrapped the work itself.
-        assert seen == [error]
+        # ...and the bridge saw its serializable record.
+        assert seen == [
+            ai.experimental_telemetry.SpanError(
+                type="ValueError", message="boom"
+            )
+        ]
 
         async with ai.experimental_telemetry.span("fine"):
             pass
-        assert seen == [error, None]
-
-
-async def test_wrap_span_swallowing_error_only_local() -> None:
-    @ai.experimental_telemetry.wrap_span
-    async def adapter(
-        span: ai.experimental_telemetry.Span,
-    ) -> AsyncGenerator[None, Any]:
-        with contextlib.suppress(ValueError):
-            while (yield) is not None:
-                pass
-
-    async with _registered(adapter):
-        # The adapter suppressing the thrown error in its own frame
-        # never suppresses it for the application.
-        with pytest.raises(ValueError):
-            async with ai.experimental_telemetry.span("failing"):
-                raise ValueError("boom")
+        assert seen[-1] is None
 
 
 async def test_wrap_span_opt_out_before_yield(recorder: Recorder) -> None:
@@ -504,8 +790,8 @@ async def test_wrap_span_events_live_loop() -> None:
 
     async with _registered(adapter):
         async with ai.experimental_telemetry.span("s") as sp:
-            await sp.add_event("one")
-            await sp.add_event("two")
+            await _add_event(sp, "one")
+            await _add_event(sp, "two")
             sp.set(a=1)
 
     assert seen == [
@@ -522,20 +808,18 @@ async def test_wrap_span_error_reaches_loop() -> None:
     async def adapter(
         span: ai.experimental_telemetry.Span,
     ) -> AsyncGenerator[None, Any]:
-        try:
-            while (ev := (yield)) is not None:
-                seen.append(ev.name)
-        except ValueError as exc:
-            seen.append(f"error {exc}")
-            raise
+        while (ev := (yield)) is not None:
+            seen.append(ev.name)
+        if span.error is not None:
+            seen.append(f"error {span.error.message}")
 
     async with _registered(adapter):
         with pytest.raises(ValueError, match="boom"):
             async with ai.experimental_telemetry.span("failing") as sp:
-                await sp.add_event("one")
+                await _add_event(sp, "one")
                 raise ValueError("boom")
 
-    # The span's error is thrown in at the yield inside the loop.
+    # Events delivered live, the error read after the loop ends.
     assert seen == ["one", "error boom"]
 
 
@@ -556,8 +840,8 @@ async def test_wrap_span_early_finish_opts_out(
 
     async with _registered(adapter):
         async with ai.experimental_telemetry.span("s") as sp:
-            await sp.add_event("one")
-            await sp.add_event("two")
+            await _add_event(sp, "one")
+            await _add_event(sp, "two")
 
     # Finishing mid-span opted out of the rest: the second event and
     # the span end were skipped, and nothing blew up.
@@ -578,8 +862,8 @@ async def test_wrap_span_raising_event_handler_isolated(
 
     async with _registered(adapter):
         async with ai.experimental_telemetry.span("s") as sp:
-            await sp.add_event("one")
-            await sp.add_event("two")  # generator already dead: skipped
+            await _add_event(sp, "one")
+            await _add_event(sp, "two")  # generator already dead: skipped
 
     assert [s.name for s in recorder.ended] == ["s"]
 
@@ -595,11 +879,11 @@ async def test_wrap_span_drain_loop() -> None:
         while (yield) is not None:
             pass  # a bridge that doesn't react to events drains them
         # The events are still on the span at end, with timestamps.
-        order.append(f"end events={[e.name for e in span.span_events]}")
+        order.append(f"end events={[e.name for e in span.events]}")
 
     async with _registered(adapter):
         async with ai.experimental_telemetry.span("s") as sp:
-            await sp.add_event("one")
+            await _add_event(sp, "one")
             order.append("event added")
 
     assert order == ["start", "event added", "end events=['one']"]
@@ -608,22 +892,50 @@ async def test_wrap_span_drain_loop() -> None:
 # ── span events ───────────────────────────────────────────────────
 
 
-async def test_add_event_appends_stamps_and_returns(
-    recorder: Recorder,
-) -> None:
+async def test_events_appended_and_stamped(recorder: Recorder) -> None:
     async with ai.experimental_telemetry.span("s") as sp:
-        first = await sp.add_event("first", a=1)
-        second = await sp.add_event("second")
+        first = await _add_event(sp, "first", a=1)
+        second = await _add_event(sp, "second")
 
-    assert sp.span_events == [first, second]
-    assert isinstance(first, ai.experimental_telemetry.SpanEvent)
+    assert sp.events == [first, second]
     assert first.name == "first"
     assert first.attributes == {"a": 1}
     assert second.attributes == {}
-    # Wall-clock stamps, appended in call order.
-    assert sp.started_at <= first.time_ns <= second.time_ns
+    # Stamps from the ambient clock, in append order.
+    assert sp.started_at is not None
     assert sp.ended_at is not None
+    assert sp.started_at <= first.time_ns <= second.time_ns
     assert second.time_ns <= sp.ended_at
+
+
+async def test_unpushed_events_delivered_by_end_push(
+    recorder: Recorder,
+) -> None:
+    seen: list[str] = []
+
+    class EventAdapter:
+        def on_span_event(
+            self,
+            span: ai.experimental_telemetry.Span,
+            event: ai.experimental_telemetry.SpanEvent,
+        ) -> None:
+            seen.append(event.name)
+
+    async with _registered(EventAdapter()):
+        async with ai.experimental_telemetry.span("s") as sp:
+            # Appended but never pushed: the context manager's end
+            # push carries it — nothing is lost, just delivered late.
+            sp.events.append(
+                ai.experimental_telemetry.SpanEvent(
+                    name="quiet",
+                    time_ns=ai.experimental_telemetry.now_ns(),
+                    attributes={},
+                )
+            )
+
+    assert seen == ["quiet"]
+    (ended,) = recorder.ended
+    assert [e.name for e in ended.events] == ["quiet"]
 
 
 async def test_span_event_dispatched_live_sync_and_async(
@@ -649,7 +961,7 @@ async def test_span_event_dispatched_live_sync_and_async(
 
     async with _registered(SyncAdapter()), _registered(AsyncAdapter()):
         async with ai.experimental_telemetry.span("s") as sp:
-            await sp.add_event("milestone")
+            await _add_event(sp, "milestone")
 
     # Both handlers saw the event while the span was still live; the
     # recorder (no on_span_event) was skipped without error.
@@ -684,56 +996,35 @@ async def test_span_event_raising_handler_isolated(
     # Broken registers first: it must not stop dispatch to Fine.
     async with _registered(Broken()), _registered(Fine()):
         async with ai.experimental_telemetry.span("s") as sp:
-            event = await sp.add_event("milestone")
+            event = await _add_event(sp, "milestone")
 
     assert seen == ["milestone"]
-    assert sp.span_events == [event]
+    assert sp.events == [event]
     assert [s.name for s in recorder.ended] == ["s"]
 
 
-async def test_add_event_after_end_warns_and_appends(
-    recorder: Recorder,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    async with ai.experimental_telemetry.span("s") as sp:
-        pass
-    assert sp.ended_at is not None
-
-    with caplog.at_level(
-        logging.WARNING, logger="ai.experimental_telemetry.span"
-    ):
-        late = await sp.add_event("late")
-
-    assert sp.span_events == [late]
-    assert any(
-        "already-ended" in record.getMessage() for record in caplog.records
-    )
+# ── noop spans (telemetry off) ───────────────────────────────────
 
 
-# ── inert spans (no adapters registered) ──────────────────────────
-
-
-async def test_span_without_adapters_is_inert() -> None:
+async def test_span_without_adapters_is_noop() -> None:
     async with ai.experimental_telemetry.span("outer", a=1) as sp:
         assert sp.id == ""
         assert sp.trace_id == ""
         assert sp.parent_id is None
-        assert sp.started_at == 0
-        # Never current: nothing to parent under, nothing to ref.
+        assert sp.started_at is None
+        # Never current: nothing to parent under.
         assert ai.experimental_telemetry.current() is None
-        assert ai.experimental_telemetry.current_ref() is None
         # Attribute writes still work; they are just never observed.
         sp.set(b=2)
-        event = await sp.add_event("milestone", c=3)
-    # add_event returned an inert event and retained nothing.
+        event = sp.add_event("milestone", c=3)
     assert event.name == "milestone"
     assert event.time_ns == 0
     assert event.attributes == {"c": 3}
-    assert sp.span_events == []
+    assert sp.events == [event]
     assert sp.ended_at is None
 
 
-async def test_inert_span_reraises_without_recording() -> None:
+async def test_noop_span_reraises_without_recording() -> None:
     with pytest.raises(ValueError, match="boom"):
         async with ai.experimental_telemetry.span("s") as sp:
             raise ValueError("boom")
@@ -750,7 +1041,8 @@ async def test_no_clock_reads_without_adapters(
     # The durable-execution contract: unused telemetry makes no
     # non-deterministic calls, so no use_clock setup is needed.
     async with ai.experimental_telemetry.span("outer") as sp:
-        await sp.add_event("milestone")
+        sp.add_event("milestone")
+        await sp.push()
         async with ai.experimental_telemetry.span(
             ai.experimental_telemetry.LoopTurnSpanData()
         ):
@@ -765,29 +1057,18 @@ async def test_no_rng_draws_without_adapters() -> None:
                     pass
             return ai.messages.generate_id()
 
-    # Inert spans consume nothing from the ambient random source, so
+    # Noop spans consume nothing from the ambient random source, so
     # ids drawn afterwards are unaffected by how many spans opened.
     assert await id_after_spans(0) == await id_after_spans(5)
 
 
-async def test_register_mid_span_keeps_open_span_inert() -> None:
-    r = Recorder()
-    async with ai.experimental_telemetry.span("before") as before:
-        ai.experimental_telemetry.register(r)
-        try:
-            # The inert decision is snapshotted at span open.
-            assert before.id == ""
-            await before.add_event("late")
-            async with ai.experimental_telemetry.span("after") as after:
-                # Live, but starts its own trace: the inert span
-                # cannot parent it.
-                assert after.id
-                assert after.parent_id is None
-        finally:
-            ai.experimental_telemetry.unregister(r)
-
-    assert [s.name for s in r.started] == ["after"]
-    assert [s.name for s in r.ended] == ["after"]
+async def test_routed_sink_keeps_spans_live_without_adapters() -> None:
+    collector = ai.experimental_telemetry.Collector()
+    with ai.experimental_telemetry.use_sink(collector):
+        async with ai.experimental_telemetry.span("s") as sp:
+            pass
+    assert sp.id
+    assert [s.name for s in collector.finished] == ["s"]
 
 
 # ── use_clock ─────────────────────────────────────────────────────
@@ -804,9 +1085,9 @@ def _ticking_clock(now_ns: int, tick_ns: int = 10) -> Callable[[], int]:
     return time_ns
 
 
-async def _stamps() -> tuple[int, int, int | None]:
+async def _stamps() -> tuple[int | None, int, int | None]:
     async with ai.experimental_telemetry.span("s") as sp:
-        event = await sp.add_event("milestone")
+        event = await _add_event(sp, "milestone")
     return sp.started_at, event.time_ns, sp.ended_at
 
 
@@ -823,6 +1104,7 @@ async def test_use_clock_overrides_and_restores(recorder: Recorder) -> None:
     # Restored on exit -- back to the wall clock.
     async with ai.experimental_telemetry.span("s") as sp:
         pass
+    assert sp.started_at is not None
     assert sp.started_at > 1_030
 
 
@@ -832,7 +1114,7 @@ async def test_use_clock_decorator_handles_async_functions(
     # Works as a decorator on an async fn; the clock is shared across
     # calls, so the second call continues where the first left off.
     @ai.experimental_telemetry.use_clock(_ticking_clock(1_000))
-    async def run() -> tuple[int, int, int | None]:
+    async def run() -> tuple[int | None, int, int | None]:
         return await _stamps()
 
     assert await run() == (1_010, 1_020, 1_030)
@@ -844,5 +1126,121 @@ async def test_use_clock_accepts_time_time_ns(recorder: Recorder) -> None:
     with ai.experimental_telemetry.use_clock(time.time_ns):
         async with ai.experimental_telemetry.span("s") as sp:
             pass
+    assert sp.started_at is not None
     assert sp.ended_at is not None
     assert before <= sp.started_at <= sp.ended_at <= time.time_ns()
+
+
+# ── Sugar: stamps, add_event, enabled, shipping helpers ───────────
+
+
+async def test_use_span_accepts_none(recorder: Recorder) -> None:
+    # "no span" is a normal state in gated instrumentation; None means
+    # no reparenting, no separate code path at the callsite.
+    with ai.experimental_telemetry.use_span(None):
+        assert ai.experimental_telemetry.current() is None
+        async with ai.experimental_telemetry.span("child") as child:
+            pass
+    assert child.parent_id is None
+
+
+async def test_enabled_reflects_sinks_and_adapters() -> None:
+    # No adapters registered here (no recorder fixture), default sink.
+    assert not ai.experimental_telemetry.enabled()
+    collector = ai.experimental_telemetry.Collector()
+    with ai.experimental_telemetry.use_sink(collector):
+        assert ai.experimental_telemetry.enabled()
+    assert not ai.experimental_telemetry.enabled()
+
+
+async def test_enabled_with_adapter_registered(recorder: Recorder) -> None:
+    assert ai.experimental_telemetry.enabled()
+
+
+async def test_stamp_start_and_end(recorder: Recorder) -> None:
+    clock = _ticking_clock(100)
+    with ai.experimental_telemetry.use_clock(clock):
+        sp = ai.experimental_telemetry.create_span("turn").stamp_start()
+        assert sp.started_at == 110
+        assert sp.stamp_end(error=ValueError("boom")) is sp
+    assert sp.ended_at == 120
+    assert sp.error == ai.experimental_telemetry.SpanError(
+        type="ValueError", message="boom"
+    )
+    # Stamps only write fields; nothing was pushed.
+    assert recorder.started == []
+
+    # A SpanError passes through as-is; error=None keeps an existing one.
+    err = ai.experimental_telemetry.SpanError(type="TurnError", message="m")
+    sp2 = ai.experimental_telemetry.create_span("t").stamp_start()
+    sp2.stamp_end(error=err)
+    assert sp2.error is err
+    sp2.stamp_end()
+    assert sp2.error is err
+
+
+async def test_add_event_appends_without_pushing() -> None:
+    collector = ai.experimental_telemetry.Collector()
+    with ai.experimental_telemetry.use_sink(collector):
+        async with ai.experimental_telemetry.span("s") as sp:
+            event = sp.add_event("cache_hit", {"cache.key": "k"}, size=3)
+            assert event.attributes == {"cache.key": "k", "size": 3}
+            assert sp.events == [event]
+            # Append only: the latest snapshot (from the start push)
+            # doesn't have it yet.
+            assert collector.spans[sp.id].events == []
+    # The end push delivered it.
+    assert [e.name for e in collector.spans[sp.id].events] == ["cache_hit"]
+
+
+async def test_collector_finished_and_push_all(recorder: Recorder) -> None:
+    collector = ai.experimental_telemetry.Collector()
+    with ai.experimental_telemetry.use_sink(collector):
+        async with ai.experimental_telemetry.span("done"):
+            pass
+        dangling = ai.experimental_telemetry.create_span("open").stamp_start()
+        await dangling.push()
+    # Only complete records are safe to ship.
+    assert [s.name for s in collector.finished] == ["done"]
+
+    # The ship step: re-deliver dumped payloads where the adapters are.
+    payload = [s.model_dump(mode="json") for s in collector.finished]
+    await ai.experimental_telemetry.push_all(payload)
+    assert [s.name for s in recorder.started] == ["done"]
+    assert [s.name for s in recorder.ended] == ["done"]
+
+    # Live spans are accepted alongside dumped ones.
+    await ai.experimental_telemetry.push_all([dangling.stamp_end()])
+    assert [s.name for s in recorder.ended] == ["done", "open"]
+
+
+async def test_attribute_mappings_for_dotted_names(
+    recorder: Recorder,
+) -> None:
+    # Viewer attribute names ("session.id") aren't valid keywords, so
+    # span()/set() take a positional mapping merged with keywords.
+    async with ai.experimental_telemetry.span(
+        "generate_title", {"session.id": "s1"}, model="haiku"
+    ) as sp:
+        sp.set({"output.value": "t"}, plain=1)
+    assert sp.data.attributes == {
+        "session.id": "s1",
+        "model": "haiku",
+        "output.value": "t",
+        "plain": 1,
+    }
+
+
+async def test_attribute_mapping_rejected_for_typed_data() -> None:
+    data = ai.experimental_telemetry.LoopTurnSpanData()
+    with pytest.raises(TypeError):
+        ai.experimental_telemetry.create_span(
+            data,  # ty: ignore[invalid-argument-type]
+            {"a": 1},  # type: ignore[call-overload]
+        )
+    with pytest.raises(TypeError):
+        async with ai.experimental_telemetry.span(
+            data,  # ty: ignore[invalid-argument-type]
+            {"a": 1},  # type: ignore[call-overload]
+        ):
+            pass

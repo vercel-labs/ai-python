@@ -723,7 +723,8 @@ class BoundToolCall:
             # A tool exception is caught and converted to an error
             # result before it reaches this block, so it never hits the
             # span's own except path — thread it through explicitly.
-            sp.error = res.exception
+            if res.exception is not None:
+                sp.error = telemetry.SpanError.from_exception(res.exception)
             return res
 
 

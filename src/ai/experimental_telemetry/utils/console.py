@@ -53,18 +53,19 @@ def _label(sp: telemetry.Span) -> str:
 
 
 def _line(sp: telemetry.Span) -> str:
-    end = sp.ended_at or sp.started_at
+    started = sp.started_at or 0
+    end = sp.ended_at or started
     # A span's lifetime can extend past the response (tool dispatch
     # while the stream is open); when the milestone is there, report
     # the true response latency instead.
-    for ev in sp.span_events:
+    for ev in sp.events:
         if ev.name == telemetry.RESPONSE_COMPLETE:
             end = ev.time_ns
             break
-    duration = (end - sp.started_at) / 1e9
+    duration = (end - started) / 1e9
     replay = "↻ " if sp.replay else ""
     error = (
-        f"  ✗ {type(sp.error).__name__}: {_short(str(sp.error))}"
+        f"  ✗ {sp.error.type}: {_short(sp.error.message)}"
         if sp.error is not None
         else ""
     )
@@ -91,7 +92,7 @@ class ConsoleAdapter:
         self, span: telemetry.Span, event: telemetry.SpanEvent
     ) -> None:
         depth = self._depth.get(span.id, 0) + 1
-        offset_ms = (event.time_ns - span.started_at) / 1e6
+        offset_ms = (event.time_ns - (span.started_at or 0)) / 1e6
         attrs = ", ".join(f"{k}={v!r}" for k, v in event.attributes.items())
         suffix = f" ({_short(attrs)})" if attrs else ""
         self._out.write(
@@ -115,7 +116,9 @@ class ConsoleAdapter:
 
         def render(s: telemetry.Span, prefix: str, kid_prefix: str) -> None:
             lines.append(prefix + _line(s))
-            kids = sorted(children.get(s.id, []), key=lambda c: c.started_at)
+            kids = sorted(
+                children.get(s.id, []), key=lambda c: c.started_at or 0
+            )
             for i, kid in enumerate(kids):
                 last = i == len(kids) - 1
                 render(
