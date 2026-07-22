@@ -157,7 +157,7 @@ async def test_event_kinds_in_order(monkeypatch: pytest.MonkeyPatch) -> None:
         ("max_tokens", "length"),
         ("tool_use", "tool_call"),
         ("refusal", "content_filter"),
-        ("pause_turn", "pause_turn"),  # no framework equivalent: verbatim
+        ("pause_turn", "other"),  # no framework equivalent
     ],
 )
 async def test_stream_end_carries_response_identity(
@@ -192,6 +192,12 @@ async def test_stream_end_carries_response_identity(
     end = collected[-1]
     assert isinstance(end, events.StreamEnd)
     assert end.finish_reason == finish_reason
+    if finish_reason == "other":
+        assert end.provider_metadata == {
+            "anthropic": {"stop_reason": stop_reason}
+        }
+    else:
+        assert end.provider_metadata is None
     assert end.response_id == "msg_test"
     assert end.response_model == "claude-test"
 

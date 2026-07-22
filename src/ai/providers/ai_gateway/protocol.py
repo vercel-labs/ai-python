@@ -831,6 +831,7 @@ _FINISH_REASONS: dict[str, str] = {
     "content-filter": "content_filter",
     "tool-calls": "tool_call",
     "error": "error",
+    "other": "other",
 }
 
 
@@ -1007,14 +1008,18 @@ def _parse_stream_part(
             usage_data = data.get("usage")
             usage = _parse_usage(usage_data) if usage_data else None
             finish = data.get("finishReason")
+            finish_reason: str | None = None
+            finish_metadata: dict[str, Any] | None = None
+            # "unknown" means the provider didn't report a reason.
+            if isinstance(finish, str) and finish != "unknown":
+                finish_reason = _FINISH_REASONS.get(finish, "other")
+                if finish not in _FINISH_REASONS:
+                    finish_metadata = {"gateway": {"finish_reason": finish}}
             return [
                 types.events.StreamEnd(
                     usage=usage,
-                    finish_reason=(
-                        _FINISH_REASONS.get(finish, finish)
-                        if isinstance(finish, str)
-                        else None
-                    ),
+                    finish_reason=finish_reason,
+                    provider_metadata=finish_metadata,
                 )
             ]
 

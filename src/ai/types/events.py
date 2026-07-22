@@ -56,9 +56,10 @@ class StreamEnd(ModelEvent):
 
     ``finish_reason`` is why the model stopped.  The framework adopts
     the OpenTelemetry gen_ai finish-reason vocabulary as its own:
-    ``stop``, ``length``, ``content_filter``, ``tool_call``, ``error``.
-    Provider adapters normalize their native stop reasons into it;
-    provider values with no equivalent pass through verbatim.
+    ``stop``, ``length``, ``content_filter``, ``tool_call``, ``error``,
+    plus ``other`` as a catch-all.  Provider adapters normalize their
+    native stop reasons into it; a provider value with no equivalent
+    becomes ``other`` with the raw value kept in ``provider_metadata``.
 
     ``response_id``/``response_model`` identify the provider response —
     ``response_model`` can differ from the requested model under

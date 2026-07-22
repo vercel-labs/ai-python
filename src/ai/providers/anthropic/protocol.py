@@ -900,8 +900,14 @@ async def stream(
             yield events.StreamEnd(
                 usage=usage,
                 finish_reason=(
-                    _FINISH_REASONS.get(stop_reason, stop_reason)
+                    _FINISH_REASONS.get(stop_reason, "other")
                     if stop_reason is not None
+                    else None
+                ),
+                provider_metadata=(
+                    _provider_metadata(stop_reason=stop_reason)
+                    if stop_reason is not None
+                    and stop_reason not in _FINISH_REASONS
                     else None
                 ),
                 response_id=snapshot.id,

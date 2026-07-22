@@ -603,6 +603,7 @@ async def stream(
         tc_state: dict[int, dict[str, Any]] = {}
         usage: types.usage.Usage | None = None
         finish_reason: str | None = None
+        raw_finish_reason: str | None = None
         response_id: str | None = None
         response_model: str | None = None
 
@@ -700,8 +701,9 @@ async def stream(
                                 )
 
             if choice.finish_reason is not None:
+                raw_finish_reason = choice.finish_reason
                 finish_reason = _FINISH_REASONS.get(
-                    choice.finish_reason, choice.finish_reason
+                    choice.finish_reason, "other"
                 )
                 if reasoning_started:
                     yield types.events.ReasoningEnd(block_id="reasoning")
@@ -720,14 +722,17 @@ async def stream(
         yield types.events.StreamEnd(
             usage=usage,
             finish_reason=finish_reason,
+            provider_metadata=(
+                {_OPENAI_METADATA_KEY: {"finish_reason": raw_finish_reason}}
+                if finish_reason == "other"
+                else None
+            ),
             response_id=response_id,
             response_model=response_model,
         )
     except openai_sdk.OpenAIError as exc:
         raise errors.map_error(
-            exc,
-            provider=provider,
-            model_id=model.id,
+            exc, provider=provider, model_id=model.id
         ) from exc
 
 
@@ -840,12 +845,21 @@ def _provider_metadata_for_response(
     response_id = response.get("id")
     model = response.get("model")
     status = response.get("status")
+    details = response.get("incomplete_details")
+    incomplete_reason = (
+        details.get("reason") if isinstance(details, Mapping) else None
+    )
     data = {
         **(
             {"response_id": response_id} if isinstance(response_id, str) else {}
         ),
         **({"model": model} if isinstance(model, str) else {}),
         **({"status": status} if isinstance(status, str) else {}),
+        **(
+            {"incomplete_reason": incomplete_reason}
+            if isinstance(incomplete_reason, str)
+            else {}
+        ),
     }
     return {_OPENAI_METADATA_KEY: data} if data else {}
 
@@ -871,7 +885,9 @@ def _finish_reason_from_response(
             )
             if reason == "max_output_tokens":
                 return "length"
-            return reason if isinstance(reason, str) else None
+            if reason == "content_filter":
+                return "content_filter"
+            return "other" if isinstance(reason, str) else None
         case "completed":
             output = response.get("output")
             if isinstance(output, list) and any(
