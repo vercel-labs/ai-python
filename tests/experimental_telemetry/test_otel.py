@@ -615,8 +615,7 @@ def test_run_span_attributes() -> None:
     attrs = otel._attributes(sp, capture_content=True)
     assert attrs["gen_ai.operation.name"] == "invoke_agent"
     assert attrs["gen_ai.agent.name"] == "MyAgent"
-    # Gateway model ids carry the actual provider as their prefix.
-    assert attrs["gen_ai.provider.name"] == "anthropic"
+    assert attrs["gen_ai.provider.name"] == "ai-gateway"
     assert attrs["gen_ai.request.model"] == "anthropic/claude-x"
     # Structured output requested: the semconv output kind, not the
     # Python type name.

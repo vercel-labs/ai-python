@@ -12,14 +12,8 @@ Follows the ``gen_ai`` semantic conventions.
 There's a certain amount of jank in this adapter, because we want it to work in
 the durable execution case, which conflicts with the OTel spec.
 
-Message content (``gen_ai.input.messages``, ``gen_ai.output.messages``,
-``gen_ai.system_instructions``, ``gen_ai.tool.definitions``, tool call
-arguments and results) is Opt-In in the conventions and off by default:
-pass ``capture_content=True`` or set the standard
-``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT`` environment
-variable (``true``, ``span_only``, or ``span_and_event``) to emit it.
-Content is emitted in the semconv message shape (role + typed ``parts``
-as a JSON string), not the framework's native message model.
+Messages are emitted in the semconv shape for maximum downstream compatibility.
+Capturing message content is opt-in.
 """
 
 from __future__ import annotations
@@ -55,15 +49,16 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+# standard flag for capturing message content
 CAPTURE_CONTENT_ENV = "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"
 
 
-def _capture_content_from_env() -> bool:
+def _should_capture_content() -> bool:
     value = os.environ.get(CAPTURE_CONTENT_ENV, "")
     return value.strip().lower() in ("true", "span_only", "span_and_event")
 
 
-def _name(sp: telemetry.Span) -> str:
+def _semconv_name(sp: telemetry.Span) -> str:
     match sp.data:
         case telemetry.AiStreamSpanData() as d:
             return f"chat {d.model}"
@@ -77,7 +72,7 @@ def _name(sp: telemetry.Span) -> str:
             return sp.name
 
 
-def _kind(sp: telemetry.Span) -> opentelemetry.trace.SpanKind:
+def _semconv_kind(sp: telemetry.Span) -> opentelemetry.trace.SpanKind:
     # Inference spans SHOULD be CLIENT per semconv; agent and tool
     # spans run in-process and stay INTERNAL.
     match sp.data:
@@ -87,7 +82,7 @@ def _kind(sp: telemetry.Span) -> opentelemetry.trace.SpanKind:
             return opentelemetry.trace.SpanKind.INTERNAL
 
 
-def _json_or_raw(raw: str) -> Any:
+def _maybe_json_loads(raw: str) -> Any:
     try:
         return json.loads(raw)
     except ValueError:
@@ -95,11 +90,9 @@ def _json_or_raw(raw: str) -> Any:
 
 
 def _semconv_part(part: dict[str, Any]) -> dict[str, Any]:
-    """Map one dumped message part onto its gen_ai semconv shape.
+    """Convert part to gen_ai semconv shape.
 
-    Shapes per ``docs/gen-ai/non-normative/models.py`` in the semconv
-    repo.  Unknown kinds degrade to the catch-all generic part, which
-    carries only ``type``.
+    https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/non-normative/models.py
     """
     match part["kind"]:
         case "text":
@@ -111,7 +104,7 @@ def _semconv_part(part: dict[str, Any]) -> dict[str, Any]:
                 "type": "tool_call",
                 "id": part["tool_call_id"],
                 "name": part["tool_name"],
-                "arguments": _json_or_raw(part["tool_args"]),
+                "arguments": _maybe_json_loads(part["tool_args"]),
             }
         case "tool_result":
             return {
@@ -126,7 +119,7 @@ def _semconv_part(part: dict[str, Any]) -> dict[str, Any]:
                 "name": part["tool_name"],
                 "server_tool_call": {
                     "type": part["tool_name"],
-                    "arguments": _json_or_raw(part["tool_args"]),
+                    "arguments": _maybe_json_loads(part["tool_args"]),
                 },
             }
         case "builtin_tool_return":
@@ -169,27 +162,20 @@ def _semconv_parts(
     return dumped["role"], [_semconv_part(p) for p in dumped["parts"]]
 
 
-def _content_attributes(
+def _semconv_content_attributes(
     messages: list[messages_.Message],
     output: messages_.Message | None,
     *,
     error: bool,
     finish_reason: str | None = None,
 ) -> dict[str, str]:
-    """gen_ai message content attributes, in the semconv message shape.
-
-    System messages are excluded from ``input.messages`` and carried as
-    ``gen_ai.system_instructions`` (a flat parts list), per semconv.
-    The schema requires ``finish_reason`` on output messages; when the
-    span data doesn't carry one (replay, spans recorded before capture)
-    it is inferred: ``error`` when the span errored, ``tool_call`` when
-    the output requests a tool call, ``stop`` otherwise.
-    """
+    """Extract and convert message content attributes."""
     system_parts: list[dict[str, Any]] = []
     inputs: list[dict[str, Any]] = []
     for message in messages:
         role, parts = _semconv_parts(message)
         if role == "system":
+            # these live in gen_ai.system_instructions
             system_parts += parts
         else:
             inputs.append({"role": role, "parts": parts})
@@ -212,15 +198,15 @@ def _content_attributes(
     return attrs
 
 
-def _field(obj: Any, name: str) -> Any:
-    # Params are ``Any`` on span data: live params objects in-process,
-    # plain dicts after a JSON round-trip.  Read both.
+def _hack_get_field(obj: Any, name: str) -> Any:
+    # this is caused by the params import hack in span.py
     if isinstance(obj, dict):
         return obj.get(name)
     return getattr(obj, name, None)
 
 
-def _has_field(obj: Any, name: str) -> bool:
+def _hack_has_field(obj: Any, name: str) -> bool:
+    # this also
     if isinstance(obj, dict):
         return name in obj
     return hasattr(obj, name)
@@ -236,33 +222,30 @@ _SEMCONV_SAMPLER_FIELDS = (
 )
 
 
-def _request_attributes(params: Any) -> dict[str, Any]:
-    """``gen_ai.request.*`` attributes from inference params.
-
-    Only numeric, explicitly-set values come through: provider-default
-    sentinels and framework knobs with no semconv name (``min_p``,
-    ``repetition_penalty``, ...) are skipped.
-    """
+def _semconv_request_attributes(params: Any) -> dict[str, Any]:
+    """Extract and convert request attributes from inference params."""
     attrs: dict[str, Any] = {}
-    sampling = _field(params, "sampling")
+    sampling = _hack_get_field(params, "sampling")
     if isinstance(sampling, dict):
         for sampler in sampling.values():
             for name in _SEMCONV_SAMPLER_FIELDS:
-                value = _field(sampler, name)
+                value = _hack_get_field(sampler, name)
                 if isinstance(value, int | float) and not isinstance(
                     value, bool
                 ):
                     attrs[f"gen_ai.request.{name}"] = value
-    max_tokens = _field(_field(params, "output"), "max_tokens")
+    max_tokens = _hack_get_field(
+        _hack_get_field(params, "output"), "max_tokens"
+    )
     if isinstance(max_tokens, int):
         attrs["gen_ai.request.max_tokens"] = max_tokens
-    effort = _field(_field(params, "reasoning"), "effort")
+    effort = _hack_get_field(_hack_get_field(params, "reasoning"), "effort")
     if isinstance(effort, str):
         attrs["gen_ai.request.reasoning.level"] = effort
     return attrs
 
 
-def _usage_attributes(usage: usage_.Usage) -> dict[str, Any]:
+def _semconv_usage_attributes(usage: usage_.Usage) -> dict[str, Any]:
     attrs: dict[str, Any] = {
         "gen_ai.usage.input_tokens": usage.input_tokens,
         "gen_ai.usage.output_tokens": usage.output_tokens,
@@ -278,15 +261,6 @@ def _usage_attributes(usage: usage_.Usage) -> dict[str, Any]:
     return attrs
 
 
-def _provider_name(model: str, provider: str | None) -> str | None:
-    # Gateway model ids are "provider/model"; the prefix names the
-    # actual inference provider and matches semconv's well-known values
-    # better than the framework provider adapter's name.
-    if "/" in model:
-        return model.partition("/")[0]
-    return provider
-
-
 def _time_to_first_chunk(sp: telemetry.Span) -> float | None:
     if sp.started_at is None:
         return None
@@ -296,7 +270,7 @@ def _time_to_first_chunk(sp: telemetry.Span) -> float | None:
     return None
 
 
-def _tool_definitions(names: list[str]) -> str:
+def _semconv_tool_definitions(names: list[str]) -> str:
     return json.dumps([{"type": "function", "name": n} for n in names])
 
 
@@ -307,16 +281,15 @@ def _attributes(sp: telemetry.Span, *, capture_content: bool) -> dict[str, Any]:
     match sp.data:
         case telemetry.AiStreamSpanData() as d:
             attrs["gen_ai.operation.name"] = "chat"
-            provider = _provider_name(d.model, d.provider)
-            if provider is not None:
-                attrs["gen_ai.provider.name"] = provider
+            if d.provider is not None:
+                attrs["gen_ai.provider.name"] = d.provider
             attrs["gen_ai.request.model"] = d.model
             attrs["gen_ai.request.stream"] = True
             if d.output_type is not None:
                 # Structured output was requested; the semconv value is
                 # the output kind, not the Python type name.
                 attrs["gen_ai.output.type"] = "json"
-            attrs |= _request_attributes(d.params)
+            attrs |= _semconv_request_attributes(d.params)
             ttfc = _time_to_first_chunk(sp)
             if ttfc is not None:
                 attrs["gen_ai.response.time_to_first_chunk"] = ttfc
@@ -327,13 +300,13 @@ def _attributes(sp: telemetry.Span, *, capture_content: bool) -> dict[str, Any]:
             if d.response_model is not None:
                 attrs["gen_ai.response.model"] = d.response_model
             if d.usage is not None:
-                attrs |= _usage_attributes(d.usage)
+                attrs |= _semconv_usage_attributes(d.usage)
             if capture_content:
                 if d.tool_names:
-                    attrs["gen_ai.tool.definitions"] = _tool_definitions(
-                        d.tool_names
+                    attrs["gen_ai.tool.definitions"] = (
+                        _semconv_tool_definitions(d.tool_names)
                     )
-                attrs |= _content_attributes(
+                attrs |= _semconv_content_attributes(
                     d.messages,
                     d.message,
                     error=sp.error is not None,
@@ -341,25 +314,24 @@ def _attributes(sp: telemetry.Span, *, capture_content: bool) -> dict[str, Any]:
                 )
         case telemetry.AiGenerateSpanData() as d:
             attrs["gen_ai.operation.name"] = "generate_content"
-            provider = _provider_name(d.model, d.provider)
-            if provider is not None:
-                attrs["gen_ai.provider.name"] = provider
+            if d.provider is not None:
+                attrs["gen_ai.provider.name"] = d.provider
             attrs["gen_ai.request.model"] = d.model
-            n = _field(d.params, "n")
+            n = _hack_get_field(d.params, "n")
             if isinstance(n, int) and n != 1:
                 attrs["gen_ai.request.choice.count"] = n
-            seed = _field(d.params, "seed")
+            seed = _hack_get_field(d.params, "seed")
             if isinstance(seed, int):
                 attrs["gen_ai.request.seed"] = seed
             if d.params is not None:
                 # ImageParams vs VideoParams: only the latter has fps.
                 attrs["gen_ai.output.type"] = (
-                    "video" if _has_field(d.params, "fps") else "image"
+                    "video" if _hack_has_field(d.params, "fps") else "image"
                 )
             if d.usage is not None:
-                attrs |= _usage_attributes(d.usage)
+                attrs |= _semconv_usage_attributes(d.usage)
             if capture_content:
-                attrs |= _content_attributes(
+                attrs |= _semconv_content_attributes(
                     d.messages, d.message, error=sp.error is not None
                 )
         case telemetry.ToolExecutionSpanData() as d:
@@ -387,23 +359,22 @@ def _attributes(sp: telemetry.Span, *, capture_content: bool) -> dict[str, Any]:
         case telemetry.RunSpanData() as d:
             attrs["gen_ai.operation.name"] = "invoke_agent"
             attrs["gen_ai.agent.name"] = d.agent
-            provider = _provider_name(d.model, d.provider)
-            if provider is not None:
-                attrs["gen_ai.provider.name"] = provider
+            if d.provider is not None:
+                attrs["gen_ai.provider.name"] = d.provider
             attrs["gen_ai.request.model"] = d.model
             if d.output_type is not None:
                 # Structured output was requested; the semconv value is
                 # the output kind, not the Python type name.
                 attrs["gen_ai.output.type"] = "json"
-            attrs |= _request_attributes(d.params)
+            attrs |= _semconv_request_attributes(d.params)
             if d.usage is not None:
-                attrs |= _usage_attributes(d.usage)
+                attrs |= _semconv_usage_attributes(d.usage)
             if capture_content:
                 if d.tool_names:
-                    attrs["gen_ai.tool.definitions"] = _tool_definitions(
-                        d.tool_names
+                    attrs["gen_ai.tool.definitions"] = (
+                        _semconv_tool_definitions(d.tool_names)
                     )
-                attrs |= _content_attributes(
+                attrs |= _semconv_content_attributes(
                     d.messages, d.final_message, error=sp.error is not None
                 )
         case telemetry.HookSpanData() as d:
@@ -489,8 +460,8 @@ class OtelAdapter(telemetry.Adapter):
         self._provider = provider
         self._live: dict[str, opentelemetry.trace.Span] = {}
 
-        self._capture_content = (
-            _capture_content_from_env()
+        self._is_capturing_content = (
+            _should_capture_content()
             if capture_content is None
             else capture_content
         )
@@ -510,7 +481,7 @@ class OtelAdapter(telemetry.Adapter):
 
     def span_name(self, span_: telemetry.Span, /) -> str:
         """Return the exported otel span name.  Override to customize."""
-        return _name(span_)
+        return _semconv_name(span_)
 
     def span_attributes(self, span_: telemetry.Span, /) -> dict[str, Any]:
         """Return the attributes set at span end.  Override to enrich.
@@ -521,7 +492,7 @@ class OtelAdapter(telemetry.Adapter):
                 def span_attributes(self, span_):
                     return super().span_attributes(span_) | {"k": "v"}
         """
-        return _attributes(span_, capture_content=self._capture_content)
+        return _attributes(span_, capture_content=self._is_capturing_content)
 
     def flush(self) -> None:
         """Flush the provider's exporters."""
@@ -588,7 +559,7 @@ class OtelAdapter(telemetry.Adapter):
             otel_span = self._tracer.start_span(
                 self.span_name(span_),
                 context=parent_context,
-                kind=_kind(span_),
+                kind=_semconv_kind(span_),
                 start_time=span_.started_at,
             )
         finally:
@@ -643,11 +614,8 @@ def install(
 ) -> OtelAdapter:
     """Create the otel adapter, register it, and return it.
 
-    Uses the global tracer provider unless one is passed.  Message
-    content capture is off by default, per the gen_ai conventions;
-    ``capture_content=True`` (or the
-    ``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT`` environment
-    variable) turns it on.
+    Uses the global tracer provider unless one is passed.
+    Message content capture is opt-in via capture_content or the env var.
     """
     adapter = OtelAdapter(
         tracer_provider=tracer_provider, capture_content=capture_content
