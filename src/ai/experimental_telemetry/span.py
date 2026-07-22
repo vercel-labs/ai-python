@@ -200,10 +200,11 @@ class SpanData(Protocol):
 class RunSpanData(pydantic.BaseModel):
     """One ``Agent.run``: the whole loop.
 
-    ``blocked``/``final_message`` are set at span end: ``blocked`` is
-    True when the run ended suspended on an unresolved hook (see
-    ``AgentStream.blocked``), ``final_message`` is the last assistant
-    message produced, if any.
+    ``blocked``/``final_message``/``usage`` are set at span end:
+    ``blocked`` is True when the run ended suspended on an unresolved
+    hook (see ``AgentStream.blocked``), ``final_message`` is the last
+    assistant message produced, if any, ``usage`` is the sum of usage
+    across the messages the run produced.
     """
 
     kind: Literal["run"] = "run"
@@ -216,6 +217,7 @@ class RunSpanData(pydantic.BaseModel):
     params: _InferenceParams | None = None
     blocked: bool = False
     final_message: messages_.Message | None = None
+    usage: usage_.Usage | None = None
 
 
 class LoopTurnSpanData(pydantic.BaseModel):
@@ -229,7 +231,7 @@ class LoopTurnSpanData(pydantic.BaseModel):
 
 
 class AiStreamSpanData(pydantic.BaseModel):
-    """One streaming LLM call.  ``message``/``usage`` are set at span end."""
+    """One streaming LLM call."""
 
     kind: Literal["ai_stream"] = "ai_stream"
     model: str
@@ -237,8 +239,12 @@ class AiStreamSpanData(pydantic.BaseModel):
     params: _InferenceParams | None = None
     provider: str | None = None
     tool_names: list[str] | None = None
+    output_type: str | None = None
     message: messages_.Message | None = None
     usage: usage_.Usage | None = None
+    finish_reason: str | None = None
+    response_id: str | None = None
+    response_model: str | None = None
 
 
 class AiGenerateSpanData(pydantic.BaseModel):
@@ -261,11 +267,14 @@ class ToolExecutionSpanData(pydantic.BaseModel):
 
     ``model_input`` is the value the LLM sees on its next turn, set
     only when it differs from ``result`` (aggregator-backed tools).
+    ``tool_description`` is the tool's model-facing description,
+    stamped at dispatch.
     """
 
     kind: Literal["tool_execution"] = "tool_execution"
     tool_name: str
     tool_call_id: str
+    tool_description: str | None = None
     args: dict[str, Any] | None = None
     result: Any = None
     model_input: Any = None
@@ -560,14 +569,19 @@ _current_sink: contextvars.ContextVar[Sink | None] = contextvars.ContextVar(
 
 
 @util.contextmanager_any_sync
-def use_sink(sink: Sink) -> Iterator[None]:
+def use_sink(sink: Sink | None) -> Iterator[None]:
     """Route span pushes to ``sink`` within this context.
 
     The default (outside any ``use_sink``) is the adapter registry.
     Inside a durable workflow body where side effects are not allowed, you
     can route to a :class:`Collector` instead and re-push the collected spans
     from a step / activity.
+
+    ``None`` is a no-op.
     """
+    if sink is None:
+        yield
+        return
     token = _current_sink.set(sink)
     try:
         yield

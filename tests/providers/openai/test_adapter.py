@@ -6,6 +6,7 @@ formatting, and explicit guards against unsupported built-in tool surfaces.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any, cast
 
 import httpx
@@ -32,14 +33,14 @@ class _EmptyOpenAIStream:
 
 
 class _ListStream:
-    def __init__(self, items: list[dict[str, Any]]) -> None:
+    def __init__(self, items: list[Any]) -> None:
         self._items = items
         self._idx = 0
 
     def __aiter__(self) -> _ListStream:
         return self
 
-    async def __anext__(self) -> dict[str, Any]:
+    async def __anext__(self) -> Any:
         if self._idx >= len(self._items):
             raise StopAsyncIteration
         item = self._items[self._idx]
@@ -56,9 +57,23 @@ class _FakeCompletions:
         return _EmptyOpenAIStream()
 
 
+class _ChunkCompletions:
+    """Fake completions endpoint replaying prebuilt stream chunks."""
+
+    def __init__(self, captured: dict[str, Any], chunks: list[Any]) -> None:
+        self._captured = captured
+        self._chunks = chunks
+
+    async def create(self, **kwargs: Any) -> _ListStream:
+        self._captured.update(kwargs)
+        return _ListStream(self._chunks)
+
+
 class _FakeChat:
     def __init__(self, captured: dict[str, Any]) -> None:
-        self.completions = _FakeCompletions(captured)
+        self.completions: _FakeCompletions | _ChunkCompletions = (
+            _FakeCompletions(captured)
+        )
 
 
 class _FakeOpenAIClient:
@@ -353,6 +368,132 @@ async def test_responses_streams_text_and_usage() -> None:
             "status": "completed",
         }
     }
+
+
+@pytest.mark.parametrize(
+    ("response", "finish_reason"),
+    [
+        (
+            {"id": "resp_1", "model": "gpt-5.4-turbo", "status": "completed"},
+            "stop",
+        ),
+        (
+            {
+                "id": "resp_1",
+                "model": "gpt-5.4-turbo",
+                "status": "completed",
+                "output": [{"type": "function_call", "name": "lookup"}],
+            },
+            "tool_call",
+        ),
+        (
+            {
+                "id": "resp_1",
+                "model": "gpt-5.4-turbo",
+                "status": "incomplete",
+                "incomplete_details": {"reason": "max_output_tokens"},
+            },
+            "length",
+        ),
+        (
+            {
+                "id": "resp_1",
+                "model": "gpt-5.4-turbo",
+                "status": "incomplete",
+                "incomplete_details": {"reason": "content_filter"},
+            },
+            "content_filter",
+        ),
+        (
+            {"id": "resp_1", "model": "gpt-5.4-turbo", "status": "failed"},
+            "error",
+        ),
+        (
+            {
+                "id": "resp_1",
+                "model": "gpt-5.4-turbo",
+                "status": "incomplete",
+                "incomplete_details": {"reason": "brand_new_reason"},
+            },
+            "other",
+        ),
+    ],
+)
+async def test_responses_stream_end_response_identity(
+    response: dict[str, Any], finish_reason: str
+) -> None:
+    """The final response's identity and finish reason land on StreamEnd."""
+    fake, _ = _patch_responses(
+        [{"type": f"response.{response['status']}", "response": response}]
+    )
+
+    collected = [
+        event
+        async for event in protocol.OpenAIResponsesProtocol().stream(
+            fake,
+            _MODEL,
+            [ai.user_message("Hi")],
+            provider="openai",
+        )
+    ]
+    end = collected[-1]
+    assert isinstance(end, events.StreamEnd)
+    assert end.finish_reason == finish_reason
+    assert end.response_id == "resp_1"
+    assert end.response_model == "gpt-5.4-turbo"
+    if finish_reason == "other":
+        # the raw provider reason is preserved in provider_metadata
+        assert end.provider_metadata is not None
+        openai_metadata = end.provider_metadata["openai"]
+        assert openai_metadata["incomplete_reason"] == "brand_new_reason"
+
+
+@pytest.mark.parametrize(
+    ("raw_finish_reason", "finish_reason"),
+    [
+        ("stop", "stop"),
+        ("tool_calls", "tool_call"),
+        ("brand_new_reason", "other"),  # no framework equivalent
+    ],
+)
+async def test_chat_stream_end_finish_reason(
+    raw_finish_reason: str, finish_reason: str
+) -> None:
+    """Chat finish reasons normalize; unmapped ones become ``other``
+    with the raw value preserved in ``provider_metadata``."""
+    chunk = SimpleNamespace(
+        id="chatcmpl-1",
+        model="gpt-5.4",
+        usage=None,
+        choices=[
+            SimpleNamespace(
+                delta=SimpleNamespace(content="Hi", tool_calls=None),
+                finish_reason=raw_finish_reason,
+            )
+        ],
+    )
+    captured: dict[str, Any] = {}
+    fake = _FakeOpenAIClient(captured)
+    fake.chat.completions = _ChunkCompletions(captured, [chunk])
+
+    collected = [
+        event
+        async for event in protocol.stream(
+            cast("openai.AsyncOpenAI", fake),
+            _MODEL,
+            [ai.user_message("Hi")],
+            provider="openai",
+        )
+    ]
+    end = collected[-1]
+    assert isinstance(end, events.StreamEnd)
+    assert end.finish_reason == finish_reason
+    if finish_reason == "other":
+        assert end.provider_metadata == {
+            "openai": {"finish_reason": raw_finish_reason}
+        }
+    else:
+        assert end.provider_metadata is None
 
 
 async def test_responses_streams_function_tool_call() -> None:

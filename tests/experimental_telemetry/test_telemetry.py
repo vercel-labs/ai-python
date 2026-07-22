@@ -458,6 +458,25 @@ async def test_use_sink_reroutes_pushes(recorder: Recorder) -> None:
     assert [s.name for s in recorder.ended] == ["outside"]
 
 
+async def test_use_sink_accepts_none(recorder: Recorder) -> None:
+    with ai.experimental_telemetry.use_sink(None):
+        async with ai.experimental_telemetry.span("inside"):
+            pass
+    assert [s.name for s in recorder.ended] == ["inside"]
+
+
+async def test_use_sink_none_preserves_outer_sink(recorder: Recorder) -> None:
+    collector = ai.experimental_telemetry.Collector()
+    with (
+        ai.experimental_telemetry.use_sink(collector),
+        ai.experimental_telemetry.use_sink(None),
+    ):
+        async with ai.experimental_telemetry.span("inside"):
+            pass
+    assert [s.name for s in collector.finished] == ["inside"]
+    assert recorder.ended == []
+
+
 async def test_collector_ships_to_adapters_exactly_as_pushed(
     recorder: Recorder,
 ) -> None:

@@ -696,6 +696,43 @@ async def test_early_close_no_response_complete(recorder: Recorder) -> None:
     ]
 
 
+async def test_stream_span_captures_response_identity(
+    recorder: Recorder,
+) -> None:
+    """StreamEnd's finish reason and response identity land on span data."""
+
+    async def _identified_stream(
+        model: models.Model,
+        messages: list[messages_.Message],
+        **kwargs: Any,
+    ) -> AsyncGenerator[events_.Event]:
+        yield events_.StreamStart()
+        yield events_.TextDelta(block_id="t", chunk="hi")
+        yield events_.StreamEnd(
+            finish_reason="length",
+            response_id="resp-1",
+            response_model="mock-model-v2",
+        )
+
+    MOCK_PROVIDER._stream_impl = _identified_stream
+
+    class Out(pydantic.BaseModel):
+        x: int
+
+    async with models.stream(
+        MOCK_MODEL, [ai.user_message("Hi")], output_type=Out
+    ) as stream:
+        async for _ in stream:
+            pass
+
+    (call,) = [s for s in recorder.ended if s.name == "ai_stream"]
+    assert isinstance(call.data, ai.experimental_telemetry.AiStreamSpanData)
+    assert call.data.output_type == "Out"
+    assert call.data.finish_reason == "length"
+    assert call.data.response_id == "resp-1"
+    assert call.data.response_model == "mock-model-v2"
+
+
 async def test_directly_constructed_stream_has_no_span() -> None:
     async with ai.Stream.replay_message(text_msg("hi")) as stream:
         async for _ in stream:

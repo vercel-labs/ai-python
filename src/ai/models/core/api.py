@@ -139,6 +139,10 @@ class Stream(Generic[StreamOutputT]):
         # (``Stream(gen)``, ``Stream.replay_message``).
         self._span: telemetry.Span[telemetry.AiStreamSpanData] | None = None
         self._first_output_seen = False
+        # Response identity off the provider's StreamEnd, for telemetry.
+        self._finish_reason: str | None = None
+        self._response_id: str | None = None
+        self._response_model: str | None = None
 
     @classmethod
     def replay_message(
@@ -428,8 +432,16 @@ class Stream(Generic[StreamOutputT]):
                 self._message.parts.append(fp)
                 self._parts[fp.id] = fp
 
-            case types.events.StreamEnd(provider_metadata=pm):
+            case types.events.StreamEnd(
+                provider_metadata=pm,
+                finish_reason=finish,
+                response_id=rid,
+                response_model=rmodel,
+            ):
                 self._ended = True
+                self._finish_reason = finish
+                self._response_id = rid
+                self._response_model = rmodel
                 if pm is not None:
                     self._message.provider_metadata = pm
             case _:
@@ -575,6 +587,7 @@ async def _stream(
         params=params,
         provider=model.provider.name,
         tool_names=[t.name for t in tools] if tools is not None else None,
+        output_type=output_type.__name__ if output_type is not None else None,
     )
     if messages and messages[-1].replay:
         last = messages[-1]
@@ -612,6 +625,9 @@ async def _stream(
             # Record whatever got built, even a partial message.
             sp.data.message = s.message
             sp.data.usage = s.usage
+            sp.data.finish_reason = s._finish_reason
+            sp.data.response_id = s._response_id
+            sp.data.response_model = s._response_model
             await s.aclose()
 
 

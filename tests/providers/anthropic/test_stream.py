@@ -150,6 +150,58 @@ async def test_event_kinds_in_order(monkeypatch: pytest.MonkeyPatch) -> None:
     ]
 
 
+@pytest.mark.parametrize(
+    ("stop_reason", "finish_reason"),
+    [
+        ("end_turn", "stop"),
+        ("max_tokens", "length"),
+        ("tool_use", "tool_call"),
+        ("refusal", "content_filter"),
+        ("pause_turn", "other"),  # no framework equivalent
+    ],
+)
+async def test_stream_end_carries_response_identity(
+    monkeypatch: pytest.MonkeyPatch,
+    stop_reason: str,
+    finish_reason: str,
+) -> None:
+    """The snapshot's stop reason / id / model land on ``StreamEnd``.
+
+    The stop reason is normalized to the framework's finish-reason
+    vocabulary (the gen_ai semconv one, see ``StreamEnd``).
+    """
+    sdk_events = [
+        block_start(0, "text"),
+        block_delta(0, "text_delta", text="hi"),
+        block_stop(0),
+    ]
+    fake = FakeAnthropicClient(
+        stream=FakeStream(sdk_events, stop_reason=stop_reason)
+    )
+    _ = monkeypatch
+
+    collected = [
+        event
+        async for event in protocol.stream(
+            cast("anthropic.AsyncAnthropic", fake),
+            _MODEL,
+            [ai.user_message("Hi")],
+            provider="anthropic",
+        )
+    ]
+    end = collected[-1]
+    assert isinstance(end, events.StreamEnd)
+    assert end.finish_reason == finish_reason
+    if finish_reason == "other":
+        assert end.provider_metadata == {
+            "anthropic": {"stop_reason": stop_reason}
+        }
+    else:
+        assert end.provider_metadata is None
+    assert end.response_id == "msg_test"
+    assert end.response_model == "claude-test"
+
+
 async def test_builtin_tool_end_carries_call_part(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
