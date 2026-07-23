@@ -2,7 +2,7 @@
 name: ai-python-subagents
 description: Use for the subagent-as-a-tool pattern.
 metadata:
-  sdk-version: "0.2.1"
+  sdk-version: "0.4.0"
 ---
 
 # ai-python-subagents

@@ -2,7 +2,7 @@
 name: ai-python-basics
 description: Use for AI SDK for Python basics. Configure a model, make messages, stream, declare tools, build a basic agent.
 metadata:
-  sdk-version: "0.2.1"
+  sdk-version: "0.4.0"
 ---
 
 # ai-python-basics

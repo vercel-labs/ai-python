@@ -2,7 +2,7 @@
 name: ai-python-durable-execution
 description: Use when adding durable execution to AI SDK for Python, building durable agent loops, or serializing messages across workflow steps.
 metadata:
-  sdk-version: "0.2.1"
+  sdk-version: "0.4.0"
 ---
 
 # ai-python-durable-execution

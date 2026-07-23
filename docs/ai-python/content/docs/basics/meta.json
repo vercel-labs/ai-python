@@ -11,6 +11,7 @@
     "durable-execution",
     "subagents-and-multi-agent",
     "human-in-the-loop",
-    "ai-sdk-ui"
+    "ai-sdk-ui",
+    "telemetry"
   ]
 }

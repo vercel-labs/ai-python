@@ -2,7 +2,7 @@
 name: ai-python-serverless-execution
 description: Use when building serverless AI SDK for Python endpoints, handling hook approvals, deferring hooks, or resuming runs across requests.
 metadata:
-  sdk-version: "0.2.1"
+  sdk-version: "0.4.0"
 ---
 
 # ai-python-serverless-execution
