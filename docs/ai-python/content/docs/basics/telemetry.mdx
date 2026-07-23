@@ -1,0 +1,143 @@
+---
+title: Telemetry
+description: Trace agent runs, model calls, and tool executions.
+type: guide
+summary: Turn on automatic tracing, open your own spans, export to OpenTelemetry, and connect any observability vendor with a small adapter.
+---
+
+The SDK records what happens during a run — every model call, tool execution,
+and agent loop turn — as a tree of *spans*. You decide where the spans go:
+export them to OpenTelemetry, send them to an observability vendor, or print
+them to the terminal.
+
+Telemetry lives in the `ai.experimental_telemetry` module. It is experimental
+and new in 0.4.0: it is not part of the stable API and may change or be
+removed.
+
+## Turn on tracing
+
+The SDK instruments itself. Every agent run, loop turn, model call, tool
+execution, and hook suspension produces a span, with no changes to your code.
+Nothing is reported until you register an adapter.
+
+Each span is a plain Pydantic record: a name, timestamps, a parent id, typed `data`
+describing the work, events, and an `error` field when the work failed.
+
+There is a built-in OpenTelemetry adapter:
+
+```bash title="Terminal"
+uv add "ai[otel]"
+```
+
+```python
+import ai
+import ai.experimental_telemetry.otel
+
+ai.experimental_telemetry.otel.install()
+```
+
+Note that this only registers the adapter that turns framework's spans into OpenTelemetry
+spans. Your application still needs to perform the
+[OpenTelemetry ceremony](https://opentelemetry.io/docs/languages/python/exporters/#usage)
+for traces to be sent to the observability backend, for example:
+
+```python
+import ai
+import ai.experimental_telemetry.otel
+
+import opentelemetry.sdk.trace
+import opentelemetry.sdk.trace.export
+import opentelemetry.trace
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
+    OTLPSpanExporter,
+)
+
+provider = opentelemetry.sdk.trace.TracerProvider()
+provider.add_span_processor(
+    opentelemetry.sdk.trace.export.BatchSpanProcessor(
+        OTLPSpanExporter(endpoint="http://localhost:6006/v1/traces")
+    )
+)
+opentelemetry.trace.set_tracer_provider(provider)
+
+ai.experimental_telemetry.otel.install()
+
+agent = ai.Agent(tools=[get_weather])
+
+async with agent.run(model, messages) as run:
+    async for event in run:
+        ...
+```
+
+## Open your own spans
+
+You can create your own spans that will automatically nest with SDK's spans and interact
+with adapters.
+
+
+```python
+import ai
+
+async with ai.experimental_telemetry.span("retrieval", query=query) as sp:
+    docs = await search(query)
+    sp.set(count=len(docs))
+```
+
+Attach attributes with keyword arguments at creation, or later with
+`sp.set(...)`. Attribute names that are not valid Python keywords, such as the
+dotted names many trace viewers use, go in a positional mapping:
+
+```python
+sp.set({"output.value": title}, model="claude-haiku-4.5")
+```
+
+Record a milestone inside a span with `sp.add_event(name)` — it becomes a
+timestamped event on the span, like the `first_token` event the SDK records on
+model calls.
+
+If the block raises, the span records the error and re-raises. You keep your
+`try`/`except` logic; the trace shows where the failure happened.
+
+## Write an adapter with wrap_span
+
+You can connect a vendor SDK directly by writing an adapter. `wrap_span` builds one from
+a single function using a generator trick similar to pytest fixtures or FastAPI
+lifecycles.
+
+
+```python
+import ai
+
+@ai.experimental_telemetry.wrap_span
+async def vendor(span):
+    with sdk.start_span(span.name) as v:    # create a span before the loop
+        while (ev := (yield)) is not None:  # process events coming from span.add_event()
+            v.log_event(ev.name, timestamp=ev.time_ns)
+        if span.error is not None:          # finish the span after the loop
+            v.set_error(span.error.message)
+        v.update(output=span.data.model_dump(mode="json"))
+
+ai.experimental_telemetry.register(vendor)  # register custom adapter
+```
+
+The function runs once per span:
+
+- Code before the loop runs when the span starts.
+- Each span event submitted via `.add_event()` resumes the `yield` with a `SpanEvent`,
+  as it happens.
+- Span end resumes the loop with `None`; the code after the loop runs with
+  `span.data` fully populated and the end timestamp set.
+
+Return before the first `yield` to skip a span.
+
+Telemetry never interferes with the run: an adapter that raises is logged and
+skipped. You can register several adapters at once, and they operate
+independently.
+
+## Next steps
+
+The module also has a low-level API, that can be useful for instrumenting complicated
+cases such as durable execution. It provides more control over adapter functionality and
+spans' lifecycles. See the
+[`ai.experimental_telemetry` reference](/docs/reference/telemetry) for the
+full API, the span data types, and the durable execution patterns.
