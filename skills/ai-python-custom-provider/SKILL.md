@@ -2,7 +2,7 @@
 name: ai-python-custom-provider
 description: Use for implementing custom providers in AI SDK for Python.
 metadata:
-  sdk-version: "0.2.1"
+  sdk-version: "0.4.0"
 ---
 
 # ai-python-custom-provider
@@ -48,7 +48,7 @@ class MyProtocol(ai.ProviderProtocol[Any]):
         yield ai.events.TextStart(block_id="text")
         yield ai.events.TextDelta(block_id="text", chunk="Hello")
         yield ai.events.TextEnd(block_id="text")
-        yield ai.events.StreamEnd()
+        yield ai.events.StreamEnd(finish_reason="stop")
 
 
 class MyProvider(ai.Provider[Any]):
@@ -72,6 +72,12 @@ class MyProvider(ai.Provider[Any]):
 
 model = ai.Model(id="my-model", provider=MyProvider(client=client))
 ```
+
+Set response metadata on `StreamEnd` (new in 0.4.0). Normalize the upstream
+API's native stop reason into the shared vocabulary: `stop`, `length`,
+`content_filter`, `tool_call`, `error`, or `other`. Keep the raw value in 
+`provider_metadata`. Set `response_id` and `response_model` when the upstream
+API reports them.
 
 For Python tool calls, emit `ToolStart`, `ToolDelta`, and `ToolEnd`:
 

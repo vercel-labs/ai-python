@@ -26,6 +26,14 @@ Text events:
 - `TextEnd`
 - `StreamEnd`
 
+`StreamEnd` carries the final response metadata. New in 0.4.0:
+
+- `finish_reason`: Why the model stopped: `stop`, `length`, `content_filter`,
+  `tool_call`, `error`, or `other`. Raw provider value is kept in `provider_metadata`.
+- `response_id`: The provider's id for the response.
+- `response_model`: The model that produced the response. It can differ from
+  the requested model under gateway routing or fallbacks.
+
 Reasoning events:
 
 - `ReasoningStart`
