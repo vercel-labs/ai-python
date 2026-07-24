@@ -25,12 +25,56 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
 
 
+def test_configure(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: dict[str, Any] = {}
+
+    class Exporter:
+        def __init__(self, *, endpoint: str | None = None) -> None:
+            calls["endpoint"] = endpoint
+            calls["exporter"] = self
+
+    class Processor:
+        def __init__(self, exporter: Any) -> None:
+            self.exporter = exporter
+
+    class Provider:
+        def add_span_processor(self, processor: Any) -> None:
+            calls["processor"] = processor
+
+    monkeypatch.setattr(
+        "ai.experimental_telemetry.otel.opentelemetry.exporter.otlp.proto."
+        "http.trace_exporter.OTLPSpanExporter",
+        Exporter,
+    )
+    monkeypatch.setattr(
+        "ai.experimental_telemetry.otel.opentelemetry.sdk.trace.export."
+        "BatchSpanProcessor",
+        Processor,
+    )
+    monkeypatch.setattr(
+        "ai.experimental_telemetry.otel.opentelemetry.sdk.trace.TracerProvider",
+        Provider,
+    )
+    monkeypatch.setattr(
+        "ai.experimental_telemetry.otel.opentelemetry.trace."
+        "set_tracer_provider",
+        lambda provider: calls.__setitem__("provider", provider),
+    )
+
+    provider = otel.configure(endpoint="http://otel.test/v1/traces")
+
+    assert calls["endpoint"] == "http://otel.test/v1/traces"
+    assert calls["processor"].exporter is calls["exporter"]
+    assert calls["provider"] is provider
+
+
 @pytest.fixture
 def otel_env() -> Iterator[tuple[InMemorySpanExporter, TracerProvider]]:
     exporter = InMemorySpanExporter()
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
-    adapter = otel.install(tracer_provider=provider, capture_content=True)
+    adapter = otel.OtelAdapter(tracer_provider=provider, capture_content=True)
+    ai.experimental_telemetry.register(adapter)
     yield exporter, provider
     ai.experimental_telemetry.unregister(adapter)
 
@@ -334,7 +378,8 @@ async def test_content_capture_off_by_default(
     exporter = InMemorySpanExporter()
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
-    adapter = otel.install(tracer_provider=provider)
+    adapter = otel.OtelAdapter(tracer_provider=provider)
+    ai.experimental_telemetry.register(adapter)
     try:
         mock_llm([[text_msg("hello")]])
         async with ai.stream(MOCK_MODEL, [ai.user_message("hi")]) as stream:
@@ -361,7 +406,8 @@ async def test_content_capture_env_opt_in(
     exporter = InMemorySpanExporter()
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
-    adapter = otel.install(tracer_provider=provider)
+    adapter = otel.OtelAdapter(tracer_provider=provider)
+    ai.experimental_telemetry.register(adapter)
     try:
         mock_llm([[text_msg("hello")]])
         async with ai.stream(MOCK_MODEL, [ai.user_message("hi")]) as stream:
