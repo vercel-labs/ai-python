@@ -146,7 +146,7 @@ import ai
 
 async with ai.experimental_telemetry.span("retrieval", query=query) as sp:
     docs = await search(query)
-    sp.set(count=len(docs))
+    sp.set_attributes(count=len(docs))
 ```
 
 Inside the block the span is the *current span*: spans opened within it,
@@ -167,14 +167,14 @@ Exceptions raised in the block are recorded on `span.error` and re-raised.
 
 Methods that are handy for custom instrumentation:
 
-- `Span.set(attributes=None, /, **kwargs)` merges attributes into a user
+- `Span.set_attributes(attributes=None, /, **kwargs)` merges attributes into a user
   span:
 
   ```python
-  sp.set({"output.value": title}, model="claude-haiku-4.5")
+  sp.set_attributes({"output.value": title}, model="claude-haiku-4.5")
   ```
 
-  `set()` only works on spans created with a string name (their data is
+  `set_attributes()` only works on spans created with a string name (their data is
   `CustomSpanData`). Framework spans carry typed data, assign their fields
   directly.
 
@@ -185,7 +185,7 @@ Methods that are handy for custom instrumentation:
   sp.add_event("cache_miss", key=key)
   ```
 
-- `current()` returns the current span, or `None` when no span is open.
+- `current_span()` returns the current span, or `None` when no span is open.
 
 
 ### Low-level span API
@@ -232,32 +232,32 @@ route spans *away* from adapters and into whatever container that sink is backed
 - The default sink is the adapter registry. It dispatches every span to an appropriate
   method on every registered adapter based on span's state (see
   [the low-level adapter API](#low-level-adapter-api)).
-- A `Collector` sink stores spans in a dict.
+- A `DictSink` sink stores spans in a dict.
 
 `Sink` is a protocol with one method:
 
 ```python
 class Sink(Protocol):
-    async def emit(self, span_: Span, /) -> None: ...
+    async def on_push(self, span_: Span, /) -> None: ...
 ```
 
 `use_sink(sink)` context manager routes span pushes to `sink` within a context.
 `push_all(spans)` can be used to send a list of spans to the current sink.
 
 ```python
-collector = ai.experimental_telemetry.Collector()
+sink = ai.experimental_telemetry.DictSink()
 
-with ai.experimental_telemetry.use_sink(collector):
-    ...  # spans go to the collector
+with ai.experimental_telemetry.use_sink(sink):
+    ...  # spans go to the sink
 
-payload = [s.model_dump(mode="json") for s in collector.finished]
+payload = [s.model_dump(mode="json") for s in sink.finished_spans]
 
 # elsewhere, with the default sink on:
 await ai.experimental_telemetry.push_all(payload)
 ```
 
-- `Collector.spans` exposes the dict of span id to span.
-- `Collector.finished` returns the collected spans that have ended.
+- `DictSink.spans` exposes the dict of span id to span.
+- `DictSink.finished_spans` returns the collected spans that have ended.
 
 ## Adapters
 
@@ -275,10 +275,10 @@ adapter using a generator trick similar to pytest fixtures or FastAPI lifecycles
 Using low-level API can mean:
 
 1. subclassing `Adapter`, overriding its `wrap_span` method (not to be confused with the
-   decorator), and, optionally, defining `flush`, storing state on the class, and so on;
+   decorator), and, optionally, storing state on the class, and so on;
 2. subclassing `Adapter` and overriding `on_span_start`, `on_span_event` and `on_span_end`
    directly, avoiding the generator trickery completely;
-3. implementing the adapter protocol;
+3. implementing `AdapterProtocol` from scratch;
 
 ...depending on the application requirements.
 
@@ -331,14 +331,13 @@ class Vendor(ai.experimental_telemetry.Adapter):
                 v.log_event(ev.name)
 ```
 
-Under the hood, an adapter is any object with some of these methods, all
-optional, each sync or async:
+Under the hood, an adapter is any object satisfying `AdapterProtocol`: 
 
 ```python
-class MyAdapter:
-    async def on_span_start(self, span): ...
-    async def on_span_event(self, span, event): ...
-    async def on_span_end(self, span): ...
+class AdapterProtocol(Protocol):
+    async def on_span_start(self, span_: Span, /) -> None: ...
+    async def on_span_event(self, span_: Span, event: SpanEvent, /) -> None: ...
+    async def on_span_end(self, span_: Span, /) -> None: ...
 ```
 
 The default sink calls each of these methods for every pushed span based on the following
@@ -362,17 +361,20 @@ extra:
 uv add "ai[otel]"
 ```
 
-`install(*, tracer_provider=None, capture_content=None)` creates an
-`OtelAdapter`, registers it, and returns it:
+Setup takes two steps: configure OpenTelemetry export, then register the
+adapter.
 
 ```python
+import ai
 from ai.experimental_telemetry import otel
 
-adapter = otel.install()
+otel.configure()
+ai.experimental_telemetry.register(otel.OtelAdapter())
 ```
 
-`otel.install()` only registers the framework adapter. You still need to perform the
-OpenTelemetry configuration ceremony somewhere in your application.
+`configure(*, endpoint=None)` performs the OpenTelemetry configuration
+ceremony: it creates a `TracerProvider` with a batching OTLP/HTTP exporter,
+sets it as the global tracer provider, and returns it. It is equivalent to:
 
 ```python
 import opentelemetry.sdk.trace
@@ -387,14 +389,10 @@ provider.add_span_processor(
     opentelemetry.sdk.trace.export.BatchSpanProcessor(OTLPSpanExporter())
 )
 opentelemetry.trace.set_tracer_provider(provider)
-
-adapter = otel.install()
 ```
-`install` uses the global tracer provider unless you pass one.
 
-The exporter decides where traces go. `OTLPSpanExporter()` without arguments
-reads the standard environment variable, so you can pick the backend without
-code changes:
+Without an `endpoint` argument, the exporter reads the standard environment
+variable, so you can pick the backend without code changes:
 
 ```bash title="Terminal"
 export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:6006
@@ -403,11 +401,15 @@ export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:6006
 Or pass the full traces URL directly:
 
 ```python
-OTLPSpanExporter(endpoint="http://localhost:6006/v1/traces")
+otel.configure(endpoint="http://localhost:6006/v1/traces")
 ```
 
 With no endpoint configured at all, the exporter sends to
-`http://localhost:4318`, the OTLP/HTTP default.
+`http://localhost:4318/v1/traces`, the OTLP/HTTP default.
+
+If your application already performs the ceremony itself, skip `configure()`
+and only register the adapter: `OtelAdapter` uses the global tracer provider
+unless you pass one.
 
 ### Semantic conventions
 
@@ -434,7 +436,7 @@ converted with `repr`.
 ### Capture message content
 
 Prompts, responses, and tool arguments are not exported by default. Opt in
-with `capture_content=True` or the standard environment variable:
+with `OtelAdapter(capture_content=True)` or the standard environment variable:
 
 ```bash title="Terminal"
 export OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true
@@ -449,7 +451,7 @@ the semantic convention message shape.
 ### OtelAdapter
 
 `OtelAdapter(*, tracer_provider=None, capture_content=None)` is the adapter
-class behind `install()`. Subclass it to customize the export:
+itself; register it with `register()`. Subclass it to customize the export:
 
 - `span_name(span_)`: Returns the exported span name. Override to rename.
 - `span_attributes(span_)`: Returns the attributes set at span end. Override
@@ -467,30 +469,18 @@ class behind `install()`. Subclass it to customize the export:
 
 ## Helpers
 
-The remaining functions support delivery guarantees and determinism. Most
-matter only for durable or short-lived processes.
+The remaining functions support delivery and determinism. Most matter only
+for durable or short-lived processes.
 
-### flush
-
-`flush()` flushes the current sink and every registered adapter that supports
-it. Vendor SDKs buffer spans in background threads; call it before a
-checkpoint or process exit so everything pushed so far is delivered. Sinks
-and adapters opt in by defining `flush()` (sync or async); failures are
-logged and skipped.
-
-```python
-await ai.experimental_telemetry.flush()
-```
-
-### use_clock and now_ns
+### use_time and now_ns
 
 Span timestamps come from the ambient clock, `now_ns()` — the wall clock by
-default. `use_clock(now_ns)` overrides it within a context, so replayed code
+default. `use_time(now_ns)` overrides it within a context, so replayed code
 produces stable timestamps:
 
 ```python
 @workflow.workflow
-@ai.experimental_telemetry.use_clock(vercel.workflow.time_ns)
+@ai.experimental_telemetry.use_time(vercel.workflow.time_ns)
 async def run_turn(turn_input):
     ...
 ```
@@ -502,12 +492,12 @@ installed.
 
 `push_all(spans)` pushes each span in order, validating dumped spans first.
 Use it to re-deliver spans gathered by a
-[`Collector`](#sinks) from a place where the real adapters are
+[`DictSink`](#sinks) from a place where the real adapters are
 available.
 
-### enabled
+### is_enabled
 
-`enabled()` reports whether anything is listening: a sink routed with
+`is_enabled()` reports whether anything is listening: a sink routed with
 `use_sink`, or at least one registered adapter.
 
 The framework checks it before creating spans, so telemetry adds no overhead
@@ -520,12 +510,16 @@ check to skip your own instrumentation work, as in the
 
 ### Regular tracing
 
-Regular agent tracing only requires you to register an adapter: 
+Regular agent tracing only requires you to configure the export and register
+an adapter: 
 
 ```python
+import ai
 from ai.experimental_telemetry import otel
 
-adapter = otel.install()
+otel.configure()
+adapter = otel.OtelAdapter()
+ai.experimental_telemetry.register(adapter)
 
 
 async def handle(request):
@@ -575,31 +569,31 @@ would apply to Temporal and other durable execution frameworks.
 The workflow body must be deterministic and free of side-effects. 
 
 We achieve determinism by replacing `random` and `time` with their deterministic
-counterparts via `use_random` and `use_clock` context managers. This enables the
+counterparts via `use_random` and `use_time` context managers. This enables the
 framework to keep stamping ids and timestamps inside the workflow body.
 
 ```python
 @workflow.workflow
-@ai.messages.use_random(workflow.random)                 # span and message ids
-@ai.experimental_telemetry.use_clock(workflow.time_ns)   # timestamps
+@ai.messages.use_random(workflow.random)                # span and message ids
+@ai.experimental_telemetry.use_time(workflow.time_ns)   # timestamps
 async def my_workflow(payload):
     ...
 ```
 
 Sending traces to a remote backend is, in fact, a side effect, and cannot be done
 inside a workflow body. Therefore, we need to gather all the spans, pass them into
-a step, and send them all at once from there. Do do this, we utilize the `Collector` sink
+a step, and send them all at once from there. Do do this, we utilize the `DictSink`
 and the `use_sink` context manager.
 
 ```python
 @workflow.workflow
 async def my_workflow(payload):
-    collector = ai.experimental_telemetry.Collector()
-    with ai.experimental_telemetry.use_sink(collector):
+    sink = ai.experimental_telemetry.DictSink()
+    with ai.experimental_telemetry.use_sink(sink):
         ...  # any instrumented work: agent runs, custom spans
 
     await report_spans(
-        [s.model_dump(mode="json") for s in collector.finished]
+        [s.model_dump(mode="json") for s in sink.finished_spans]
     )
 
 
@@ -614,7 +608,7 @@ framework reports them to the vendor.
 
 ```python
 # where the run begins: mint the span; nothing is reported yet
-if ai.experimental_telemetry.enabled():
+if ai.experimental_telemetry.is_enabled():
     payload["run_span"] = (
         ai.experimental_telemetry.create_span("run")
         .stamp_start()
@@ -641,10 +635,10 @@ await run_span.stamp_end().push()
   `CustomSpanData`.
 - Event names: `FIRST_TOKEN`, `RESPONSE_COMPLETE`, `HOOK_DEFERRED`,
   `HOOK_RESOLVED`, `HOOK_CANCELLED`.
-- Opening spans: `span`, `create_span`, `current`, `use_span`.
-- Adapters: `Adapter`, `wrap_span`, `register`, `unregister`, `enabled`,
-  `flush`.
-- Sinks and clocks: `Sink`, `use_sink`, `Collector`, `push_all`, `use_clock`,
+- Opening spans: `span`, `create_span`, `current_span`, `use_span`.
+- Adapters: `Adapter`, `AdapterProtocol`, `wrap_span`, `register`,
+  `unregister`, `is_enabled`.
+- Sinks and clocks: `Sink`, `use_sink`, `DictSink`, `push_all`, `use_time`,
   `now_ns`.
 
-`ai.experimental_telemetry.otel` exports `install` and `OtelAdapter`.
+`ai.experimental_telemetry.otel` exports `configure` and `OtelAdapter`.
