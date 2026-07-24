@@ -2,7 +2,7 @@
 name: ai-python-custom-loop
 description: Use when building custom agent loops. Modify tool dispatch, history management, hooks, control flow.
 metadata:
-  sdk-version: "0.2.1"
+  sdk-version: "0.4.0"
 ---
 
 # ai-python-custom-loop
