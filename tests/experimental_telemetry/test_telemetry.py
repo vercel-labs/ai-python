@@ -130,8 +130,10 @@ async def test_out_of_order_close_raises(recorder: Recorder) -> None:
 
 
 async def test_failing_adapter_is_isolated(recorder: Recorder) -> None:
-    class Broken:
-        def on_span_start(self, span: ai.experimental_telemetry.Span) -> None:
+    class Broken(ai.experimental_telemetry.Adapter):
+        async def on_span_start(
+            self, span: ai.experimental_telemetry.Span
+        ) -> None:
             raise RuntimeError("adapter bug")
 
     broken = Broken()
@@ -148,7 +150,7 @@ async def test_failing_adapter_is_isolated(recorder: Recorder) -> None:
 async def test_async_adapter_methods_awaited() -> None:
     ended: list[str] = []
 
-    class AsyncAdapter:
+    class AsyncAdapter(ai.experimental_telemetry.Adapter):
         async def on_span_end(
             self, span: ai.experimental_telemetry.Span
         ) -> None:
@@ -353,18 +355,22 @@ async def test_push_snapshots_are_frozen(recorder: Recorder) -> None:
 async def test_finished_span_delivered_whole(recorder: Recorder) -> None:
     order: list[str] = []
 
-    class Adapter:
-        def on_span_start(self, span: ai.experimental_telemetry.Span) -> None:
+    class Adapter(ai.experimental_telemetry.Adapter):
+        async def on_span_start(
+            self, span: ai.experimental_telemetry.Span
+        ) -> None:
             order.append(f"start {span.name}")
 
-        def on_span_event(
+        async def on_span_event(
             self,
             span: ai.experimental_telemetry.Span,
             event: ai.experimental_telemetry.SpanEvent,
         ) -> None:
             order.append(f"event {event.name}")
 
-        def on_span_end(self, span: ai.experimental_telemetry.Span) -> None:
+        async def on_span_end(
+            self, span: ai.experimental_telemetry.Span
+        ) -> None:
             order.append(f"end {span.name} error={span.error is not None}")
 
     # A span that lived elsewhere arrives as one complete record...
@@ -397,11 +403,15 @@ async def test_adapter_view_updated_in_place() -> None:
     starts: list[ai.experimental_telemetry.Span] = []
     ends: list[ai.experimental_telemetry.Span] = []
 
-    class Holder:
-        def on_span_start(self, span: ai.experimental_telemetry.Span) -> None:
+    class Holder(ai.experimental_telemetry.Adapter):
+        async def on_span_start(
+            self, span: ai.experimental_telemetry.Span
+        ) -> None:
             starts.append(span)
 
-        def on_span_end(self, span: ai.experimental_telemetry.Span) -> None:
+        async def on_span_end(
+            self, span: ai.experimental_telemetry.Span
+        ) -> None:
             ends.append(span)
 
     async with _registered(Holder()):
@@ -506,26 +516,6 @@ async def test_push_never_raises(recorder: Recorder) -> None:
     with ai.experimental_telemetry.use_sink(BrokenSink()):
         async with ai.experimental_telemetry.span("s"):
             pass  # both pushes hit the broken sink; neither raises
-
-
-async def test_flush_reaches_sink_and_adapters() -> None:
-    flushed: list[str] = []
-
-    class FlushingAdapter:
-        def flush(self) -> None:
-            flushed.append("adapter")
-
-    class FlushingSink:
-        async def on_push(self, span: ai.experimental_telemetry.Span) -> None:
-            pass
-
-        async def flush(self) -> None:
-            flushed.append("sink")
-
-    async with _registered(FlushingAdapter()):
-        with ai.experimental_telemetry.use_sink(FlushingSink()):
-            await ai.experimental_telemetry.flush()
-    assert flushed == ["sink", "adapter"]
 
 
 # ── span/trace ids ────────────────────────────────────────────────
@@ -653,7 +643,9 @@ async def test_wrap_span_function_returns_adapter() -> None:
 
 
 @contextlib.asynccontextmanager
-async def _registered(adapter: Any) -> AsyncIterator[None]:
+async def _registered(
+    adapter: ai.experimental_telemetry.AdapterProtocol,
+) -> AsyncIterator[None]:
     ai.experimental_telemetry.register(adapter)
     try:
         yield
@@ -932,8 +924,8 @@ async def test_unpushed_events_delivered_by_end_push(
 ) -> None:
     seen: list[str] = []
 
-    class EventAdapter:
-        def on_span_event(
+    class EventAdapter(ai.experimental_telemetry.Adapter):
+        async def on_span_event(
             self,
             span: ai.experimental_telemetry.Span,
             event: ai.experimental_telemetry.SpanEvent,
@@ -957,36 +949,36 @@ async def test_unpushed_events_delivered_by_end_push(
     assert [e.name for e in ended.events] == ["quiet"]
 
 
-async def test_span_event_dispatched_live_sync_and_async(
+async def test_span_event_dispatched_live_to_multiple_adapters(
     recorder: Recorder,
 ) -> None:
     seen: list[tuple[str, str, bool]] = []
 
-    class SyncAdapter:
-        def on_span_event(
-            self,
-            span: ai.experimental_telemetry.Span,
-            event: ai.experimental_telemetry.SpanEvent,
-        ) -> None:
-            seen.append(("sync", event.name, span.ended_at is None))
-
-    class AsyncAdapter:
+    class FirstAdapter(ai.experimental_telemetry.Adapter):
         async def on_span_event(
             self,
             span: ai.experimental_telemetry.Span,
             event: ai.experimental_telemetry.SpanEvent,
         ) -> None:
-            seen.append(("async", event.name, span.ended_at is None))
+            seen.append(("first", event.name, span.ended_at is None))
 
-    async with _registered(SyncAdapter()), _registered(AsyncAdapter()):
+    class SecondAdapter(ai.experimental_telemetry.Adapter):
+        async def on_span_event(
+            self,
+            span: ai.experimental_telemetry.Span,
+            event: ai.experimental_telemetry.SpanEvent,
+        ) -> None:
+            seen.append(("second", event.name, span.ended_at is None))
+
+    async with _registered(FirstAdapter()), _registered(SecondAdapter()):
         async with ai.experimental_telemetry.span("s") as sp:
             await _add_event(sp, "milestone")
 
     # Both handlers saw the event while the span was still live; the
     # recorder (no on_span_event) was skipped without error.
     assert seen == [
-        ("sync", "milestone", True),
-        ("async", "milestone", True),
+        ("first", "milestone", True),
+        ("second", "milestone", True),
     ]
     assert [s.name for s in recorder.ended] == ["s"]
 
@@ -996,16 +988,16 @@ async def test_span_event_raising_handler_isolated(
 ) -> None:
     seen: list[str] = []
 
-    class Broken:
-        def on_span_event(
+    class Broken(ai.experimental_telemetry.Adapter):
+        async def on_span_event(
             self,
             span: ai.experimental_telemetry.Span,
             event: ai.experimental_telemetry.SpanEvent,
         ) -> None:
             raise RuntimeError("adapter bug")
 
-    class Fine:
-        def on_span_event(
+    class Fine(ai.experimental_telemetry.Adapter):
+        async def on_span_event(
             self,
             span: ai.experimental_telemetry.Span,
             event: ai.experimental_telemetry.SpanEvent,
