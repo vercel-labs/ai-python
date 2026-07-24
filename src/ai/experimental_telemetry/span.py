@@ -63,7 +63,7 @@ lifetime (``first_token``, ``hook_resolved``, ...): append it to
 ``span.events`` and push.
 
 Span timestamps come from the ambient clock (:func:`now_ns`);
-:func:`use_clock` overrides it per-context, e.g. with a deterministic
+:func:`use_time` overrides it per-context, e.g. with a deterministic
 clock inside a durable workflow.
 """
 
@@ -137,7 +137,7 @@ _span_clock: contextvars.ContextVar[Callable[[], int] | None] = (
 def now_ns() -> int:
     """Nanoseconds since the epoch, from the ambient span clock.
 
-    The wall clock by default; whatever :func:`use_clock` installed
+    The wall clock by default; whatever :func:`use_time` installed
     otherwise.
     """
     clock = _span_clock.get()
@@ -145,20 +145,20 @@ def now_ns() -> int:
 
 
 @util.contextmanager_any_sync
-def use_clock(now_ns: Callable[[], int]) -> Iterator[None]:
+def use_time(now_ns: Callable[[], int]) -> Iterator[None]:
     """Read span timestamps from ``now_ns`` within this context.
 
     Framework's observability creates timestamps. This API can be
     used to plug an approved clock function in durable execution
     settings::
 
-        with ai.experimental_telemetry.use_clock(workflow.time_ns):
+        with ai.experimental_telemetry.use_time(workflow.time_ns):
             ...  # spans opened here read time from workflow.time_ns
 
     This can also be used as a decorator on both sync and async
     functions::
 
-        @ai.experimental_telemetry.use_clock(clock.time_ns)
+        @ai.experimental_telemetry.use_time(clock.time_ns)
         async def run(...):
             ...
     """

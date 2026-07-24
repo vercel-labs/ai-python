@@ -34,9 +34,9 @@ from .span import (
     register,
     span,
     unregister,
-    use_clock,
     use_sink,
     use_span,
+    use_time,
     wrap_span,
 )
 
@@ -69,8 +69,8 @@ __all__ = [
     "register",
     "span",
     "unregister",
-    "use_clock",
     "use_sink",
     "use_span",
+    "use_time",
     "wrap_span",
 ]

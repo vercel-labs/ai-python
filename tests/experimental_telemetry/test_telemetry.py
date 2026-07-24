@@ -1058,7 +1058,7 @@ async def test_no_clock_reads_without_adapters(
 
     monkeypatch.setattr(time, "time_ns", forbidden)
     # The durable-execution contract: unused telemetry makes no
-    # non-deterministic calls, so no use_clock setup is needed.
+    # non-deterministic calls, so no use_time setup is needed.
     async with ai.experimental_telemetry.span("outer") as sp:
         sp.add_event("milestone")
         await sp.push()
@@ -1090,7 +1090,7 @@ async def test_routed_sink_keeps_spans_live_without_adapters() -> None:
     assert [s.name for s in collector.finished] == ["s"]
 
 
-# ── use_clock ─────────────────────────────────────────────────────
+# ── use_time ──────────────────────────────────────────────────────
 
 
 def _ticking_clock(now_ns: int, tick_ns: int = 10) -> Callable[[], int]:
@@ -1110,12 +1110,12 @@ async def _stamps() -> tuple[int | None, int, int | None]:
     return sp.started_at, event.time_ns, sp.ended_at
 
 
-async def test_use_clock_overrides_and_restores(recorder: Recorder) -> None:
+async def test_use_time_overrides_and_restores(recorder: Recorder) -> None:
     # A ticking clock gives a deterministic timestamp sequence; the
     # override drives started_at, event stamps, and ended_at alike.
-    with ai.experimental_telemetry.use_clock(_ticking_clock(1_000)):
+    with ai.experimental_telemetry.use_time(_ticking_clock(1_000)):
         first = await _stamps()
-    with ai.experimental_telemetry.use_clock(_ticking_clock(1_000)):
+    with ai.experimental_telemetry.use_time(_ticking_clock(1_000)):
         second = await _stamps()
 
     assert first == second == (1_010, 1_020, 1_030)
@@ -1127,12 +1127,12 @@ async def test_use_clock_overrides_and_restores(recorder: Recorder) -> None:
     assert sp.started_at > 1_030
 
 
-async def test_use_clock_decorator_handles_async_functions(
+async def test_use_time_decorator_handles_async_functions(
     recorder: Recorder,
 ) -> None:
     # Works as a decorator on an async fn; the clock is shared across
     # calls, so the second call continues where the first left off.
-    @ai.experimental_telemetry.use_clock(_ticking_clock(1_000))
+    @ai.experimental_telemetry.use_time(_ticking_clock(1_000))
     async def run() -> tuple[int | None, int, int | None]:
         return await _stamps()
 
@@ -1140,9 +1140,9 @@ async def test_use_clock_decorator_handles_async_functions(
     assert await run() == (1_040, 1_050, 1_060)
 
 
-async def test_use_clock_accepts_time_time_ns(recorder: Recorder) -> None:
+async def test_use_time_accepts_time_time_ns(recorder: Recorder) -> None:
     before = time.time_ns()
-    with ai.experimental_telemetry.use_clock(time.time_ns):
+    with ai.experimental_telemetry.use_time(time.time_ns):
         async with ai.experimental_telemetry.span("s") as sp:
             pass
     assert sp.started_at is not None
@@ -1178,7 +1178,7 @@ async def test_enabled_with_adapter_registered(recorder: Recorder) -> None:
 
 async def test_stamp_start_and_end(recorder: Recorder) -> None:
     clock = _ticking_clock(100)
-    with ai.experimental_telemetry.use_clock(clock):
+    with ai.experimental_telemetry.use_time(clock):
         sp = ai.experimental_telemetry.create_span("turn").stamp_start()
         assert sp.started_at == 110
         assert sp.stamp_end(error=ValueError("boom")) is sp
