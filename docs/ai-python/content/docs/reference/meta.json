@@ -12,6 +12,7 @@
     "errors",
     "mcp",
     "types",
-    "util"
+    "util",
+    "telemetry"
   ]
 }
