@@ -7,7 +7,7 @@ work-specific data::
 
     async with ai.experimental_telemetry.span("retrieval", query=q) as sp:
         docs = await search(q)
-        sp.set(count=len(docs))
+        sp.set_attributes(count=len(docs))
 
 Nesting is automatic: the current span is tracked using a context var.
 
@@ -394,7 +394,7 @@ class Span(pydantic.BaseModel, Generic[DataT_co]):
     ``replay=True`` marks work that is being replayed (resume,
     serverless re-entry) rather than performed live.
 
-    A span created while telemetry was off (see :func:`enabled`) has an
+    A span created while telemetry was off (see :func:`is_enabled`) has an
     empty ``id`` and is a noop: :meth:`push` delivers nothing.
 
     ``set_as_current=False`` marks a span that does not set itself
@@ -420,7 +420,7 @@ class Span(pydantic.BaseModel, Generic[DataT_co]):
 
     schema_version: ClassVar[int] = 3
 
-    def set(
+    def set_attributes(
         self, attributes: Mapping[str, Any] | None = None, /, **kwargs: Any
     ) -> None:
         """Attach attributes to a span created with ``span("name", ...)``.
@@ -429,12 +429,12 @@ class Span(pydantic.BaseModel, Generic[DataT_co]):
         dotted names like ``"output.value"``) go in the positional
         mapping; it merges with the keyword arguments::
 
-            sp.set({"output.value": title}, model="haiku")
+            sp.set_attributes({"output.value": title}, model="haiku")
         """
         if not isinstance(self.data, CustomSpanData):
             raise TypeError(
-                "set() only works on user spans; framework spans carry "
-                "typed data, assign its fields directly"
+                "set_attributes() only works on user spans; framework "
+                "spans carry typed data, assign its fields directly"
             )
         self.data.attributes.update({**(attributes or {}), **kwargs})
 
@@ -522,7 +522,7 @@ _current: contextvars.ContextVar[Span | None] = contextvars.ContextVar(
 )
 
 
-def current() -> Span | None:
+def current_span() -> Span | None:
     """Return the current span, or ``None`` when no span is open."""
     return _current.get()
 
@@ -693,7 +693,7 @@ def unregister(adapter: Any) -> None:
     _adapters.remove(adapter)
 
 
-def enabled() -> bool:
+def is_enabled() -> bool:
     """Whether anything is listening for spans.
 
     True when a sink is routed with :func:`use_sink` or at least one
@@ -786,7 +786,7 @@ def create_span(
     :meth:`Span.push` when the work begins, or hand the whole
     lifecycle to the :func:`span` context manager.
 
-    While telemetry is off (see :func:`enabled`) this returns a noop
+    While telemetry is off (see :func:`is_enabled`) this returns a noop
     span instead.
     """
     if isinstance(name_or_data, str):
@@ -799,7 +799,7 @@ def create_span(
             raise TypeError("attributes only go with a str span name")
         name = name_or_data.kind
         data = name_or_data
-    if not enabled():
+    if not is_enabled():
         return Span(
             name=name,
             data=data,

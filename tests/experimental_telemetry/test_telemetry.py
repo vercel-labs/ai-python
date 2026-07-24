@@ -33,11 +33,11 @@ async def _add_event(
 
 async def test_nesting_and_ids(recorder: Recorder) -> None:
     async with ai.experimental_telemetry.span("outer") as outer:
-        assert ai.experimental_telemetry.current() is outer
+        assert ai.experimental_telemetry.current_span() is outer
         async with ai.experimental_telemetry.span("inner") as inner:
             assert inner.parent_id == outer.id
             assert inner.trace_id == outer.trace_id
-    assert ai.experimental_telemetry.current() is None
+    assert ai.experimental_telemetry.current_span() is None
     assert outer.parent_id is None
     assert [s.name for s in recorder.started] == ["outer", "inner"]
     assert [s.name for s in recorder.ended] == ["inner", "outer"]
@@ -71,18 +71,18 @@ async def test_error_recorded_and_reraised(recorder: Recorder) -> None:
 
 async def test_set_attributes(recorder: Recorder) -> None:
     async with ai.experimental_telemetry.span("s", a=1) as span:
-        span.set(b=2)
+        span.set_attributes(b=2)
     (ended,) = recorder.ended
     assert isinstance(ended.data, ai.experimental_telemetry.CustomSpanData)
     assert ended.data.attributes == {"a": 1, "b": 2}
 
 
-async def test_set_rejects_framework_spans() -> None:
+async def test_set_attributes_rejects_framework_spans() -> None:
     async with ai.experimental_telemetry.span(
         ai.experimental_telemetry.LoopTurnSpanData()
     ) as span:
         with pytest.raises(TypeError):
-            span.set(a=1)
+            span.set_attributes(a=1)
 
 
 async def test_data_with_attributes_rejected() -> None:
@@ -112,7 +112,7 @@ async def test_not_set_as_current(recorder: Recorder) -> None:
             assert overlapping.parent_id == outer.id
             # ...but is not current: work opened meanwhile parents to
             # the outer span instead.
-            assert ai.experimental_telemetry.current() is outer
+            assert ai.experimental_telemetry.current_span() is outer
             async with ai.experimental_telemetry.span("child") as child:
                 assert child.parent_id == outer.id
 
@@ -210,11 +210,11 @@ async def test_use_span_parents_without_lifecycle(
     # ``use_span`` is pure context plumbing: no pushes, no timestamps.
     outer = ai.experimental_telemetry.create_span("outer")
     with ai.experimental_telemetry.use_span(outer):
-        assert ai.experimental_telemetry.current() is outer
+        assert ai.experimental_telemetry.current_span() is outer
         async with ai.experimental_telemetry.span("child") as child:
             assert child.parent_id == outer.id
             assert child.trace_id == outer.trace_id
-    assert ai.experimental_telemetry.current() is None
+    assert ai.experimental_telemetry.current_span() is None
     # Only the child was reported; outer was never pushed.
     assert [s.name for s in recorder.started] == ["child"]
 
@@ -252,7 +252,7 @@ async def test_restored_user_span_data() -> None:
     assert restored.data == ai.experimental_telemetry.CustomSpanData(
         attributes={"session": "s1"}
     )
-    restored.set(extra=1)  # typed data means set() works after a restore
+    restored.set_attributes(extra=1)
 
     # ...even when its name collides with a framework kind: the type
     # travels in the data, not the span name.
@@ -406,7 +406,7 @@ async def test_adapter_view_updated_in_place() -> None:
 
     async with _registered(Holder()):
         async with ai.experimental_telemetry.span("s") as sp:
-            sp.set(a=1)
+            sp.set_attributes(a=1)
 
     # The adapter holds one object across callbacks; by span end it
     # shows the final data, like the live object it used to be handed.
@@ -679,8 +679,8 @@ async def test_wrap_span_locals_across_yield() -> None:
     async with _registered(adapter):
         async with ai.experimental_telemetry.span("outer") as outer:
             async with ai.experimental_telemetry.span("inner") as inner:
-                inner.set(a=1)
-            outer.set(a=2)
+                inner.set_attributes(a=1)
+            outer.set_attributes(a=2)
 
     # One generator frame per live span, each resumed at its own
     # span's end with the final data visible after the yield.
@@ -811,7 +811,7 @@ async def test_wrap_span_events_live_loop() -> None:
         async with ai.experimental_telemetry.span("s") as sp:
             await _add_event(sp, "one")
             await _add_event(sp, "two")
-            sp.set(a=1)
+            sp.set_attributes(a=1)
 
     assert seen == [
         "vendor:s event one",
@@ -1032,9 +1032,9 @@ async def test_span_without_adapters_is_noop() -> None:
         assert sp.parent_id is None
         assert sp.started_at is None
         # Never current: nothing to parent under.
-        assert ai.experimental_telemetry.current() is None
+        assert ai.experimental_telemetry.current_span() is None
         # Attribute writes still work; they are just never observed.
-        sp.set(b=2)
+        sp.set_attributes(b=2)
         event = sp.add_event("milestone", c=3)
     assert event.name == "milestone"
     assert event.time_ns == 0
@@ -1150,30 +1150,30 @@ async def test_use_time_accepts_time_time_ns(recorder: Recorder) -> None:
     assert before <= sp.started_at <= sp.ended_at <= time.time_ns()
 
 
-# ── Sugar: stamps, add_event, enabled, shipping helpers ───────────
+# ── Sugar: stamps, add_event, is_enabled, shipping helpers ────────
 
 
 async def test_use_span_accepts_none(recorder: Recorder) -> None:
     # "no span" is a normal state in gated instrumentation; None means
     # no reparenting, no separate code path at the callsite.
     with ai.experimental_telemetry.use_span(None):
-        assert ai.experimental_telemetry.current() is None
+        assert ai.experimental_telemetry.current_span() is None
         async with ai.experimental_telemetry.span("child") as child:
             pass
     assert child.parent_id is None
 
 
-async def test_enabled_reflects_sinks_and_adapters() -> None:
+async def test_is_enabled_reflects_sinks_and_adapters() -> None:
     # No adapters registered here (no recorder fixture), default sink.
-    assert not ai.experimental_telemetry.enabled()
+    assert not ai.experimental_telemetry.is_enabled()
     sink = ai.experimental_telemetry.DictSink()
     with ai.experimental_telemetry.use_sink(sink):
-        assert ai.experimental_telemetry.enabled()
-    assert not ai.experimental_telemetry.enabled()
+        assert ai.experimental_telemetry.is_enabled()
+    assert not ai.experimental_telemetry.is_enabled()
 
 
-async def test_enabled_with_adapter_registered(recorder: Recorder) -> None:
-    assert ai.experimental_telemetry.enabled()
+async def test_is_enabled_with_adapter_registered(recorder: Recorder) -> None:
+    assert ai.experimental_telemetry.is_enabled()
 
 
 async def test_stamp_start_and_end(recorder: Recorder) -> None:
@@ -1239,11 +1239,11 @@ async def test_attribute_mappings_for_dotted_names(
     recorder: Recorder,
 ) -> None:
     # Viewer attribute names ("session.id") aren't valid keywords, so
-    # span()/set() take a positional mapping merged with keywords.
+    # span()/set_attributes() take a positional mapping merged with keywords.
     async with ai.experimental_telemetry.span(
         "generate_title", {"session.id": "s1"}, model="haiku"
     ) as sp:
-        sp.set({"output.value": "t"}, plain=1)
+        sp.set_attributes({"output.value": "t"}, plain=1)
     assert sp.data.attributes == {
         "session.id": "s1",
         "model": "haiku",
