@@ -510,9 +510,9 @@ class Span(pydantic.BaseModel, Generic[DataT_co]):
             return  # noop: telemetry was off at creation
         sink = _current_sink.get() or _registry_sink
         try:
-            await sink.emit(self.model_copy(deep=True))
+            await sink.on_push(self.model_copy(deep=True))
         except Exception:
-            logger.exception("telemetry sink %r raised in emit", sink)
+            logger.exception("telemetry sink %r raised in on_push", sink)
 
 
 # utilities for managing the current span
@@ -553,14 +553,14 @@ def use_span(span_: Span | None) -> Iterator[None]:
 
 # sinks are used to control where spans go within the current context.
 # that could be the adapter registry (so they immediately get sent to the
-# observability backend; or it could be a Collector that allows us to defer
+# observability backend; or it could be a DictSink that allows us to defer
 # sending them until later.
 
 
 class Sink(Protocol):
     """Anything that accepts pushed span snapshots."""
 
-    async def emit(self, span_: Span, /) -> None: ...
+    async def on_push(self, span_: Span, /) -> None: ...
 
 
 _current_sink: contextvars.ContextVar[Sink | None] = contextvars.ContextVar(
@@ -574,7 +574,7 @@ def use_sink(sink: Sink | None) -> Iterator[None]:
 
     The default (outside any ``use_sink``) is the adapter registry.
     Inside a durable workflow body where side effects are not allowed, you
-    can route to a :class:`Collector` instead and re-push the collected spans
+    can route to a :class:`DictSink` instead and re-push the collected spans
     from a step / activity.
 
     ``None`` is a no-op.
@@ -589,17 +589,17 @@ def use_sink(sink: Sink | None) -> Iterator[None]:
         _current_sink.reset(token)
 
 
-class Collector:
+class DictSink:
     """A sink that keeps the latest snapshot of every span pushed to it.
 
     ``spans`` maps span id to the most recent snapshot, in first-push
-    order.  Scoop the complete ones out as data (:attr:`finished`) and
+    order.  Scoop the complete ones out as data (:attr:`finished_spans`) and
     re-push them where the real sink is available::
 
-        collector = Collector()
-        with use_sink(collector):
+        sink = DictSink()
+        with use_sink(sink):
             ...  # replayed / suspendable code
-        payload = [s.model_dump(mode="json") for s in collector.finished]
+        payload = [s.model_dump(mode="json") for s in sink.finished_spans]
 
         # elsewhere (a workflow step, another process):
         await push_all(payload)
@@ -608,11 +608,11 @@ class Collector:
     def __init__(self) -> None:
         self.spans: dict[str, Span] = {}
 
-    async def emit(self, span_: Span, /) -> None:
+    async def on_push(self, span_: Span, /) -> None:
         self.spans[span_.id] = span_
 
     @property
-    def finished(self) -> list[Span]:
+    def finished_spans(self) -> list[Span]:
         """The collected spans that have ended, in first-push order."""
         return [s for s in self.spans.values() if s.ended_at is not None]
 
@@ -620,7 +620,7 @@ class Collector:
 async def push_all(spans: Iterable[Span | Mapping[str, Any]]) -> None:
     """Push each span, in order; dumped spans are validated first.
 
-    This is a utility that can be used with :class:`Collector` to push
+    This is a utility that can be used with :class:`DictSink` to push
     a bunch of collected spans all at once::
 
         await push_all(payload)
@@ -653,7 +653,7 @@ class _RegistrySink:
     def __init__(self) -> None:
         self._views: dict[str, Span] = {}
 
-    async def emit(self, span_: Span, /) -> None:
+    async def on_push(self, span_: Span, /) -> None:
         if span_.started_at is None:
             return
         view = self._views.get(span_.id)

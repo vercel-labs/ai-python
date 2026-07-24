@@ -333,17 +333,17 @@ async def test_push_lifecycle_split_across_pushes(
 
 
 async def test_push_snapshots_are_frozen(recorder: Recorder) -> None:
-    collector = ai.experimental_telemetry.Collector()
+    sink = ai.experimental_telemetry.DictSink()
     data = ai.experimental_telemetry.ToolExecutionSpanData(
         tool_name="t", tool_call_id="tc", args={"x": 1}
     )
-    with ai.experimental_telemetry.use_sink(collector):
+    with ai.experimental_telemetry.use_sink(sink):
         sp = ai.experimental_telemetry.create_span(data)
         sp.started_at = ai.experimental_telemetry.now_ns()
         await sp.push()
         # Mutations after a push don't leak into the snapshot.
         sp.data.args = {"x": 2}
-    snapshot = collector.spans[sp.id]
+    snapshot = sink.spans[sp.id]
     assert isinstance(
         snapshot.data, ai.experimental_telemetry.ToolExecutionSpanData
     )
@@ -434,8 +434,8 @@ async def test_repush_after_end_redelivers(recorder: Recorder) -> None:
 
 
 async def test_use_sink_reroutes_pushes(recorder: Recorder) -> None:
-    collector = ai.experimental_telemetry.Collector()
-    with ai.experimental_telemetry.use_sink(collector):
+    sink = ai.experimental_telemetry.DictSink()
+    with ai.experimental_telemetry.use_sink(sink):
         async with ai.experimental_telemetry.span("inside") as sp:
             sp.events.append(
                 ai.experimental_telemetry.SpanEvent(
@@ -445,10 +445,10 @@ async def test_use_sink_reroutes_pushes(recorder: Recorder) -> None:
                 )
             )
             await sp.push()
-    # Adapters saw nothing; the collector kept the latest snapshot.
+    # Adapters saw nothing; the sink kept the latest snapshot.
     assert recorder.started == []
     assert recorder.ended == []
-    (snapshot,) = collector.spans.values()
+    (snapshot,) = sink.spans.values()
     assert snapshot.name == "inside"
     assert snapshot.ended_at is not None
     assert [e.name for e in snapshot.events] == ["milestone"]
@@ -466,27 +466,27 @@ async def test_use_sink_accepts_none(recorder: Recorder) -> None:
 
 
 async def test_use_sink_none_preserves_outer_sink(recorder: Recorder) -> None:
-    collector = ai.experimental_telemetry.Collector()
+    sink = ai.experimental_telemetry.DictSink()
     with (
-        ai.experimental_telemetry.use_sink(collector),
+        ai.experimental_telemetry.use_sink(sink),
         ai.experimental_telemetry.use_sink(None),
     ):
         async with ai.experimental_telemetry.span("inside"):
             pass
-    assert [s.name for s in collector.finished] == ["inside"]
+    assert [s.name for s in sink.finished_spans] == ["inside"]
     assert recorder.ended == []
 
 
-async def test_collector_ships_to_adapters_exactly_as_pushed(
+async def test_dict_sink_ships_to_adapters_exactly_as_pushed(
     recorder: Recorder,
 ) -> None:
     # The durable-body pattern: collect inside, re-push from a "step".
-    collector = ai.experimental_telemetry.Collector()
-    with ai.experimental_telemetry.use_sink(collector):
+    sink = ai.experimental_telemetry.DictSink()
+    with ai.experimental_telemetry.use_sink(sink):
         async with ai.experimental_telemetry.span("outer"):
             async with ai.experimental_telemetry.span("inner"):
                 pass
-    payload = [s.model_dump(mode="json") for s in collector.spans.values()]
+    payload = [s.model_dump(mode="json") for s in sink.spans.values()]
 
     for item in payload:
         await ai.experimental_telemetry.Span.model_validate(item).push()
@@ -500,7 +500,7 @@ async def test_collector_ships_to_adapters_exactly_as_pushed(
 
 async def test_push_never_raises(recorder: Recorder) -> None:
     class BrokenSink:
-        async def emit(self, span: ai.experimental_telemetry.Span) -> None:
+        async def on_push(self, span: ai.experimental_telemetry.Span) -> None:
             raise RuntimeError("sink bug")
 
     with ai.experimental_telemetry.use_sink(BrokenSink()):
@@ -516,7 +516,7 @@ async def test_flush_reaches_sink_and_adapters() -> None:
             flushed.append("adapter")
 
     class FlushingSink:
-        async def emit(self, span: ai.experimental_telemetry.Span) -> None:
+        async def on_push(self, span: ai.experimental_telemetry.Span) -> None:
             pass
 
         async def flush(self) -> None:
@@ -1082,12 +1082,12 @@ async def test_no_rng_draws_without_adapters() -> None:
 
 
 async def test_routed_sink_keeps_spans_live_without_adapters() -> None:
-    collector = ai.experimental_telemetry.Collector()
-    with ai.experimental_telemetry.use_sink(collector):
+    sink = ai.experimental_telemetry.DictSink()
+    with ai.experimental_telemetry.use_sink(sink):
         async with ai.experimental_telemetry.span("s") as sp:
             pass
     assert sp.id
-    assert [s.name for s in collector.finished] == ["s"]
+    assert [s.name for s in sink.finished_spans] == ["s"]
 
 
 # ── use_time ──────────────────────────────────────────────────────
@@ -1166,8 +1166,8 @@ async def test_use_span_accepts_none(recorder: Recorder) -> None:
 async def test_enabled_reflects_sinks_and_adapters() -> None:
     # No adapters registered here (no recorder fixture), default sink.
     assert not ai.experimental_telemetry.enabled()
-    collector = ai.experimental_telemetry.Collector()
-    with ai.experimental_telemetry.use_sink(collector):
+    sink = ai.experimental_telemetry.DictSink()
+    with ai.experimental_telemetry.use_sink(sink):
         assert ai.experimental_telemetry.enabled()
     assert not ai.experimental_telemetry.enabled()
 
@@ -1199,31 +1199,33 @@ async def test_stamp_start_and_end(recorder: Recorder) -> None:
 
 
 async def test_add_event_appends_without_pushing() -> None:
-    collector = ai.experimental_telemetry.Collector()
-    with ai.experimental_telemetry.use_sink(collector):
+    sink = ai.experimental_telemetry.DictSink()
+    with ai.experimental_telemetry.use_sink(sink):
         async with ai.experimental_telemetry.span("s") as sp:
             event = sp.add_event("cache_hit", {"cache.key": "k"}, size=3)
             assert event.attributes == {"cache.key": "k", "size": 3}
             assert sp.events == [event]
             # Append only: the latest snapshot (from the start push)
             # doesn't have it yet.
-            assert collector.spans[sp.id].events == []
+            assert sink.spans[sp.id].events == []
     # The end push delivered it.
-    assert [e.name for e in collector.spans[sp.id].events] == ["cache_hit"]
+    assert [e.name for e in sink.spans[sp.id].events] == ["cache_hit"]
 
 
-async def test_collector_finished_and_push_all(recorder: Recorder) -> None:
-    collector = ai.experimental_telemetry.Collector()
-    with ai.experimental_telemetry.use_sink(collector):
+async def test_dict_sink_finished_spans_and_push_all(
+    recorder: Recorder,
+) -> None:
+    sink = ai.experimental_telemetry.DictSink()
+    with ai.experimental_telemetry.use_sink(sink):
         async with ai.experimental_telemetry.span("done"):
             pass
         dangling = ai.experimental_telemetry.create_span("open").stamp_start()
         await dangling.push()
     # Only complete records are safe to ship.
-    assert [s.name for s in collector.finished] == ["done"]
+    assert [s.name for s in sink.finished_spans] == ["done"]
 
     # The ship step: re-deliver dumped payloads where the adapters are.
-    payload = [s.model_dump(mode="json") for s in collector.finished]
+    payload = [s.model_dump(mode="json") for s in sink.finished_spans]
     await ai.experimental_telemetry.push_all(payload)
     assert [s.name for s in recorder.started] == ["done"]
     assert [s.name for s in recorder.ended] == ["done"]
