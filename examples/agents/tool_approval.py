@@ -31,12 +31,11 @@ async def live(messages: list[ai.messages.Message]) -> None:
                 and event.hook.status == "pending"
             ):
                 print(f"\n[deferred] {event.hook.hook_id}")
-                ai.resolve_hook(
-                    event.hook,
+                event.hook.resolve(
                     ai.tools.ToolApproval(
                         granted=True,
                         reason="approved while the run is still active",
-                    ),
+                    )
                 )
     print()
 
@@ -63,7 +62,7 @@ async def stateless(
             ):
                 deferred.append(event.hook)
                 print(f"\n[deferred] {event.hook.hook_id}")
-                ai.defer_hook(event.hook)
+                event.hook.defer()
 
     return stream.messages, deferred, "".join(text)
 

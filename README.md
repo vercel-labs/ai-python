@@ -153,7 +153,8 @@ approval = await ai.hook(
     metadata={"tool": "send_email"},
 )
 
-ai.resolve_hook("approve_send_email", {"granted": True, "reason": "approved"})
+# From a HookEvent handler, resolve it with the resolve() method:
+event.hook.resolve({"granted": True, "reason": "approved"})
 ```
 
 ## Examples

@@ -61,6 +61,14 @@ Tool and runtime parts:
 - `BuiltinToolReturnPart`: A provider-executed tool result.
 - `HookPart`: A hook suspension, resolution, or cancellation.
 
+`HookPart` has convenience methods for hook event handlers:
+
+```python
+hook_part.resolve(data)
+await hook_part.cancel(reason="client disconnected")
+hook_part.defer()
+```
+
 `ToolResultPart.get_model_input()` returns the value sent back to the model. For
 most tools this is the same as `result`. Aggregator-backed tools can store a
 rich `result` while sending a simpler model-facing value.

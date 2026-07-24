@@ -49,13 +49,12 @@ async def main() -> None:
                 and event.hook.status == "pending"
             ):
                 print(f"\n[deferred] {event.hook.hook_id}")
-                ai.resolve_hook(
-                    event.hook,
+                event.hook.resolve(
                     DeploymentReview(
                         approved=True,
                         reviewer="ops",
                         reason="change window is open",
-                    ),
+                    )
                 )
             elif (
                 isinstance(event, ai.events.HookEvent)

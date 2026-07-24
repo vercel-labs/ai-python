@@ -323,9 +323,13 @@ approval = await ai.hook(
 Hook exports:
 
 - `hook`: Emit a deferred hook event and wait for a matching resolution.
-- `resolve_hook`: Resolve a live or future hook.
+- `resolve_hook`: Resolve a live or future hook by ID or `HookPart`.
 - `defer_hook`: Mark a serialized deferred hook as aborted.
-- `cancel_hook`: Cancel a live hook by label.
+- `cancel_hook`: Cancel a live hook by ID or `HookPart`.
+
+`HookPart` also has convenience methods for event-driven code:
+`hook_part.resolve(...)`, `await hook_part.cancel(...)`, and
+`hook_part.defer()`.
 
 ## Errors
 

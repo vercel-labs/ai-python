@@ -4,13 +4,25 @@ import functools
 import random
 import weakref
 from collections.abc import Callable, Iterator, Sequence
-from typing import Annotated, Any, Literal, Protocol, Self, cast, overload
+from typing import (
+    TYPE_CHECKING,
+    Annotated,
+    Any,
+    Literal,
+    Protocol,
+    Self,
+    cast,
+    overload,
+)
 
 import pydantic
 
 from .. import util
 from . import media
 from . import usage as usage_
+
+if TYPE_CHECKING:
+    from ..agents import hooks as hooks_
 
 type RandomSource = random.Random | Callable[[], random.Random]
 """A ``Random``, or a zero-arg factory that produces one."""
@@ -438,6 +450,35 @@ class HookPart[T](pydantic.BaseModel):
 
     kind: Literal["hook"] = "hook"
     model_config = pydantic.ConfigDict(frozen=True)
+
+    def resolve(
+        self,
+        data: pydantic.BaseModel | dict[str, Any] | BaseException,
+        *,
+        payload: type[pydantic.BaseModel] | None = None,
+        registry: "hooks_.HookRegistry | None" = None,
+    ) -> None:
+        """Resolve this hook. See :func:`ai.resolve_hook`."""
+        from ..agents import hooks  # noqa: PLC0415
+
+        hooks.resolve_hook(self, data, payload=payload, registry=registry)
+
+    async def cancel(
+        self,
+        *,
+        reason: str | None = None,
+        registry: "hooks_.HookRegistry | None" = None,
+    ) -> None:
+        """Cancel this pending hook. See :func:`ai.cancel_hook`."""
+        from ..agents import hooks  # noqa: PLC0415
+
+        await hooks.cancel_hook(self, reason=reason, registry=registry)
+
+    def defer(self, *, registry: "hooks_.HookRegistry | None" = None) -> None:
+        """Defer this hook. See :func:`ai.defer_hook`."""
+        from ..agents import hooks  # noqa: PLC0415
+
+        hooks.defer_hook(self, registry=registry)
 
 
 Part = Annotated[

@@ -78,7 +78,7 @@ async def chat(request: ChatRequest) -> fastapi.responses.StreamingResponse:
                         isinstance(event, ai.events.HookEvent)
                         and event.hook.status == "pending"
                     ):
-                        ai.defer_hook(event.hook)
+                        event.hook.defer()
                     yield event
 
             async for chunk in ai.ui.ai_sdk.to_sse(process()):

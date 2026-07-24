@@ -7,7 +7,7 @@ Minimal coding-agent TUI built with the AI SDK for Python and
 - streamed markdown replies (and reasoning, when the model emits it)
 - every bash call is gated behind a `ToolApproval` hook: the run
   suspends, a y/n prompt appears above the composer, and the decision
-  is resolved in-process with `ai.resolve_hook()`
+  is resolved in-process
 - messages typed while the agent is busy are queued and run in order;
   Esc interrupts the current turn
 
