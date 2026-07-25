@@ -7,7 +7,7 @@ work-specific data::
 
     async with ai.experimental_telemetry.span("retrieval", query=q) as sp:
         docs = await search(q)
-        sp.set(count=len(docs))
+        sp.set_attributes(count=len(docs))
 
 Nesting is automatic: the current span is tracked using a context var.
 
@@ -34,8 +34,7 @@ and set it as current using :func:`use_span` or pass to a child span explicity.
 
 An adapter processes spans and decides what to do with them::
 
-    class MyAdapter:
-        # all optional and can be blocking
+    class MyAdapter(ai.experimental_telemetry.Adapter):
         async def on_span_start(self, span): ...
         async def on_span_end(self, span): ...
         async def on_span_event(self, span, event): ...
@@ -63,7 +62,7 @@ lifetime (``first_token``, ``hook_resolved``, ...): append it to
 ``span.events`` and push.
 
 Span timestamps come from the ambient clock (:func:`now_ns`);
-:func:`use_clock` overrides it per-context, e.g. with a deterministic
+:func:`use_time` overrides it per-context, e.g. with a deterministic
 clock inside a durable workflow.
 """
 
@@ -100,6 +99,7 @@ if TYPE_CHECKING:
     from collections.abc import (
         AsyncGenerator,
         AsyncIterator,
+        Awaitable,
         Callable,
         Iterable,
         Iterator,
@@ -137,7 +137,7 @@ _span_clock: contextvars.ContextVar[Callable[[], int] | None] = (
 def now_ns() -> int:
     """Nanoseconds since the epoch, from the ambient span clock.
 
-    The wall clock by default; whatever :func:`use_clock` installed
+    The wall clock by default; whatever :func:`use_time` installed
     otherwise.
     """
     clock = _span_clock.get()
@@ -145,20 +145,20 @@ def now_ns() -> int:
 
 
 @util.contextmanager_any_sync
-def use_clock(now_ns: Callable[[], int]) -> Iterator[None]:
+def use_time(now_ns: Callable[[], int]) -> Iterator[None]:
     """Read span timestamps from ``now_ns`` within this context.
 
     Framework's observability creates timestamps. This API can be
     used to plug an approved clock function in durable execution
     settings::
 
-        with ai.experimental_telemetry.use_clock(workflow.time_ns):
+        with ai.experimental_telemetry.use_time(workflow.time_ns):
             ...  # spans opened here read time from workflow.time_ns
 
     This can also be used as a decorator on both sync and async
     functions::
 
-        @ai.experimental_telemetry.use_clock(clock.time_ns)
+        @ai.experimental_telemetry.use_time(clock.time_ns)
         async def run(...):
             ...
     """
@@ -394,7 +394,7 @@ class Span(pydantic.BaseModel, Generic[DataT_co]):
     ``replay=True`` marks work that is being replayed (resume,
     serverless re-entry) rather than performed live.
 
-    A span created while telemetry was off (see :func:`enabled`) has an
+    A span created while telemetry was off (see :func:`is_enabled`) has an
     empty ``id`` and is a noop: :meth:`push` delivers nothing.
 
     ``set_as_current=False`` marks a span that does not set itself
@@ -420,7 +420,7 @@ class Span(pydantic.BaseModel, Generic[DataT_co]):
 
     schema_version: ClassVar[int] = 3
 
-    def set(
+    def set_attributes(
         self, attributes: Mapping[str, Any] | None = None, /, **kwargs: Any
     ) -> None:
         """Attach attributes to a span created with ``span("name", ...)``.
@@ -429,12 +429,12 @@ class Span(pydantic.BaseModel, Generic[DataT_co]):
         dotted names like ``"output.value"``) go in the positional
         mapping; it merges with the keyword arguments::
 
-            sp.set({"output.value": title}, model="haiku")
+            sp.set_attributes({"output.value": title}, model="haiku")
         """
         if not isinstance(self.data, CustomSpanData):
             raise TypeError(
-                "set() only works on user spans; framework spans carry "
-                "typed data, assign its fields directly"
+                "set_attributes() only works on user spans; framework "
+                "spans carry typed data, assign its fields directly"
             )
         self.data.attributes.update({**(attributes or {}), **kwargs})
 
@@ -510,9 +510,9 @@ class Span(pydantic.BaseModel, Generic[DataT_co]):
             return  # noop: telemetry was off at creation
         sink = _current_sink.get() or _registry_sink
         try:
-            await sink.emit(self.model_copy(deep=True))
+            await sink.on_push(self.model_copy(deep=True))
         except Exception:
-            logger.exception("telemetry sink %r raised in emit", sink)
+            logger.exception("telemetry sink %r raised in on_push", sink)
 
 
 # utilities for managing the current span
@@ -522,7 +522,7 @@ _current: contextvars.ContextVar[Span | None] = contextvars.ContextVar(
 )
 
 
-def current() -> Span | None:
+def current_span() -> Span | None:
     """Return the current span, or ``None`` when no span is open."""
     return _current.get()
 
@@ -553,14 +553,14 @@ def use_span(span_: Span | None) -> Iterator[None]:
 
 # sinks are used to control where spans go within the current context.
 # that could be the adapter registry (so they immediately get sent to the
-# observability backend; or it could be a Collector that allows us to defer
+# observability backend; or it could be a DictSink that allows us to defer
 # sending them until later.
 
 
 class Sink(Protocol):
     """Anything that accepts pushed span snapshots."""
 
-    async def emit(self, span_: Span, /) -> None: ...
+    async def on_push(self, span_: Span, /) -> None: ...
 
 
 _current_sink: contextvars.ContextVar[Sink | None] = contextvars.ContextVar(
@@ -574,7 +574,7 @@ def use_sink(sink: Sink | None) -> Iterator[None]:
 
     The default (outside any ``use_sink``) is the adapter registry.
     Inside a durable workflow body where side effects are not allowed, you
-    can route to a :class:`Collector` instead and re-push the collected spans
+    can route to a :class:`DictSink` instead and re-push the collected spans
     from a step / activity.
 
     ``None`` is a no-op.
@@ -589,17 +589,17 @@ def use_sink(sink: Sink | None) -> Iterator[None]:
         _current_sink.reset(token)
 
 
-class Collector:
+class DictSink:
     """A sink that keeps the latest snapshot of every span pushed to it.
 
     ``spans`` maps span id to the most recent snapshot, in first-push
-    order.  Scoop the complete ones out as data (:attr:`finished`) and
+    order.  Scoop the complete ones out as data (:attr:`finished_spans`) and
     re-push them where the real sink is available::
 
-        collector = Collector()
-        with use_sink(collector):
+        sink = DictSink()
+        with use_sink(sink):
             ...  # replayed / suspendable code
-        payload = [s.model_dump(mode="json") for s in collector.finished]
+        payload = [s.model_dump(mode="json") for s in sink.finished_spans]
 
         # elsewhere (a workflow step, another process):
         await push_all(payload)
@@ -608,11 +608,11 @@ class Collector:
     def __init__(self) -> None:
         self.spans: dict[str, Span] = {}
 
-    async def emit(self, span_: Span, /) -> None:
+    async def on_push(self, span_: Span, /) -> None:
         self.spans[span_.id] = span_
 
     @property
-    def finished(self) -> list[Span]:
+    def finished_spans(self) -> list[Span]:
         """The collected spans that have ended, in first-push order."""
         return [s for s in self.spans.values() if s.ended_at is not None]
 
@@ -620,7 +620,7 @@ class Collector:
 async def push_all(spans: Iterable[Span | Mapping[str, Any]]) -> None:
     """Push each span, in order; dumped spans are validated first.
 
-    This is a utility that can be used with :class:`Collector` to push
+    This is a utility that can be used with :class:`DictSink` to push
     a bunch of collected spans all at once::
 
         await push_all(payload)
@@ -653,14 +653,14 @@ class _RegistrySink:
     def __init__(self) -> None:
         self._views: dict[str, Span] = {}
 
-    async def emit(self, span_: Span, /) -> None:
+    async def on_push(self, span_: Span, /) -> None:
         if span_.started_at is None:
             return
         view = self._views.get(span_.id)
         if view is None:
             view = span_
             self._views[view.id] = view
-            await _dispatch("on_span_start", view)
+            await _dispatch(lambda a: a.on_span_start(view))
             fresh = list(view.events)
         else:
             seen = len(view.events)
@@ -669,10 +669,16 @@ class _RegistrySink:
             view.__dict__.update(span_.__dict__)
             fresh = view.events[seen:]
         for event in fresh:
-            await _dispatch("on_span_event", view, event)
+            # the default binds `event` now; a plain lambda would trip B023
+            def call(
+                a: AdapterProtocol, ev: SpanEvent = event
+            ) -> Awaitable[None]:
+                return a.on_span_event(view, ev)
+
+            await _dispatch(call)
         if view.ended_at is not None:
             del self._views[view.id]
-            await _dispatch("on_span_end", view)
+            await _dispatch(lambda a: a.on_span_end(view))
 
 
 _registry_sink = _RegistrySink()
@@ -680,20 +686,31 @@ _registry_sink = _RegistrySink()
 
 # adapter registry utilities
 
-_adapters: list[Any] = []
+
+class AdapterProtocol(Protocol):
+    """The async callbacks implemented by a telemetry adapter."""
+
+    async def on_span_start(self, span_: Span, /) -> None: ...
+
+    async def on_span_event(self, span_: Span, event: SpanEvent, /) -> None: ...
+
+    async def on_span_end(self, span_: Span, /) -> None: ...
 
 
-def register(adapter: Any) -> None:
+_adapters: list[AdapterProtocol] = []
+
+
+def register(adapter: AdapterProtocol) -> None:
     """Add an adapter.  Multiple adapters coexist independently."""
     _adapters.append(adapter)
 
 
-def unregister(adapter: Any) -> None:
+def unregister(adapter: AdapterProtocol) -> None:
     """Remove a previously registered adapter."""
     _adapters.remove(adapter)
 
 
-def enabled() -> bool:
+def is_enabled() -> bool:
     """Whether anything is listening for spans.
 
     True when a sink is routed with :func:`use_sink` or at least one
@@ -702,41 +719,14 @@ def enabled() -> bool:
     return _current_sink.get() is not None or bool(_adapters)
 
 
-async def _dispatch(method: str, span_: Span, *args: Any) -> None:
+async def _dispatch(
+    call: Callable[[AdapterProtocol], Awaitable[None]],
+) -> None:
     for adapter in list(_adapters):
-        fn = getattr(adapter, method, None)
-        if fn is None:
-            continue
         try:
-            result = fn(span_, *args)
-            if inspect.isawaitable(result):
-                await result
+            await call(adapter)
         except Exception:
-            logger.exception(
-                "telemetry adapter %r raised in %s", adapter, method
-            )
-
-
-async def flush() -> None:
-    """Flush the current sink and every adapter that supports it.
-
-    Vendor SDKs buffer spans in background threads; call this before a
-    checkpoint or process exit so everything pushed so far is actually
-    delivered.  Sinks and adapters opt in by defining ``flush()``
-    (sync or async); failures are logged and skipped.
-    """
-    sink = _current_sink.get()
-    targets = ([sink] if sink is not None else []) + list(_adapters)
-    for target in targets:
-        fn = getattr(target, "flush", None)
-        if fn is None:
-            continue
-        try:
-            result = fn()
-            if inspect.isawaitable(result):
-                await result
-        except Exception:
-            logger.exception("telemetry flush of %r raised", target)
+            logger.exception("telemetry adapter %r raised", adapter)
 
 
 # span building utilities
@@ -786,7 +776,7 @@ def create_span(
     :meth:`Span.push` when the work begins, or hand the whole
     lifecycle to the :func:`span` context manager.
 
-    While telemetry is off (see :func:`enabled`) this returns a noop
+    While telemetry is off (see :func:`is_enabled`) this returns a noop
     span instead.
     """
     if isinstance(name_or_data, str):
@@ -799,7 +789,7 @@ def create_span(
             raise TypeError("attributes only go with a str span name")
         name = name_or_data.kind
         data = name_or_data
-    if not enabled():
+    if not is_enabled():
         return Span(
             name=name,
             data=data,
@@ -961,8 +951,8 @@ async def _span_impl(
             )
 
 
-class Adapter:
-    """Base class for adapters: the protocol, with the right defaults.
+class Adapter(AdapterProtocol):
+    """Base adapter implementing the protocol with the right defaults.
 
     class Vendor(telemetry.Adapter):
         async def wrap_span(self, span):

@@ -4,8 +4,11 @@ Experimental: not part of the stable API, may change or be removed.
 
 ::
 
+    import ai
     from ai.experimental_telemetry import otel
-    otel.install()  # uses the global TracerProvider
+
+    otel.configure()
+    ai.experimental_telemetry.register(otel.OtelAdapter())
 
 Follows the ``gen_ai`` semantic conventions.
 
@@ -31,6 +34,8 @@ from .. import experimental_telemetry as telemetry
 
 try:
     import opentelemetry.context
+    import opentelemetry.exporter.otlp.proto.http.trace_exporter
+    import opentelemetry.sdk.trace.export
     import opentelemetry.sdk.trace.id_generator
     import opentelemetry.trace
 except ModuleNotFoundError as exc:  # pragma: no cover
@@ -607,18 +612,32 @@ class OtelAdapter(telemetry.Adapter):
             otel_span.end(end_time=span_.ended_at)
 
 
-def install(
+def configure(
     *,
-    tracer_provider: opentelemetry.trace.TracerProvider | None = None,
-    capture_content: bool | None = None,
-) -> OtelAdapter:
-    """Create the otel adapter, register it, and return it.
+    endpoint: str | None = None,
+) -> opentelemetry.sdk.trace.TracerProvider:
+    """Configure the global tracer provider with OTLP/HTTP export.
 
-    Uses the global tracer provider unless one is passed.
-    Message content capture is opt-in via capture_content or the env var.
+    ``endpoint`` defaults to the standard OpenTelemetry environment
+    configuration, then ``http://localhost:4318/v1/traces``.
+
+    This only configures OpenTelemetry. Create and register the adapter
+    separately::
+
+        import ai
+        from ai.experimental_telemetry import otel
+
+        otel.configure()
+        ai.experimental_telemetry.register(otel.OtelAdapter())
     """
-    adapter = OtelAdapter(
-        tracer_provider=tracer_provider, capture_content=capture_content
+    provider = opentelemetry.sdk.trace.TracerProvider()
+    exporter = (
+        opentelemetry.exporter.otlp.proto.http.trace_exporter.OTLPSpanExporter(
+            endpoint=endpoint
+        )
     )
-    telemetry.register(adapter)
-    return adapter
+    provider.add_span_processor(
+        opentelemetry.sdk.trace.export.BatchSpanProcessor(exporter)
+    )
+    opentelemetry.trace.set_tracer_provider(provider)
+    return provider

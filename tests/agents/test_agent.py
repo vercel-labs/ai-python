@@ -153,7 +153,7 @@ async def test_early_break_closes_span_tree(recorder: Recorder) -> None:
         async for _ in stream:
             break
 
-    assert ai.experimental_telemetry.current() is None
+    assert ai.experimental_telemetry.current_span() is None
     assert {s.id for s in recorder.ended} == {s.id for s in recorder.started}
     names = [s.name for s in recorder.ended]
     assert names[-1] == "run"
@@ -169,7 +169,7 @@ async def test_consumer_error_closes_span_tree(recorder: Recorder) -> None:
             async for _ in stream:
                 raise ValueError("stop")
 
-    assert ai.experimental_telemetry.current() is None
+    assert ai.experimental_telemetry.current_span() is None
     assert {s.id for s in recorder.ended} == {s.id for s in recorder.started}
     assert [s.name for s in recorder.ended][-1] == "run"
 

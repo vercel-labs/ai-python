@@ -72,7 +72,7 @@ def _line(sp: telemetry.Span) -> str:
     return f"{replay}{_label(sp)}  {duration:.2f}s{error}"
 
 
-class ConsoleAdapter:
+class ConsoleAdapter(telemetry.Adapter):
     """Print spans to ``out`` (default: stdout)."""
 
     def __init__(self, *, out: TextIO | None = None) -> None:
@@ -80,7 +80,7 @@ class ConsoleAdapter:
         self._depth: dict[str, int] = {}
         self._ended: dict[str, list[telemetry.Span]] = {}
 
-    def on_span_start(self, span: telemetry.Span) -> None:
+    async def on_span_start(self, span: telemetry.Span) -> None:
         depth = 0
         if span.parent_id is not None:
             depth = self._depth.get(span.parent_id, -1) + 1
@@ -88,7 +88,7 @@ class ConsoleAdapter:
         replay = "↻ " if span.replay else ""
         self._out.write(f"▸ {'  ' * depth}{replay}{_label(span)}\n")
 
-    def on_span_event(
+    async def on_span_event(
         self, span: telemetry.Span, event: telemetry.SpanEvent
     ) -> None:
         depth = self._depth.get(span.id, 0) + 1
@@ -99,7 +99,7 @@ class ConsoleAdapter:
             f"· {'  ' * depth}{event.name} +{offset_ms:.0f}ms{suffix}\n"
         )
 
-    def on_span_end(self, span: telemetry.Span) -> None:
+    async def on_span_end(self, span: telemetry.Span) -> None:
         self._ended.setdefault(span.trace_id, []).append(span)
         if span.parent_id is not None:
             return

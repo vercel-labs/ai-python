@@ -67,8 +67,8 @@ async def test_console_tree_uses_response_complete_duration() -> None:
             )
         ],
     )
-    adapter.on_span_start(span)
-    adapter.on_span_end(span)
+    await adapter.on_span_start(span)
+    await adapter.on_span_end(span)
 
     text = out.getvalue()
     # The reported duration is the model latency, not the span

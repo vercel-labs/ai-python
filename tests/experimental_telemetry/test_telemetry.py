@@ -33,11 +33,11 @@ async def _add_event(
 
 async def test_nesting_and_ids(recorder: Recorder) -> None:
     async with ai.experimental_telemetry.span("outer") as outer:
-        assert ai.experimental_telemetry.current() is outer
+        assert ai.experimental_telemetry.current_span() is outer
         async with ai.experimental_telemetry.span("inner") as inner:
             assert inner.parent_id == outer.id
             assert inner.trace_id == outer.trace_id
-    assert ai.experimental_telemetry.current() is None
+    assert ai.experimental_telemetry.current_span() is None
     assert outer.parent_id is None
     assert [s.name for s in recorder.started] == ["outer", "inner"]
     assert [s.name for s in recorder.ended] == ["inner", "outer"]
@@ -71,18 +71,18 @@ async def test_error_recorded_and_reraised(recorder: Recorder) -> None:
 
 async def test_set_attributes(recorder: Recorder) -> None:
     async with ai.experimental_telemetry.span("s", a=1) as span:
-        span.set(b=2)
+        span.set_attributes(b=2)
     (ended,) = recorder.ended
     assert isinstance(ended.data, ai.experimental_telemetry.CustomSpanData)
     assert ended.data.attributes == {"a": 1, "b": 2}
 
 
-async def test_set_rejects_framework_spans() -> None:
+async def test_set_attributes_rejects_framework_spans() -> None:
     async with ai.experimental_telemetry.span(
         ai.experimental_telemetry.LoopTurnSpanData()
     ) as span:
         with pytest.raises(TypeError):
-            span.set(a=1)
+            span.set_attributes(a=1)
 
 
 async def test_data_with_attributes_rejected() -> None:
@@ -112,7 +112,7 @@ async def test_not_set_as_current(recorder: Recorder) -> None:
             assert overlapping.parent_id == outer.id
             # ...but is not current: work opened meanwhile parents to
             # the outer span instead.
-            assert ai.experimental_telemetry.current() is outer
+            assert ai.experimental_telemetry.current_span() is outer
             async with ai.experimental_telemetry.span("child") as child:
                 assert child.parent_id == outer.id
 
@@ -130,8 +130,10 @@ async def test_out_of_order_close_raises(recorder: Recorder) -> None:
 
 
 async def test_failing_adapter_is_isolated(recorder: Recorder) -> None:
-    class Broken:
-        def on_span_start(self, span: ai.experimental_telemetry.Span) -> None:
+    class Broken(ai.experimental_telemetry.Adapter):
+        async def on_span_start(
+            self, span: ai.experimental_telemetry.Span
+        ) -> None:
             raise RuntimeError("adapter bug")
 
     broken = Broken()
@@ -148,7 +150,7 @@ async def test_failing_adapter_is_isolated(recorder: Recorder) -> None:
 async def test_async_adapter_methods_awaited() -> None:
     ended: list[str] = []
 
-    class AsyncAdapter:
+    class AsyncAdapter(ai.experimental_telemetry.Adapter):
         async def on_span_end(
             self, span: ai.experimental_telemetry.Span
         ) -> None:
@@ -210,11 +212,11 @@ async def test_use_span_parents_without_lifecycle(
     # ``use_span`` is pure context plumbing: no pushes, no timestamps.
     outer = ai.experimental_telemetry.create_span("outer")
     with ai.experimental_telemetry.use_span(outer):
-        assert ai.experimental_telemetry.current() is outer
+        assert ai.experimental_telemetry.current_span() is outer
         async with ai.experimental_telemetry.span("child") as child:
             assert child.parent_id == outer.id
             assert child.trace_id == outer.trace_id
-    assert ai.experimental_telemetry.current() is None
+    assert ai.experimental_telemetry.current_span() is None
     # Only the child was reported; outer was never pushed.
     assert [s.name for s in recorder.started] == ["child"]
 
@@ -252,7 +254,7 @@ async def test_restored_user_span_data() -> None:
     assert restored.data == ai.experimental_telemetry.CustomSpanData(
         attributes={"session": "s1"}
     )
-    restored.set(extra=1)  # typed data means set() works after a restore
+    restored.set_attributes(extra=1)
 
     # ...even when its name collides with a framework kind: the type
     # travels in the data, not the span name.
@@ -333,17 +335,17 @@ async def test_push_lifecycle_split_across_pushes(
 
 
 async def test_push_snapshots_are_frozen(recorder: Recorder) -> None:
-    collector = ai.experimental_telemetry.Collector()
+    sink = ai.experimental_telemetry.DictSink()
     data = ai.experimental_telemetry.ToolExecutionSpanData(
         tool_name="t", tool_call_id="tc", args={"x": 1}
     )
-    with ai.experimental_telemetry.use_sink(collector):
+    with ai.experimental_telemetry.use_sink(sink):
         sp = ai.experimental_telemetry.create_span(data)
         sp.started_at = ai.experimental_telemetry.now_ns()
         await sp.push()
         # Mutations after a push don't leak into the snapshot.
         sp.data.args = {"x": 2}
-    snapshot = collector.spans[sp.id]
+    snapshot = sink.spans[sp.id]
     assert isinstance(
         snapshot.data, ai.experimental_telemetry.ToolExecutionSpanData
     )
@@ -353,18 +355,22 @@ async def test_push_snapshots_are_frozen(recorder: Recorder) -> None:
 async def test_finished_span_delivered_whole(recorder: Recorder) -> None:
     order: list[str] = []
 
-    class Adapter:
-        def on_span_start(self, span: ai.experimental_telemetry.Span) -> None:
+    class Adapter(ai.experimental_telemetry.Adapter):
+        async def on_span_start(
+            self, span: ai.experimental_telemetry.Span
+        ) -> None:
             order.append(f"start {span.name}")
 
-        def on_span_event(
+        async def on_span_event(
             self,
             span: ai.experimental_telemetry.Span,
             event: ai.experimental_telemetry.SpanEvent,
         ) -> None:
             order.append(f"event {event.name}")
 
-        def on_span_end(self, span: ai.experimental_telemetry.Span) -> None:
+        async def on_span_end(
+            self, span: ai.experimental_telemetry.Span
+        ) -> None:
             order.append(f"end {span.name} error={span.error is not None}")
 
     # A span that lived elsewhere arrives as one complete record...
@@ -397,16 +403,20 @@ async def test_adapter_view_updated_in_place() -> None:
     starts: list[ai.experimental_telemetry.Span] = []
     ends: list[ai.experimental_telemetry.Span] = []
 
-    class Holder:
-        def on_span_start(self, span: ai.experimental_telemetry.Span) -> None:
+    class Holder(ai.experimental_telemetry.Adapter):
+        async def on_span_start(
+            self, span: ai.experimental_telemetry.Span
+        ) -> None:
             starts.append(span)
 
-        def on_span_end(self, span: ai.experimental_telemetry.Span) -> None:
+        async def on_span_end(
+            self, span: ai.experimental_telemetry.Span
+        ) -> None:
             ends.append(span)
 
     async with _registered(Holder()):
         async with ai.experimental_telemetry.span("s") as sp:
-            sp.set(a=1)
+            sp.set_attributes(a=1)
 
     # The adapter holds one object across callbacks; by span end it
     # shows the final data, like the live object it used to be handed.
@@ -434,8 +444,8 @@ async def test_repush_after_end_redelivers(recorder: Recorder) -> None:
 
 
 async def test_use_sink_reroutes_pushes(recorder: Recorder) -> None:
-    collector = ai.experimental_telemetry.Collector()
-    with ai.experimental_telemetry.use_sink(collector):
+    sink = ai.experimental_telemetry.DictSink()
+    with ai.experimental_telemetry.use_sink(sink):
         async with ai.experimental_telemetry.span("inside") as sp:
             sp.events.append(
                 ai.experimental_telemetry.SpanEvent(
@@ -445,10 +455,10 @@ async def test_use_sink_reroutes_pushes(recorder: Recorder) -> None:
                 )
             )
             await sp.push()
-    # Adapters saw nothing; the collector kept the latest snapshot.
+    # Adapters saw nothing; the sink kept the latest snapshot.
     assert recorder.started == []
     assert recorder.ended == []
-    (snapshot,) = collector.spans.values()
+    (snapshot,) = sink.spans.values()
     assert snapshot.name == "inside"
     assert snapshot.ended_at is not None
     assert [e.name for e in snapshot.events] == ["milestone"]
@@ -466,27 +476,27 @@ async def test_use_sink_accepts_none(recorder: Recorder) -> None:
 
 
 async def test_use_sink_none_preserves_outer_sink(recorder: Recorder) -> None:
-    collector = ai.experimental_telemetry.Collector()
+    sink = ai.experimental_telemetry.DictSink()
     with (
-        ai.experimental_telemetry.use_sink(collector),
+        ai.experimental_telemetry.use_sink(sink),
         ai.experimental_telemetry.use_sink(None),
     ):
         async with ai.experimental_telemetry.span("inside"):
             pass
-    assert [s.name for s in collector.finished] == ["inside"]
+    assert [s.name for s in sink.finished_spans] == ["inside"]
     assert recorder.ended == []
 
 
-async def test_collector_ships_to_adapters_exactly_as_pushed(
+async def test_dict_sink_ships_to_adapters_exactly_as_pushed(
     recorder: Recorder,
 ) -> None:
     # The durable-body pattern: collect inside, re-push from a "step".
-    collector = ai.experimental_telemetry.Collector()
-    with ai.experimental_telemetry.use_sink(collector):
+    sink = ai.experimental_telemetry.DictSink()
+    with ai.experimental_telemetry.use_sink(sink):
         async with ai.experimental_telemetry.span("outer"):
             async with ai.experimental_telemetry.span("inner"):
                 pass
-    payload = [s.model_dump(mode="json") for s in collector.spans.values()]
+    payload = [s.model_dump(mode="json") for s in sink.spans.values()]
 
     for item in payload:
         await ai.experimental_telemetry.Span.model_validate(item).push()
@@ -500,32 +510,12 @@ async def test_collector_ships_to_adapters_exactly_as_pushed(
 
 async def test_push_never_raises(recorder: Recorder) -> None:
     class BrokenSink:
-        async def emit(self, span: ai.experimental_telemetry.Span) -> None:
+        async def on_push(self, span: ai.experimental_telemetry.Span) -> None:
             raise RuntimeError("sink bug")
 
     with ai.experimental_telemetry.use_sink(BrokenSink()):
         async with ai.experimental_telemetry.span("s"):
             pass  # both pushes hit the broken sink; neither raises
-
-
-async def test_flush_reaches_sink_and_adapters() -> None:
-    flushed: list[str] = []
-
-    class FlushingAdapter:
-        def flush(self) -> None:
-            flushed.append("adapter")
-
-    class FlushingSink:
-        async def emit(self, span: ai.experimental_telemetry.Span) -> None:
-            pass
-
-        async def flush(self) -> None:
-            flushed.append("sink")
-
-    async with _registered(FlushingAdapter()):
-        with ai.experimental_telemetry.use_sink(FlushingSink()):
-            await ai.experimental_telemetry.flush()
-    assert flushed == ["sink", "adapter"]
 
 
 # ── span/trace ids ────────────────────────────────────────────────
@@ -653,7 +643,9 @@ async def test_wrap_span_function_returns_adapter() -> None:
 
 
 @contextlib.asynccontextmanager
-async def _registered(adapter: Any) -> AsyncIterator[None]:
+async def _registered(
+    adapter: ai.experimental_telemetry.AdapterProtocol,
+) -> AsyncIterator[None]:
     ai.experimental_telemetry.register(adapter)
     try:
         yield
@@ -679,8 +671,8 @@ async def test_wrap_span_locals_across_yield() -> None:
     async with _registered(adapter):
         async with ai.experimental_telemetry.span("outer") as outer:
             async with ai.experimental_telemetry.span("inner") as inner:
-                inner.set(a=1)
-            outer.set(a=2)
+                inner.set_attributes(a=1)
+            outer.set_attributes(a=2)
 
     # One generator frame per live span, each resumed at its own
     # span's end with the final data visible after the yield.
@@ -811,7 +803,7 @@ async def test_wrap_span_events_live_loop() -> None:
         async with ai.experimental_telemetry.span("s") as sp:
             await _add_event(sp, "one")
             await _add_event(sp, "two")
-            sp.set(a=1)
+            sp.set_attributes(a=1)
 
     assert seen == [
         "vendor:s event one",
@@ -932,8 +924,8 @@ async def test_unpushed_events_delivered_by_end_push(
 ) -> None:
     seen: list[str] = []
 
-    class EventAdapter:
-        def on_span_event(
+    class EventAdapter(ai.experimental_telemetry.Adapter):
+        async def on_span_event(
             self,
             span: ai.experimental_telemetry.Span,
             event: ai.experimental_telemetry.SpanEvent,
@@ -957,36 +949,36 @@ async def test_unpushed_events_delivered_by_end_push(
     assert [e.name for e in ended.events] == ["quiet"]
 
 
-async def test_span_event_dispatched_live_sync_and_async(
+async def test_span_event_dispatched_live_to_multiple_adapters(
     recorder: Recorder,
 ) -> None:
     seen: list[tuple[str, str, bool]] = []
 
-    class SyncAdapter:
-        def on_span_event(
-            self,
-            span: ai.experimental_telemetry.Span,
-            event: ai.experimental_telemetry.SpanEvent,
-        ) -> None:
-            seen.append(("sync", event.name, span.ended_at is None))
-
-    class AsyncAdapter:
+    class FirstAdapter(ai.experimental_telemetry.Adapter):
         async def on_span_event(
             self,
             span: ai.experimental_telemetry.Span,
             event: ai.experimental_telemetry.SpanEvent,
         ) -> None:
-            seen.append(("async", event.name, span.ended_at is None))
+            seen.append(("first", event.name, span.ended_at is None))
 
-    async with _registered(SyncAdapter()), _registered(AsyncAdapter()):
+    class SecondAdapter(ai.experimental_telemetry.Adapter):
+        async def on_span_event(
+            self,
+            span: ai.experimental_telemetry.Span,
+            event: ai.experimental_telemetry.SpanEvent,
+        ) -> None:
+            seen.append(("second", event.name, span.ended_at is None))
+
+    async with _registered(FirstAdapter()), _registered(SecondAdapter()):
         async with ai.experimental_telemetry.span("s") as sp:
             await _add_event(sp, "milestone")
 
     # Both handlers saw the event while the span was still live; the
     # recorder (no on_span_event) was skipped without error.
     assert seen == [
-        ("sync", "milestone", True),
-        ("async", "milestone", True),
+        ("first", "milestone", True),
+        ("second", "milestone", True),
     ]
     assert [s.name for s in recorder.ended] == ["s"]
 
@@ -996,16 +988,16 @@ async def test_span_event_raising_handler_isolated(
 ) -> None:
     seen: list[str] = []
 
-    class Broken:
-        def on_span_event(
+    class Broken(ai.experimental_telemetry.Adapter):
+        async def on_span_event(
             self,
             span: ai.experimental_telemetry.Span,
             event: ai.experimental_telemetry.SpanEvent,
         ) -> None:
             raise RuntimeError("adapter bug")
 
-    class Fine:
-        def on_span_event(
+    class Fine(ai.experimental_telemetry.Adapter):
+        async def on_span_event(
             self,
             span: ai.experimental_telemetry.Span,
             event: ai.experimental_telemetry.SpanEvent,
@@ -1032,9 +1024,9 @@ async def test_span_without_adapters_is_noop() -> None:
         assert sp.parent_id is None
         assert sp.started_at is None
         # Never current: nothing to parent under.
-        assert ai.experimental_telemetry.current() is None
+        assert ai.experimental_telemetry.current_span() is None
         # Attribute writes still work; they are just never observed.
-        sp.set(b=2)
+        sp.set_attributes(b=2)
         event = sp.add_event("milestone", c=3)
     assert event.name == "milestone"
     assert event.time_ns == 0
@@ -1058,7 +1050,7 @@ async def test_no_clock_reads_without_adapters(
 
     monkeypatch.setattr(time, "time_ns", forbidden)
     # The durable-execution contract: unused telemetry makes no
-    # non-deterministic calls, so no use_clock setup is needed.
+    # non-deterministic calls, so no use_time setup is needed.
     async with ai.experimental_telemetry.span("outer") as sp:
         sp.add_event("milestone")
         await sp.push()
@@ -1082,15 +1074,15 @@ async def test_no_rng_draws_without_adapters() -> None:
 
 
 async def test_routed_sink_keeps_spans_live_without_adapters() -> None:
-    collector = ai.experimental_telemetry.Collector()
-    with ai.experimental_telemetry.use_sink(collector):
+    sink = ai.experimental_telemetry.DictSink()
+    with ai.experimental_telemetry.use_sink(sink):
         async with ai.experimental_telemetry.span("s") as sp:
             pass
     assert sp.id
-    assert [s.name for s in collector.finished] == ["s"]
+    assert [s.name for s in sink.finished_spans] == ["s"]
 
 
-# ── use_clock ─────────────────────────────────────────────────────
+# ── use_time ──────────────────────────────────────────────────────
 
 
 def _ticking_clock(now_ns: int, tick_ns: int = 10) -> Callable[[], int]:
@@ -1110,12 +1102,12 @@ async def _stamps() -> tuple[int | None, int, int | None]:
     return sp.started_at, event.time_ns, sp.ended_at
 
 
-async def test_use_clock_overrides_and_restores(recorder: Recorder) -> None:
+async def test_use_time_overrides_and_restores(recorder: Recorder) -> None:
     # A ticking clock gives a deterministic timestamp sequence; the
     # override drives started_at, event stamps, and ended_at alike.
-    with ai.experimental_telemetry.use_clock(_ticking_clock(1_000)):
+    with ai.experimental_telemetry.use_time(_ticking_clock(1_000)):
         first = await _stamps()
-    with ai.experimental_telemetry.use_clock(_ticking_clock(1_000)):
+    with ai.experimental_telemetry.use_time(_ticking_clock(1_000)):
         second = await _stamps()
 
     assert first == second == (1_010, 1_020, 1_030)
@@ -1127,12 +1119,12 @@ async def test_use_clock_overrides_and_restores(recorder: Recorder) -> None:
     assert sp.started_at > 1_030
 
 
-async def test_use_clock_decorator_handles_async_functions(
+async def test_use_time_decorator_handles_async_functions(
     recorder: Recorder,
 ) -> None:
     # Works as a decorator on an async fn; the clock is shared across
     # calls, so the second call continues where the first left off.
-    @ai.experimental_telemetry.use_clock(_ticking_clock(1_000))
+    @ai.experimental_telemetry.use_time(_ticking_clock(1_000))
     async def run() -> tuple[int | None, int, int | None]:
         return await _stamps()
 
@@ -1140,9 +1132,9 @@ async def test_use_clock_decorator_handles_async_functions(
     assert await run() == (1_040, 1_050, 1_060)
 
 
-async def test_use_clock_accepts_time_time_ns(recorder: Recorder) -> None:
+async def test_use_time_accepts_time_time_ns(recorder: Recorder) -> None:
     before = time.time_ns()
-    with ai.experimental_telemetry.use_clock(time.time_ns):
+    with ai.experimental_telemetry.use_time(time.time_ns):
         async with ai.experimental_telemetry.span("s") as sp:
             pass
     assert sp.started_at is not None
@@ -1150,35 +1142,35 @@ async def test_use_clock_accepts_time_time_ns(recorder: Recorder) -> None:
     assert before <= sp.started_at <= sp.ended_at <= time.time_ns()
 
 
-# ── Sugar: stamps, add_event, enabled, shipping helpers ───────────
+# ── Sugar: stamps, add_event, is_enabled, shipping helpers ────────
 
 
 async def test_use_span_accepts_none(recorder: Recorder) -> None:
     # "no span" is a normal state in gated instrumentation; None means
     # no reparenting, no separate code path at the callsite.
     with ai.experimental_telemetry.use_span(None):
-        assert ai.experimental_telemetry.current() is None
+        assert ai.experimental_telemetry.current_span() is None
         async with ai.experimental_telemetry.span("child") as child:
             pass
     assert child.parent_id is None
 
 
-async def test_enabled_reflects_sinks_and_adapters() -> None:
+async def test_is_enabled_reflects_sinks_and_adapters() -> None:
     # No adapters registered here (no recorder fixture), default sink.
-    assert not ai.experimental_telemetry.enabled()
-    collector = ai.experimental_telemetry.Collector()
-    with ai.experimental_telemetry.use_sink(collector):
-        assert ai.experimental_telemetry.enabled()
-    assert not ai.experimental_telemetry.enabled()
+    assert not ai.experimental_telemetry.is_enabled()
+    sink = ai.experimental_telemetry.DictSink()
+    with ai.experimental_telemetry.use_sink(sink):
+        assert ai.experimental_telemetry.is_enabled()
+    assert not ai.experimental_telemetry.is_enabled()
 
 
-async def test_enabled_with_adapter_registered(recorder: Recorder) -> None:
-    assert ai.experimental_telemetry.enabled()
+async def test_is_enabled_with_adapter_registered(recorder: Recorder) -> None:
+    assert ai.experimental_telemetry.is_enabled()
 
 
 async def test_stamp_start_and_end(recorder: Recorder) -> None:
     clock = _ticking_clock(100)
-    with ai.experimental_telemetry.use_clock(clock):
+    with ai.experimental_telemetry.use_time(clock):
         sp = ai.experimental_telemetry.create_span("turn").stamp_start()
         assert sp.started_at == 110
         assert sp.stamp_end(error=ValueError("boom")) is sp
@@ -1199,31 +1191,33 @@ async def test_stamp_start_and_end(recorder: Recorder) -> None:
 
 
 async def test_add_event_appends_without_pushing() -> None:
-    collector = ai.experimental_telemetry.Collector()
-    with ai.experimental_telemetry.use_sink(collector):
+    sink = ai.experimental_telemetry.DictSink()
+    with ai.experimental_telemetry.use_sink(sink):
         async with ai.experimental_telemetry.span("s") as sp:
             event = sp.add_event("cache_hit", {"cache.key": "k"}, size=3)
             assert event.attributes == {"cache.key": "k", "size": 3}
             assert sp.events == [event]
             # Append only: the latest snapshot (from the start push)
             # doesn't have it yet.
-            assert collector.spans[sp.id].events == []
+            assert sink.spans[sp.id].events == []
     # The end push delivered it.
-    assert [e.name for e in collector.spans[sp.id].events] == ["cache_hit"]
+    assert [e.name for e in sink.spans[sp.id].events] == ["cache_hit"]
 
 
-async def test_collector_finished_and_push_all(recorder: Recorder) -> None:
-    collector = ai.experimental_telemetry.Collector()
-    with ai.experimental_telemetry.use_sink(collector):
+async def test_dict_sink_finished_spans_and_push_all(
+    recorder: Recorder,
+) -> None:
+    sink = ai.experimental_telemetry.DictSink()
+    with ai.experimental_telemetry.use_sink(sink):
         async with ai.experimental_telemetry.span("done"):
             pass
         dangling = ai.experimental_telemetry.create_span("open").stamp_start()
         await dangling.push()
     # Only complete records are safe to ship.
-    assert [s.name for s in collector.finished] == ["done"]
+    assert [s.name for s in sink.finished_spans] == ["done"]
 
     # The ship step: re-deliver dumped payloads where the adapters are.
-    payload = [s.model_dump(mode="json") for s in collector.finished]
+    payload = [s.model_dump(mode="json") for s in sink.finished_spans]
     await ai.experimental_telemetry.push_all(payload)
     assert [s.name for s in recorder.started] == ["done"]
     assert [s.name for s in recorder.ended] == ["done"]
@@ -1237,11 +1231,11 @@ async def test_attribute_mappings_for_dotted_names(
     recorder: Recorder,
 ) -> None:
     # Viewer attribute names ("session.id") aren't valid keywords, so
-    # span()/set() take a positional mapping merged with keywords.
+    # span()/set_attributes() take a positional mapping merged with keywords.
     async with ai.experimental_telemetry.span(
         "generate_title", {"session.id": "s1"}, model="haiku"
     ) as sp:
-        sp.set({"output.value": "t"}, plain=1)
+        sp.set_attributes({"output.value": "t"}, plain=1)
     assert sp.data.attributes == {
         "session.id": "s1",
         "model": "haiku",

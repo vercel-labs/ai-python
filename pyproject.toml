@@ -38,6 +38,7 @@ anthropic = ["anthropic>=0.83.0"]
 mcp = ["mcp>=1.18.0"]
 openai = ["openai>=2.14.0"]
 otel = [
+    "opentelemetry-exporter-otlp-proto-http>=1.30",
     "opentelemetry-sdk>=1.30",
 ]
 vercel = [
