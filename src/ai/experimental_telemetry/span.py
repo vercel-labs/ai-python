@@ -36,7 +36,7 @@ and set it as current using :func:`use_span` or pass to a child span explicity.
 
 An adapter processes spans and decides what to do with them::
 
-    class MyAdapter(ai.experimental_telemetry.Adapter):
+    class MyAdapter:
         async def on_span_start(self, span): ...
         async def on_span_end(self, span): ...
         async def on_span_event(self, span, event): ...
@@ -46,8 +46,8 @@ An adapter processes spans and decides what to do with them::
 Adapters dispatch on the type of ``span.data``.  An adapter that crashes
 is logged and skipped, it never kills the run.
 
-:func:`wrap_span` builds an adapter from an async generator function, using
-the pytest fixture-style trick.
+:func:`adapter` builds an adapter from an async generator function or
+class, using the pytest fixture-style trick.
 
 A :class:`Sink` is what sits *before* the adapters and routes span snapshots.
 It exists, again, because of the durable execution case: the user can control
@@ -84,7 +84,9 @@ from typing import (
     Literal,
     Protocol,
     Self,
+    cast,
     overload,
+    runtime_checkable,
 )
 
 import pydantic
@@ -533,8 +535,8 @@ def current_span() -> Span | None:
 
 
 @util.contextmanager_any_sync
-def use_span(span_: Span | None) -> Iterator[None]:
-    """Make ``span_`` the current span within this context.
+def use_span(span: Span | None) -> Iterator[None]:
+    """Make ``span`` the current span within this context.
 
     Unlike :func:`span` this is pure context plumbing with no timestamps
     and no pushes.  Use it to continue a trace around existing work, e.g.
@@ -546,10 +548,10 @@ def use_span(span_: Span | None) -> Iterator[None]:
 
     ``None`` is a no-op.
     """
-    if span_ is None:
+    if span is None:
         yield
         return
-    token = _current.set(span_)
+    token = _current.set(span)
     try:
         yield
     finally:
@@ -565,7 +567,7 @@ def use_span(span_: Span | None) -> Iterator[None]:
 class Sink(Protocol):
     """Anything that accepts pushed span snapshots."""
 
-    async def on_push(self, span_: Span, /) -> None: ...
+    async def on_push(self, span: Span, /) -> None: ...
 
 
 _current_sink: contextvars.ContextVar[Sink | None] = contextvars.ContextVar(
@@ -613,8 +615,8 @@ class DictSink:
     def __init__(self) -> None:
         self.spans: dict[str, Span] = {}
 
-    async def on_push(self, span_: Span, /) -> None:
-        self.spans[span_.id] = span_
+    async def on_push(self, span: Span, /) -> None:
+        self.spans[span.id] = span
 
     @property
     def finished_spans(self) -> list[Span]:
@@ -631,8 +633,8 @@ async def push_all(spans: Iterable[Span | Mapping[str, Any]]) -> None:
         await push_all(payload)
     """
     for item in spans:
-        span_ = item if isinstance(item, Span) else Span.model_validate(item)
-        await span_.push()
+        span = item if isinstance(item, Span) else Span.model_validate(item)
+        await span.push()
 
 
 class _RegistrySink:
@@ -658,12 +660,12 @@ class _RegistrySink:
     def __init__(self) -> None:
         self._views: dict[str, Span] = {}
 
-    async def on_push(self, span_: Span, /) -> None:
-        if span_.started_at is None:
+    async def on_push(self, span: Span, /) -> None:
+        if span.started_at is None:
             return
-        view = self._views.get(span_.id)
+        view = self._views.get(span.id)
         if view is None:
-            view = span_
+            view = span
             self._views[view.id] = view
             await _dispatch(lambda a: a.on_span_start(view))
             fresh = list(view.events)
@@ -671,7 +673,7 @@ class _RegistrySink:
             seen = len(view.events)
             # we need to preserve the view's identity
             # but update all of the fields
-            view.__dict__.update(span_.__dict__)
+            view.__dict__.update(span.__dict__)
             fresh = view.events[seen:]
         for event in fresh:
             # the default binds `event` now; a plain lambda would trip B023
@@ -692,26 +694,44 @@ _registry_sink = _RegistrySink()
 # adapter registry utilities
 
 
+@runtime_checkable
 class AdapterProtocol(Protocol):
     """The async callbacks implemented by a telemetry adapter."""
 
-    async def on_span_start(self, span_: Span, /) -> None: ...
+    async def on_span_start(self, span: Span, /) -> None: ...
 
-    async def on_span_event(self, span_: Span, event: SpanEvent, /) -> None: ...
+    async def on_span_event(self, span: Span, event: SpanEvent, /) -> None: ...
 
-    async def on_span_end(self, span_: Span, /) -> None: ...
+    async def on_span_end(self, span: Span, /) -> None: ...
+
+
+class AdapterCallable(Protocol):
+    """The ``__call__`` shape the :func:`adapter` decorator accepts.
+
+    Static-typing companion to :class:`AdapterProtocol`: checkers don't
+    see the callbacks :func:`adapter` mixes into a decorated class, so
+    :func:`register` accepts this shape as well.
+    """
+
+    def __call__(self, span: Span, /) -> AsyncGenerator[None, Any] | None: ...
 
 
 _adapters: list[AdapterProtocol] = []
 
 
-def register(adapter: AdapterProtocol) -> None:
+def register(adapter: AdapterProtocol | AdapterCallable) -> None:
     """Add an adapter.  Multiple adapters coexist independently."""
+    if not isinstance(adapter, AdapterProtocol):
+        raise TypeError(
+            f"{adapter!r} does not implement the adapter callbacks; "
+            "an adapter class must be decorated with @adapter"
+        )
     _adapters.append(adapter)
 
 
-def unregister(adapter: AdapterProtocol) -> None:
+def unregister(adapter: AdapterProtocol | AdapterCallable) -> None:
     """Remove a previously registered adapter."""
+    assert isinstance(adapter, AdapterProtocol)  # register() enforced it
     _adapters.remove(adapter)
 
 
@@ -927,38 +947,29 @@ async def _span_impl(
             )
 
 
-class Adapter(AdapterProtocol):
-    """Base adapter implementing the protocol with the right defaults.
+class AdapterMixin(AdapterProtocol):
+    """The driver :func:`adapter` mixes into a decorated class.
 
-    class Vendor(telemetry.Adapter):
-        async def wrap_span(self, span):
-            with sdk.start_span(span.name) as v:
-                while (ev := (yield)) is not None:
-                    v.log_event(ev.name)
-                if span.error is not None:
-                    v.set_error(span.error.message)
-                v.update(output=span.data)
+    Implements the adapter callbacks. Don't subclass it directly. Put
+    :func:`adapter` over a class with ``__call__`` async generator method.
     """
 
     # Name-mangled so the driver's bookkeeping can never collide with
-    # a subclass attribute; created lazily so subclasses keep their
-    # ``__init__`` entirely to themselves.
+    # an attribute of the class it is mixed into; created lazily so
+    # that class keeps its ``__init__`` entirely to itself.
     __live: dict[str, AsyncGenerator[None, Any]] | None = None
 
-    # Positional-only params on all overridable methods, so subclasses
-    # are free to pick their own names (`span` shadows nothing there).
-    def wrap_span(self, span_: Span, /) -> AsyncGenerator[None, Any] | None:
+    # Positional-only params on all overridable methods, so overrides
+    # are free to pick their own names.
+    def __call__(self, span: Span, /) -> AsyncGenerator[None, Any] | None:
         """Return the generator frame for one span, or ``None``.
 
-        Override it as an async generator method (a ``yield`` loop, as
-        in the class docstring) — calling one *returns* the generator,
-        so the override satisfies this signature.  The default returns
-        ``None``: no per-span frame.
+        The decorated class's ``__call__`` overrides this.
         """
         return None
 
-    async def on_span_start(self, span_: Span, /) -> None:
-        gen = self.wrap_span(span_)
+    async def on_span_start(self, span: Span, /) -> None:
+        gen = self(span)
         if gen is None:
             return
         try:
@@ -967,11 +978,11 @@ class Adapter(AdapterProtocol):
             return  # returned before yielding: opted out of this span
         if self.__live is None:
             self.__live = {}
-        self.__live[span_.id] = gen
+        self.__live[span.id] = gen
 
-    async def on_span_event(self, span_: Span, event: SpanEvent, /) -> None:
+    async def on_span_event(self, span: Span, event: SpanEvent, /) -> None:
         live = self.__live
-        gen = live.get(span_.id) if live is not None else None
+        gen = live.get(span.id) if live is not None else None
         if live is None or gen is None:
             return  # opted out, span already ended, or start raised
         try:
@@ -979,15 +990,15 @@ class Adapter(AdapterProtocol):
         except StopAsyncIteration:
             # Finished mid-span: opted out of the rest of this span,
             # including its end.
-            del live[span_.id]
+            del live[span.id]
         except BaseException:
             # The generator frame is dead, don't resume it again at
             # span end.  The error itself is logged by _dispatch.
-            del live[span_.id]
+            del live[span.id]
             raise
 
-    async def on_span_end(self, span_: Span, /) -> None:
-        gen = self.__live.pop(span_.id, None) if self.__live else None
+    async def on_span_end(self, span: Span, /) -> None:
+        gen = self.__live.pop(span.id, None) if self.__live else None
         if gen is None:  # opted out, or start raised (and was logged)
             return
         try:
@@ -995,30 +1006,57 @@ class Adapter(AdapterProtocol):
         except StopAsyncIteration:
             return
         await gen.aclose()
-        raise RuntimeError("wrap_span generator yielded again after span end")
+        raise RuntimeError("adapter generator yielded again after span end")
 
 
-class _WrapSpanFn(Adapter):
-    """Adapter built by :func:`wrap_span`."""
+class _AdapterFn(AdapterMixin):
+    """Adapter built by :func:`adapter` from a function."""
 
     def __init__(self, fn: Callable[[Span], AsyncGenerator[None, Any]]) -> None:
         self._fn = fn
 
     def __repr__(self) -> str:
-        return f"wrap_span({getattr(self._fn, '__qualname__', self._fn)!r})"
+        return f"adapter({getattr(self._fn, '__qualname__', self._fn)!r})"
 
-    def wrap_span(self, span_: Span, /) -> AsyncGenerator[None, Any]:
-        return self._fn(span_)
+    def __call__(self, span: Span, /) -> AsyncGenerator[None, Any]:
+        return self._fn(span)
 
 
-def wrap_span(
-    fn: Callable[[Span], AsyncGenerator[None, Any]],
-) -> Adapter:
-    """Build an adapter from a free-standing async generator function.
+_AdapterCallableT = TypeVar("_AdapterCallableT", bound=AdapterCallable)
 
-    Sugar over subclassing :class:`Adapter` — same semantics as
-    overriding its ``wrap_span`` method, for bridges that need no
-    state or methods of their own.
+
+@overload
+def adapter(target: type[_AdapterCallableT]) -> type[_AdapterCallableT]: ...
+
+
+@overload
+def adapter(
+    target: Callable[[Span], AsyncGenerator[None, Any]],
+) -> AdapterMixin: ...
+
+
+def adapter(
+    target: type[_AdapterCallableT]
+    | Callable[[Span], AsyncGenerator[None, Any]],
+) -> type[_AdapterCallableT] | AdapterMixin:
+    """Build an adapter from an async generator function or class.
+
+    Decorating a free-standing async generator function returns a
+    ready-to-register adapter.
+
+    Decorating a class whose ``__call__`` is an
+    async generator method returns that class with the adapter
+    machinery (:class:`AdapterMixin`) mixed in::
+
+        @adapter
+        class Vendor:
+            def __init__(self, *, api_key):
+                self._client = sdk.Client(api_key)
+
+            async def __call__(self, span):
+                ...  # same yield loop as the function form
+
+        ai.experimental_telemetry.register(Vendor(api_key="..."))
 
     How to use to bridge a vendor SDKs:
     write the vendor's ``with``/``async with`` around one yield loop.
@@ -1027,7 +1065,7 @@ def wrap_span(
     ``None``, and the code after the loop runs with ``span.data``
     fully populated and ``ended_at`` set::
 
-        @wrap_span
+        @adapter
         async def vendor(span):
             with sdk.start_span(span.name) as v:
                 while (ev := (yield)) is not None:   # each event, live
@@ -1053,9 +1091,28 @@ def wrap_span(
     - Like any adapter, a generator that raises is logged and skipped;
       it never kills the run.
     """
-    if not inspect.isasyncgenfunction(fn):
+    if inspect.isclass(target):
+        if issubclass(target, AdapterMixin):
+            raise TypeError(f"{target.__name__} is already an adapter")
+        call = inspect.getattr_static(target, "__call__", None)
+        if not inspect.isasyncgenfunction(call):
+            raise TypeError(
+                "@adapter on a class requires __call__ to be an async "
+                "generator method (`async def` containing a `yield` loop)"
+            )
+        mixed = type(
+            target.__name__,
+            (target, AdapterMixin),
+            {
+                "__module__": target.__module__,
+                "__qualname__": target.__qualname__,
+                "__doc__": target.__doc__,
+            },
+        )
+        return cast("type[_AdapterCallableT]", mixed)
+    if not inspect.isasyncgenfunction(target):
         raise TypeError(
-            "wrap_span requires an async generator function "
+            "@adapter requires an async generator function "
             "(`async def` containing a `yield` loop)"
         )
-    return _WrapSpanFn(fn)
+    return _AdapterFn(target)

@@ -11,7 +11,8 @@ from .span import (
     HOOK_DEFERRED,
     HOOK_RESOLVED,
     RESPONSE_COMPLETE,
-    Adapter,
+    AdapterCallable,
+    AdapterMixin,
     AdapterProtocol,
     AiGenerateSpanData,
     AiStreamSpanData,
@@ -26,6 +27,7 @@ from .span import (
     SpanError,
     SpanEvent,
     ToolExecutionSpanData,
+    adapter,
     create_span,
     current_span,
     is_enabled,
@@ -37,7 +39,6 @@ from .span import (
     use_sink,
     use_span,
     use_time,
-    wrap_span,
 )
 
 __all__ = [
@@ -46,7 +47,8 @@ __all__ = [
     "HOOK_DEFERRED",
     "HOOK_RESOLVED",
     "RESPONSE_COMPLETE",
-    "Adapter",
+    "AdapterCallable",
+    "AdapterMixin",
     "AdapterProtocol",
     "AiGenerateSpanData",
     "AiStreamSpanData",
@@ -61,6 +63,7 @@ __all__ = [
     "SpanError",
     "SpanEvent",
     "ToolExecutionSpanData",
+    "adapter",
     "create_span",
     "current_span",
     "is_enabled",
@@ -72,5 +75,4 @@ __all__ = [
     "use_sink",
     "use_span",
     "use_time",
-    "wrap_span",
 ]

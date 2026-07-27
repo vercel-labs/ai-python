@@ -299,7 +299,7 @@ def tool_result_msg(
 # ── Telemetry ────────────────────────────────────────────────────
 
 
-class Recorder(ai.experimental_telemetry.Adapter):
+class Recorder:
     """Telemetry adapter that records every span start/end it sees."""
 
     def __init__(self) -> None:
@@ -308,6 +308,13 @@ class Recorder(ai.experimental_telemetry.Adapter):
 
     async def on_span_start(self, span: ai.experimental_telemetry.Span) -> None:
         self.started.append(span)
+
+    async def on_span_event(
+        self,
+        span: ai.experimental_telemetry.Span,
+        event: ai.experimental_telemetry.SpanEvent,
+    ) -> None:
+        pass
 
     async def on_span_end(self, span: ai.experimental_telemetry.Span) -> None:
         self.ended.append(span)

@@ -7,8 +7,11 @@ Experimental: not part of the stable API, may change or be removed.
     import ai
     from ai.experimental_telemetry import otel
 
-    otel.configure()
     ai.experimental_telemetry.register(otel.OtelAdapter())
+
+The adapter uses the global tracer provider by default. To set up a
+tracer provider and OTLP export, see the OpenTelemetry docs:
+https://opentelemetry.io/docs/languages/python/exporters/#otlp
 
 Follows the ``gen_ai`` semantic conventions.
 
@@ -34,8 +37,6 @@ from .. import experimental_telemetry as telemetry
 
 try:
     import opentelemetry.context
-    import opentelemetry.exporter.otlp.proto.http.trace_exporter
-    import opentelemetry.sdk.trace.export
     import opentelemetry.sdk.trace.id_generator
     import opentelemetry.trace
 except ModuleNotFoundError as exc:  # pragma: no cover
@@ -452,7 +453,8 @@ class _Flushable(Protocol):
     def shutdown(self) -> None: ...
 
 
-class OtelAdapter(telemetry.Adapter):
+@telemetry.adapter
+class OtelAdapter:
     """Maps framework spans onto otel spans."""
 
     def __init__(
@@ -484,20 +486,20 @@ class OtelAdapter(telemetry.Adapter):
             "ai", tracer_provider=provider
         )
 
-    def span_name(self, span_: telemetry.Span, /) -> str:
+    def span_name(self, span: telemetry.Span, /) -> str:
         """Return the exported otel span name.  Override to customize."""
-        return _semconv_name(span_)
+        return _semconv_name(span)
 
-    def span_attrs(self, span_: telemetry.Span, /) -> dict[str, Any]:
+    def span_attrs(self, span: telemetry.Span, /) -> dict[str, Any]:
         """Return the attributes set at span end.  Override to enrich.
 
         ::
 
             class MyAdapter(otel.OtelAdapter):
-                def span_attrs(self, span_):
-                    return super().span_attrs(span_) | {"k": "v"}
+                def span_attrs(self, span):
+                    return super().span_attrs(span) | {"k": "v"}
         """
-        return _attributes(span_, capture_content=self._is_capturing_content)
+        return _attributes(span, capture_content=self._is_capturing_content)
 
     def flush(self) -> None:
         """Flush the provider's exporters."""
@@ -515,10 +517,10 @@ class OtelAdapter(telemetry.Adapter):
             self._provider.shutdown()
 
     def _parent_context(
-        self, span_: telemetry.Span
+        self, span: telemetry.Span
     ) -> opentelemetry.context.Context | None:
         # sometimes we need to set a parent span that isn't currently live.
-        if span_.parent_id is None or span_.parent_id in self._live:
+        if span.parent_id is None or span.parent_id in self._live:
             # here the parent span is actually live, proceed as normal
             return None
 
@@ -540,8 +542,8 @@ class OtelAdapter(telemetry.Adapter):
         return opentelemetry.trace.set_span_in_context(
             opentelemetry.trace.NonRecordingSpan(
                 opentelemetry.trace.SpanContext(
-                    trace_id=_derive_trace_id(span_.trace_id),
-                    span_id=_derive_span_id(span_.parent_id),
+                    trace_id=_derive_trace_id(span.trace_id),
+                    span_id=_derive_span_id(span.parent_id),
                     is_remote=True,  # marks the parent as living elsewhere
                     trace_flags=opentelemetry.trace.TraceFlags(
                         opentelemetry.trace.TraceFlags.SAMPLED
@@ -551,26 +553,26 @@ class OtelAdapter(telemetry.Adapter):
             opentelemetry.context.Context(),
         )
 
-    async def wrap_span(
-        self, span_: telemetry.Span, /
+    async def __call__(
+        self, span: telemetry.Span, /
     ) -> AsyncGenerator[None, Any]:
-        parent_context = self._parent_context(span_)
+        parent_context = self._parent_context(span)
 
         # convert framework's span ids into otel's and prepare for smuggling
         smuggled_token = _smuggled_ids.set(
-            (_derive_trace_id(span_.trace_id), _derive_span_id(span_.id))
+            (_derive_trace_id(span.trace_id), _derive_span_id(span.id))
         )
         try:
             otel_span = self._tracer.start_span(
-                self.span_name(span_),
+                self.span_name(span),
                 context=parent_context,
-                kind=_semconv_kind(span_),
-                start_time=span_.started_at,
+                kind=_semconv_kind(span),
+                start_time=span.started_at,
             )
         finally:
             _smuggled_ids.reset(smuggled_token)
 
-        self._live[span_.id] = otel_span
+        self._live[span.id] = otel_span
 
         try:
             # set live span as otel's current, so raw spans user opens in their
@@ -579,12 +581,12 @@ class OtelAdapter(telemetry.Adapter):
                 opentelemetry.trace.use_span(
                     otel_span,
                     end_on_exit=False,  # we end it ourselves below
-                    # errors come it via span_.error, not via raising, because
+                    # errors come it via span.error, not via raising, because
                     # we need them to serialize
                     record_exception=False,
                     set_status_on_exception=False,
                 )
-                if span_.set_as_current
+                if span.set_as_current
                 else contextlib.nullcontext()
             ):
                 # span end resumes with None
@@ -600,44 +602,13 @@ class OtelAdapter(telemetry.Adapter):
                         timestamp=ev.time_ns,
                     )
         finally:
-            self._live.pop(span_.id, None)
-            for key, value in self.span_attrs(span_).items():
+            self._live.pop(span.id, None)
+            for key, value in self.span_attrs(span).items():
                 otel_span.set_attribute(key, value)
-            if span_.error is not None:
-                otel_span.set_attribute("error.type", span_.error.type)
+            if span.error is not None:
+                otel_span.set_attribute("error.type", span.error.type)
                 otel_span.set_status(
                     opentelemetry.trace.StatusCode.ERROR,
-                    f"{span_.error.type}: {span_.error.message}",
+                    f"{span.error.type}: {span.error.message}",
                 )
-            otel_span.end(end_time=span_.ended_at)
-
-
-def configure(
-    *,
-    endpoint: str | None = None,
-) -> opentelemetry.sdk.trace.TracerProvider:
-    """Configure the global tracer provider with OTLP/HTTP export.
-
-    ``endpoint`` defaults to the standard OpenTelemetry environment
-    configuration, then ``http://localhost:4318/v1/traces``.
-
-    This only configures OpenTelemetry. Create and register the adapter
-    separately::
-
-        import ai
-        from ai.experimental_telemetry import otel
-
-        otel.configure()
-        ai.experimental_telemetry.register(otel.OtelAdapter())
-    """
-    provider = opentelemetry.sdk.trace.TracerProvider()
-    exporter = (
-        opentelemetry.exporter.otlp.proto.http.trace_exporter.OTLPSpanExporter(
-            endpoint=endpoint
-        )
-    )
-    provider.add_span_processor(
-        opentelemetry.sdk.trace.export.BatchSpanProcessor(exporter)
-    )
-    opentelemetry.trace.set_tracer_provider(provider)
-    return provider
+            otel_span.end(end_time=span.ended_at)

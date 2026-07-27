@@ -72,7 +72,7 @@ def _line(sp: telemetry.Span) -> str:
     return f"{replay}{_label(sp)}  {duration:.2f}s{error}"
 
 
-class ConsoleAdapter(telemetry.Adapter):
+class ConsoleAdapter:
     """Print spans to ``out`` (default: stdout)."""
 
     def __init__(self, *, out: TextIO | None = None) -> None:
