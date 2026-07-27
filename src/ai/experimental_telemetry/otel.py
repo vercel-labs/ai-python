@@ -7,8 +7,11 @@ Experimental: not part of the stable API, may change or be removed.
     import ai
     from ai.experimental_telemetry import otel
 
-    otel.configure()
     ai.experimental_telemetry.register(otel.OtelAdapter())
+
+The adapter uses the global tracer provider by default. To set up a
+tracer provider and OTLP export, see the OpenTelemetry docs:
+https://opentelemetry.io/docs/languages/python/exporters/#otlp
 
 Follows the ``gen_ai`` semantic conventions.
 
@@ -34,8 +37,6 @@ from .. import experimental_telemetry as telemetry
 
 try:
     import opentelemetry.context
-    import opentelemetry.exporter.otlp.proto.http.trace_exporter
-    import opentelemetry.sdk.trace.export
     import opentelemetry.sdk.trace.id_generator
     import opentelemetry.trace
 except ModuleNotFoundError as exc:  # pragma: no cover
@@ -611,34 +612,3 @@ class OtelAdapter:
                     f"{span_.error.type}: {span_.error.message}",
                 )
             otel_span.end(end_time=span_.ended_at)
-
-
-def configure(
-    *,
-    endpoint: str | None = None,
-) -> opentelemetry.sdk.trace.TracerProvider:
-    """Configure the global tracer provider with OTLP/HTTP export.
-
-    ``endpoint`` defaults to the standard OpenTelemetry environment
-    configuration, then ``http://localhost:4318/v1/traces``.
-
-    This only configures OpenTelemetry. Create and register the adapter
-    separately::
-
-        import ai
-        from ai.experimental_telemetry import otel
-
-        otel.configure()
-        ai.experimental_telemetry.register(otel.OtelAdapter())
-    """
-    provider = opentelemetry.sdk.trace.TracerProvider()
-    exporter = (
-        opentelemetry.exporter.otlp.proto.http.trace_exporter.OTLPSpanExporter(
-            endpoint=endpoint
-        )
-    )
-    provider.add_span_processor(
-        opentelemetry.sdk.trace.export.BatchSpanProcessor(exporter)
-    )
-    opentelemetry.trace.set_tracer_provider(provider)
-    return provider
