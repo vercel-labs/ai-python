@@ -452,7 +452,7 @@ class _Flushable(Protocol):
     def shutdown(self) -> None: ...
 
 
-@telemetry.wrap_span
+@telemetry.adapter
 class OtelAdapter:
     """Maps framework spans onto otel spans."""
 

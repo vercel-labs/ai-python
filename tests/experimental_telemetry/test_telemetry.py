@@ -34,7 +34,7 @@ async def _add_event(
 @contextlib.asynccontextmanager
 async def _registered(
     adapter: ai.experimental_telemetry.AdapterProtocol
-    | ai.experimental_telemetry.SpanWrapper,
+    | ai.experimental_telemetry.Decoratable,
 ) -> AsyncIterator[None]:
     ai.experimental_telemetry.register(adapter)
     try:
@@ -553,11 +553,11 @@ async def test_ids_deterministic_under_use_random() -> None:
     assert await run() == await run()
 
 
-# ── wrap_span on a class ──────────────────────────────────────────
+# ── @adapter on a class ──────────────────────────────────────────
 
 
-async def test_wrap_span_class_driven() -> None:
-    @ai.experimental_telemetry.wrap_span
+async def test_adapter_class_driven() -> None:
+    @ai.experimental_telemetry.adapter
     class Vendor:
         def __init__(self) -> None:
             self.log: list[str] = []  # vendor-specific state
@@ -592,8 +592,8 @@ async def test_wrap_span_class_driven() -> None:
     ]
 
 
-async def test_wrap_span_class_keeps_identity() -> None:
-    @ai.experimental_telemetry.wrap_span
+async def test_adapter_class_keeps_identity() -> None:
+    @ai.experimental_telemetry.adapter
     class Vendor:
         """Vendor bridge."""
 
@@ -606,13 +606,13 @@ async def test_wrap_span_class_keeps_identity() -> None:
     assert Vendor.__name__ == "Vendor"
     assert Vendor.__qualname__.endswith("Vendor")
     assert Vendor.__doc__ == "Vendor bridge."
-    assert isinstance(Vendor(), ai.experimental_telemetry.Adapter)
+    assert isinstance(Vendor(), ai.experimental_telemetry.AdapterMixin)
 
 
-async def test_wrap_span_decorated_class_supports_subclassing() -> None:
+async def test_adapter_decorated_class_supports_subclassing() -> None:
     log: list[str] = []
 
-    @ai.experimental_telemetry.wrap_span
+    @ai.experimental_telemetry.adapter
     class Base:
         def label(self, span: ai.experimental_telemetry.Span) -> str:
             return span.name
@@ -637,7 +637,7 @@ async def test_wrap_span_decorated_class_supports_subclassing() -> None:
     assert log == ["end enriched:s"]
 
 
-async def test_wrap_span_class_requires_async_generator_call() -> None:
+async def test_adapter_class_requires_async_generator_call() -> None:
     class NoCall:
         pass
 
@@ -648,11 +648,11 @@ async def test_wrap_span_class_requires_async_generator_call() -> None:
     bad_classes: list[Any] = [NoCall, PlainCall]
     for bad in bad_classes:
         with pytest.raises(TypeError, match="async generator"):
-            ai.experimental_telemetry.wrap_span(bad)
+            ai.experimental_telemetry.adapter(bad)
 
 
-async def test_wrap_span_rejects_double_decoration() -> None:
-    @ai.experimental_telemetry.wrap_span
+async def test_adapter_rejects_double_decoration() -> None:
+    @ai.experimental_telemetry.adapter
     class Vendor:
         async def __call__(
             self, span: ai.experimental_telemetry.Span
@@ -660,8 +660,8 @@ async def test_wrap_span_rejects_double_decoration() -> None:
             while (yield) is not None:
                 pass
 
-    with pytest.raises(TypeError, match="already a wrap_span adapter"):
-        ai.experimental_telemetry.wrap_span(Vendor)
+    with pytest.raises(TypeError, match="already an adapter"):
+        ai.experimental_telemetry.adapter(Vendor)
 
 
 async def test_register_rejects_undecorated_class() -> None:
@@ -672,14 +672,14 @@ async def test_register_rejects_undecorated_class() -> None:
             while (yield) is not None:
                 pass
 
-    with pytest.raises(TypeError, match="wrap_span"):
+    with pytest.raises(TypeError, match="@adapter"):
         ai.experimental_telemetry.register(Vendor())
 
 
 async def test_adapter_defaults_are_noops(recorder: Recorder) -> None:
-    # A bare Adapter (the mixin's defaults) is valid: no per-span
+    # A bare AdapterMixin (its defaults) is valid: no per-span
     # frames.
-    async with _registered(ai.experimental_telemetry.Adapter()):
+    async with _registered(ai.experimental_telemetry.AdapterMixin()):
         async with ai.experimental_telemetry.span("s") as sp:
             await _add_event(sp, "e")
     assert [s.name for s in recorder.ended] == ["s"]
@@ -688,7 +688,7 @@ async def test_adapter_defaults_are_noops(recorder: Recorder) -> None:
 async def test_hook_override_composes_with_super() -> None:
     log: list[str] = []
 
-    @ai.experimental_telemetry.wrap_span
+    @ai.experimental_telemetry.adapter
     class Both:
         async def __call__(
             self, span: ai.experimental_telemetry.Span
@@ -716,7 +716,7 @@ async def test_hook_override_composes_with_super() -> None:
 
 
 async def test_decorated_class_state_cannot_collide_with_driver() -> None:
-    @ai.experimental_telemetry.wrap_span
+    @ai.experimental_telemetry.adapter
     class Clashy:
         def __init__(self) -> None:
             self._live = "mine"  # same name the driver mangles away
@@ -737,25 +737,25 @@ async def test_decorated_class_state_cannot_collide_with_driver() -> None:
     assert clashy._live == "mine"
 
 
-async def test_wrap_span_function_returns_adapter() -> None:
-    @ai.experimental_telemetry.wrap_span
+async def test_adapter_function_returns_adapter() -> None:
+    @ai.experimental_telemetry.adapter
     async def vendor(
         span: ai.experimental_telemetry.Span,
     ) -> AsyncGenerator[None, Any]:
         while (yield) is not None:
             pass
 
-    assert isinstance(vendor, ai.experimental_telemetry.Adapter)
-    assert "wrap_span" in repr(vendor)
+    assert isinstance(vendor, ai.experimental_telemetry.AdapterMixin)
+    assert "adapter" in repr(vendor)
 
 
-# ── wrap_span ─────────────────────────────────────────────────────
+# ── @adapter on a function ────────────────────────────────────────
 
 
-async def test_wrap_span_locals_across_yield() -> None:
+async def test_adapter_locals_across_yield() -> None:
     events: list[str] = []
 
-    @ai.experimental_telemetry.wrap_span
+    @ai.experimental_telemetry.adapter
     async def adapter(
         span: ai.experimental_telemetry.Span,
     ) -> AsyncGenerator[None, Any]:
@@ -783,10 +783,10 @@ async def test_wrap_span_locals_across_yield() -> None:
     ]
 
 
-async def test_wrap_span_reads_error_after_loop() -> None:
+async def test_adapter_reads_error_after_loop() -> None:
     seen: list[ai.experimental_telemetry.SpanError | None] = []
 
-    @ai.experimental_telemetry.wrap_span
+    @ai.experimental_telemetry.adapter
     async def adapter(
         span: ai.experimental_telemetry.Span,
     ) -> AsyncGenerator[None, Any]:
@@ -816,10 +816,10 @@ async def test_wrap_span_reads_error_after_loop() -> None:
         assert seen[-1] is None
 
 
-async def test_wrap_span_opt_out_before_yield(recorder: Recorder) -> None:
+async def test_adapter_opt_out_before_yield(recorder: Recorder) -> None:
     ended: list[str] = []
 
-    @ai.experimental_telemetry.wrap_span
+    @ai.experimental_telemetry.adapter
     async def adapter(
         span: ai.experimental_telemetry.Span,
     ) -> AsyncGenerator[None, Any]:
@@ -839,8 +839,8 @@ async def test_wrap_span_opt_out_before_yield(recorder: Recorder) -> None:
     assert [s.name for s in recorder.ended] == ["boring", "interesting"]
 
 
-async def test_wrap_span_failures_isolated(recorder: Recorder) -> None:
-    @ai.experimental_telemetry.wrap_span
+async def test_adapter_failures_isolated(recorder: Recorder) -> None:
+    @ai.experimental_telemetry.adapter
     async def broken_before(
         span: ai.experimental_telemetry.Span,
     ) -> AsyncGenerator[None, Any]:
@@ -848,7 +848,7 @@ async def test_wrap_span_failures_isolated(recorder: Recorder) -> None:
         while (yield) is not None:
             pass
 
-    @ai.experimental_telemetry.wrap_span
+    @ai.experimental_telemetry.adapter
     async def broken_after(
         span: ai.experimental_telemetry.Span,
     ) -> AsyncGenerator[None, Any]:
@@ -856,7 +856,7 @@ async def test_wrap_span_failures_isolated(recorder: Recorder) -> None:
             pass
         raise RuntimeError("post-loop bug")
 
-    @ai.experimental_telemetry.wrap_span
+    @ai.experimental_telemetry.adapter
     async def yields_after_end(
         span: ai.experimental_telemetry.Span,
     ) -> AsyncGenerator[None, Any]:
@@ -874,19 +874,19 @@ async def test_wrap_span_failures_isolated(recorder: Recorder) -> None:
     assert [s.name for s in recorder.ended] == ["s"]
 
 
-async def test_wrap_span_rejects_plain_functions() -> None:
+async def test_adapter_rejects_plain_functions() -> None:
     async def not_a_generator(span: ai.experimental_telemetry.Span) -> None:
         pass
 
     fn: Any = not_a_generator
     with pytest.raises(TypeError, match="async generator function"):
-        ai.experimental_telemetry.wrap_span(fn)
+        ai.experimental_telemetry.adapter(fn)
 
 
-async def test_wrap_span_events_live_loop() -> None:
+async def test_adapter_events_live_loop() -> None:
     seen: list[str] = []
 
-    @ai.experimental_telemetry.wrap_span
+    @ai.experimental_telemetry.adapter
     async def adapter(
         span: ai.experimental_telemetry.Span,
     ) -> AsyncGenerator[None, Any]:
@@ -911,10 +911,10 @@ async def test_wrap_span_events_live_loop() -> None:
     ]
 
 
-async def test_wrap_span_error_reaches_loop() -> None:
+async def test_adapter_error_reaches_loop() -> None:
     seen: list[str] = []
 
-    @ai.experimental_telemetry.wrap_span
+    @ai.experimental_telemetry.adapter
     async def adapter(
         span: ai.experimental_telemetry.Span,
     ) -> AsyncGenerator[None, Any]:
@@ -933,13 +933,13 @@ async def test_wrap_span_error_reaches_loop() -> None:
     assert seen == ["one", "error boom"]
 
 
-async def test_wrap_span_early_finish_opts_out(
+async def test_adapter_early_finish_opts_out(
     recorder: Recorder,
 ) -> None:
     seen: list[str] = []
     ended: list[str] = []
 
-    @ai.experimental_telemetry.wrap_span
+    @ai.experimental_telemetry.adapter
     async def adapter(
         span: ai.experimental_telemetry.Span,
     ) -> AsyncGenerator[None, Any]:
@@ -960,10 +960,10 @@ async def test_wrap_span_early_finish_opts_out(
     assert [s.name for s in recorder.ended] == ["s"]
 
 
-async def test_wrap_span_raising_event_handler_isolated(
+async def test_adapter_raising_event_handler_isolated(
     recorder: Recorder,
 ) -> None:
-    @ai.experimental_telemetry.wrap_span
+    @ai.experimental_telemetry.adapter
     async def adapter(
         span: ai.experimental_telemetry.Span,
     ) -> AsyncGenerator[None, Any]:
@@ -978,10 +978,10 @@ async def test_wrap_span_raising_event_handler_isolated(
     assert [s.name for s in recorder.ended] == ["s"]
 
 
-async def test_wrap_span_drain_loop() -> None:
+async def test_adapter_drain_loop() -> None:
     order: list[str] = []
 
-    @ai.experimental_telemetry.wrap_span
+    @ai.experimental_telemetry.adapter
     async def adapter(
         span: ai.experimental_telemetry.Span,
     ) -> AsyncGenerator[None, Any]:
