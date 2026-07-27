@@ -452,7 +452,8 @@ class _Flushable(Protocol):
     def shutdown(self) -> None: ...
 
 
-class OtelAdapter(telemetry.Adapter):
+@telemetry.wrap_span
+class OtelAdapter:
     """Maps framework spans onto otel spans."""
 
     def __init__(
@@ -551,7 +552,7 @@ class OtelAdapter(telemetry.Adapter):
             opentelemetry.context.Context(),
         )
 
-    async def wrap_span(
+    async def __call__(
         self, span_: telemetry.Span, /
     ) -> AsyncGenerator[None, Any]:
         parent_context = self._parent_context(span_)

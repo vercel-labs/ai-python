@@ -31,6 +31,35 @@ async def _add_event(
     return event
 
 
+@contextlib.asynccontextmanager
+async def _registered(
+    adapter: ai.experimental_telemetry.AdapterProtocol
+    | ai.experimental_telemetry.SpanWrapper,
+) -> AsyncIterator[None]:
+    ai.experimental_telemetry.register(adapter)
+    try:
+        yield
+    finally:
+        ai.experimental_telemetry.unregister(adapter)
+
+
+class _NoopAdapter:
+    """Raw-hook adapter base: tests override the hooks they care about."""
+
+    async def on_span_start(self, span: ai.experimental_telemetry.Span) -> None:
+        pass
+
+    async def on_span_event(
+        self,
+        span: ai.experimental_telemetry.Span,
+        event: ai.experimental_telemetry.SpanEvent,
+    ) -> None:
+        pass
+
+    async def on_span_end(self, span: ai.experimental_telemetry.Span) -> None:
+        pass
+
+
 async def test_nesting_and_ids(recorder: Recorder) -> None:
     async with ai.experimental_telemetry.span("outer") as outer:
         assert ai.experimental_telemetry.current_span() is outer
@@ -119,7 +148,7 @@ async def test_out_of_order_close_raises(recorder: Recorder) -> None:
 
 
 async def test_failing_adapter_is_isolated(recorder: Recorder) -> None:
-    class Broken(ai.experimental_telemetry.Adapter):
+    class Broken(_NoopAdapter):
         async def on_span_start(
             self, span: ai.experimental_telemetry.Span
         ) -> None:
@@ -139,7 +168,7 @@ async def test_failing_adapter_is_isolated(recorder: Recorder) -> None:
 async def test_async_adapter_methods_awaited() -> None:
     ended: list[str] = []
 
-    class AsyncAdapter(ai.experimental_telemetry.Adapter):
+    class AsyncAdapter(_NoopAdapter):
         async def on_span_end(
             self, span: ai.experimental_telemetry.Span
         ) -> None:
@@ -345,7 +374,7 @@ async def test_push_snapshots_are_frozen(recorder: Recorder) -> None:
 async def test_finished_span_delivered_whole(recorder: Recorder) -> None:
     order: list[str] = []
 
-    class Adapter(ai.experimental_telemetry.Adapter):
+    class Adapter:
         async def on_span_start(
             self, span: ai.experimental_telemetry.Span
         ) -> None:
@@ -393,7 +422,7 @@ async def test_adapter_view_updated_in_place() -> None:
     starts: list[ai.experimental_telemetry.Span] = []
     ends: list[ai.experimental_telemetry.Span] = []
 
-    class Holder(ai.experimental_telemetry.Adapter):
+    class Holder(_NoopAdapter):
         async def on_span_start(
             self, span: ai.experimental_telemetry.Span
         ) -> None:
@@ -524,15 +553,16 @@ async def test_ids_deterministic_under_use_random() -> None:
     assert await run() == await run()
 
 
-# ── Adapter base class ────────────────────────────────────────────
+# ── wrap_span on a class ──────────────────────────────────────────
 
 
-async def test_adapter_wrap_span_method_driven() -> None:
-    class Vendor(ai.experimental_telemetry.Adapter):
+async def test_wrap_span_class_driven() -> None:
+    @ai.experimental_telemetry.wrap_span
+    class Vendor:
         def __init__(self) -> None:
-            self.log: list[str] = []  # instance state, no __init__ chaining
+            self.log: list[str] = []  # vendor-specific state
 
-        async def wrap_span(
+        async def __call__(
             self, span: ai.experimental_telemetry.Span
         ) -> AsyncGenerator[None, Any]:
             if span.name == "boring":
@@ -551,8 +581,8 @@ async def test_adapter_wrap_span_method_driven() -> None:
                 pass
             await _add_event(outer, "milestone")
 
-    # The base class's hooks drove one generator frame per span, with
-    # the same semantics as the wrap_span function.
+    # The mixed-in driver ran one generator frame per span, with the
+    # same semantics as decorating a free-standing function.
     assert vendor.log == [
         "start outer",
         "start inner",
@@ -562,19 +592,105 @@ async def test_adapter_wrap_span_method_driven() -> None:
     ]
 
 
+async def test_wrap_span_class_keeps_identity() -> None:
+    @ai.experimental_telemetry.wrap_span
+    class Vendor:
+        """Vendor bridge."""
+
+        async def __call__(
+            self, span: ai.experimental_telemetry.Span
+        ) -> AsyncGenerator[None, Any]:
+            while (yield) is not None:
+                pass
+
+    assert Vendor.__name__ == "Vendor"
+    assert Vendor.__qualname__.endswith("Vendor")
+    assert Vendor.__doc__ == "Vendor bridge."
+    assert isinstance(Vendor(), ai.experimental_telemetry.Adapter)
+
+
+async def test_wrap_span_decorated_class_supports_subclassing() -> None:
+    log: list[str] = []
+
+    @ai.experimental_telemetry.wrap_span
+    class Base:
+        def label(self, span: ai.experimental_telemetry.Span) -> str:
+            return span.name
+
+        async def __call__(
+            self, span: ai.experimental_telemetry.Span
+        ) -> AsyncGenerator[None, Any]:
+            while (yield) is not None:
+                pass
+            log.append(f"end {self.label(span)}")
+
+    class Enriched(Base):
+        def label(self, span: ai.experimental_telemetry.Span) -> str:
+            return f"enriched:{span.name}"
+
+    # A subclass of a decorated class inherits the driver; no second
+    # decoration needed.
+    async with _registered(Enriched()):
+        async with ai.experimental_telemetry.span("s"):
+            pass
+
+    assert log == ["end enriched:s"]
+
+
+async def test_wrap_span_class_requires_async_generator_call() -> None:
+    class NoCall:
+        pass
+
+    class PlainCall:
+        async def __call__(self, span: ai.experimental_telemetry.Span) -> None:
+            pass
+
+    bad_classes: list[Any] = [NoCall, PlainCall]
+    for bad in bad_classes:
+        with pytest.raises(TypeError, match="async generator"):
+            ai.experimental_telemetry.wrap_span(bad)
+
+
+async def test_wrap_span_rejects_double_decoration() -> None:
+    @ai.experimental_telemetry.wrap_span
+    class Vendor:
+        async def __call__(
+            self, span: ai.experimental_telemetry.Span
+        ) -> AsyncGenerator[None, Any]:
+            while (yield) is not None:
+                pass
+
+    with pytest.raises(TypeError, match="already a wrap_span adapter"):
+        ai.experimental_telemetry.wrap_span(Vendor)
+
+
+async def test_register_rejects_undecorated_class() -> None:
+    class Vendor:
+        async def __call__(
+            self, span: ai.experimental_telemetry.Span
+        ) -> AsyncGenerator[None, Any]:
+            while (yield) is not None:
+                pass
+
+    with pytest.raises(TypeError, match="wrap_span"):
+        ai.experimental_telemetry.register(Vendor())
+
+
 async def test_adapter_defaults_are_noops(recorder: Recorder) -> None:
-    # A bare Adapter is valid: no per-span frames.
+    # A bare Adapter (the mixin's defaults) is valid: no per-span
+    # frames.
     async with _registered(ai.experimental_telemetry.Adapter()):
         async with ai.experimental_telemetry.span("s") as sp:
             await _add_event(sp, "e")
     assert [s.name for s in recorder.ended] == ["s"]
 
 
-async def test_adapter_hook_override_composes_with_super() -> None:
+async def test_hook_override_composes_with_super() -> None:
     log: list[str] = []
 
-    class Both(ai.experimental_telemetry.Adapter):
-        async def wrap_span(
+    @ai.experimental_telemetry.wrap_span
+    class Both:
+        async def __call__(
             self, span: ai.experimental_telemetry.Span
         ) -> AsyncGenerator[None, Any]:
             while (yield) is not None:
@@ -586,8 +702,11 @@ async def test_adapter_hook_override_composes_with_super() -> None:
         ) -> None:
             log.append(f"hook end {span.name}")
             # Overriding a hook replaces the driver for that phase;
-            # super() plugs it back in.
-            await super().on_span_end(span)
+            # super() plugs it back in (the mixin sits after this
+            # class in the MRO; static checkers can't see it).
+            await super().on_span_end(  # type: ignore[misc]  # ty: ignore[unresolved-attribute]
+                span
+            )
 
     async with _registered(Both()):
         async with ai.experimental_telemetry.span("s"):
@@ -596,13 +715,14 @@ async def test_adapter_hook_override_composes_with_super() -> None:
     assert log == ["hook end s", "frame end s"]
 
 
-async def test_adapter_subclass_state_cannot_collide_with_driver() -> None:
-    class Clashy(ai.experimental_telemetry.Adapter):
+async def test_decorated_class_state_cannot_collide_with_driver() -> None:
+    @ai.experimental_telemetry.wrap_span
+    class Clashy:
         def __init__(self) -> None:
             self._live = "mine"  # same name the driver mangles away
             self.ended: list[str] = []
 
-        async def wrap_span(
+        async def __call__(
             self, span: ai.experimental_telemetry.Span
         ) -> AsyncGenerator[None, Any]:
             while (yield) is not None:
@@ -630,17 +750,6 @@ async def test_wrap_span_function_returns_adapter() -> None:
 
 
 # ── wrap_span ─────────────────────────────────────────────────────
-
-
-@contextlib.asynccontextmanager
-async def _registered(
-    adapter: ai.experimental_telemetry.AdapterProtocol,
-) -> AsyncIterator[None]:
-    ai.experimental_telemetry.register(adapter)
-    try:
-        yield
-    finally:
-        ai.experimental_telemetry.unregister(adapter)
 
 
 async def test_wrap_span_locals_across_yield() -> None:
@@ -914,7 +1023,7 @@ async def test_unpushed_events_delivered_by_end_push(
 ) -> None:
     seen: list[str] = []
 
-    class EventAdapter(ai.experimental_telemetry.Adapter):
+    class EventAdapter(_NoopAdapter):
         async def on_span_event(
             self,
             span: ai.experimental_telemetry.Span,
@@ -944,7 +1053,7 @@ async def test_span_event_dispatched_live_to_multiple_adapters(
 ) -> None:
     seen: list[tuple[str, str, bool]] = []
 
-    class FirstAdapter(ai.experimental_telemetry.Adapter):
+    class FirstAdapter(_NoopAdapter):
         async def on_span_event(
             self,
             span: ai.experimental_telemetry.Span,
@@ -952,7 +1061,7 @@ async def test_span_event_dispatched_live_to_multiple_adapters(
         ) -> None:
             seen.append(("first", event.name, span.ended_at is None))
 
-    class SecondAdapter(ai.experimental_telemetry.Adapter):
+    class SecondAdapter(_NoopAdapter):
         async def on_span_event(
             self,
             span: ai.experimental_telemetry.Span,
@@ -965,7 +1074,7 @@ async def test_span_event_dispatched_live_to_multiple_adapters(
             await _add_event(sp, "milestone")
 
     # Both handlers saw the event while the span was still live; the
-    # recorder (no on_span_event) was skipped without error.
+    # recorder (no-op on_span_event) stayed out of the way.
     assert seen == [
         ("first", "milestone", True),
         ("second", "milestone", True),
@@ -978,7 +1087,7 @@ async def test_span_event_raising_handler_isolated(
 ) -> None:
     seen: list[str] = []
 
-    class Broken(ai.experimental_telemetry.Adapter):
+    class Broken(_NoopAdapter):
         async def on_span_event(
             self,
             span: ai.experimental_telemetry.Span,
@@ -986,7 +1095,7 @@ async def test_span_event_raising_handler_isolated(
         ) -> None:
             raise RuntimeError("adapter bug")
 
-    class Fine(ai.experimental_telemetry.Adapter):
+    class Fine(_NoopAdapter):
         async def on_span_event(
             self,
             span: ai.experimental_telemetry.Span,

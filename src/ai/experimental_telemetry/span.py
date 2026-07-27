@@ -36,7 +36,7 @@ and set it as current using :func:`use_span` or pass to a child span explicity.
 
 An adapter processes spans and decides what to do with them::
 
-    class MyAdapter(ai.experimental_telemetry.Adapter):
+    class MyAdapter:
         async def on_span_start(self, span): ...
         async def on_span_end(self, span): ...
         async def on_span_event(self, span, event): ...
@@ -46,8 +46,8 @@ An adapter processes spans and decides what to do with them::
 Adapters dispatch on the type of ``span.data``.  An adapter that crashes
 is logged and skipped, it never kills the run.
 
-:func:`wrap_span` builds an adapter from an async generator function, using
-the pytest fixture-style trick.
+:func:`wrap_span` builds an adapter from an async generator function or
+class, using the pytest fixture-style trick.
 
 A :class:`Sink` is what sits *before* the adapters and routes span snapshots.
 It exists, again, because of the durable execution case: the user can control
@@ -84,7 +84,9 @@ from typing import (
     Literal,
     Protocol,
     Self,
+    cast,
     overload,
+    runtime_checkable,
 )
 
 import pydantic
@@ -692,6 +694,7 @@ _registry_sink = _RegistrySink()
 # adapter registry utilities
 
 
+@runtime_checkable
 class AdapterProtocol(Protocol):
     """The async callbacks implemented by a telemetry adapter."""
 
@@ -702,16 +705,28 @@ class AdapterProtocol(Protocol):
     async def on_span_end(self, span_: Span, /) -> None: ...
 
 
+class SpanWrapper(Protocol):
+    """A per-span async generator factory."""
+
+    def __call__(self, span_: Span, /) -> AsyncGenerator[None, Any] | None: ...
+
+
 _adapters: list[AdapterProtocol] = []
 
 
-def register(adapter: AdapterProtocol) -> None:
+def register(adapter: AdapterProtocol | SpanWrapper) -> None:
     """Add an adapter.  Multiple adapters coexist independently."""
+    if not isinstance(adapter, AdapterProtocol):
+        raise TypeError(
+            f"{adapter!r} does not implement the adapter callbacks; "
+            "an adapter class must be decorated with @wrap_span"
+        )
     _adapters.append(adapter)
 
 
-def unregister(adapter: AdapterProtocol) -> None:
+def unregister(adapter: AdapterProtocol | SpanWrapper) -> None:
     """Remove a previously registered adapter."""
+    assert isinstance(adapter, AdapterProtocol)  # register() enforced it
     _adapters.remove(adapter)
 
 
@@ -928,37 +943,28 @@ async def _span_impl(
 
 
 class Adapter(AdapterProtocol):
-    """Base adapter implementing the protocol with the right defaults.
+    """The driver :func:`wrap_span` mixes into a decorated class.
 
-    class Vendor(telemetry.Adapter):
-        async def wrap_span(self, span):
-            with sdk.start_span(span.name) as v:
-                while (ev := (yield)) is not None:
-                    v.log_event(ev.name)
-                if span.error is not None:
-                    v.set_error(span.error.message)
-                v.update(output=span.data)
+    Implements the adapter callbacks. Don't subclass it directly. Put
+    :func:`wrap_span` over a class with ``__call__`` async generator method.
     """
 
     # Name-mangled so the driver's bookkeeping can never collide with
-    # a subclass attribute; created lazily so subclasses keep their
-    # ``__init__`` entirely to themselves.
+    # an attribute of the class it is mixed into; created lazily so
+    # that class keeps its ``__init__`` entirely to itself.
     __live: dict[str, AsyncGenerator[None, Any]] | None = None
 
-    # Positional-only params on all overridable methods, so subclasses
-    # are free to pick their own names (`span` shadows nothing there).
-    def wrap_span(self, span_: Span, /) -> AsyncGenerator[None, Any] | None:
+    # Positional-only params on all overridable methods, so overrides
+    # are free to pick their own names.
+    def __call__(self, span_: Span, /) -> AsyncGenerator[None, Any] | None:
         """Return the generator frame for one span, or ``None``.
 
-        Override it as an async generator method (a ``yield`` loop, as
-        in the class docstring) — calling one *returns* the generator,
-        so the override satisfies this signature.  The default returns
-        ``None``: no per-span frame.
+        The decorated class's ``__call__`` overrides this.
         """
         return None
 
     async def on_span_start(self, span_: Span, /) -> None:
-        gen = self.wrap_span(span_)
+        gen = self(span_)
         if gen is None:
             return
         try:
@@ -999,7 +1005,7 @@ class Adapter(AdapterProtocol):
 
 
 class _WrapSpanFn(Adapter):
-    """Adapter built by :func:`wrap_span`."""
+    """Adapter built by :func:`wrap_span` from a function."""
 
     def __init__(self, fn: Callable[[Span], AsyncGenerator[None, Any]]) -> None:
         self._fn = fn
@@ -1007,18 +1013,44 @@ class _WrapSpanFn(Adapter):
     def __repr__(self) -> str:
         return f"wrap_span({getattr(self._fn, '__qualname__', self._fn)!r})"
 
-    def wrap_span(self, span_: Span, /) -> AsyncGenerator[None, Any]:
+    def __call__(self, span_: Span, /) -> AsyncGenerator[None, Any]:
         return self._fn(span_)
 
 
-def wrap_span(
-    fn: Callable[[Span], AsyncGenerator[None, Any]],
-) -> Adapter:
-    """Build an adapter from a free-standing async generator function.
+_WrapperT = TypeVar("_WrapperT", bound=SpanWrapper)
 
-    Sugar over subclassing :class:`Adapter` — same semantics as
-    overriding its ``wrap_span`` method, for bridges that need no
-    state or methods of their own.
+
+@overload
+def wrap_span(target: type[_WrapperT]) -> type[_WrapperT]: ...
+
+
+@overload
+def wrap_span(
+    target: Callable[[Span], AsyncGenerator[None, Any]],
+) -> Adapter: ...
+
+
+def wrap_span(
+    target: type[_WrapperT] | Callable[[Span], AsyncGenerator[None, Any]],
+) -> type[_WrapperT] | Adapter:
+    """Build an adapter from an async generator function or class.
+
+    Decorating a free-standing async generator function returns a
+    ready-to-register adapter.
+
+    Decorating a class whose ``__call__`` is an
+    async generator method returns that class with the adapter
+    machinery (:class:`Adapter`) mixed in::
+
+        @wrap_span
+        class Vendor:
+            def __init__(self, *, api_key):
+                self._client = sdk.Client(api_key)
+
+            async def __call__(self, span):
+                ...  # same yield loop as the function form
+
+        ai.experimental_telemetry.register(Vendor(api_key="..."))
 
     How to use to bridge a vendor SDKs:
     write the vendor's ``with``/``async with`` around one yield loop.
@@ -1053,9 +1085,28 @@ def wrap_span(
     - Like any adapter, a generator that raises is logged and skipped;
       it never kills the run.
     """
-    if not inspect.isasyncgenfunction(fn):
+    if inspect.isclass(target):
+        if issubclass(target, Adapter):
+            raise TypeError(f"{target.__name__} is already a wrap_span adapter")
+        call = inspect.getattr_static(target, "__call__", None)
+        if not inspect.isasyncgenfunction(call):
+            raise TypeError(
+                "wrap_span on a class requires __call__ to be an async "
+                "generator method (`async def` containing a `yield` loop)"
+            )
+        mixed = type(
+            target.__name__,
+            (target, Adapter),
+            {
+                "__module__": target.__module__,
+                "__qualname__": target.__qualname__,
+                "__doc__": target.__doc__,
+            },
+        )
+        return cast("type[_WrapperT]", mixed)
+    if not inspect.isasyncgenfunction(target):
         raise TypeError(
             "wrap_span requires an async generator function "
             "(`async def` containing a `yield` loop)"
         )
-    return _WrapSpanFn(fn)
+    return _WrapSpanFn(target)
