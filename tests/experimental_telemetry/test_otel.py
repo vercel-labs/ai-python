@@ -83,7 +83,8 @@ async def test_nesting_names_and_attributes(
     otel_env: tuple[InMemorySpanExporter, TracerProvider],
 ) -> None:
     exporter, _ = otel_env
-    async with ai.experimental_telemetry.span("outer", foo="bar"):
+    async with ai.experimental_telemetry.span("outer") as sp:
+        sp.set_attributes(foo="bar")
         async with ai.experimental_telemetry.span("inner"):
             pass
 
@@ -359,8 +360,8 @@ async def test_subclass_can_enrich_names_and_attributes() -> None:
     adapter = Enriched(tracer_provider=provider)
     ai.experimental_telemetry.register(adapter)
     try:
-        async with ai.experimental_telemetry.span("s", foo="bar"):
-            pass
+        async with ai.experimental_telemetry.span("s") as sp:
+            sp.set_attributes(foo="bar")
     finally:
         ai.experimental_telemetry.unregister(adapter)
 

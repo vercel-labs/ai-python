@@ -14,14 +14,16 @@ async def test_console_prints_tree() -> None:
     ai.experimental_telemetry.register(adapter)
     try:
         async with ai.experimental_telemetry.span("outer"):
-            async with ai.experimental_telemetry.span("inner", k=1):
-                pass
+            async with ai.experimental_telemetry.span("inner") as sp:
+                sp.set_attributes(k=1)
     finally:
         ai.experimental_telemetry.unregister(adapter)
 
     text = out.getvalue()
     assert "▸ outer" in text
-    assert "▸   inner (k=1)" in text
+    # The live line prints at span start, before attributes are set;
+    # the end-of-trace tree shows them.
+    assert "▸   inner" in text
     assert "└─ inner (k=1)" in text
     assert "trace " in text
 

@@ -40,7 +40,8 @@ async def test_agent_run_span_tree(recorder: Recorder) -> None:
     @ai.tool
     async def lookup(x: int) -> str:
         """Tool that opens a user span."""
-        async with ai.experimental_telemetry.span("user_work", x=x):
+        async with ai.experimental_telemetry.span("user_work") as sp:
+            sp.set_attributes(x=x)
             return "ok"
 
     mock_llm(

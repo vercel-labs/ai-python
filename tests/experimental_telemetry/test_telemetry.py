@@ -70,7 +70,8 @@ async def test_error_recorded_and_reraised(recorder: Recorder) -> None:
 
 
 async def test_set_attributes(recorder: Recorder) -> None:
-    async with ai.experimental_telemetry.span("s", a=1) as span:
+    async with ai.experimental_telemetry.span("s") as span:
+        span.set_attributes(a=1)
         span.set_attributes(b=2)
     (ended,) = recorder.ended
     assert isinstance(ended.data, ai.experimental_telemetry.CustomSpanData)
@@ -83,18 +84,6 @@ async def test_set_attributes_rejects_framework_spans() -> None:
     ) as span:
         with pytest.raises(TypeError):
             span.set_attributes(a=1)
-
-
-async def test_data_with_attributes_rejected() -> None:
-    with pytest.raises(TypeError):
-        # The overloads reject this statically too; the runtime check
-        # covers untyped callers.
-        data = ai.experimental_telemetry.LoopTurnSpanData()
-        async with ai.experimental_telemetry.span(
-            data,  # ty: ignore[invalid-argument-type]
-            a=1,  # type: ignore[call-overload]
-        ):
-            pass
 
 
 async def test_replay_flag(recorder: Recorder) -> None:
@@ -245,9 +234,9 @@ async def test_span_round_trips_typed_data() -> None:
 
 
 async def test_restored_user_span_data() -> None:
-    # A user span made with span("name", **attrs) restores typed...
-    async with ai.experimental_telemetry.span("turn", session="s1") as sp:
-        pass
+    # A user span made with span("name") restores typed...
+    async with ai.experimental_telemetry.span("turn") as sp:
+        sp.set_attributes(session="s1")
     restored = ai.experimental_telemetry.Span.model_validate(
         sp.model_dump(mode="json")
     )
@@ -258,8 +247,8 @@ async def test_restored_user_span_data() -> None:
 
     # ...even when its name collides with a framework kind: the type
     # travels in the data, not the span name.
-    async with ai.experimental_telemetry.span("loop_turn", foo=1) as sp2:
-        pass
+    async with ai.experimental_telemetry.span("loop_turn") as sp2:
+        sp2.set_attributes(foo=1)
     collided = ai.experimental_telemetry.Span.model_validate(
         sp2.model_dump(mode="json")
     )
@@ -321,7 +310,8 @@ async def test_create_span_reports_nothing(recorder: Recorder) -> None:
 async def test_push_lifecycle_split_across_pushes(
     recorder: Recorder,
 ) -> None:
-    sp = ai.experimental_telemetry.create_span("turn", session="s1")
+    sp = ai.experimental_telemetry.create_span("turn")
+    sp.set_attributes(session="s1")
     sp.started_at = ai.experimental_telemetry.now_ns()
     await sp.push()
     assert [s.name for s in recorder.started] == ["turn"]
@@ -1018,7 +1008,7 @@ async def test_span_event_raising_handler_isolated(
 
 
 async def test_span_without_adapters_is_noop() -> None:
-    async with ai.experimental_telemetry.span("outer", a=1) as sp:
+    async with ai.experimental_telemetry.span("outer") as sp:
         assert sp.id == ""
         assert sp.trace_id == ""
         assert sp.parent_id is None
@@ -1231,10 +1221,9 @@ async def test_attribute_mappings_for_dotted_names(
     recorder: Recorder,
 ) -> None:
     # Viewer attribute names ("session.id") aren't valid keywords, so
-    # span()/set_attributes() take a positional mapping merged with keywords.
-    async with ai.experimental_telemetry.span(
-        "generate_title", {"session.id": "s1"}, model="haiku"
-    ) as sp:
+    # set_attributes() merges a positional mapping with keywords.
+    async with ai.experimental_telemetry.span("generate_title") as sp:
+        sp.set_attributes({"session.id": "s1"}, model="haiku")
         sp.set_attributes({"output.value": "t"}, plain=1)
     assert sp.data.attributes == {
         "session.id": "s1",
@@ -1242,18 +1231,3 @@ async def test_attribute_mappings_for_dotted_names(
         "output.value": "t",
         "plain": 1,
     }
-
-
-async def test_attribute_mapping_rejected_for_typed_data() -> None:
-    data = ai.experimental_telemetry.LoopTurnSpanData()
-    with pytest.raises(TypeError):
-        ai.experimental_telemetry.create_span(
-            data,  # ty: ignore[invalid-argument-type]
-            {"a": 1},  # type: ignore[call-overload]
-        )
-    with pytest.raises(TypeError):
-        async with ai.experimental_telemetry.span(
-            data,  # ty: ignore[invalid-argument-type]
-            {"a": 1},  # type: ignore[call-overload]
-        ):
-            pass

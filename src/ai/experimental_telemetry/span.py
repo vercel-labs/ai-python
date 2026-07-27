@@ -5,7 +5,8 @@ Experimental: not part of the stable API, may change or be removed.
 :class:`Span` is a record of work. It carries ids, timestamps, parent id, and
 work-specific data::
 
-    async with ai.experimental_telemetry.span("retrieval", query=q) as sp:
+    async with ai.experimental_telemetry.span("retrieval") as sp:
+        sp.set_attributes(query=q)
         docs = await search(q)
         sp.set_attributes(count=len(docs))
 
@@ -22,7 +23,8 @@ selectively using low-level API may be a better fit.
 The default sink is the adapter registry, meaning on push all registered
 adapters will get the updated version of the span::
 
-    sp = create_span("turn", session=sid)    # identity only, reports nothing
+    sp = create_span("turn")                 # identity only, reports nothing
+    sp.set_attributes(session=sid)
     sp.stamp_start()                         # writes started_at
     await sp.push()                          # visible to sinks/adapters
     ...                                      # possibly elsewhere, later:
@@ -299,7 +301,10 @@ class HookSpanData(pydantic.BaseModel):
 
 
 class CustomSpanData(pydantic.BaseModel):
-    """A user span made with ``span("name", key=value, ...)``."""
+    """A user span made with ``span("name")``.
+
+    Attributes are set with :meth:`Span.set_attributes`.
+    """
 
     kind: Literal["custom"] = "custom"
     attributes: dict[str, Any]
@@ -735,13 +740,11 @@ async def _dispatch(
 @overload
 def create_span(
     name_or_data: str,
-    attributes: Mapping[str, Any] | None = None,
     /,
     *,
     parent: Span | None = None,
     replay: bool = False,
     set_as_current: bool = True,
-    **kwargs: Any,
 ) -> Span[CustomSpanData]: ...
 
 
@@ -758,13 +761,11 @@ def create_span(
 
 def create_span(
     name_or_data: str | SpanData,
-    attributes: Mapping[str, Any] | None = None,
     /,
     *,
     parent: Span | None = None,
     replay: bool = False,
     set_as_current: bool = True,
-    **kwargs: Any,
 ) -> Span[Any]:
     """Create a span: identity only, nothing is reported.
 
@@ -781,12 +782,8 @@ def create_span(
     """
     if isinstance(name_or_data, str):
         name = name_or_data
-        data: SpanData = CustomSpanData(
-            attributes={**(attributes or {}), **kwargs}
-        )
+        data: SpanData = CustomSpanData(attributes={})
     else:
-        if attributes is not None or kwargs:
-            raise TypeError("attributes only go with a str span name")
         name = name_or_data.kind
         data = name_or_data
     if not is_enabled():
@@ -819,13 +816,11 @@ def create_span(
 @overload
 def span(
     name_or_data: str,
-    attributes: Mapping[str, Any] | None = None,
     /,
     *,
     parent: Span | None = None,
     replay: bool = False,
     set_as_current: bool = True,
-    **kwargs: Any,
 ) -> contextlib.AbstractAsyncContextManager[Span[CustomSpanData]]: ...
 
 
@@ -842,13 +837,11 @@ def span(
 
 def span(
     name_or_data: str | SpanData,
-    attributes: Mapping[str, Any] | None = None,
     /,
     *,
     parent: Span | None = None,
     replay: bool = False,
     set_as_current: bool = True,
-    **kwargs: Any,
 ) -> contextlib.AbstractAsyncContextManager[Span[Any]]:
     """Open a span; it sets itself as current inside the block.
 
@@ -856,10 +849,10 @@ def span(
     and pushes on enter; stamps ``ended_at`` (and ``error``, if the
     block raised) and pushes on exit.
 
-    Pass a name plus attributes for a user span (a mapping for dotted
-    attribute names, keywords for the rest), or a :class:`SpanData`
-    instance for a typed one. Exceptions are recorded on the span
-    and re-raised.
+    Pass a name for a user span (set attributes on it with
+    :meth:`Span.set_attributes`), or a :class:`SpanData` instance
+    for a typed one. Exceptions are recorded on the span and
+    re-raised.
 
     ``parent`` overrides the ambient parent for this span: a live
     :class:`Span`, or one restored from another process to continue its
@@ -873,44 +866,27 @@ def span(
     # to an overloaded function directly.
     return _span_impl(
         name_or_data,
-        attributes,
         parent=parent,
         replay=replay,
         set_as_current=set_as_current,
-        **kwargs,
     )
 
 
 @contextlib.asynccontextmanager
 async def _span_impl(
     name_or_data: str | SpanData,
-    attributes: Mapping[str, Any] | None,
     /,
     *,
     parent: Span | None,
     replay: bool,
     set_as_current: bool,
-    **kwargs: Any,
 ) -> AsyncIterator[Span[Any]]:
-    sp: Span[Any]
-    if isinstance(name_or_data, str):
-        sp = create_span(
-            name_or_data,
-            attributes,
-            parent=parent,
-            replay=replay,
-            set_as_current=set_as_current,
-            **kwargs,
-        )
-    else:
-        sp = create_span(
-            name_or_data,
-            parent=parent,
-            replay=replay,
-            set_as_current=set_as_current,
-        )
-        if attributes is not None or kwargs:
-            raise TypeError("attributes only go with a str span name")
+    sp: Span[Any] = create_span(
+        name_or_data,
+        parent=parent,
+        replay=replay,
+        set_as_current=set_as_current,
+    )
     if not sp.id:
         # noop: no timestamps, no pushes, never current
         yield sp
