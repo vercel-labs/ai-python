@@ -229,7 +229,7 @@ async def test_use_span_parents_without_lifecycle(
 ) -> None:
     # ``use_span`` is pure context plumbing: no pushes, no timestamps.
     outer = ai.experimental_telemetry.create_span("outer")
-    with ai.experimental_telemetry.use_span(outer):
+    async with ai.experimental_telemetry.use_span(outer):
         assert ai.experimental_telemetry.current_span() is outer
         async with ai.experimental_telemetry.span("child") as child:
             assert child.parent_id == outer.id
@@ -358,7 +358,7 @@ async def test_push_snapshots_are_frozen(recorder: Recorder) -> None:
     data = ai.experimental_telemetry.ToolExecutionSpanData(
         tool_name="t", tool_call_id="tc", args={"x": 1}
     )
-    with ai.experimental_telemetry.use_sink(sink):
+    async with ai.experimental_telemetry.use_sink(sink):
         sp = ai.experimental_telemetry.create_span(data)
         sp.started_at = ai.experimental_telemetry.now_ns()
         await sp.push()
@@ -464,7 +464,7 @@ async def test_repush_after_end_redelivers(recorder: Recorder) -> None:
 
 async def test_use_sink_reroutes_pushes(recorder: Recorder) -> None:
     sink = ai.experimental_telemetry.DictSink()
-    with ai.experimental_telemetry.use_sink(sink):
+    async with ai.experimental_telemetry.use_sink(sink):
         async with ai.experimental_telemetry.span("inside") as sp:
             sp.events.append(
                 ai.experimental_telemetry.SpanEvent(
@@ -488,7 +488,7 @@ async def test_use_sink_reroutes_pushes(recorder: Recorder) -> None:
 
 
 async def test_use_sink_accepts_none(recorder: Recorder) -> None:
-    with ai.experimental_telemetry.use_sink(None):
+    async with ai.experimental_telemetry.use_sink(None):
         async with ai.experimental_telemetry.span("inside"):
             pass
     assert [s.name for s in recorder.ended] == ["inside"]
@@ -496,7 +496,7 @@ async def test_use_sink_accepts_none(recorder: Recorder) -> None:
 
 async def test_use_sink_none_preserves_outer_sink(recorder: Recorder) -> None:
     sink = ai.experimental_telemetry.DictSink()
-    with (
+    async with (
         ai.experimental_telemetry.use_sink(sink),
         ai.experimental_telemetry.use_sink(None),
     ):
@@ -511,7 +511,7 @@ async def test_dict_sink_ships_to_adapters_exactly_as_pushed(
 ) -> None:
     # The durable-body pattern: collect inside, re-push from a "step".
     sink = ai.experimental_telemetry.DictSink()
-    with ai.experimental_telemetry.use_sink(sink):
+    async with ai.experimental_telemetry.use_sink(sink):
         async with ai.experimental_telemetry.span("outer"):
             async with ai.experimental_telemetry.span("inner"):
                 pass
@@ -532,7 +532,7 @@ async def test_push_never_raises(recorder: Recorder) -> None:
         async def on_push(self, span: ai.experimental_telemetry.Span) -> None:
             raise RuntimeError("sink bug")
 
-    with ai.experimental_telemetry.use_sink(BrokenSink()):
+    async with ai.experimental_telemetry.use_sink(BrokenSink()):
         async with ai.experimental_telemetry.span("s"):
             pass  # both pushes hit the broken sink; neither raises
 
@@ -542,7 +542,7 @@ async def test_push_never_raises(recorder: Recorder) -> None:
 
 async def test_ids_deterministic_under_use_random() -> None:
     async def run() -> tuple[str, str, str]:
-        with ai.messages.use_random(random.Random(7)):
+        async with ai.messages.use_random(random.Random(7)):
             async with ai.experimental_telemetry.span("outer") as outer:
                 async with ai.experimental_telemetry.span("inner") as inner:
                     pass
@@ -1161,7 +1161,7 @@ async def test_no_clock_reads_without_adapters(
 
 async def test_no_rng_draws_without_adapters() -> None:
     async def id_after_spans(spans: int) -> str:
-        with ai.messages.use_random(random.Random(7)):
+        async with ai.messages.use_random(random.Random(7)):
             for _ in range(spans):
                 async with ai.experimental_telemetry.span("s"):
                     pass
@@ -1174,7 +1174,7 @@ async def test_no_rng_draws_without_adapters() -> None:
 
 async def test_routed_sink_keeps_spans_live_without_adapters() -> None:
     sink = ai.experimental_telemetry.DictSink()
-    with ai.experimental_telemetry.use_sink(sink):
+    async with ai.experimental_telemetry.use_sink(sink):
         async with ai.experimental_telemetry.span("s") as sp:
             pass
     assert sp.id
@@ -1204,9 +1204,9 @@ async def _stamps() -> tuple[int | None, int, int | None]:
 async def test_use_time_overrides_and_restores(recorder: Recorder) -> None:
     # A ticking clock gives a deterministic timestamp sequence; the
     # override drives started_at, event stamps, and ended_at alike.
-    with ai.experimental_telemetry.use_time(_ticking_clock(1_000)):
+    async with ai.experimental_telemetry.use_time(_ticking_clock(1_000)):
         first = await _stamps()
-    with ai.experimental_telemetry.use_time(_ticking_clock(1_000)):
+    async with ai.experimental_telemetry.use_time(_ticking_clock(1_000)):
         second = await _stamps()
 
     assert first == second == (1_010, 1_020, 1_030)
@@ -1233,7 +1233,7 @@ async def test_use_time_decorator_handles_async_functions(
 
 async def test_use_time_accepts_time_time_ns(recorder: Recorder) -> None:
     before = time.time_ns()
-    with ai.experimental_telemetry.use_time(time.time_ns):
+    async with ai.experimental_telemetry.use_time(time.time_ns):
         async with ai.experimental_telemetry.span("s") as sp:
             pass
     assert sp.started_at is not None
@@ -1247,7 +1247,7 @@ async def test_use_time_accepts_time_time_ns(recorder: Recorder) -> None:
 async def test_use_span_accepts_none(recorder: Recorder) -> None:
     # "no span" is a normal state in gated instrumentation; None means
     # no reparenting, no separate code path at the callsite.
-    with ai.experimental_telemetry.use_span(None):
+    async with ai.experimental_telemetry.use_span(None):
         assert ai.experimental_telemetry.current_span() is None
         async with ai.experimental_telemetry.span("child") as child:
             pass
@@ -1258,7 +1258,7 @@ async def test_is_enabled_reflects_sinks_and_adapters() -> None:
     # No adapters registered here (no recorder fixture), default sink.
     assert not ai.experimental_telemetry.is_enabled()
     sink = ai.experimental_telemetry.DictSink()
-    with ai.experimental_telemetry.use_sink(sink):
+    async with ai.experimental_telemetry.use_sink(sink):
         assert ai.experimental_telemetry.is_enabled()
     assert not ai.experimental_telemetry.is_enabled()
 
@@ -1269,7 +1269,7 @@ async def test_is_enabled_with_adapter_registered(recorder: Recorder) -> None:
 
 async def test_stamp_start_and_end(recorder: Recorder) -> None:
     clock = _ticking_clock(100)
-    with ai.experimental_telemetry.use_time(clock):
+    async with ai.experimental_telemetry.use_time(clock):
         sp = ai.experimental_telemetry.create_span("turn").stamp_start()
         assert sp.started_at == 110
         assert sp.stamp_end(error=ValueError("boom")) is sp
@@ -1291,7 +1291,7 @@ async def test_stamp_start_and_end(recorder: Recorder) -> None:
 
 async def test_add_event_appends_without_pushing() -> None:
     sink = ai.experimental_telemetry.DictSink()
-    with ai.experimental_telemetry.use_sink(sink):
+    async with ai.experimental_telemetry.use_sink(sink):
         async with ai.experimental_telemetry.span("s") as sp:
             event = sp.add_event("cache_hit", {"cache.key": "k"}, size=3)
             assert event.attrs == {"cache.key": "k", "size": 3}
@@ -1307,7 +1307,7 @@ async def test_dict_sink_finished_spans_and_push_all(
     recorder: Recorder,
 ) -> None:
     sink = ai.experimental_telemetry.DictSink()
-    with ai.experimental_telemetry.use_sink(sink):
+    async with ai.experimental_telemetry.use_sink(sink):
         async with ai.experimental_telemetry.span("done"):
             pass
         dangling = ai.experimental_telemetry.create_span("open").stamp_start()

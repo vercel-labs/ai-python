@@ -259,7 +259,7 @@ async def test_span_finished_elsewhere_exports_and_parents(
 
     # "Process two": live children under the restored span.
     restored = ai.experimental_telemetry.Span.model_validate(payload)
-    with ai.experimental_telemetry.use_span(restored):
+    async with ai.experimental_telemetry.use_span(restored):
         async with ai.experimental_telemetry.span("child"):
             pass
 

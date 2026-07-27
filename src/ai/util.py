@@ -5,49 +5,16 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import dataclasses
-import functools
-import inspect
-from typing import TYPE_CHECKING, Any, Protocol, cast, overload
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from collections.abc import (
         AsyncIterable,
         AsyncIterator,
-        Callable,
         Collection,
-        Coroutine,
         Generator,
-        Iterator,
     )
     from types import TracebackType
-
-
-class ContextManagerAnySync[T](Protocol):
-    def __enter__(self) -> T: ...
-
-    def __exit__(
-        self,
-        typ: type[BaseException] | None,
-        value: BaseException | None,
-        traceback: TracebackType | None,
-    ) -> bool | None: ...
-
-    async def __aenter__(self) -> T: ...
-
-    async def __aexit__(
-        self,
-        typ: type[BaseException] | None,
-        value: BaseException | None,
-        traceback: TracebackType | None,
-    ) -> bool | None: ...
-
-    @overload
-    def __call__[**P, R](
-        self, func: Callable[P, Coroutine[Any, Any, R]]
-    ) -> Callable[P, Coroutine[Any, Any, R]]: ...
-
-    @overload
-    def __call__[**P, R](self, func: Callable[P, R]) -> Callable[P, R]: ...
 
 
 @dataclasses.dataclass
@@ -148,53 +115,6 @@ class MultiWaiter[T]:
     ) -> bool:
         self.clear()
         return False
-
-
-class _GeneratorContextManagerAnySync[T](
-    contextlib._GeneratorContextManager[T]
-):
-    async def __aenter__(self) -> T:
-        return self.__enter__()
-
-    async def __aexit__(
-        self,
-        typ: type[BaseException] | None,
-        value: BaseException | None,
-        traceback: TracebackType | None,
-    ) -> bool | None:
-        return self.__exit__(typ, value, traceback)
-
-    def __call__[_F: Callable[..., Any]](self, func: _F) -> _F:
-        if inspect.iscoroutinefunction(func):
-
-            @functools.wraps(func)
-            async def inner(*args: Any, **kwds: Any) -> Any:
-                with self._recreate_cm():
-                    return await func(*args, **kwds)
-        else:
-
-            @functools.wraps(func)
-            def inner(*args: Any, **kwds: Any) -> Any:
-                with self._recreate_cm():
-                    return func(*args, **kwds)
-
-        return cast("_F", inner)
-
-
-def contextmanager_any_sync[**P, T](
-    func: Callable[P, Iterator[T]],
-) -> Callable[P, ContextManagerAnySync[T]]:
-    """@contextmanager decorator but the result is also usable in async."""
-
-    @functools.wraps(func)
-    def helper(
-        *args: P.args, **kwds: P.kwargs
-    ) -> _GeneratorContextManagerAnySync[T]:
-        return _GeneratorContextManagerAnySync(
-            cast("Callable[..., Generator[T, None, None]]", func), args, kwds
-        )
-
-    return helper
 
 
 class TaskGroupGenExit(GeneratorExit, BaseExceptionGroup[BaseException]):
