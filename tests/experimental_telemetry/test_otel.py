@@ -84,7 +84,7 @@ async def test_nesting_names_and_attributes(
 ) -> None:
     exporter, _ = otel_env
     async with ai.experimental_telemetry.span("outer") as sp:
-        sp.set_attributes(foo="bar")
+        sp.set_attrs(foo="bar")
         async with ai.experimental_telemetry.span("inner"):
             pass
 
@@ -193,14 +193,14 @@ async def test_span_events_exported_with_original_timestamps(
         first = ai.experimental_telemetry.SpanEvent(
             name="first_token",
             time_ns=ai.experimental_telemetry.now_ns(),
-            attributes={"event_type": "TextStart"},
+            attrs={"event_type": "TextStart"},
         )
         sp.events.append(first)
         await sp.push()
         second = ai.experimental_telemetry.SpanEvent(
             name="custom",
             time_ns=ai.experimental_telemetry.now_ns(),
-            attributes={"obj": marker},
+            attrs={"obj": marker},
         )
         sp.events.append(second)
         await sp.push()
@@ -352,16 +352,16 @@ async def test_subclass_can_enrich_names_and_attributes() -> None:
         def span_name(self, span_: ai.experimental_telemetry.Span, /) -> str:
             return f"seal:{super().span_name(span_)}"
 
-        def span_attributes(
+        def span_attrs(
             self, span_: ai.experimental_telemetry.Span, /
         ) -> dict[str, Any]:
-            return super().span_attributes(span_) | {"extra": True}
+            return super().span_attrs(span_) | {"extra": True}
 
     adapter = Enriched(tracer_provider=provider)
     ai.experimental_telemetry.register(adapter)
     try:
         async with ai.experimental_telemetry.span("s") as sp:
-            sp.set_attributes(foo="bar")
+            sp.set_attrs(foo="bar")
     finally:
         ai.experimental_telemetry.unregister(adapter)
 

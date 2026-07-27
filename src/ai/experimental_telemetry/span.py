@@ -6,9 +6,9 @@ Experimental: not part of the stable API, may change or be removed.
 work-specific data::
 
     async with ai.experimental_telemetry.span("retrieval") as sp:
-        sp.set_attributes(query=q)
+        sp.set_attrs(query=q)
         docs = await search(q)
-        sp.set_attributes(count=len(docs))
+        sp.set_attrs(count=len(docs))
 
 Nesting is automatic: the current span is tracked using a context var.
 
@@ -24,7 +24,7 @@ The default sink is the adapter registry, meaning on push all registered
 adapters will get the updated version of the span::
 
     sp = create_span("turn")                 # identity only, reports nothing
-    sp.set_attributes(session=sid)
+    sp.set_attrs(session=sid)
     sp.stamp_start()                         # writes started_at
     await sp.push()                          # visible to sinks/adapters
     ...                                      # possibly elsewhere, later:
@@ -303,11 +303,11 @@ class HookSpanData(pydantic.BaseModel):
 class CustomSpanData(pydantic.BaseModel):
     """A user span made with ``span("name")``.
 
-    Attributes are set with :meth:`Span.set_attributes`.
+    Attributes are set with :meth:`Span.set_attrs`.
     """
 
     kind: Literal["custom"] = "custom"
-    attributes: dict[str, Any]
+    attrs: dict[str, Any]
 
 
 # names for span events shared between producers,
@@ -334,7 +334,7 @@ class SpanEvent(pydantic.BaseModel):
 
     name: str
     time_ns: int
-    attributes: dict[str, Any]
+    attrs: dict[str, Any]
 
 
 class SpanError(pydantic.BaseModel):
@@ -423,30 +423,30 @@ class Span(pydantic.BaseModel, Generic[DataT_co]):
     set_as_current: bool = True
     events: list[SpanEvent] = pydantic.Field(default_factory=list)
 
-    schema_version: ClassVar[int] = 3
+    schema_version: ClassVar[int] = 4
 
-    def set_attributes(
-        self, attributes: Mapping[str, Any] | None = None, /, **kwargs: Any
+    def set_attrs(
+        self, attrs: Mapping[str, Any] | None = None, /, **kwargs: Any
     ) -> None:
-        """Attach attributes to a span created with ``span("name", ...)``.
+        """Attach attributes to a span created with ``span("name")``.
 
         Attribute names that aren't valid Python keywords (viewers use
         dotted names like ``"output.value"``) go in the positional
         mapping; it merges with the keyword arguments::
 
-            sp.set_attributes({"output.value": title}, model="haiku")
+            sp.set_attrs({"output.value": title}, model="haiku")
         """
         if not isinstance(self.data, CustomSpanData):
             raise TypeError(
-                "set_attributes() only works on user spans; framework "
+                "set_attrs() only works on user spans; framework "
                 "spans carry typed data, assign its fields directly"
             )
-        self.data.attributes.update({**(attributes or {}), **kwargs})
+        self.data.attrs.update({**(attrs or {}), **kwargs})
 
     def add_event(
         self,
         name: str,
-        attributes: Mapping[str, Any] | None = None,
+        attrs: Mapping[str, Any] | None = None,
         /,
         **kwargs: Any,
     ) -> SpanEvent:
@@ -464,7 +464,7 @@ class Span(pydantic.BaseModel, Generic[DataT_co]):
             name=name,
             # a noop span (telemetry off at creation) reads no clock
             time_ns=now_ns() if self.id else 0,
-            attributes={**(attributes or {}), **kwargs},
+            attrs={**(attrs or {}), **kwargs},
         )
         self.events.append(event)
         return event
@@ -782,7 +782,7 @@ def create_span(
     """
     if isinstance(name_or_data, str):
         name = name_or_data
-        data: SpanData = CustomSpanData(attributes={})
+        data: SpanData = CustomSpanData(attrs={})
     else:
         name = name_or_data.kind
         data = name_or_data
@@ -850,7 +850,7 @@ def span(
     block raised) and pushes on exit.
 
     Pass a name for a user span (set attributes on it with
-    :meth:`Span.set_attributes`), or a :class:`SpanData` instance
+    :meth:`Span.set_attrs`), or a :class:`SpanData` instance
     for a typed one. Exceptions are recorded on the span and
     re-raised.
 

@@ -623,7 +623,7 @@ async def test_stream_span_milestones(recorder: Recorder) -> None:
     ]
     first, complete = call.events
     # The milestone says what kind of output arrived first.
-    assert first.attributes == {"event_type": "TextStart"}
+    assert first.attrs == {"event_type": "TextStart"}
     assert call.started_at is not None
     assert call.started_at <= first.time_ns <= complete.time_ns
     assert call.ended_at is not None
@@ -653,7 +653,7 @@ async def test_stream_first_token_fires_on_delta_without_start(
     assert stream.experimental_span is not None
     first = stream.experimental_span.events[0]
     assert first.name == ai.experimental_telemetry.FIRST_TOKEN
-    assert first.attributes == {"event_type": "TextDelta"}
+    assert first.attrs == {"event_type": "TextDelta"}
 
 
 async def test_replay_stream_has_no_milestones(recorder: Recorder) -> None:

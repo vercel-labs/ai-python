@@ -387,7 +387,7 @@ def _attributes(sp: telemetry.Span, *, capture_content: bool) -> dict[str, Any]:
             attrs["ai.hook.type"] = d.hook_type
             attrs["ai.hook.status"] = d.status
         case telemetry.CustomSpanData() as d:
-            for key, value in d.attributes.items():
+            for key, value in d.attrs.items():
                 # otel only allows scalar attribute values or lists of them
                 attrs[key] = (
                     value
@@ -488,14 +488,14 @@ class OtelAdapter(telemetry.Adapter):
         """Return the exported otel span name.  Override to customize."""
         return _semconv_name(span_)
 
-    def span_attributes(self, span_: telemetry.Span, /) -> dict[str, Any]:
+    def span_attrs(self, span_: telemetry.Span, /) -> dict[str, Any]:
         """Return the attributes set at span end.  Override to enrich.
 
         ::
 
             class MyAdapter(otel.OtelAdapter):
-                def span_attributes(self, span_):
-                    return super().span_attributes(span_) | {"k": "v"}
+                def span_attrs(self, span_):
+                    return super().span_attrs(span_) | {"k": "v"}
         """
         return _attributes(span_, capture_content=self._is_capturing_content)
 
@@ -595,13 +595,13 @@ class OtelAdapter(telemetry.Adapter):
                             k: v  # squash everything into scalars
                             if isinstance(v, str | bool | int | float)
                             else repr(v)
-                            for k, v in ev.attributes.items()
+                            for k, v in ev.attrs.items()
                         },
                         timestamp=ev.time_ns,
                     )
         finally:
             self._live.pop(span_.id, None)
-            for key, value in self.span_attributes(span_).items():
+            for key, value in self.span_attrs(span_).items():
                 otel_span.set_attribute(key, value)
             if span_.error is not None:
                 otel_span.set_attribute("error.type", span_.error.type)
