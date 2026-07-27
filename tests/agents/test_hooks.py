@@ -409,7 +409,7 @@ async def test_cancelled_hook_span(recorder: Recorder) -> None:
     deferred, cancelled = hook_span.events
     assert deferred.name == ai.experimental_telemetry.HOOK_DEFERRED
     assert cancelled.name == ai.experimental_telemetry.HOOK_CANCELLED
-    assert cancelled.attributes == {"reason": "denied"}
+    assert cancelled.attrs == {"reason": "denied"}
 
 
 async def test_pre_registered_hook_is_replay_span(recorder: Recorder) -> None:

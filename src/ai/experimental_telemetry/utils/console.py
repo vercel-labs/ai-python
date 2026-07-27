@@ -46,7 +46,7 @@ def _label(sp: telemetry.Span) -> str:
         case telemetry.RunSpanData() as d:
             return f"run {d.agent} ({d.model})"
         case telemetry.CustomSpanData() as d:
-            attrs = ", ".join(f"{k}={v!r}" for k, v in d.attributes.items())
+            attrs = ", ".join(f"{k}={v!r}" for k, v in d.attrs.items())
             return sp.name + (f" ({_short(attrs)})" if attrs else "")
         case _:
             return sp.name
@@ -93,7 +93,7 @@ class ConsoleAdapter(telemetry.Adapter):
     ) -> None:
         depth = self._depth.get(span.id, 0) + 1
         offset_ms = (event.time_ns - (span.started_at or 0)) / 1e6
-        attrs = ", ".join(f"{k}={v!r}" for k, v in event.attributes.items())
+        attrs = ", ".join(f"{k}={v!r}" for k, v in event.attrs.items())
         suffix = f" ({_short(attrs)})" if attrs else ""
         self._out.write(
             f"· {'  ' * depth}{event.name} +{offset_ms:.0f}ms{suffix}\n"
