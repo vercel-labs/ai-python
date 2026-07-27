@@ -33,7 +33,6 @@ uv add "ai[otel]"
 import ai
 from ai.experimental_telemetry import otel
 
-otel.configure(endpoint="http://localhost:6006/v1/traces")
 ai.experimental_telemetry.register(otel.OtelAdapter())
 
 agent = ai.Agent(tools=[get_weather])
@@ -43,17 +42,16 @@ async with agent.run(model, messages) as run:
         ...
 ```
 
-`configure()` performs the
-[OpenTelemetry ceremony](https://opentelemetry.io/docs/languages/python/exporters/#usage).
-
 `register(otel.OtelAdapter())` registers the adapter that turns framework's
-spans into OpenTelemetry spans. Without an `endpoint` argument, `configure()`
-reads the standard OpenTelemetry environment variables, falling back to
-`http://localhost:4318/v1/traces`.
-
-If your application already configures OpenTelemetry, skip `configure()` and
-only register the adapter, `OtelAdapter` uses the global tracer provider
+spans into OpenTelemetry spans. `OtelAdapter` uses the global tracer provider
 unless you pass one.
+
+<Callout title="Note">
+  See
+  [OpenTelemetry ceremony](https://opentelemetry.io/docs/languages/python/exporters/#usage)
+  documentation page to configure the endpoint for your traces to be submitted to.
+</Callout>
+
 
 ## Open your own spans
 
@@ -64,17 +62,18 @@ with adapters.
 ```python
 import ai
 
-async with ai.experimental_telemetry.span("retrieval", query=query) as sp:
+async with ai.experimental_telemetry.span("retrieval") as sp:
+    sp.set_attrs(query=query)
     docs = await search(query)
-    sp.set_attributes(count=len(docs))
+    sp.set_attrs(count=len(docs))
 ```
 
-Attach attributes with keyword arguments at creation, or later with
-`sp.set_attributes(...)`. Attribute names that are not valid Python keywords, such as the
-dotted names many trace viewers use, go in a positional mapping:
+Attach attributes with `sp.set_attrs(...)`. Attribute names that are not
+valid Python keywords, such as the dotted names many trace viewers use, go
+in a positional mapping:
 
 ```python
-sp.set_attributes({"output.value": title}, model="claude-haiku-4.5")
+sp.set_attrs({"output.value": title}, model="claude-haiku-4.5")
 ```
 
 Record a milestone inside a span with `sp.add_event(name)` — it becomes a
@@ -84,17 +83,17 @@ model calls.
 If the block raises, the span records the error and re-raises. You keep your
 `try`/`except` logic; the trace shows where the failure happened.
 
-## Write an adapter with wrap_span
+## Write an adapter
 
-You can connect a vendor SDK directly by writing an adapter. `wrap_span` builds one from
-a single function using a generator trick similar to pytest fixtures or FastAPI
-lifecycles.
+You can connect a vendor SDK directly by writing an adapter. The `@adapter`
+decorator builds one from a single function using a generator trick similar
+to pytest fixtures or FastAPI lifecycles.
 
 
 ```python
 import ai
 
-@ai.experimental_telemetry.wrap_span
+@ai.experimental_telemetry.adapter
 async def vendor(span):
     with sdk.start_span(span.name) as v:    # create a span before the loop
         while (ev := (yield)) is not None:  # process events coming from span.add_event()
@@ -115,6 +114,9 @@ The function runs once per span:
   `span.data` fully populated and the end timestamp set.
 
 Return before the first `yield` to skip a span.
+
+`@adapter` can also decorate a class. For a class, the async generator trick should
+be put in `__call__`.
 
 Telemetry never interferes with the run: an adapter that raises is logged and
 skipped. You can register several adapters at once, and they operate
