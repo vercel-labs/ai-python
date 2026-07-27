@@ -306,13 +306,13 @@ async def test_subclass_can_enrich_names_and_attributes() -> None:
     provider.add_span_processor(SimpleSpanProcessor(exporter))
 
     class Enriched(otel.OtelAdapter):
-        def span_name(self, span_: ai.experimental_telemetry.Span, /) -> str:
-            return f"seal:{super().span_name(span_)}"
+        def span_name(self, span: ai.experimental_telemetry.Span, /) -> str:
+            return f"seal:{super().span_name(span)}"
 
         def span_attrs(
-            self, span_: ai.experimental_telemetry.Span, /
+            self, span: ai.experimental_telemetry.Span, /
         ) -> dict[str, Any]:
-            return super().span_attrs(span_) | {"extra": True}
+            return super().span_attrs(span) | {"extra": True}
 
     adapter = Enriched(tracer_provider=provider)
     ai.experimental_telemetry.register(adapter)

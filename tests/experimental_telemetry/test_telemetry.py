@@ -34,7 +34,7 @@ async def _add_event(
 @contextlib.asynccontextmanager
 async def _registered(
     adapter: ai.experimental_telemetry.AdapterProtocol
-    | ai.experimental_telemetry.Decoratable,
+    | ai.experimental_telemetry.AdapterCallable,
 ) -> AsyncIterator[None]:
     ai.experimental_telemetry.register(adapter)
     try:
