@@ -1258,8 +1258,8 @@ async def _aggregate_from[T, S, R](
     agg = aggregator()
 
     rt = runtime.get_runtime()
-    async with util.maybe_aclosing(source) as src:
-        async for item in src:
+    async with util.maybe_aclosing(source):
+        async for item in source:
             agg.feed(item)
             await rt.put_event(
                 events_.PartialToolCallResult(

@@ -165,9 +165,9 @@ class TaskGroup(asyncio.TaskGroup):
 
 
 @contextlib.asynccontextmanager
-async def maybe_aclosing[T](
-    iter: AsyncIterable[T],
-) -> AsyncIterator[AsyncIterable[T]]:
+async def maybe_aclosing(
+    iter: AsyncIterable[Any],
+) -> AsyncIterator[AsyncIterable[Any]]:
     """Like ``contextlib.aclosing`` but a no-op if ``iter`` has no ``aclose``.
 
     Useful when consuming an arbitrary ``AsyncIterable[T]`` whose concrete
