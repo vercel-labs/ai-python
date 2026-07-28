@@ -46,25 +46,26 @@ def _label(sp: telemetry.Span) -> str:
         case telemetry.RunSpanData() as d:
             return f"run {d.agent} ({d.model})"
         case telemetry.CustomSpanData() as d:
-            attrs = ", ".join(f"{k}={v!r}" for k, v in d.attributes.items())
+            attrs = ", ".join(f"{k}={v!r}" for k, v in d.attrs.items())
             return sp.name + (f" ({_short(attrs)})" if attrs else "")
         case _:
             return sp.name
 
 
 def _line(sp: telemetry.Span) -> str:
-    end = sp.ended_at or sp.started_at
+    started = sp.started_at or 0
+    end = sp.ended_at or started
     # A span's lifetime can extend past the response (tool dispatch
     # while the stream is open); when the milestone is there, report
     # the true response latency instead.
-    for ev in sp.span_events:
+    for ev in sp.events:
         if ev.name == telemetry.RESPONSE_COMPLETE:
             end = ev.time_ns
             break
-    duration = (end - sp.started_at) / 1e9
+    duration = (end - started) / 1e9
     replay = "↻ " if sp.replay else ""
     error = (
-        f"  ✗ {type(sp.error).__name__}: {_short(str(sp.error))}"
+        f"  ✗ {sp.error.type}: {_short(sp.error.message)}"
         if sp.error is not None
         else ""
     )
@@ -79,7 +80,7 @@ class ConsoleAdapter:
         self._depth: dict[str, int] = {}
         self._ended: dict[str, list[telemetry.Span]] = {}
 
-    def on_span_start(self, span: telemetry.Span) -> None:
+    async def on_span_start(self, span: telemetry.Span) -> None:
         depth = 0
         if span.parent_id is not None:
             depth = self._depth.get(span.parent_id, -1) + 1
@@ -87,18 +88,18 @@ class ConsoleAdapter:
         replay = "↻ " if span.replay else ""
         self._out.write(f"▸ {'  ' * depth}{replay}{_label(span)}\n")
 
-    def on_span_event(
+    async def on_span_event(
         self, span: telemetry.Span, event: telemetry.SpanEvent
     ) -> None:
         depth = self._depth.get(span.id, 0) + 1
-        offset_ms = (event.time_ns - span.started_at) / 1e6
-        attrs = ", ".join(f"{k}={v!r}" for k, v in event.attributes.items())
+        offset_ms = (event.time_ns - (span.started_at or 0)) / 1e6
+        attrs = ", ".join(f"{k}={v!r}" for k, v in event.attrs.items())
         suffix = f" ({_short(attrs)})" if attrs else ""
         self._out.write(
             f"· {'  ' * depth}{event.name} +{offset_ms:.0f}ms{suffix}\n"
         )
 
-    def on_span_end(self, span: telemetry.Span) -> None:
+    async def on_span_end(self, span: telemetry.Span) -> None:
         self._ended.setdefault(span.trace_id, []).append(span)
         if span.parent_id is not None:
             return
@@ -115,7 +116,9 @@ class ConsoleAdapter:
 
         def render(s: telemetry.Span, prefix: str, kid_prefix: str) -> None:
             lines.append(prefix + _line(s))
-            kids = sorted(children.get(s.id, []), key=lambda c: c.started_at)
+            kids = sorted(
+                children.get(s.id, []), key=lambda c: c.started_at or 0
+            )
             for i, kid in enumerate(kids):
                 last = i == len(kids) - 1
                 render(

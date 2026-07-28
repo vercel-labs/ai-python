@@ -1,63 +1,618 @@
 ---
-title: "ai.providers.ai_gateway"
-description: Reference for AI Gateway provider APIs.
+title: "AI Gateway"
+description: Configure Vercel AI Gateway models, authentication, routing, tools, and media generation.
 type: reference
-summary: Reference for ai.providers.ai_gateway.
+summary: Use models from multiple providers through Vercel AI Gateway.
 ---
 
-`ai.providers.ai_gateway` contains the Vercel AI Gateway provider, protocol,
-params, tools, and error mapping.
+Vercel AI Gateway gives you access to models from multiple providers through
+one API. You can change models, control routing, and use provider tools without
+configuring a separate SDK for each provider.
+
+The AI SDK uses AI Gateway when a model ID does not include a colon-separated
+provider prefix:
 
 ```python
-model = ai.get_model("gateway:anthropic/claude-sonnet-4")
-ids = await ai.get_provider("vercel").list_models()
+import ai
+
+model = ai.get_model("anthropic/claude-sonnet-4.6")
 ```
 
-## GatewayProvider
+This is equivalent to:
 
-`GatewayProvider` implements `Provider` for Vercel AI Gateway.
+```python
+model = ai.get_model("gateway:anthropic/claude-sonnet-4.6")
+```
 
-Default configuration uses `AI_GATEWAY_API_KEY`.
+## Configure authentication
+
+AI Gateway supports OIDC and API key authentication.
+
+### Use Vercel OIDC
+
+OIDC enables your application to authenticate both locally and in the cloud
+without storing static credentials.
+
+Install the optional Vercel dependency to use OIDC:
+
+```bash title="Terminal"
+uv add "ai[vercel]"
+```
+
+For local development, use `vercel dev` to run your application, and the
+provider will automatically obtain a fresh token before accessing the Gateway.
+Alternatively, use `vercel env pull` and manually pass `VERCEL_OIDC_TOKEN`
+to the provider.
+
+When deployed to Vercel, no additional environment configuration is required.
+
+See the [Vercel OIDC documentation](https://vercel.com/docs/oidc) for more
+information.
+
+### Use an API key
+
+Set `AI_GATEWAY_API_KEY` in your environment:
+
+```bash title="Terminal"
+export AI_GATEWAY_API_KEY="your_ai_gateway_api_key_here"
+```
+
+No additional dependencies are required when using API key authentication. You
+can also pass an API key when you create a provider:
+
+```python
+provider = ai.get_provider(
+    "vercel",
+    api_key="your_ai_gateway_api_key_here",
+)
+```
+
+An explicit API key takes priority over `AI_GATEWAY_API_KEY`. Either form takes
+priority over OIDC authentication.
+
+
+## Stream a model response
+
+Pass the model to `ai.stream` with a list of messages:
+
+```python
+import ai
+
+model = ai.get_model("anthropic/claude-sonnet-4.6")
+messages = [
+    ai.system_message("Be concise."),
+    ai.user_message("Explain why the sky is blue."),
+]
+
+async with ai.stream(model, messages) as stream:
+    async for event in stream:
+        if isinstance(event, ai.events.TextDelta):
+            print(event.chunk, end="", flush=True)
+```
+
+After the stream finishes, you can access the response and token usage:
+
+```python
+print(stream.text)
+print(stream.message)
+print(stream.usage)
+```
+
+AI Gateway streams text, reasoning, tool calls, tool results, generated files,
+and usage through the standard SDK event types.
+
+## Configure a provider
+
+Use `ai.get_provider("vercel")` when you need custom provider configuration:
+
+```python
+import ai
+
+provider = ai.get_provider(
+    "vercel",
+    base_url="https://gateway.example.com/v3/ai",
+    api_key="your_ai_gateway_api_key_here",
+    headers={"X-Application": "example_application"},
+)
+
+model = ai.Model(
+    id="anthropic/claude-sonnet-4.6",
+    provider=provider,
+)
+```
+
+`GatewayProvider` accepts these configuration options:
+
+| Option | Description |
+| --- | --- |
+| `api_key` | API key used instead of `AI_GATEWAY_API_KEY` or OIDC. |
+| `base_url` | Gateway API base URL. The default is `https://ai-gateway.vercel.sh/v3/ai`. |
+| `headers` | Headers included with each Gateway request. |
+| `env` | Environment values used only by this provider instance. |
+| `client` | Custom `httpx.AsyncClient` used for requests. |
+| `protocol` | Custom provider protocol. Most applications should use the default. |
+
+Close providers that your application creates:
+
+```python
+await provider.aclose()
+```
+
+The provider closes the HTTP client that it creates. If you pass a custom
+`httpx.AsyncClient`, close that client in your application.
+
+## List and check models
+
+Use `list_models` to get the model IDs available to the authenticated Gateway
+account:
 
 ```python
 provider = ai.get_provider("vercel")
-model = ai.Model(id="anthropic/claude-sonnet-4", provider=provider)
+
+model_ids = await provider.list_models()
+
+for model_id in model_ids:
+    print(model_id)
 ```
 
-The provider uses the Gateway v3 protocol by default, owns the Gateway client,
-and supports model listing, probing, streaming, and media generation.
+`list_models` returns model IDs as sorted strings, such as
+`anthropic/claude-sonnet-4.6`.
 
-## GatewayV3Protocol
+Use `ai.probe` to check authentication and model availability without
+generating tokens:
 
-`GatewayV3Protocol` translates SDK messages, tools, params, and generated files
-to the AI Gateway v3 wire format.
+```python
+model = ai.get_model("anthropic/claude-sonnet-4.6")
 
-Use it directly only when you need a protocol override. Most code should let
-`GatewayProvider` choose the default protocol.
+await ai.probe(model)
+```
 
-## GatewayParams
+`probe` raises `ProviderNotConfiguredError` when authentication is missing and
+`ProviderModelNotFoundError` when the model is unavailable.
 
-AI Gateway params configure gateway-specific request behavior.
+## Configure routing and fallbacks
+
+Use `RoutingParams` to control how AI Gateway selects a provider or fallback
+model:
+
+```python
+params = ai.InferenceRequestParams(
+    routing=ai.RoutingParams(
+        provider_allowlist=frozenset({"anthropic", "bedrock"}),
+        provider_order=("bedrock", "anthropic"),
+        provider_ranking=ai.ProviderRankingStrategy.COST,
+        fallback_models=(
+            "openai/gpt-5-mini",
+            "google/gemini-2.5-flash",
+        ),
+    )
+)
+
+async with ai.stream(model, messages, params=params) as stream:
+    async for event in stream:
+        ...
+```
+
+The routing fields map to AI Gateway options:
+
+| Python field | Gateway option | Description |
+| --- | --- | --- |
+| `provider_allowlist` | `only` | Restricts routing to the listed providers. |
+| `provider_order` | `order` | Sets the order in which Gateway tries providers. |
+| `provider_ranking` | `sort` | Ranks providers by the selected cost or performance strategy. |
+| `fallback_models` | `models` | Lists models to try after the requested model fails. |
+| `routing_target` | `inferenceRegion` | Restricts routing by global scope, geographic region, or provider region. |
+
+Use `GLOBAL`, `GeoRegion`, or `CloudRegion` to select a routing target:
+
+```python
+params = ai.InferenceRequestParams(
+    routing=ai.RoutingParams(
+        routing_target=ai.GeoRegion("us"),
+    )
+)
+```
+
+Use `RoutingTargetChain` when Gateway and the selected provider need different
+targets:
+
+```python
+params = ai.InferenceRequestParams(
+    routing=ai.RoutingParams(
+        routing_target=ai.RoutingTargetChain(
+            gateway=ai.GeoRegion("us"),
+            provider=ai.CloudRegion("us-east-1"),
+        )
+    )
+)
+```
+
+## Track requests
+
+Use `safety_identifier` to attach a stable end-user ID to a request.
+
+Use `tags` to group requests by application, feature, environment, or another
+category:
+
+```python
+params = ai.InferenceRequestParams(
+    safety_identifier="user_123",
+    tags=frozenset(
+        {
+            "feature:document_summary",
+            "environment:production",
+        }
+    ),
+    metadata={
+        "prompt_version": "3",
+    },
+)
+```
+
+You can use the user ID and tags when reviewing AI Gateway usage and reports.
+
+## Configure Gateway request options
+
+`GatewayParams` contains request options that apply only to AI Gateway.
+
+Add it to `InferenceRequestParams` using `with_provider_params`:
+
+```python
+from ai.providers.ai_gateway import (
+    GatewayParams,
+    ProviderTimeoutsParams,
+)
+
+params = ai.InferenceRequestParams().with_provider_params(
+    GatewayParams(
+        quota_entity_id="workspace_123",
+        zero_data_retention=True,
+        disallow_prompt_training=True,
+        provider_timeouts=ProviderTimeoutsParams(
+            byok={"anthropic": 5_000},
+        ),
+    )
+)
+```
+
+`GatewayParams` supports these fields:
+
+| Field | Description |
+| --- | --- |
+| `quota_entity_id` | Identifies the entity against which Gateway tracks quota. |
+| `zero_data_retention` | Restricts routing to credentials that satisfy the requested zero-data-retention policy. |
+| `hipaa_compliant` | Restricts routing to providers that meet AI Gateway HIPAA requirements. |
+| `disallow_prompt_training` | Restricts routing to providers that do not train on prompts. |
+| `byok` | Supplies request-scoped Bring Your Own Key (BYOK) credentials, grouped by provider. |
+| `provider_timeouts` | Sets per-provider BYOK attempt timeouts in milliseconds. |
+
+### Supply request-scoped BYOK credentials
+
+The value of `byok` maps provider names to lists of credential objects:
+
+```python
+import os
+
+from ai.providers.ai_gateway import GatewayParams
+
+params = ai.InferenceRequestParams().with_provider_params(
+    GatewayParams(
+        byok={
+            "anthropic": [
+                {
+                    "apiKey": os.environ["ANTHROPIC_API_KEY"],
+                }
+            ]
+        }
+    )
+)
+```
+
+Each provider defines its own credential fields. AI Gateway controls credential
+validation, ordering, policy checks, and fallback behavior.
+
+Keep provider credentials in environment variables or another secret store.
+Avoid placing credentials directly in source code.
+
+See the [AI Gateway BYOK documentation](https://vercel.com/docs/ai-gateway/byok)
+for provider credential formats and account-level setup.
+
+## Pass provider-specific options
+
+Use `extra_body.providerOptions` when the selected model provider supports an
+option that does not have a typed SDK field.
+
+Use the selected provider name as the key:
+
+```python
+params = ai.InferenceRequestParams(
+    extra_body={
+        "providerOptions": {
+            "anthropic": {
+                "speed": "fast",
+            }
+        }
+    }
+)
+```
+
+Use `gateway` as the key only for raw AI Gateway options:
+
+```python
+params = ai.InferenceRequestParams(
+    extra_body={
+        "providerOptions": {
+            "gateway": {
+                "sort": "cost",
+            }
+        }
+    }
+)
+```
+
+The provider merges raw options after typed SDK options. When both forms set
+the same field, the value in `extra_body` takes priority.
+
+Prefer typed fields such as `RoutingParams` and `GatewayParams` when they are
+available. Use `extra_body` for provider options that the SDK does not yet
+represent.
+
+## Use standard request options
+
+AI Gateway supports the common fields in `InferenceRequestParams`, including:
+
+- Sampling temperature, top-p, top-k, seed, frequency penalty, and presence
+  penalty.
+- Reasoning effort and reasoning summaries.
+- Tool selection, tool limits, and parallel tool calls.
+- Service tiers.
+- Safety identifiers, metadata, and tags.
+- Maximum output tokens and provider-specific response data.
+- Prompt caching.
+- Routing and fallback models.
+- Server-side context management for OpenAI and Anthropic models.
+- Extra headers, query parameters, and request body fields.
+
+The provider translates reasoning and context management options based on the
+provider name in the model ID.
+
+These options are not supported by the current Gateway protocol implementation
+and raise `ValueError` when set:
+
+- `MinPSamplerParams.min_p`.
+- `RepetitionPenaltyParams.repetition_penalty`.
+- `RepetitionPenaltyParams.consideration_window`.
+- `OutputParams.text_verbosity`.
+
+Context management requires an OpenAI or Anthropic model.
+
+## Use tools
+
+AI Gateway supports Python function tools, provider-specific tools, and tools
+executed by AI Gateway.
+
+### Use Python function tools
+
+Pass function tools to `ai.stream` or an agent:
+
+```python
+@ai.tool
+async def get_weather(city: str) -> str:
+    """Get the weather for a city."""
+    return f"The weather in {city} is sunny."
+
+
+async with ai.stream(
+    model,
+    messages,
+    tools=[get_weather.tool],
+) as stream:
+    ...
+```
+
+`ai.stream` sends the tool schema and returns tool calls. Use `ai.Agent` when
+the SDK should execute the Python function and continue the model loop.
+
+### Use provider-specific tools
+
+Provider-specific tool definitions can pass through AI Gateway:
+
+```python
+from ai.providers.anthropic import tools as anthropic_tools
+
+tools = [
+    anthropic_tools.web_search(max_uses=3),
+]
+```
+
+Use a tool that the selected model and provider support. Some provider tools
+also require provider account configuration.
+
+### Use AI Gateway tools
+
+AI Gateway tools run in Gateway and can work with any gateway-routed model:
+
+```python
+from ai.providers.ai_gateway import tools as gateway_tools
+
+tools = [
+    gateway_tools.perplexity_search(
+        max_results=5,
+        search_domain_filter=["reuters.com"],
+    )
+]
+
+async with ai.stream(
+    model,
+    [ai.user_message("Find recent AI policy news.")],
+    tools=tools,
+) as stream:
+    async for event in stream:
+        if isinstance(event, ai.events.TextDelta):
+            print(event.chunk, end="", flush=True)
+        elif isinstance(event, ai.events.BuiltinToolResult):
+            print(event.result.result)
+```
+
+The provider includes these AI Gateway tools:
+
+- `perplexity_search`.
+- `parallel_search`.
+
+See [AI Gateway tools](/docs/reference/ai.providers/ai-gateway/tools) for all
+tool options and configured examples.
+
+## Generate structured output
+
+Pass a Pydantic model as `output_type` to request structured output:
+
+```python
+import pydantic
+
+import ai
+
+
+class Summary(pydantic.BaseModel):
+    title: str
+    points: list[str]
+
+
+model = ai.get_model("openai/gpt-5.4")
+
+async with ai.stream(
+    model,
+    [ai.user_message("Summarize the benefits of renewable energy.")],
+    output_type=Summary,
+) as stream:
+    async for _ in stream:
+        pass
+
+summary = stream.output
+```
+
+After the stream finishes, `stream.output` contains the validated Pydantic
+model.
+
+## Handle generated files
+
+Models can return files as part of a language model stream. Each file produces
+a `FileEvent` and is added to the final assistant message:
+
+```python
+async with ai.stream(model, messages) as stream:
+    async for event in stream:
+        if isinstance(event, ai.events.FileEvent):
+            print(event.media_type, event.filename)
+
+for file in stream.message.files:
+    print(file.media_type)
+```
+
+## Handle errors
+
+The provider maps AI Gateway failures to the standard `ai.ProviderError`
+hierarchy:
+
+| Gateway failure | Python error |
+| --- | --- |
+| Missing configuration | `ProviderNotConfiguredError` |
+| Authentication failure | `ProviderAuthenticationError` |
+| Invalid request | `ProviderBadRequestError` |
+| Rate limit | `ProviderRateLimitError` |
+| Missing model | `ProviderModelNotFoundError` |
+| Gateway server failure | `ProviderInternalServerError` |
+| Invalid Gateway response | `ProviderResponseError` |
+| Request timeout | `ProviderTimeoutError` |
+
+Catch a specific error when your application can handle it:
+
+```python
+try:
+    await ai.probe(model)
+except ai.ProviderAuthenticationError:
+    print("Check the AI Gateway credentials.")
+except ai.ProviderModelNotFoundError:
+    print("Choose an available model.")
+```
+
+Mapped API errors retain the Gateway response in `error.body`. This can include
+details about failed routing attempts.
+
+See [`ai.errors`](/docs/reference/errors) for the complete error hierarchy.
+
+## Current provider scope
+
+The Python provider currently supports:
+
+- Language model streaming.
+- Structured output.
+- Function and provider-executed tools.
+- Model listing and connection checks.
+- Image and video generation through the experimental generation API.
+
+It does not currently expose reranking models, realtime sessions, credit
+queries, spend reports, or generation lookup helpers.
+
+## API reference
+
+### GatewayProvider
+
+`GatewayProvider` owns AI Gateway authentication, configuration, HTTP
+resources, model discovery, and the default protocol.
+
+Get an instance with:
+
+```python
+provider = ai.get_provider("vercel")
+```
+
+Methods and properties:
+
+- `client`: Shared Gateway client.
+- `protocol`: Configured protocol.
+- `tools`: AI Gateway tool module.
+- `is_configured()`: Reports whether API key or OIDC authentication is
+  available.
+- `list_models()`: Returns available model IDs.
+- `probe(model)`: Checks authentication and model availability.
+- `stream(...)`: Streams a language model response.
+- `generate(...)`: Generates image or video output.
+- `aclose()`: Closes provider-owned resources.
+
+### GatewayParams
+
+`GatewayParams` contains typed AI Gateway request options:
+
+- `quota_entity_id`.
+- `zero_data_retention`.
+- `hipaa_compliant`.
+- `disallow_prompt_training`.
+- `byok`.
+- `provider_timeouts`.
+
+### ProviderTimeoutsParams
+
+`ProviderTimeoutsParams` contains per-provider timeout settings.
 
 Fields:
 
-- `quota_entity_id`
-- `zero_data_retention`
-- `hipaa_compliant`
-- `disallow_prompt_training`
-- `byok`
-- `provider_timeouts`
+- `byok`: Mapping of provider names to timeout values in milliseconds.
 
-Pass `GatewayParams` through `InferenceRequestParams.provider_params`.
+### GatewayV3Protocol
 
-## ProviderTimeoutsParams
+`GatewayV3Protocol` translates SDK messages, tools, request parameters, stream
+events, and generated media to and from the AI Gateway v3 API.
 
-`ProviderTimeoutsParams` configures per-provider timeout behavior.
+`GatewayProvider` uses this protocol by default. Pass it directly only when you
+need a protocol override.
 
-Fields:
+### Module exports
 
-- `byok`: Per-provider BYOK attempt timeouts in milliseconds.
+`ai.providers.ai_gateway` exports:
 
-## Tools
-
-Provider-executed AI Gateway tools are documented on the child `tools` page.
+- `GatewayProvider`.
+- `GatewayV3Protocol`.
+- `GatewayParams`.
+- `ProviderTimeoutsParams`.
+- `errors`.
+- `tools`.

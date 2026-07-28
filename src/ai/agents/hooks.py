@@ -229,7 +229,8 @@ async def _hook_impl(call: middleware_.HookContext) -> pydantic.BaseModel:
         )
 
         await rt.put_hook(hook_part)
-        await sp.add_event(telemetry.HOOK_DEFERRED)
+        sp.add_event(telemetry.HOOK_DEFERRED)
+        await sp.push()
 
         # Await resolution — may be resolved externally or cancelled.
         try:
@@ -240,7 +241,8 @@ async def _hook_impl(call: middleware_.HookContext) -> pydantic.BaseModel:
             attrs: dict[str, Any] = {}
             if exc.args and exc.args[0] is not None:
                 attrs["reason"] = exc.args[0]
-            await sp.add_event(telemetry.HOOK_CANCELLED, **attrs)
+            sp.add_event(telemetry.HOOK_CANCELLED, attrs)
+            await sp.push()
             raise
         finally:
             # Clean up live registry.
@@ -248,7 +250,8 @@ async def _hook_impl(call: middleware_.HookContext) -> pydantic.BaseModel:
 
         sp.data.status = "resolved"
         sp.data.resolution = resolution
-        await sp.add_event(telemetry.HOOK_RESOLVED)
+        sp.add_event(telemetry.HOOK_RESOLVED)
+        await sp.push()
 
         # Emit resolved signal.
         await rt.put_hook(

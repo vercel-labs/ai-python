@@ -1,18 +1,9 @@
 @import "tailwindcss";
 @import "./styles/geistdocs.css";
 
+/* Pulsing dot used by the landing page hero badge. */
 @theme {
-  --animate-badge-glow: badge-glow 3s ease-in-out infinite;
   --animate-badge-dot: badge-dot 3s ease-in-out infinite;
-}
-
-@keyframes badge-glow {
-  0%, 100% {
-    box-shadow: 0 0 4px 0 rgb(96 165 250 / 0.2);
-  }
-  50% {
-    box-shadow: 0 0 14px 3px rgb(96 165 250 / 0.35);
-  }
 }
 
 @keyframes badge-dot {

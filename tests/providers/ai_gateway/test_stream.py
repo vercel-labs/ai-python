@@ -90,6 +90,71 @@ class TestStreaming:
         assert final.usage.input_tokens == 5
         assert final.usage.output_tokens == 2
 
+    async def test_finish_reason_normalized_on_stream_end(self) -> None:
+        body = sse(
+            {"type": "text-start", "id": "t1"},
+            {"type": "text-delta", "id": "t1", "textDelta": "x"},
+            {"type": "text-end", "id": "t1"},
+            {"type": "finish", "finishReason": "tool-calls", "usage": {}},
+        )
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, text=body)
+
+        collected = await _collect(
+            mock_client(httpx.MockTransport(handler)), [user_msg("Hi")]
+        )
+        end = collected[-1]
+        assert isinstance(end, events.StreamEnd)
+        # AI SDK values are normalized to the framework's finish-reason
+        # vocabulary (the gen_ai semconv one, see StreamEnd).
+        assert end.finish_reason == "tool_call"
+
+    async def test_unmapped_finish_reason_becomes_other(self) -> None:
+        body = sse(
+            {"type": "text-start", "id": "t1"},
+            {"type": "text-delta", "id": "t1", "textDelta": "x"},
+            {"type": "text-end", "id": "t1"},
+            {
+                "type": "finish",
+                "finishReason": "brand-new-reason",
+                "usage": {},
+            },
+        )
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, text=body)
+
+        collected = await _collect(
+            mock_client(httpx.MockTransport(handler)), [user_msg("Hi")]
+        )
+        end = collected[-1]
+        assert isinstance(end, events.StreamEnd)
+        assert end.finish_reason == "other"
+        assert end.provider_metadata == {
+            "gateway": {"finish_reason": "brand-new-reason"}
+        }
+
+    async def test_unknown_finish_reason_becomes_none(self) -> None:
+        body = sse(
+            {"type": "text-start", "id": "t1"},
+            {"type": "text-delta", "id": "t1", "textDelta": "x"},
+            {"type": "text-end", "id": "t1"},
+            {"type": "finish", "finishReason": "unknown", "usage": {}},
+        )
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, text=body)
+
+        collected = await _collect(
+            mock_client(httpx.MockTransport(handler)), [user_msg("Hi")]
+        )
+        end = collected[-1]
+        assert isinstance(end, events.StreamEnd)
+        # "unknown" means the provider didn't report a reason.
+        assert end.finish_reason is None
+        assert end.provider_metadata is None
+
     async def test_reasoning_then_text(self) -> None:
         body = sse(
             {"type": "reasoning-start", "id": "r1"},

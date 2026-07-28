@@ -6,21 +6,15 @@ Run::
 
     python -m ai.experimental_telemetry.utils.viewer [--port 4318]
 
-and point any OTLP/HTTP exporter at ``http://127.0.0.1:4318/v1/traces``::
+and point any OTLP/HTTP exporter at ``http://127.0.0.1:4318/v1/traces``
+(the OTLP/HTTP default); see
+https://opentelemetry.io/docs/languages/python/exporters/#otlp for the
+exporter setup. Then register the adapter::
 
-    from opentelemetry import trace
-    from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
-        OTLPSpanExporter,
-    )
-    from opentelemetry.sdk.trace import TracerProvider
-    from opentelemetry.sdk.trace.export import BatchSpanProcessor
+    import ai
+    from ai.experimental_telemetry import otel
 
-    provider = TracerProvider()
-    provider.add_span_processor(
-        BatchSpanProcessor(OTLPSpanExporter("http://127.0.0.1:4318/v1/traces"))
-    )
-    trace.set_tracer_provider(provider)
-    ai.experimental_telemetry.otel.install()
+    ai.experimental_telemetry.register(otel.OtelAdapter())
 
 Spans are buffered per trace, and the tree is printed when the trace's
 root span arrives (roots end — and therefore export — last).

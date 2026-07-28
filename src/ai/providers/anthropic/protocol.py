@@ -41,6 +41,19 @@ _TOOL_RESULT_BLOCK_TYPES: frozenset[str] = frozenset(
 )
 
 
+# Anthropic stop reasons → the framework's finish reasons (the gen_ai
+# semconv vocabulary, see ``types.events.StreamEnd``); values with no
+# semconv equivalent (e.g. ``pause_turn``) pass through raw.
+_FINISH_REASONS: dict[str, str] = {
+    "end_turn": "stop",
+    "stop_sequence": "stop",
+    "max_tokens": "length",
+    "model_context_window_exceeded": "length",
+    "tool_use": "tool_call",
+    "refusal": "content_filter",
+}
+
+
 def _provider_metadata(**values: Any) -> dict[str, Any]:
     """Namespace metadata as ``{"anthropic": {...}}``."""
     return {PROVIDER_NAME: {**values}}
@@ -868,6 +881,7 @@ async def stream(
                             )
 
             snapshot = sdk_stream.current_message_snapshot
+            stop_reason = snapshot.stop_reason
             sdk_usage = snapshot.usage
             cache_read = getattr(sdk_usage, "cache_read_input_tokens", None)
             usage = types.usage.Usage(
@@ -883,7 +897,22 @@ async def stream(
                 ),
                 raw=sdk_usage.model_dump(exclude_none=True) or None,
             )
-            yield events.StreamEnd(usage=usage)
+            yield events.StreamEnd(
+                usage=usage,
+                finish_reason=(
+                    _FINISH_REASONS.get(stop_reason, "other")
+                    if stop_reason is not None
+                    else None
+                ),
+                provider_metadata=(
+                    _provider_metadata(stop_reason=stop_reason)
+                    if stop_reason is not None
+                    and stop_reason not in _FINISH_REASONS
+                    else None
+                ),
+                response_id=snapshot.id,
+                response_model=snapshot.model,
+            )
     except anthropic_sdk.AnthropicError as exc:
         raise errors.map_error(
             exc,

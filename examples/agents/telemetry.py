@@ -15,9 +15,10 @@ from ai.experimental_telemetry.utils import console
 @ai.tool
 async def get_weather(city: str) -> str:
     """Get current weather for a city."""
-    async with ai.experimental_telemetry.span("lookup", city=city) as span:
+    async with ai.experimental_telemetry.span("lookup") as span:
+        span.set_attrs(city=city)
         await asyncio.sleep(0.1)
-        span.set(source="cache")
+        span.set_attrs(source="cache")
     return f"Sunny, 72F in {city}"
 
 

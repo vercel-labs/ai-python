@@ -1,5 +1,5 @@
 import { createSearchRoute } from "@vercel/geistdocs/routes/search";
 import { config } from "@/lib/geistdocs/config";
-import { source } from "@/lib/geistdocs/source";
+import { geistdocsSource } from "@/lib/geistdocs/source";
 
-export const GET = createSearchRoute({ config, source });
+export const GET = createSearchRoute({ config, sources: [geistdocsSource] });

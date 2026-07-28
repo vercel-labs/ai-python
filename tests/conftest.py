@@ -306,10 +306,17 @@ class Recorder:
         self.started: list[ai.experimental_telemetry.Span] = []
         self.ended: list[ai.experimental_telemetry.Span] = []
 
-    def on_span_start(self, span: ai.experimental_telemetry.Span) -> None:
+    async def on_span_start(self, span: ai.experimental_telemetry.Span) -> None:
         self.started.append(span)
 
-    def on_span_end(self, span: ai.experimental_telemetry.Span) -> None:
+    async def on_span_event(
+        self,
+        span: ai.experimental_telemetry.Span,
+        event: ai.experimental_telemetry.SpanEvent,
+    ) -> None:
+        pass
+
+    async def on_span_end(self, span: ai.experimental_telemetry.Span) -> None:
         self.ended.append(span)
 
 

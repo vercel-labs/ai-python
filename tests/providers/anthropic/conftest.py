@@ -39,9 +39,19 @@ class FakeUsage:
 class FakeSnapshot:
     """Mimics ``MessageStream.current_message_snapshot``."""
 
-    def __init__(self, content: list[Any] | None = None) -> None:
+    def __init__(
+        self,
+        content: list[Any] | None = None,
+        *,
+        stop_reason: str | None = None,
+        id: str = "msg_test",
+        model: str = "claude-test",
+    ) -> None:
         self.usage = FakeUsage()
         self.content = content or []
+        self.stop_reason = stop_reason
+        self.id = id
+        self.model = model
 
 
 class FakeStream:
@@ -55,9 +65,13 @@ class FakeStream:
         self,
         events: Iterable[Any] = (),
         snapshot_content: list[Any] | None = None,
+        *,
+        stop_reason: str | None = None,
     ) -> None:
         self._events = list(events)
-        self.current_message_snapshot = FakeSnapshot(snapshot_content)
+        self.current_message_snapshot = FakeSnapshot(
+            snapshot_content, stop_reason=stop_reason
+        )
 
     async def __aenter__(self) -> FakeStream:
         return self
