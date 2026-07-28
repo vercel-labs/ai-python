@@ -134,6 +134,26 @@ async def test_reasoning_disabled_maps_to_zero_budget() -> None:
     assert fake.captured["config"]["thinking_config"] == {"thinking_budget": 0}
 
 
+async def test_reasoning_disabled_maps_to_minimal_level_on_gemini_3() -> None:
+    fake = FakeGoogleClient()
+
+    await _drain(
+        protocol.stream(
+            cast("Any", fake),
+            ai.Model(id="gemini-3-flash-preview", provider=_MODEL.provider),
+            [ai.user_message("Hi")],
+            params=ai.InferenceRequestParams(
+                reasoning=ai.ReasoningParams(effort=None)
+            ),
+            provider="google",
+        )
+    )
+
+    assert fake.captured["config"]["thinking_config"] == {
+        "thinking_level": "minimal"
+    }
+
+
 async def test_random_seed_omitted_by_adapter() -> None:
     fake = FakeGoogleClient()
 

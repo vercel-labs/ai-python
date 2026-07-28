@@ -40,6 +40,26 @@ _THINKING_BUDGETS = {
     "high": 24576,
 }
 
+# Keyed by raw enum value: the SDK's ``FinishReason`` grows members
+# dynamically at parse time for values its installed version doesn't
+# know statically, so member-keyed lookups would silently miss them.
+_FINISH_REASONS: dict[str, str] = {
+    "STOP": "stop",
+    "MAX_TOKENS": "length",
+    "SAFETY": "content_filter",
+    "RECITATION": "content_filter",
+    "BLOCKLIST": "content_filter",
+    "PROHIBITED_CONTENT": "content_filter",
+    "SPII": "content_filter",
+    "IMAGE_SAFETY": "content_filter",
+    "IMAGE_PROHIBITED_CONTENT": "content_filter",
+    "MODEL_ARMOR": "content_filter",
+    "LANGUAGE": "error",
+    "MALFORMED_FUNCTION_CALL": "error",
+    "UNEXPECTED_TOOL_CALL": "error",
+    "NO_IMAGE": "error",
+}
+
 
 def _provider_metadata(**values: Any) -> dict[str, Any]:
     """Namespace metadata as ``{"google": {...}}``."""
@@ -423,10 +443,14 @@ def _apply_google_params(
     if not isinstance(reasoning, params_.ModelProviderDefault) and _not_default(
         reasoning.effort
     ):
-        if reasoning.effort is None:
+        if model_id.startswith("gemini-3"):
+            # Gemini 3 configures thinking via `thinking_level` and
+            # rejects a zero budget; "off" maps to the lowest level.
+            thinking["thinking_level"] = (
+                "minimal" if reasoning.effort is None else reasoning.effort
+            )
+        elif reasoning.effort is None:
             thinking["thinking_budget"] = 0
-        elif model_id.startswith("gemini-3"):
-            thinking["thinking_level"] = reasoning.effort
         else:
             thinking["thinking_budget"] = _THINKING_BUDGETS.get(
                 cast("str", reasoning.effort), -1
@@ -565,8 +589,14 @@ async def stream(
         yield events.StreamStart()
 
         usage_metadata: Any = None
-        finish_reason: str | None = None
+        raw_finish_reason: str | None = None
+        response_id: str | None = None
+        response_model: str | None = None
         async for chunk in sdk_stream:
+            if chunk.response_id:
+                response_id = chunk.response_id
+            if chunk.model_version:
+                response_model = chunk.model_version
             feedback = chunk.prompt_feedback
             if feedback is not None and feedback.block_reason:
                 raise ai_errors.ProviderResponseError(
@@ -578,7 +608,7 @@ async def stream(
                 usage_metadata = chunk.usage_metadata
             candidate = chunk.candidates[0] if chunk.candidates else None
             if candidate is not None and candidate.finish_reason is not None:
-                finish_reason = str(candidate.finish_reason.value)
+                raw_finish_reason = str(candidate.finish_reason.value)
             content = candidate.content if candidate is not None else None
             for part in (content.parts if content is not None else None) or []:
                 signature = (
@@ -587,6 +617,10 @@ async def stream(
                     else None
                 )
                 if part.text is not None:
+                    # Google sometimes streams empty text parts; skip
+                    # them unless they carry a signature.
+                    if not part.text and signature is None:
+                        continue
                     if part.thought:
                         if not reasoning_started:
                             reasoning_started = True
@@ -731,11 +765,19 @@ async def stream(
             usage = types.usage.Usage()
         yield events.StreamEnd(
             usage=usage,
-            provider_metadata=(
-                _provider_metadata(finishReason=finish_reason)
-                if finish_reason is not None
+            finish_reason=(
+                _FINISH_REASONS.get(raw_finish_reason, "other")
+                if raw_finish_reason is not None
                 else None
             ),
+            provider_metadata=(
+                _provider_metadata(finishReason=raw_finish_reason)
+                if raw_finish_reason is not None
+                and raw_finish_reason not in _FINISH_REASONS
+                else None
+            ),
+            response_id=response_id,
+            response_model=response_model,
         )
     except genai_errors.APIError as exc:
         raise errors.map_error(

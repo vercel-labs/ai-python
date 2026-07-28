@@ -20,6 +20,8 @@ def chunk(
     usage: dict[str, Any] | None = None,
     finish_reason: genai_types.FinishReason | None = None,
     block_reason: genai_types.BlockedReason | None = None,
+    response_id: str | None = None,
+    model_version: str | None = None,
 ) -> genai_types.GenerateContentResponse:
     """Build an SDK-typed streaming response chunk."""
     candidates = None
@@ -36,6 +38,8 @@ def chunk(
         ]
     return genai_types.GenerateContentResponse(
         candidates=candidates,
+        response_id=response_id,
+        model_version=model_version,
         prompt_feedback=(
             genai_types.GenerateContentResponsePromptFeedback(
                 block_reason=block_reason

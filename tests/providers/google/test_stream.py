@@ -257,8 +257,24 @@ async def test_blocked_prompt_raises_response_error() -> None:
         await _drain([chunk(block_reason=genai_types.BlockedReason.SAFETY)])
 
 
-async def test_finish_reason_lands_in_provider_metadata() -> None:
-    s = await _drain(
+async def _stream_end(chunks: list[Any]) -> events.StreamEnd:
+    fake = FakeGoogleClient(chunks=chunks)
+    collected = [
+        event
+        async for event in protocol.stream(
+            cast("Any", fake),
+            _MODEL,
+            [ai.user_message("Hi")],
+            provider="google",
+        )
+    ]
+    end = collected[-1]
+    assert isinstance(end, events.StreamEnd)
+    return end
+
+
+async def test_finish_reason_normalizes_to_otel_vocabulary() -> None:
+    end = await _stream_end(
         [
             chunk(
                 [genai_types.Part(text="partial")],
@@ -267,7 +283,58 @@ async def test_finish_reason_lands_in_provider_metadata() -> None:
         ]
     )
 
-    assert s.message.provider_metadata == {"google": {"finishReason": "SAFETY"}}
+    assert end.finish_reason == "content_filter"
+    assert end.provider_metadata is None
+
+
+async def test_unknown_finish_reason_keeps_raw_value_in_metadata() -> None:
+    end = await _stream_end(
+        [
+            chunk(
+                [genai_types.Part(text="Hi")],
+                finish_reason=genai_types.FinishReason.OTHER,
+            ),
+        ]
+    )
+
+    assert end.finish_reason == "other"
+    assert end.provider_metadata == {"google": {"finishReason": "OTHER"}}
+
+
+async def test_response_identity_lands_on_stream_end() -> None:
+    end = await _stream_end(
+        [
+            chunk(
+                [genai_types.Part(text="Hi")],
+                finish_reason=genai_types.FinishReason.STOP,
+                response_id="resp_1",
+                model_version="gemini-2.5-flash-002",
+            ),
+        ]
+    )
+
+    assert end.finish_reason == "stop"
+    assert end.response_id == "resp_1"
+    assert end.response_model == "gemini-2.5-flash-002"
+
+
+async def test_empty_text_parts_are_skipped() -> None:
+    s = await _drain(
+        [
+            chunk([genai_types.Part(text="")]),
+            chunk(
+                [
+                    genai_types.Part(
+                        function_call=genai_types.FunctionCall(
+                            name="get_weather", args={}, id="fc_1"
+                        )
+                    )
+                ]
+            ),
+        ]
+    )
+
+    assert not [p for p in s.message.parts if isinstance(p, messages.TextPart)]
 
 
 async def test_usage_metadata_maps_to_usage() -> None:
