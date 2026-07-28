@@ -12,12 +12,14 @@ uv add ai
 ```
 
 AI Gateway API-key usage works with the base package. Direct providers that
-use an OpenAI-compatible or Anthropic-compatible adapter load the corresponding
-official SDK lazily. Vercel OIDC for AI Gateway also uses an optional extra:
+use an OpenAI-compatible, Anthropic-compatible, or Google adapter load the
+corresponding official SDK lazily. Vercel OIDC for AI Gateway also uses an
+optional extra:
 
 ```bash
 uv add "ai[openai]"      # OpenAI-compatible providers
 uv add "ai[anthropic]"   # Anthropic-compatible providers
+uv add "ai[google]"      # Google Gemini
 uv add "ai[vercel]"      # Vercel OIDC for AI Gateway
 ```
 
@@ -72,12 +74,14 @@ model = ai.get_model("openai/gpt-5.4")  # provider omitted: defaults to gateway
 model = ai.get_model("gateway:openai/gpt-5.4")
 model = ai.get_model("openai:gpt-5.4")
 model = ai.get_model("anthropic:claude-sonnet-4-6")
+model = ai.get_model("google:gemini-2.5-flash")
 ```
 
 Provider IDs without a `provider:` prefix route through AI Gateway by default.
 Direct OpenAI-compatible providers, including `openai:` and compatible
 models.dev provider IDs, require `ai[openai]`. Direct Anthropic-compatible
-providers require `ai[anthropic]`.
+providers require `ai[anthropic]`. The direct Google provider requires
+`ai[google]`.
 
 Structured output:
 

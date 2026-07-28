@@ -1,0 +1,53 @@
+---
+title: "ai.providers.google"
+description: Reference for Google provider APIs.
+type: reference
+summary: Reference for ai.providers.google.
+---
+
+`ai.providers.google` contains the Google Gemini provider, protocol, and
+provider-executed tools.
+
+```python
+provider = ai.get_provider("google")
+model = ai.Model(id="gemini-2.5-flash", provider=provider)
+```
+
+The optional upstream `google-genai` SDK loads lazily when the provider
+creates or uses an SDK client.
+
+## GoogleProvider
+
+`GoogleProvider` implements `Provider` for the Google Gemini API.
+
+Default configuration for the `google` provider uses:
+
+- `GOOGLE_GENERATIVE_AI_API_KEY`, falling back to `GEMINI_API_KEY` and
+  `GOOGLE_API_KEY`
+- `GOOGLE_GEMINI_BASE_URL`
+
+Pass `base_url`, `api_key`, or a custom client through `get_provider` when you
+need explicit configuration.
+
+```python
+provider = ai.get_provider(
+    "google",
+    base_url="https://gemini.example.com",
+)
+model = ai.Model(id="gemini-2.5-flash", provider=provider)
+```
+
+The provider supports model listing, probing, streaming, provider-executed
+tools, and custom `google.genai.Client` instances.
+
+## GoogleGenerateContentProtocol
+
+`GoogleGenerateContentProtocol` translates SDK messages and params to the
+Google generateContent API wire format.
+
+The provider uses this protocol by default. Use it directly only when you need
+a protocol override.
+
+## Tools
+
+Provider-executed Google tools are documented on the child `tools` page.

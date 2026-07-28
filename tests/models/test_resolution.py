@@ -7,6 +7,7 @@ import ai
 from ai import ConfigurationError, models
 from ai.providers.ai_gateway import GatewayV3Protocol
 from ai.providers.anthropic import AnthropicMessagesProtocol
+from ai.providers.google import GoogleGenerateContentProtocol
 from ai.providers.openai import (
     OpenAIChatCompletionsProtocol,
     OpenAIResponsesProtocol,
@@ -211,14 +212,22 @@ def test_provider_from_id_rejects_unknown_provider() -> None:
 
 def test_provider_from_id_rejects_unsupported_provider_package() -> None:
     with pytest.raises(ai.UnsupportedProviderError) as exc_info:
-        ai.get_provider("google")
+        ai.get_provider("google-vertex")
 
-    assert exc_info.value.provider_id == "google"
+    assert exc_info.value.provider_id == "google-vertex"
 
 
 def test_get_rejects_unsupported_provider_package() -> None:
     with pytest.raises(ai.errors.UnsupportedProviderError):
-        models.get_model("google:gemini-2.5-pro")
+        models.get_model("google-vertex:gemini-2.5-pro")
+
+
+def test_get_resolves_provider_qualified_google_model_id() -> None:
+    model = models.get_model("google:gemini-2.5-pro")
+
+    assert model.id == "gemini-2.5-pro"
+    assert model.provider.name == "google"
+    assert isinstance(model.provider.protocol, GoogleGenerateContentProtocol)
 
 
 def test_get_rejects_empty_model_id() -> None:

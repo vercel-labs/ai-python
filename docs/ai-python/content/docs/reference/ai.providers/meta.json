@@ -4,6 +4,7 @@
   "pages": [
     "ai-gateway",
     "openai",
-    "anthropic"
+    "anthropic",
+    "google"
   ]
 }
