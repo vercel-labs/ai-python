@@ -95,7 +95,6 @@ import pydantic
 # Use the typing_extensions backport so this works on 3.12 too.
 from typing_extensions import TypeVar
 
-from .. import util
 from ..types import messages as messages_
 from ..types import usage as usage_
 
@@ -106,7 +105,6 @@ if TYPE_CHECKING:
         Awaitable,
         Callable,
         Iterable,
-        Iterator,
         Mapping,
     )
 
@@ -148,19 +146,18 @@ def now_ns() -> int:
     return clock() if clock is not None else time.time_ns()
 
 
-@util.contextmanager_any_sync
-def use_time(now_ns: Callable[[], int]) -> Iterator[None]:
+@contextlib.asynccontextmanager
+async def use_time(now_ns: Callable[[], int]) -> AsyncIterator[None]:
     """Read span timestamps from ``now_ns`` within this context.
 
     Framework's observability creates timestamps. This API can be
     used to plug an approved clock function in durable execution
     settings::
 
-        with ai.experimental_telemetry.use_time(workflow.time_ns):
+        async with ai.experimental_telemetry.use_time(workflow.time_ns):
             ...  # spans opened here read time from workflow.time_ns
 
-    This can also be used as a decorator on both sync and async
-    functions::
+    This can also be used as a decorator on async functions::
 
         @ai.experimental_telemetry.use_time(clock.time_ns)
         async def run(...):
@@ -534,24 +531,24 @@ def current_span() -> Span | None:
     return _current.get()
 
 
-@util.contextmanager_any_sync
-def use_span(span: Span | None) -> Iterator[None]:
-    """Make ``span`` the current span within this context.
+@contextlib.asynccontextmanager
+async def use_span(span_: Span | None) -> AsyncIterator[None]:
+    """Make ``span_`` the current span within this context.
 
     Unlike :func:`span` this is pure context plumbing with no timestamps
     and no pushes.  Use it to continue a trace around existing work, e.g.
     parenting under a span restored from another process::
 
         turn_span = Span.model_validate(payload["turn_span"])
-        with ai.experimental_telemetry.use_span(turn_span):
+        async with ai.experimental_telemetry.use_span(turn_span):
             ...  # spans opened here parent under turn_span
 
     ``None`` is a no-op.
     """
-    if span is None:
+    if span_ is None:
         yield
         return
-    token = _current.set(span)
+    token = _current.set(span_)
     try:
         yield
     finally:
@@ -575,8 +572,8 @@ _current_sink: contextvars.ContextVar[Sink | None] = contextvars.ContextVar(
 )
 
 
-@util.contextmanager_any_sync
-def use_sink(sink: Sink | None) -> Iterator[None]:
+@contextlib.asynccontextmanager
+async def use_sink(sink: Sink | None) -> AsyncIterator[None]:
     """Route span pushes to ``sink`` within this context.
 
     The default (outside any ``use_sink``) is the adapter registry.
@@ -604,7 +601,7 @@ class DictSink:
     re-push them where the real sink is available::
 
         sink = DictSink()
-        with use_sink(sink):
+        async with use_sink(sink):
             ...  # replayed / suspendable code
         payload = [s.model_dump(mode="json") for s in sink.finished_spans]
 

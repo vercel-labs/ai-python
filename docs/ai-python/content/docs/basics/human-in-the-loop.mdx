@@ -79,14 +79,17 @@ async with agent.run(model, messages) as stream:
 
 To make a registry current for a block of code outside a run — so plain
 `resolve_hook(...)` calls inside it need no `registry=` argument — use
-`ai.agents.hooks.use_hook_registry`. It also works as a decorator on sync
-and async functions:
+`ai.agents.hooks.use_hook_registry`. It is an async context manager and
+also works as a decorator on async functions:
 
 ```python
 from ai.agents import hooks
 
+async with hooks.use_hook_registry(registry):
+    ai.resolve_hook(hook_id, approval)
+
 @hooks.use_hook_registry(registry)
-def on_decision(hook_id: str, approval: ai.tools.ToolApproval) -> None:
+async def on_decision(hook_id: str, approval: ai.tools.ToolApproval) -> None:
     ai.resolve_hook(hook_id, approval)
 ```
 

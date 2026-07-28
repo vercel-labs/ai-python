@@ -21,19 +21,20 @@ Cancellation::
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import contextvars
 from typing import TYPE_CHECKING, Any, cast
 
 import pydantic
 
 from .. import experimental_telemetry as telemetry
-from .. import types, util
+from .. import types
 from ..types import messages as messages_
 from . import _middleware as middleware_
 from . import runtime as runtime_
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import AsyncIterator
 
 
 class HookRegistry:
@@ -114,8 +115,8 @@ def get_hook_registry() -> HookRegistry:
     return _registry(None)
 
 
-@util.contextmanager_any_sync
-def use_hook_registry(registry: HookRegistry) -> Iterator[None]:
+@contextlib.asynccontextmanager
+async def use_hook_registry(registry: HookRegistry) -> AsyncIterator[None]:
     """Make *registry* the current HookRegistry within this context.
 
     Scoped to the calling task and tasks spawned from it, and restored
