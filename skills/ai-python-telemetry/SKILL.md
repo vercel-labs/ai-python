@@ -61,14 +61,17 @@ metadata:
   agent runs and the `span()` context manager work in the body. Use the
   low-level API for spans that cross process boundaries.
 - Collect in the body: `sink = DictSink()`, run under
-  `with use_sink(sink):`, then serialize `sink.finished_spans` with
+  `async with use_sink(sink):`, then serialize `sink.finished_spans` with
   `model_dump(mode="json")`.
 - Deliver from a step: `await push_all(payload)`.
 - Manual lifecycle: `create_span()` then `stamp_start()` / `stamp_end()` /
   `push()`; nothing is reported except by pushing.
 - Continue a trace across processes: restore with `Span.model_validate(...)`,
-  parent under it with `use_span(restored)` or `span(..., parent=restored)`.
+  parent under it with `async with use_span(restored):` or
+  `span(..., parent=restored)`.
 - Deterministic timestamps: `use_time(workflow.time_ns)`; read the ambient
   clock with `now_ns()`.
+- `use_sink`, `use_span`, and `use_time` are async context managers; they also
+  work as decorators on async functions, but never with a plain `with`.
 - Errors serialize as `SpanError` (`SpanError.from_exception(exc)`), so spans
   that failed in another process still report.

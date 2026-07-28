@@ -221,8 +221,6 @@ You can push a span more than once; each push snapshots the whole span, and
 the last push with `ended_at` set is the complete record.
 
 `use_span(None)` is a no-op, which keeps call sites free of conditionals.
-Like the other context utilities in this module, it works with `with` and
-`async with`, and as a decorator on sync and async functions.
 
 ## Sinks
 
@@ -249,7 +247,7 @@ class Sink(Protocol):
 ```python
 sink = ai.experimental_telemetry.DictSink()
 
-with ai.experimental_telemetry.use_sink(sink):
+async with ai.experimental_telemetry.use_sink(sink):
     ...  # spans go to the sink
 
 payload = [s.model_dump(mode="json") for s in sink.finished_spans]
@@ -550,7 +548,7 @@ and the `use_sink` context manager.
 @workflow.workflow
 async def my_workflow(payload):
     sink = ai.experimental_telemetry.DictSink()
-    with ai.experimental_telemetry.use_sink(sink):
+    async with ai.experimental_telemetry.use_sink(sink):
         ...  # any instrumented work: agent runs, custom spans
 
     await report_spans(
@@ -578,7 +576,7 @@ if ai.experimental_telemetry.is_enabled():
 
 # in any step or process that continues the work:
 run_span = ai.experimental_telemetry.Span.model_validate(payload["run_span"])
-with ai.experimental_telemetry.use_span(run_span):
+async with ai.experimental_telemetry.use_span(run_span):
     ...  # spans opened here parent under run_span
 
 # where the run ends: complete the span and report it
