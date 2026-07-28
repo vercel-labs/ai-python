@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Sequence
 from typing import Any
 
 import pydantic
@@ -74,6 +74,67 @@ async def test_generator_tool_streams_and_returns_result() -> None:
     assert len(tool_results) >= 1
     tr = tool_results[0].results[0].result
     assert tr == "Answer for test"
+
+
+# ---------------------------------------------------------------------------
+# Streaming is keyed on being async-iterable, not on being a generator
+# ---------------------------------------------------------------------------
+
+
+class _Chunks:
+    """Async-iterable but not an async generator -- ``__aiter__`` hands
+    back the generator, the shape ``ToolRunner.events()`` has."""
+
+    def __init__(self, *items: str) -> None:
+        self._items = items
+
+    async def _gen(self) -> AsyncIterator[str]:
+        for item in self._items:
+            yield item
+
+    def __aiter__(self) -> AsyncIterator[str]:
+        return self._gen()
+
+
+@ai.tool(aggregator=ai.agents.ConcatAggregator)
+def spell_tool(word: str) -> _Chunks:
+    """Spell a word out, one letter at a time."""
+    return _Chunks(*word)
+
+
+async def test_async_iterable_tool_streams_like_a_generator() -> None:
+    my_agent = ai.Agent(tools=[spell_tool])
+    llm = mock_llm(
+        [
+            [
+                tool_call_msg(
+                    tc_id="tc-1", name="spell_tool", args='{"word": "abc"}'
+                )
+            ],
+            [text_msg("Done!", id="msg-2")],
+        ]
+    )
+
+    all_events: list[agent_events_.AgentEvent] = []
+    async with my_agent.run(MOCK_MODEL, [ai.user_message("Go")]) as stream:
+        async for event in stream:
+            all_events.append(event)
+
+    assert llm.call_count == 2
+
+    # Each letter reached the consumer as it was produced...
+    partials = [
+        e.value
+        for e in all_events
+        if isinstance(e, agent_events_.PartialToolCallResult)
+    ]
+    assert partials == ["a", "b", "c"]
+
+    # ...and the aggregated value is what the LLM sees.
+    tool_results = [
+        e for e in all_events if isinstance(e, agent_events_.ToolCallResult)
+    ]
+    assert tool_results[0].results[0].result == "abc"
 
 
 # ---------------------------------------------------------------------------
