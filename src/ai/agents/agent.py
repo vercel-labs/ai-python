@@ -10,6 +10,7 @@ import json
 import typing
 from collections.abc import (
     AsyncGenerator,
+    AsyncIterable,
     AsyncIterator,
     Awaitable,
     Callable,
@@ -364,7 +365,11 @@ def _stream_item_type(return_type: Any) -> Any:
     if typing.get_origin(resolved) is typing.Annotated:
         resolved = typing.get_args(resolved)[0]
 
-    if typing.get_origin(resolved) is not AsyncGenerator:
+    if typing.get_origin(resolved) not in (
+        AsyncGenerator,
+        AsyncIterator,
+        AsyncIterable,
+    ):
         return None
 
     args = typing.get_args(resolved)
@@ -454,7 +459,6 @@ class AgentTool:
     tool: Tool
     fn: Callable[..., Any]
     validator: type[pydantic.BaseModel] | None = None
-    is_gen: bool = False
     aggregator: Callable[[], events_.Aggregator[Any, Any, Any]] | None = None
     return_type: Any = None
 
@@ -489,7 +493,7 @@ def tool[**P, R](fn: Callable[P, Awaitable[R]], /) -> AgentTool: ...
 
 
 @overload
-def tool[**P, T](fn: Callable[P, AsyncGenerator[T]], /) -> AgentTool: ...
+def tool[**P, T](fn: Callable[P, AsyncIterable[T]], /) -> AgentTool: ...
 
 
 @overload
@@ -497,7 +501,9 @@ def tool[**P](
     *,
     require_approval: bool,
     return_type: Any = None,
-) -> Callable[[Callable[P, Any]], AgentTool]: ...
+) -> Callable[
+    [Callable[P, Awaitable[Any] | AsyncIterable[Any]]], AgentTool
+]: ...
 
 
 @overload
@@ -505,7 +511,9 @@ def tool[**P](
     *,
     return_type: Any,
     require_approval: bool = False,
-) -> Callable[[Callable[P, Any]], AgentTool]: ...
+) -> Callable[
+    [Callable[P, Awaitable[Any] | AsyncIterable[Any]]], AgentTool
+]: ...
 
 
 @overload
@@ -514,20 +522,18 @@ def tool[**P](
     aggregator: Callable[[], events_.Aggregator[Any, Any, Any]],
     require_approval: bool = False,
     return_type: Any = None,
-) -> Callable[[Callable[P, AsyncGenerator[Any]]], AgentTool]: ...
+) -> Callable[[Callable[P, AsyncIterable[Any]]], AgentTool]: ...
 
 
 def tool[**P, T, R](
-    fn: Callable[P, Awaitable[R]]
-    | Callable[P, AsyncGenerator[T]]
-    | None = None,
+    fn: Callable[P, Awaitable[R]] | Callable[P, AsyncIterable[T]] | None = None,
     /,
     *,
     aggregator: Callable[[], events_.Aggregator[Any, Any, Any]] | None = None,
     require_approval: bool = False,
     return_type: Any = None,
 ) -> (
-    Callable[[Callable[P, AsyncGenerator[Any]]], AgentTool]
+    Callable[[Callable[P, AsyncIterable[Any]]], AgentTool]
     | Callable[[Callable[P, Awaitable[R]]], AgentTool]
     | AgentTool
 ):
@@ -579,7 +585,6 @@ def tool[**P, T, R](
             tool=tool_decl,
             fn=fn,
             validator=validator,
-            is_gen=inspect.isasyncgenfunction(fn),
             aggregator=effective_aggregator,
             return_type=return_type
             or _tool_result_type_from_return_annotation(
@@ -682,24 +687,38 @@ class BoundToolCall:
             model_input: Any
             try:
                 kwargs = _validate_kwargs(tool, call.kwargs)
-                if tool.is_gen:
-                    # Generator tool (e.g. agent-as-a-tool): drain the async
-                    # generator, forward each yielded value to the runtime for
+                # The returned value decides how the tool runs, so a
+                # plain `def` returning a coroutine works too.
+                returned = tool.fn(**kwargs)
+                if isinstance(returned, AsyncIterable):
+                    # Streaming tool (e.g. agent-as-a-tool): drain the async
+                    # iterable, forward each yielded value to the runtime for
                     # real-time streaming, then capture both the aggregator
                     # snapshot (the rich shape that flows to the UI) and the
                     # model-facing value (what the LLM sees on its next turn).
-                    assert tool.aggregator
+                    if tool.aggregator is None:
+                        raise TypeError(
+                            f"tool {tool.name!r} streams but declares no "
+                            f"aggregator; pass `aggregator=` or annotate its "
+                            f"return type with an Aggregate marker"
+                        )
                     agg = await _aggregate_from(
-                        tool.fn(**kwargs),
+                        returned,
                         tool_call_id=call.tool_call_id,
                         tool_name=call.tool_name,
                         aggregator=tool.aggregator,
                     )
                     result = agg.snapshot()
                     model_input = agg.get_model_input()
-                else:
-                    result = await tool.fn(**kwargs)
+                elif inspect.isawaitable(returned):
+                    result = await returned
                     model_input = result
+                else:
+                    raise TypeError(
+                        f"tool {tool.name!r} must return an awaitable or an "
+                        f"async iterable, not {type(returned).__name__}; "
+                        f"declare it with `async def`"
+                    )
             except Exception as exc:
                 return _error_tool_result(
                     exc,
@@ -1181,7 +1200,7 @@ def deferred_tool_result(
 
 
 async def yield_from[T, S, R](
-    source: AsyncGenerator[T],
+    source: AsyncIterable[T],
     *,
     aggregator: Callable[[], events_.Aggregator[T, S, R]],
     # TODO: is this what we really want for labelling?
@@ -1222,7 +1241,7 @@ async def yield_from[T, S, R](
 
 
 async def _aggregate_from[T, S, R](
-    source: AsyncGenerator[T],
+    source: AsyncIterable[T],
     *,
     aggregator: Callable[[], events_.Aggregator[T, S, R]],
     tool_name: str | None = None,
@@ -1239,8 +1258,8 @@ async def _aggregate_from[T, S, R](
     agg = aggregator()
 
     rt = runtime.get_runtime()
-    async with contextlib.aclosing(source) as src:
-        async for item in src:
+    async with util.maybe_aclosing(source):
+        async for item in source:
             agg.feed(item)
             await rt.put_event(
                 events_.PartialToolCallResult(

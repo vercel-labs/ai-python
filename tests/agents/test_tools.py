@@ -3,12 +3,20 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from typing import Any, cast
 
 import pydantic
 import pytest
 
 import ai
+
+# Declaring a tool with a plain `def` is a type error by design; go
+# through an untyped view of the decorator to reach the runtime check.
+_untyped_tool = cast(
+    "Callable[[Callable[..., Any]], ai.AgentTool]",
+    ai.tool,
+)
 
 # -- Schema extraction from type hints ------------------------------------
 
@@ -160,6 +168,67 @@ async def test_tool_call_unwraps_singleton_exceptiongroup() -> None:
     assert "BoomError" in str(result.results[0].result)
     assert "kaboom" in str(result.results[0].result)
     assert isinstance(result.exception, BoomError)
+
+
+async def test_sync_tool_says_what_is_wrong() -> None:
+    # Typing rejects a plain `def` tool; if one gets through anyway, the
+    # failure names the tool instead of "object int can't be used in
+    # 'await' expression".
+    @_untyped_tool
+    def add(a: int, b: int) -> int:
+        """Add two numbers."""
+        return a + b
+
+    part = ai.messages.ToolCallPart(
+        tool_call_id="tc-sync",
+        tool_name="add",
+        tool_args='{"a": 1, "b": 2}',
+    )
+    result = await ai.agents.BoundToolCall(part=part, tool=add)()
+
+    assert result.results[0].is_error
+    assert "must return an awaitable" in str(result.results[0].result)
+    assert "'add'" in str(result.results[0].result)
+    assert isinstance(result.exception, TypeError)
+
+
+async def test_plain_def_returning_a_coroutine_runs() -> None:
+    # The check is on the returned value, not on how the tool is
+    # declared, so a `def` that hands back a coroutine is fine.
+    async def _add(a: int, b: int) -> int:
+        return a + b
+
+    @_untyped_tool
+    def add(a: int, b: int) -> Any:
+        """Add two numbers."""
+        return _add(a, b)
+
+    part = ai.messages.ToolCallPart(
+        tool_call_id="tc-coro",
+        tool_name="add",
+        tool_args='{"a": 1, "b": 2}',
+    )
+    result = await ai.agents.BoundToolCall(part=part, tool=add)()
+
+    assert not result.results[0].is_error
+    assert result.results[0].result == 3
+
+
+async def test_generator_tool_without_aggregator_says_so() -> None:
+    @_untyped_tool
+    async def stream(x: int) -> Any:
+        """Streams without declaring an aggregator."""
+        yield x
+
+    part = ai.messages.ToolCallPart(
+        tool_call_id="tc-gen",
+        tool_name="stream",
+        tool_args='{"x": 1}',
+    )
+    result = await ai.agents.BoundToolCall(part=part, tool=stream)()
+
+    assert result.results[0].is_error
+    assert "declares no aggregator" in str(result.results[0].result)
 
 
 async def test_tool_call_allows_kwarg_overrides() -> None:
