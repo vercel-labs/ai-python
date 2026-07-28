@@ -1,0 +1,603 @@
+---
+title: "ai.experimental_telemetry"
+description: Reference for spans, adapters, sinks, and the OpenTelemetry exporter.
+type: reference
+summary: Reference for ai.experimental_telemetry.
+---
+
+The module is experimental and new in 0.4.0: it is not part of the stable API
+and may change or be removed.
+
+`ai.experimental_telemetry` contains instrumentation for tracing agent runs, model calls,
+tool executions, and other work in a provider-agnostic way.
+
+The high-level API consists of the `span()` context manager for creating custom spans,
+and an `@adapter` decorator for making adapters. It can be used to augment the built-in
+instrumentation.
+
+The underlying low-level API enables manual control over spans' lifecycles, as well as
+when and how they reach observability providers. It can be used in environments the
+context manager cannot serve; chiefly durable execution, where parts of the app must be
+free of side effects, and things are being passed around as JSON.
+
+## Spans
+
+A span is a record of one unit of work. Spans form a tree: every span carries
+a `trace_id` shared by the whole tree and a `parent_id` pointing at the span
+it ran under.
+
+It is a Pydantic model, generic in its data type: `Span[SpanData]`.
+
+| Field | Description |
+| --- | --- |
+| `name` | Span name. For typed spans, defaults to the data's `kind`. |
+| `data` | The typed payload describing the work. |
+| `id` | Span id. Can be empty on a no-op span. |
+| `trace_id` | Trace id shared by every span in one tree. |
+| `parent_id` | Id of the parent span, or `None` for a root. |
+| `started_at` | Start time in nanoseconds since the epoch, or `None` if not started. |
+| `ended_at` | End time in nanoseconds, or `None` while in flight. |
+| `error` | The `SpanError` that ended the span, or `None`. |
+| `replay` | `True` when the work is being [replayed](/docs/reference/ai/stream#replay) rather than performed live (resume, serverless re-entry). |
+| `set_as_current` | Whether the span sets itself as current. Adapters should respect it to keep nesting consistent. |
+| `events` | List of `SpanEvent` milestones. |
+
+The lifecycle is encoded in the timestamps:
+
+1. `started_at=None` means the span has not started; 
+2. `ended_at is not None` means it is complete.
+
+The adapter registry uses this convention to decide which adapter method should handle
+a span in its current state: `on_span_start`, `on_span_event`, or `on_span_end`.
+
+A span can be serialized using `model_dump` / `model_validate` like any Pydantic model.
+Plain `Span.model_validate(...)` restores the framework data types by their `kind`
+discriminator; custom data types need `Span[MyData].model_validate(...)`.
+
+### Span data
+
+Every span carries a `data` field that describes the work. The type of
+`data` tells you what kind of span it is.
+
+`SpanData` is the protocol for span data: anything with a string `kind` property.
+Implement it with a Pydantic model to define your own typed spans:
+
+```python
+import pydantic
+from typing import Literal
+
+class RetrievalSpanData(pydantic.BaseModel):
+    kind: Literal["retrieval"] = "retrieval"
+    query: str
+    count: int | None = None
+
+async with ai.experimental_telemetry.span(RetrievalSpanData(query=q)) as sp:
+    docs = await search(q)
+    sp.data.count = len(docs)  # typed
+```
+
+A typed span is `Span[RetrievalSpanData]`, so assignments to `sp.data` fields are type
+checked. To correctly restore a span with a custom data type, use
+`Span[RetrievalSpanData].model_validate(...)`.
+
+Built-in data types:
+
+| Type | Kind | Describes |
+| --- | --- | --- |
+| `RunSpanData` | `run` | One `Agent.run`: the whole loop. |
+| `LoopTurnSpanData` | `loop_turn` | One turn of the default agent loop. |
+| `AiStreamSpanData` | `ai_stream` | One streaming model call. |
+| `AiGenerateSpanData` | `ai_generate` | One non-streaming generation call (images, video). |
+| `ToolExecutionSpanData` | `tool_execution` | One tool execution, from dispatch to result. |
+| `HookSpanData` | `hook` | One hook suspension, from deferred until resolved or cancelled. |
+| `CustomSpanData` | `custom` | A user span made with `span("name")`; its attributes live in `attrs`. |
+
+`RunSpanData` carries the agent name, model, input messages, tool names, and
+parameters; `blocked`, `final_message`, and `usage` are set at span end.
+`blocked` is `True` when the run ended suspended on an unresolved hook.
+
+`AiStreamSpanData` carries the model, messages, parameters, and tool names of
+one call; the response `message`, `usage`, `finish_reason`, `response_id`,
+and `response_model` are set at span end.
+
+`ToolExecutionSpanData` carries `tool_name`, `tool_call_id`,
+`tool_description`, and `args`; `result`, `model_input`, and `is_error` are
+set at span end. `model_input` is set only when the value the model sees
+differs from `result`.
+
+`LoopTurnSpanData` has no fields, it exists so adapters can group a turn's
+model and tool spans. Turn order is given by `started_at` and `parent_id`.
+
+### Events and errors
+
+`SpanEvent` is a named, timestamped milestone inside a span's lifetime,
+stored in `span.events`:
+
+| Field | Description |
+| --- | --- |
+| `name` | Event name, such as `first_token`. |
+| `time_ns` | Timestamp in nanoseconds from the ambient clock. |
+| `attrs` | Event attributes. |
+
+The SDK records its own events with shared name constants: `FIRST_TOKEN`,
+`RESPONSE_COMPLETE`, `HOOK_DEFERRED`, `HOOK_RESOLVED`, and `HOOK_CANCELLED`.
+Events on one span are delivered in list order; there is no ordering
+guarantee across spans.
+
+`SpanError` is a serializable record of the failure that ended a span:
+
+| Field | Description |
+| --- | --- |
+| `type` | Exception type name, such as `TimeoutError`. |
+| `message` | The error message. |
+
+Spans cross process boundaries, so the error can't be a live exception.
+`SpanError.from_exception(exc)` builds one from an exception.
+
+### High-level span API
+
+`span(name_or_data, /, *, parent=None, replay=False, set_as_current=True)`
+opens a span as an async context manager. It stamps the start time and
+pushes on enter, and stamps the end time (and the error, if the block
+raised) and pushes on exit:
+
+```python
+import ai
+
+async with ai.experimental_telemetry.span("retrieval") as sp:
+    sp.set_attrs(query=query)
+    docs = await search(query)
+    sp.set_attrs(count=len(docs))
+```
+
+Inside the block the span is the *current span*: spans opened within it,
+including the spans the SDK opens, become its children. Nesting requires no
+explicit parent references.
+
+Parameters:
+
+| Parameter | Description |
+| --- | --- |
+| `name_or_data` | A span name for a user span, or a `SpanData` instance for a typed span. |
+| `parent` | Overrides the ambient parent: a live `Span`, or one restored from another process. The default parents under the current span. |
+| `replay` | Marks work that is being replayed (resume, serverless re-entry). Used primarily by the framework's internals. |
+| `set_as_current` | When `False`, the span does not become current; work done while it is open parents to *its* parent instead. Also meant mostly for internals. |
+
+Exceptions raised in the block are recorded on `span.error` and re-raised.
+
+Methods that are handy for custom instrumentation:
+
+- `Span.set_attrs(attrs=None, /, **kwargs)` merges attributes into a user
+  span:
+
+  ```python
+  sp.set_attrs({"output.value": title}, model="claude-haiku-4.5")
+  ```
+
+  `set_attrs()` only works on spans created with a string name (their data is
+  `CustomSpanData`). Framework spans carry typed data, assign their fields
+  directly.
+
+- `Span.add_event(name, attrs=None, /, **kwargs)` appends a named
+  milestone and returns it. The next push delivers it; the `span()` context
+  manager pushes on exit:
+
+  ```python
+  sp.add_event("cache_miss", key=key)
+  ```
+
+- `current_span()` returns the current span, or `None` when no span is open.
+
+
+### Low-level span API
+
+Using low-level API boils down to manually creating and mutating `Span` objects (that
+are Pydantic models, as you recall), and manually pushing their current state to the
+sink with `Span.push()`.
+
+The framework provides utilities to make this less verbose, as well as to make those
+manual spans play nice with the built-in instrumentation.
+
+1. `create_span()` mints identity and takes the trace id and parentage from
+   `parent` (default: the current span; a fresh trace when there is none). Nothing is reported.
+2. `stamp_start()` and `stamp_end()` write timestamps from the ambient clock. 
+   `stamp_end(error=...)` also records an error when given one, converting an
+   exception to a `SpanError`. Still nothing is reported.
+3. `use_span(span)` context manager makes the span current, so other spans can nest under
+   it automatically. Also no reporting.
+4. `push()` delivers a snapshot to the current sink. This is the only reporting step.
+
+
+```python
+sp = ai.experimental_telemetry.create_span("turn")
+sp.set_attrs(session=session_id)
+sp.stamp_start()
+await sp.push()                    # visible to adapters
+...                                # possibly elsewhere, later:
+await sp.stamp_end().push()        # complete
+```
+
+You can push a span more than once; each push snapshots the whole span, and
+the last push with `ended_at` set is the complete record.
+
+`use_span(None)` is a no-op, which keeps call sites free of conditionals.
+
+## Sinks
+
+A `Sink` is what receives pushed span snapshots.
+
+Sinks are considered a low-level API. Manually changing the current sink allows you to
+route spans *away* from adapters and into whatever container that sink is backed by.
+
+- The default sink is the adapter registry. It dispatches every span to an appropriate
+  method on every registered adapter based on span's state (see
+  [the low-level adapter API](#low-level-adapter-api)).
+- A `DictSink` sink stores spans in a dict.
+
+`Sink` is a protocol with one method:
+
+```python
+class Sink(Protocol):
+    async def on_push(self, span: Span, /) -> None: ...
+```
+
+`use_sink(sink)` context manager routes span pushes to `sink` within a context.
+`push_all(spans)` can be used to send a list of spans to the current sink.
+
+```python
+sink = ai.experimental_telemetry.DictSink()
+
+async with ai.experimental_telemetry.use_sink(sink):
+    ...  # spans go to the sink
+
+payload = [s.model_dump(mode="json") for s in sink.finished_spans]
+
+# elsewhere, with the default sink on:
+await ai.experimental_telemetry.push_all(payload)
+```
+
+- `DictSink.spans` exposes the dict of span id to span.
+- `DictSink.finished_spans` returns the collected spans that have ended.
+
+## Adapters
+
+Adapters are meant to convert framework's spans into vendor spans.
+
+- `register(adapter)` adds an adapter. Multiple adapters coexist
+  independently.
+- `unregister(adapter)` removes a previously registered adapter.
+
+Custom adapters can be built using a high-level or a low-level API.
+
+By high-level API we mean the `@adapter` decorator that converts a function or a class 
+into an adapter, using a generator trick similar to pytest fixtures or FastAPI
+lifecycles.
+
+Using the low-level API means implementing `AdapterProtocol` from scratch,
+avoiding the generator trickery completely.
+
+Adapter that raises is logged and skipped: telemetry never kills the run.
+
+### High-level adapter API
+
+`@adapter` builds an adapter from one async generator function.
+
+```python
+@ai.experimental_telemetry.adapter
+async def vendor(span):
+    with sdk.start_span(span.name) as v:          # span start
+        while (ev := (yield)) is not None:        # each event, live
+            v.log_event(ev.name, timestamp=ev.time_ns)
+        if span.error is not None:                # span end
+            v.set_error(span.error.message)
+        v.update(output=span.data.model_dump(mode="json"))
+
+ai.experimental_telemetry.register(vendor)
+```
+
+- Code before the loop runs at span start. Each span event resumes the
+  `yield` with the `SpanEvent`, live. Span end resumes it with `None`, and
+  the code after the loop runs with `span.data` fully populated and
+  `ended_at` set.
+- A failed span ends the loop normally; read `span.error` after the loop to
+  report it.
+- A span that arrives already complete is replayed to the generator as start,
+  events, end, back to back.
+- Return before the first `yield` to skip a span. Returning mid-span, from
+  inside the loop, opts out of the rest of that span, including its end.
+- Loop until the `yield` returns `None`.
+
+When the adapter needs configuration or state, decorate a class instead.
+`__call__` must be an async generator method with the same yield loop:
+
+```python
+@ai.experimental_telemetry.adapter
+class Vendor:
+    def __init__(self, *, api_key):
+        self._client = sdk.Client(api_key)
+
+    async def __call__(self, span):
+        with self._client.start_span(span.name) as v:
+            while (ev := (yield)) is not None:
+                v.log_event(ev.name)
+
+ai.experimental_telemetry.register(Vendor(api_key="..."))
+```
+
+Decorating a class mixes the adapter machinery (`AdapterMixin`) into it.
+The built-in `OtelAdapter` is built this way.
+
+
+### Low-level adapter API
+
+Under the hood, an adapter is any object satisfying `AdapterProtocol`: 
+
+```python
+class AdapterProtocol(Protocol):
+    async def on_span_start(self, span: Span, /) -> None: ...
+    async def on_span_event(self, span: Span, event: SpanEvent, /) -> None: ...
+    async def on_span_end(self, span: Span, /) -> None: ...
+```
+
+The default sink calls each of these methods for every pushed span based on the following
+convention:
+
+- `on_span_start` is called when a span is pushed for the first time with `started_at` stamped
+- `on_span_event` is called when a span is pushed with new events; called once per event
+- `on_span_end` is called when a span is pushed with `ended_at` set
+- After the end, the span id is forgotten: pushing a completed span again re-delivers it in full.
+
+Implement the protocol directly when the callback shape fits your target better than a generator.
+
+
+## The OpenTelemetry adapter
+
+`ai.experimental_telemetry.otel` maps framework spans onto OpenTelemetry
+spans, following the `gen_ai` semantic conventions. It requires the `otel`
+extra:
+
+```bash title="Terminal"
+uv add "ai[otel]"
+```
+
+```python
+import ai
+from ai.experimental_telemetry import otel
+
+ai.experimental_telemetry.register(otel.OtelAdapter())
+```
+
+`OtelAdapter` uses the global tracer provider unless you pass one.
+
+By default, the adapter sends traces to
+`http://localhost:4318/v1/traces`, the OTLP/HTTP default.
+
+### Semantic conventions
+
+The adapter names spans and sets attributes per the `gen_ai` conventions:
+
+| Span data | Span name | Operation |
+| --- | --- | --- |
+| `RunSpanData` | `invoke_agent {agent}` | `invoke_agent` |
+| `AiStreamSpanData` | `chat {model}` | `chat` |
+| `AiGenerateSpanData` | `generate_content {model}` | `generate_content` |
+| `ToolExecutionSpanData` | `execute_tool {tool_name}` | `execute_tool` |
+| Other | The span's own name | — |
+
+Attributes include `gen_ai.request.*` (model, temperature, max tokens,
+reasoning level), `gen_ai.response.*` (finish reasons, response id, time to
+first chunk), `gen_ai.usage.*` (input, output, reasoning, and cache tokens),
+and `gen_ai.tool.*` (name, call id, description). Failed spans set
+`error.type` and an error status. Model call spans export with the `CLIENT`
+span kind; agent and tool spans stay `INTERNAL`.
+
+Custom span attributes export as-is; values that are not scalars are
+converted with `repr`.
+
+### Capture message content
+
+Prompts, responses, and tool arguments are not exported by default. Opt in
+with `OtelAdapter(capture_content=True)` or the standard environment variable:
+
+```bash title="Terminal"
+export OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true
+```
+
+With capture on, the adapter sets `gen_ai.input.messages`,
+`gen_ai.output.messages`, `gen_ai.system_instructions`,
+`gen_ai.tool.definitions`, and the tool call arguments and results, all in
+the semantic convention message shape.
+
+
+### OtelAdapter
+
+`OtelAdapter(*, tracer_provider=None, capture_content=None)` is the adapter
+itself; register it with `register()`. Subclass it to customize the export:
+
+- `span_name(span)`: Returns the exported span name. Override to rename.
+- `span_attrs(span)`: Returns the attributes set at span end. Override
+  to enrich:
+
+  ```python
+  class MyAdapter(otel.OtelAdapter):
+      def span_attrs(self, span):
+          return super().span_attrs(span) | {"deployment.env": "prod"}
+  ```
+
+- `flush()`: Flushes the provider's exporters.
+- `shutdown()`: Flushes and stops the provider; spans pushed after this are
+  lost.
+
+## Helpers
+
+The remaining functions support delivery and determinism. Most matter only
+for durable or short-lived processes.
+
+### use_time and now_ns
+
+Span timestamps come from the ambient clock, `now_ns()` — the wall clock by
+default. `use_time(now_ns)` overrides it within a context, so replayed code
+produces stable timestamps:
+
+```python
+@workflow.workflow
+@ai.experimental_telemetry.use_time(vercel.workflow.time_ns)
+async def run_turn(turn_input):
+    ...
+```
+
+`now_ns()` returns nanoseconds since the epoch from whichever clock is
+installed.
+
+### push_all
+
+`push_all(spans)` pushes each span in order, validating dumped spans first.
+Use it to re-deliver spans gathered by a
+[`DictSink`](#sinks) from a place where the real adapters are
+available.
+
+### is_enabled
+
+`is_enabled()` reports whether anything is listening: a sink routed with
+`use_sink`, or at least one registered adapter.
+
+The framework checks it before creating spans, so telemetry adds no overhead
+while it is off: a span created while nothing is listening is a no-op with an
+empty `id` — it reads no clock, and `push()` delivers nothing. Use the same
+check to skip your own instrumentation work, as in the
+[durable execution pattern](#durable-execution).
+
+## Patterns
+
+### Regular tracing
+
+Regular agent tracing only requires you to register an adapter: 
+
+```python
+import ai
+from ai.experimental_telemetry import otel
+
+...  # the OpenTelemetry ceremony
+
+ai.experimental_telemetry.register(OtelAdapter())
+
+
+async def handle(request):
+    async with ai.experimental_telemetry.span("handle_request") as sp:
+        sp.set_attrs(request_id=request.id)
+        async with agent.run(model, request.messages) as run:
+            async for event in run:
+                ...
+
+
+# at shutdown:
+adapter.shutdown()
+```
+
+### Typed spans with a matching adapter
+
+Typed span data and generator-based adapters compose: define a data model
+for your own work, and write an adapter that opts into exactly that type.
+
+```python
+class RetrievalSpanData(pydantic.BaseModel):
+    kind: Literal["retrieval"] = "retrieval"
+    query: str
+    count: int | None = None
+
+
+@ai.experimental_telemetry.adapter
+async def retrieval_metrics(span):
+    if not isinstance(span.data, RetrievalSpanData):
+        return  # skip everything else
+    while (yield) is not None:
+        pass
+    metrics.histogram("retrieval.count").observe(span.data.count or 0)
+```
+
+The same dispatch works for framework types: match on `AiStreamSpanData` to
+observe model calls, `ToolExecutionSpanData` for tools, and so on.
+
+### Durable execution
+
+Tracing durable execution is subject to very specific constraints.
+
+The examples below assume shape and terminology of Vercel Workflows, but the same pattern
+would apply to Temporal and other durable execution frameworks.
+
+The workflow body must be deterministic and free of side-effects. 
+
+We achieve determinism by replacing `random` and `time` with their deterministic
+counterparts via `use_random` and `use_time` context managers. This enables the
+framework to keep stamping ids and timestamps inside the workflow body.
+
+```python
+@workflow.workflow
+@ai.messages.use_random(workflow.random)                # span and message ids
+@ai.experimental_telemetry.use_time(workflow.time_ns)   # timestamps
+async def my_workflow(payload):
+    ...
+```
+
+Sending traces to a remote backend is, in fact, a side effect, and cannot be done
+inside a workflow body. Therefore, we need to gather all the spans, pass them into
+a step, and send them all at once from there. Do do this, we utilize the `DictSink`
+and the `use_sink` context manager.
+
+```python
+@workflow.workflow
+async def my_workflow(payload):
+    sink = ai.experimental_telemetry.DictSink()
+    async with ai.experimental_telemetry.use_sink(sink):
+        ...  # any instrumented work: agent runs, custom spans
+
+    await report_spans(
+        [s.model_dump(mode="json") for s in sink.finished_spans]
+    )
+
+
+@workflow.step
+async def report_spans(spans_data):
+    await ai.experimental_telemetry.push_all(spans_data)
+```
+
+Finally, we need to be able to serialize and restore spans in order to pass them into
+workflows and steps via JSON. That way, all the spans can be nested correctly when the
+framework reports them to the vendor.
+
+```python
+# where the run begins: mint the span; nothing is reported yet
+if ai.experimental_telemetry.is_enabled():
+    payload["run_span"] = (
+        ai.experimental_telemetry.create_span("run")
+        .stamp_start()
+        .model_dump(mode="json")
+    )
+
+# in any step or process that continues the work:
+run_span = ai.experimental_telemetry.Span.model_validate(payload["run_span"])
+async with ai.experimental_telemetry.use_span(run_span):
+    ...  # spans opened here parent under run_span
+
+# where the run ends: complete the span and report it
+run_span = ai.experimental_telemetry.Span.model_validate(payload["run_span"])
+await run_span.stamp_end().push()
+```
+
+## Module exports
+
+`ai.experimental_telemetry` exports:
+
+- Spans: `Span`, `SpanData`, `SpanEvent`, `SpanError`.
+- Span data types: `RunSpanData`, `LoopTurnSpanData`, `AiStreamSpanData`,
+  `AiGenerateSpanData`, `ToolExecutionSpanData`, `HookSpanData`,
+  `CustomSpanData`.
+- Event names: `FIRST_TOKEN`, `RESPONSE_COMPLETE`, `HOOK_DEFERRED`,
+  `HOOK_RESOLVED`, `HOOK_CANCELLED`.
+- Opening spans: `span`, `create_span`, `current_span`, `use_span`.
+- Adapters: `adapter`, `AdapterProtocol`, `AdapterMixin`, `AdapterCallable`,
+  `register`, `unregister`, `is_enabled`.
+- Sinks and clocks: `Sink`, `use_sink`, `DictSink`, `push_all`, `use_time`,
+  `now_ns`.
+
+`ai.experimental_telemetry.otel` exports `OtelAdapter`.

@@ -2,7 +2,7 @@
 name: ai-python-ui-adapter
 description: Use when connecting AI SDK for Python streams to AI SDK UI useChat clients.
 metadata:
-  sdk-version: "0.2.1"
+  sdk-version: "0.4.0"
 ---
 
 # ai-python-ui-adapter

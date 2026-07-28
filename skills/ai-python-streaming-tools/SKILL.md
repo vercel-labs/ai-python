@@ -2,7 +2,7 @@
 name: ai-python-streaming-tools
 description: Use for AI SDK for Python async-generator tools, streaming tool output, subagent tools, PartialToolCallResult events, and custom tool aggregation.
 metadata:
-  sdk-version: "0.2.1"
+  sdk-version: "0.4.0"
 ---
 
 # ai-python-streaming-tools
