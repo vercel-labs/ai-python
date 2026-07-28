@@ -61,7 +61,8 @@ async def use_random(source: RandomSource) -> AsyncIterator[None]:
         async with ai.messages.use_random(rng):
             ...  # ids built here are drawn from rng
 
-    This can also be used as a decorator on both sync and async functions::
+    This can also be used as a decorator on async functions::
+
         @ai.messages.use_random(workflow.random)
         async def run(...):
             ...

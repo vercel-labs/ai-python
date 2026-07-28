@@ -157,8 +157,7 @@ async def use_time(now_ns: Callable[[], int]) -> AsyncIterator[None]:
         async with ai.experimental_telemetry.use_time(workflow.time_ns):
             ...  # spans opened here read time from workflow.time_ns
 
-    This can also be used as a decorator on both sync and async
-    functions::
+    This can also be used as a decorator on async functions::
 
         @ai.experimental_telemetry.use_time(clock.time_ns)
         async def run(...):
