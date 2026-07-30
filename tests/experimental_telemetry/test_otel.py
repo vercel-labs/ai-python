@@ -53,6 +53,23 @@ async def test_nesting_names_and_attributes(
     assert outer.attributes["foo"] == "bar"
 
 
+async def test_trace_attrs_exported_on_every_span(
+    otel_env: tuple[InMemorySpanExporter, TracerProvider],
+) -> None:
+    exporter, _ = otel_env
+    async with ai.experimental_telemetry.span("outer") as sp:
+        sp.trace_attrs["session.id"] = "s-1"
+        sp.trace_attrs["obj"] = {"a": 1}  # non-scalar: exported as repr
+        async with ai.experimental_telemetry.span("inner"):
+            pass
+
+    spans = {s.name: s for s in exporter.get_finished_spans()}
+    for span in spans.values():
+        assert span.attributes is not None
+        assert span.attributes["session.id"] == "s-1"
+        assert span.attributes["obj"] == repr({"a": 1})
+
+
 async def test_model_call_attributes(
     otel_env: tuple[InMemorySpanExporter, TracerProvider],
 ) -> None:

@@ -407,6 +407,9 @@ class Span(pydantic.BaseModel, Generic[DataT_co]):
     Adapters must not make those spans "current" either to avoid
     nesting discrepancies.
 
+    ``trace_attrs`` is user data that propagates down from parent to child
+    on creation.
+
     ``schema_version`` tracks the shape of spans and their data types.
     """
 
@@ -421,8 +424,9 @@ class Span(pydantic.BaseModel, Generic[DataT_co]):
     replay: bool = False
     set_as_current: bool = True
     events: list[SpanEvent] = pydantic.Field(default_factory=list)
+    trace_attrs: dict[str, Any] = pydantic.Field(default_factory=dict)
 
-    schema_version: ClassVar[int] = 4
+    schema_version: ClassVar[int] = 5
 
     def set_attrs(
         self, attrs: Mapping[str, Any] | None = None, /, **kwargs: Any
@@ -786,9 +790,10 @@ def create_span(
 ) -> Span[Any]:
     """Create a span: identity only, nothing is reported.
 
-    Mints the span id, and takes trace id and parentage from ``parent``
-    (default: the current span; a fresh trace when there is none).
-    ``parent`` may be a span restored from JSON.
+    Mints the span id, and takes trace id, parentage, and a copy of
+    ``trace_attrs`` from ``parent`` (default: the current span; a fresh
+    trace when there is none).  ``parent`` may be a span restored from
+    JSON.
 
     The span has no timestamps yet: :meth:`Span.stamp_start` and
     :meth:`Span.push` when the work begins, or hand the whole
@@ -817,8 +822,10 @@ def create_span(
         parent = _current.get()
     if parent is None:
         trace_id, parent_id = messages_.generate_id("trace"), None
+        trace_attrs: dict[str, Any] = {}
     else:
         trace_id, parent_id = parent.trace_id, parent.id
+        trace_attrs = dict(parent.trace_attrs)
     return Span(
         name=name,
         data=data,
@@ -827,6 +834,7 @@ def create_span(
         parent_id=parent_id,
         replay=replay,
         set_as_current=set_as_current,
+        trace_attrs=trace_attrs,
     )
 
 
