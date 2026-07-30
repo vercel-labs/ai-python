@@ -574,6 +574,43 @@ async def test_resolved_approval_hook_emits_response_event() -> None:
     assert any(isinstance(p, ui_events.UIToolOutputDeniedEvent) for p in out)
 
 
+async def test_stream_end_closes_step_and_next_event_reopens_it() -> None:
+    """StreamEnd finishes the current step; the next event starts a new one."""
+    out = await _collect(
+        [
+            events_.TextStart(block_id="t1"),
+            events_.TextDelta(block_id="t1", chunk="hi"),
+            events_.TextEnd(block_id="t1"),
+            events_.StreamEnd(),
+            events_.ToolStart(tool_call_id="tc1", tool_name="search"),
+            events_.ToolDelta(tool_call_id="tc1", chunk="{}"),
+            events_.ToolEnd(
+                tool_call_id="tc1",
+                tool_call=messages_.ToolCallPart(
+                    tool_call_id="tc1",
+                    tool_name="search",
+                    tool_args="{}",
+                ),
+            ),
+        ]
+    )
+
+    types = [type(event).__name__ for event in out]
+    assert types == [
+        "UIStartEvent",
+        "UIStartStepEvent",
+        "UITextStartEvent",
+        "UITextDeltaEvent",
+        "UITextEndEvent",
+        "UIFinishStepEvent",
+        "UIStartStepEvent",
+        "UIToolInputStartEvent",
+        "UIToolInputDeltaEvent",
+        "UIFinishStepEvent",
+        "UIFinishEvent",
+    ]
+
+
 # NOTE: agent-change boundary detection used to be driven by
 # Message.source_label.  That field has been removed; agent-change
 # routing in the AI SDK adapter now needs to come from

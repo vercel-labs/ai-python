@@ -110,6 +110,16 @@ class _StreamState:
         self.open_text_ids.clear()
         return events
 
+    def _ensure_step(
+        self,
+    ) -> list[ui_events.UIMessageStreamEvent]:
+        events: list[ui_events.UIMessageStreamEvent] = []
+        if not self.in_step:
+            events.append(ui_events.UIStartStepEvent())
+            self.in_step = True
+
+        return events
+
     def _ensure_started(
         self,
         message_id: str | None = None,
@@ -120,15 +130,22 @@ class _StreamState:
         if not self.emitted_start:
             self.ui_message_id = message_id
             events.append(ui_events.UIStartEvent(message_id=self.ui_message_id))
-            events.append(ui_events.UIStartStepEvent())
             self.emitted_start = True
-            self.in_step = True
             self.started_tool_inputs.clear()
             self.tool_names.clear()
             self.input_available_emitted.clear()
             self.emitted_tool_results.clear()
             self.emitted_approval_requests.clear()
 
+        events.extend(self._ensure_step())
+
+        return events
+
+    def _end_step(self) -> list[ui_events.UIMessageStreamEvent]:
+        events: list[ui_events.UIMessageStreamEvent] = []
+        if self.emitted_start and self.in_step:
+            events.append(ui_events.UIFinishStepEvent())
+            self.in_step = False
         return events
 
     # -- phase: streaming events --------------------------------------------
@@ -149,8 +166,17 @@ class _StreamState:
                 elif message.id != "<unset>":
                     message_id = message.id
             out.extend(self._ensure_started(message_id))
+        else:
+            out.extend(self._ensure_step())
 
         match event:
+            case events_.StreamEnd():
+                # Close out steps on a StreamEnd. This gives a bit
+                # more structure to the output, and makes it easy find
+                # the splits between assistant turns and tool
+                # running.
+                out.extend(self._end_step())
+
             case events_.TextStart(block_id=pid):
                 self.open_text_ids.add(pid)
                 out.append(
