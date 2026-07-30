@@ -224,6 +224,42 @@ async def test_restored_span_parent_continues_trace(
             assert nested.parent_id == pickup.id
 
 
+async def test_trace_attrs_propagate_to_children(recorder: Recorder) -> None:
+    async with ai.experimental_telemetry.span("root") as root:
+        root.trace_attrs["session.id"] = "s-1"
+        async with ai.experimental_telemetry.span("child") as child:
+            # A copy of the parent's attrs at creation time...
+            assert child.trace_attrs == {"session.id": "s-1"}
+            async with ai.experimental_telemetry.span("grandchild") as gc:
+                assert gc.trace_attrs == {"session.id": "s-1"}
+            # ...independent of the parent's dict.
+            child.trace_attrs["extra"] = True
+        assert root.trace_attrs == {"session.id": "s-1"}
+        # Later mutations reach spans created afterwards, not before.
+        root.trace_attrs["user.id"] = "u-1"
+        async with ai.experimental_telemetry.span("sibling") as sibling:
+            assert sibling.trace_attrs == {
+                "session.id": "s-1",
+                "user.id": "u-1",
+            }
+        assert child.trace_attrs == {"session.id": "s-1", "extra": True}
+
+
+async def test_trace_attrs_survive_restore(recorder: Recorder) -> None:
+    # "Process one": trace_attrs travel inside the serialized span.
+    async with ai.experimental_telemetry.span("origin") as origin:
+        origin.trace_attrs["session.id"] = "s-1"
+        payload = origin.model_dump(mode="json")
+
+    # "Process two": children of the restored span inherit them.
+    restored = ai.experimental_telemetry.Span.model_validate(payload)
+    assert restored.trace_attrs == {"session.id": "s-1"}
+    async with ai.experimental_telemetry.span(
+        "pickup", parent=restored
+    ) as pickup:
+        assert pickup.trace_attrs == {"session.id": "s-1"}
+
+
 async def test_use_span_parents_without_lifecycle(
     recorder: Recorder,
 ) -> None:

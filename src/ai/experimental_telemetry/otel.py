@@ -281,7 +281,14 @@ def _semconv_tool_definitions(names: list[str]) -> str:
 
 
 def _attributes(sp: telemetry.Span, *, capture_content: bool) -> dict[str, Any]:
-    attrs: dict[str, Any] = {}
+    # process trace_attrs
+    attrs: dict[str, Any] = {
+        # otel only allows scalar attribute values or lists of them
+        key: value
+        if isinstance(value, str | bool | int | float)
+        else repr(value)
+        for key, value in sp.trace_attrs.items()
+    }
     if sp.replay:
         attrs["ai.replay"] = True
     match sp.data:
