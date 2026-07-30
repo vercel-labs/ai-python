@@ -574,14 +574,15 @@ async def test_resolved_approval_hook_emits_response_event() -> None:
     assert any(isinstance(p, ui_events.UIToolOutputDeniedEvent) for p in out)
 
 
-async def test_stream_end_closes_step_and_next_event_reopens_it() -> None:
-    """StreamEnd finishes the current step; the next event starts a new one."""
+async def test_stream_start_after_stream_end_reopens_step() -> None:
+    """A new model stream starts a new UI step after StreamEnd."""
     out = await _collect(
         [
             events_.TextStart(block_id="t1"),
             events_.TextDelta(block_id="t1", chunk="hi"),
             events_.TextEnd(block_id="t1"),
             events_.StreamEnd(),
+            events_.StreamStart(),
             events_.ToolStart(tool_call_id="tc1", tool_name="search"),
             events_.ToolDelta(tool_call_id="tc1", chunk="{}"),
             events_.ToolEnd(
