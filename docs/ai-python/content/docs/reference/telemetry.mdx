@@ -41,6 +41,7 @@ It is a Pydantic model, generic in its data type: `Span[SpanData]`.
 | `replay` | `True` when the work is being [replayed](/docs/reference/ai/stream#replay) rather than performed live (resume, serverless re-entry). |
 | `set_as_current` | Whether the span sets itself as current. Adapters should respect it to keep nesting consistent. |
 | `events` | List of `SpanEvent` milestones. |
+| `trace_attrs` | User data propagated down the trace: a child gets a copy of its parent's `trace_attrs` at creation. |
 
 The lifecycle is encoded in the timestamps:
 
@@ -198,8 +199,9 @@ sink with `Span.push()`.
 The framework provides utilities to make this less verbose, as well as to make those
 manual spans play nice with the built-in instrumentation.
 
-1. `create_span()` mints identity and takes the trace id and parentage from
-   `parent` (default: the current span; a fresh trace when there is none). Nothing is reported.
+1. `create_span()` mints identity and takes the trace id, parentage, and a copy of
+   `trace_attrs` from `parent` (default: the current span; a fresh trace when there
+   is none). Nothing is reported.
 2. `stamp_start()` and `stamp_end()` write timestamps from the ambient clock. 
    `stamp_end(error=...)` also records an error when given one, converting an
    exception to a `SpanError`. Still nothing is reported.
@@ -391,8 +393,8 @@ and `gen_ai.tool.*` (name, call id, description). Failed spans set
 `error.type` and an error status. Model call spans export with the `CLIENT`
 span kind; agent and tool spans stay `INTERNAL`.
 
-Custom span attributes export as-is; values that are not scalars are
-converted with `repr`.
+Custom span attributes and `trace_attrs` export as-is; values that are not
+scalars are converted with `repr`.
 
 ### Capture message content
 
