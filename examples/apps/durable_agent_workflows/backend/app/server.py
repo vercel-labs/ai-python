@@ -1,13 +1,6 @@
 from __future__ import annotations
 
 import collections.abc
-import os
-
-_BACKEND_DIR = os.path.dirname(os.path.dirname(__file__))
-os.environ.setdefault(
-    "WORKFLOW_LOCAL_DATA_DIR",
-    os.path.join(_BACKEND_DIR, ".workflow-data"),
-)
 
 import ai  # noqa: E402
 import ai.ui.ai_sdk as ai_sdk  # noqa: E402
@@ -33,12 +26,12 @@ class ChatRequest(pydantic.BaseModel):
     messages: list[ai_sdk.UIMessage]
 
 
-@app.get("/health")
+@app.get("/api/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.post("/chat")
+@app.post("/api/chat")
 async def post_chat(request: ChatRequest) -> fastapi.responses.StreamingResponse:
     messages, _ = ai_sdk.to_messages(request.messages)
     if not messages:
