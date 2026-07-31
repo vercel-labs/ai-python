@@ -10,8 +10,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+import mypy.version
+
 REPO = Path(__file__).resolve().parent.parent.parent
-MYPY_VERSION = "mypy>=1.11"
+MYPY_VERSION = f"mypy=={mypy.version.__version__}"
 _EXAMPLES_DIR = REPO / "examples"
 
 _SAMPLE_FILES = sorted(
@@ -21,56 +23,44 @@ _SAMPLE_FILES = sorted(
     and p.relative_to(_EXAMPLES_DIR).parts[:1] != ("apps",)
 )
 
-# Each entry: (display name, directory to check, extra --with deps, targets)
-EXAMPLES: list[tuple[str, Path, list[str], list[str]]] = [
-    ("samples", _EXAMPLES_DIR, [], _SAMPLE_FILES),
+# Each entry: (display name, directory to check, targets)
+EXAMPLES: list[tuple[str, Path, list[str]]] = [
+    ("samples", _EXAMPLES_DIR, _SAMPLE_FILES),
     (
         "web_agent/backend",
         _EXAMPLES_DIR / "apps" / "web_agent" / "backend",
-        ["fastapi"],
         ["."],
     ),
     (
         "durable_agent_temporal",
         _EXAMPLES_DIR / "apps" / "durable_agent_temporal",
-        ["temporalio"],
         ["."],
     ),
     (
         "durable_agent_workflows/backend",
         _EXAMPLES_DIR / "apps" / "durable_agent_workflows" / "backend",
-        [
-            "fastapi",
-            "vercel @ git+https://github.com/vercel/vercel-py@47d881242e35b18dcbc7d58b7018e1188894f332",
-            "vercel-workers>=0.0.22",
-        ],
         ["."],
     ),
     (
         "slack_agent",
         _EXAMPLES_DIR / "apps" / "slack_agent",
-        ["slack-bolt>=1.29", "aiohttp"],
         ["."],
     ),
 ]
 
 
-def run_mypy(
-    name: str, directory: Path, extra_deps: list[str], targets: list[str]
-) -> bool:
+def run_mypy(name: str, directory: Path, targets: list[str]) -> bool:
     header = f"{'=' * 20} {name} {'=' * 20}"
     print(header)
 
     with_args: list[str] = []
-    for dep in [MYPY_VERSION, "pydantic", *extra_deps]:
+    for dep in [MYPY_VERSION]:
         with_args.extend(["--with", dep])
 
     cmd = [
         "uv",
         "run",
         "--frozen",
-        "--project",
-        str(REPO),
         "--group",
         "dev",
         "--with-editable",
@@ -92,8 +82,8 @@ def run_mypy(
 
 def main() -> None:
     results: list[tuple[str, bool]] = []
-    for name, directory, extra_deps, targets in EXAMPLES:
-        ok = run_mypy(name, directory, extra_deps, targets)
+    for name, directory, targets in EXAMPLES:
+        ok = run_mypy(name, directory, targets)
         results.append((name, ok))
 
     print("=" * 60)

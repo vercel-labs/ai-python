@@ -9,6 +9,9 @@ dependencies = [
     "slack-bolt>=1.29",
 ]
 
+[dependency-groups]
+dev = []
+
 [tool.uv]
 exclude-newer = "2 days"
 
