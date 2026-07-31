@@ -50,10 +50,15 @@ EXAMPLES: list[tuple[str, Path, list[str]]] = [
 ]
 
 
-def run_mypy(
-    name: str, directory: Path, targets: list[str], *, use_current_ai: bool
+def run_checker(
+    checker: list[str],
+    name: str,
+    directory: Path,
+    targets: list[str],
+    *,
+    use_current_ai: bool,
 ) -> bool:
-    header = f"{'=' * 20} {name} {'=' * 20}"
+    header = f"{'=' * 20} {name} ({checker[0]}) {'=' * 20}"
     print(header)
 
     with_args: list[str] = []
@@ -66,9 +71,7 @@ def run_mypy(
     cmd.extend(
         [
             *with_args,
-            "mypy",
-            "--config-file",
-            str(REPO / "pyproject.toml"),
+            *checker,
             *targets,
         ]
     )
@@ -79,6 +82,12 @@ def run_mypy(
     print()
     sys.stdout.flush()
     return result.returncode == 0
+
+
+CHECKERS = [
+    ["mypy", "--config-file", str(REPO / "pyproject.toml")],
+    ["ty", "check"],
+]
 
 
 def main() -> None:
@@ -92,10 +101,15 @@ def main() -> None:
 
     results: list[tuple[str, bool]] = []
     for name, directory, targets in EXAMPLES:
-        ok = run_mypy(
-            name, directory, targets, use_current_ai=not args.no_current_ai
-        )
-        results.append((name, ok))
+        for checker in CHECKERS:
+            ok = run_checker(
+                checker,
+                name,
+                directory,
+                targets,
+                use_current_ai=not args.no_current_ai,
+            )
+            results.append((f"{name} ({checker[0]})", ok))
 
     print("=" * 60)
     print("Summary:")
