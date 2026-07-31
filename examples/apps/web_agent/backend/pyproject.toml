@@ -5,7 +5,7 @@ description = "Chat demo using Python Vercel AI SDK with FastAPI"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi[standard]>=0.128.1",
-    "ai[vercel]>=0.2.1",
+    "ai[vercel]",
 ]
 
 [dependency-groups]

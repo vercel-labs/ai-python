@@ -5,6 +5,7 @@ Usage (from repo root):
     uv run examples/.test_scripts/check-examples.py
 """
 
+import argparse
 import os
 import subprocess
 import sys
@@ -49,28 +50,31 @@ EXAMPLES: list[tuple[str, Path, list[str]]] = [
 ]
 
 
-def run_mypy(name: str, directory: Path, targets: list[str]) -> bool:
-    header = f"{'=' * 20} {name} {'=' * 20}"
+def run_checker(
+    checker: list[str],
+    name: str,
+    directory: Path,
+    targets: list[str],
+    *,
+    use_current_ai: bool,
+) -> bool:
+    header = f"{'=' * 20} {name} ({checker[0]}) {'=' * 20}"
     print(header)
 
     with_args: list[str] = []
     for dep in [MYPY_VERSION]:
         with_args.extend(["--with", dep])
 
-    cmd = [
-        "uv",
-        "run",
-        "--frozen",
-        "--group",
-        "dev",
-        "--with-editable",
-        str(REPO),
-        *with_args,
-        "mypy",
-        "--config-file",
-        str(REPO / "pyproject.toml"),
-        *targets,
-    ]
+    cmd = ["uv", "run", "--frozen", "--group", "dev"]
+    if use_current_ai:
+        cmd.extend(["--with-editable", str(REPO)])
+    cmd.extend(
+        [
+            *with_args,
+            *checker,
+            *targets,
+        ]
+    )
 
     env = {k: v for k, v in os.environ.items() if k != "VIRTUAL_ENV"}
     sys.stdout.flush()
@@ -80,11 +84,32 @@ def run_mypy(name: str, directory: Path, targets: list[str]) -> bool:
     return result.returncode == 0
 
 
+CHECKERS = [
+    ["mypy", "--config-file", str(REPO / "pyproject.toml")],
+    ["ty", "check"],
+]
+
+
 def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--no-current-ai",
+        action="store_true",
+        help="check against the ai version specified by each example",
+    )
+    args = parser.parse_args()
+
     results: list[tuple[str, bool]] = []
     for name, directory, targets in EXAMPLES:
-        ok = run_mypy(name, directory, targets)
-        results.append((name, ok))
+        for checker in CHECKERS:
+            ok = run_checker(
+                checker,
+                name,
+                directory,
+                targets,
+                use_current_ai=not args.no_current_ai,
+            )
+            results.append((f"{name} ({checker[0]})", ok))
 
     print("=" * 60)
     print("Summary:")

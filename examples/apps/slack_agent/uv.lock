@@ -8,50 +8,17 @@ exclude-newer-span = "P2D"
 
 [[package]]
 name = "ai"
-source = { editable = "../../../" }
+version = "0.4.0"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httpx" },
     { name = "modelsdotdev" },
     { name = "pydantic" },
     { name = "typing-extensions" },
 ]
-
-[package.metadata]
-requires-dist = [
-    { name = "anthropic", marker = "extra == 'anthropic'", specifier = ">=0.83.0" },
-    { name = "httpx", specifier = ">=0.28.1" },
-    { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.18.0" },
-    { name = "modelsdotdev", specifier = "==0.*" },
-    { name = "openai", marker = "extra == 'openai'", specifier = ">=2.14.0" },
-    { name = "opentelemetry-exporter-otlp-proto-http", marker = "extra == 'otel'", specifier = ">=1.30" },
-    { name = "opentelemetry-sdk", marker = "extra == 'otel'", specifier = ">=1.30" },
-    { name = "pydantic", specifier = ">=2.13" },
-    { name = "typing-extensions", specifier = ">=4.15.0" },
-    { name = "vercel", marker = "extra == 'vercel'", specifier = ">=0.5.9" },
-]
-provides-extras = ["anthropic", "mcp", "openai", "otel", "vercel"]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "anthropic", specifier = ">=0.83.0" },
-    { name = "async-solipsism", specifier = ">=0.9" },
-    { name = "mcp", specifier = ">=1.18.0" },
-    { name = "mypy", specifier = "~=2.1.0" },
-    { name = "openai", specifier = ">=2.14.0" },
-    { name = "opentelemetry-exporter-otlp-proto-http", specifier = ">=1.43.0" },
-    { name = "opentelemetry-sdk", specifier = ">=1.43.0" },
-    { name = "pytest", specifier = ">=8.0" },
-    { name = "pytest-asyncio", specifier = ">=0.24" },
-    { name = "python-dotenv", specifier = ">=1.2.1" },
-    { name = "rich", specifier = ">=14.2.0" },
-    { name = "ruff", specifier = "~=0.8.0" },
-    { name = "ty", specifier = "~=0.0.37" },
-]
-examples = [
-    { name = "fastapi", specifier = ">=0.136.1" },
-    { name = "temporalio", specifier = ">=1.27.2" },
-    { name = "textual", specifier = ">=8.2.6" },
-    { name = "websockets", specifier = ">=16.0" },
+sdist = { url = "https://files.pythonhosted.org/packages/a1/64/e4fb93545d0bded3a826aa6b9bf7a1154fa67d9f559ad833f59e75778353/ai-0.4.0.tar.gz", hash = "sha256:9b1292d9615b0867591541fc9b82add25a002d78cb6a1c4ed18fb5bc8f217f3f", size = 1181865, upload-time = "2026-07-28T17:56:24.719Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/7b/64/4e70ac7aa8fc6ad586d066cf5d1df853989cb80fd40d12a88172bf26885f/ai-0.4.0-py3-none-any.whl", hash = "sha256:39fb560872c34c43eda400ea1fc6bc4e1488f118f2efb850713677735e31459f", size = 179587, upload-time = "2026-07-28T17:56:23.63Z" },
 ]
 
 [[package]]
@@ -655,7 +622,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "ai", editable = "../../../" },
+    { name = "ai" },
     { name = "aiohttp", specifier = ">=3.10" },
     { name = "slack-bolt", specifier = ">=1.29" },
 ]
