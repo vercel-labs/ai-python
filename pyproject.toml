@@ -79,15 +79,9 @@ dev = [
     "opentelemetry-sdk>=1.43.0",
     "opentelemetry-exporter-otlp-proto-http>=1.43.0",
 ]
-examples = [
-    "fastapi>=0.136.1",
-    "temporalio>=1.27.2",
-    "textual>=8.2.6",
-    "websockets>=16.0",
-]
 
 [tool.uv]
-default-groups = ["dev", "examples"]
+default-groups = ["dev"]
 exclude-newer = "2 days"
 
 [tool.mypy]
@@ -109,10 +103,7 @@ root = ["./src", "./"]
 
 [tool.ty.src]
 exclude = [
-    # depends on the vercel package, which is not part of this project's env
-    "examples/apps/durable_agent_workflows/",
-    # depends on slack-bolt, which is not part of this project's env
-    "examples/apps/slack_agent/",
+    "examples/",
 ]
 
 [tool.pytest.ini_options]

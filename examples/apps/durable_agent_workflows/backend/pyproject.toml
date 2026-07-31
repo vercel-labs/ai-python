@@ -34,9 +34,6 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 [tool.uv]
 exclude-newer = "2 days"
 
-[tool.uv.sources]
-ai = { path = "../../../..", editable = true }
-
 [dependency-groups]
 dev = [
     "mypy>=1.19.1",

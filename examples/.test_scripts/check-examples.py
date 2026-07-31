@@ -5,6 +5,7 @@ Usage (from repo root):
     uv run examples/.test_scripts/check-examples.py
 """
 
+import argparse
 import os
 import subprocess
 import sys
@@ -49,7 +50,9 @@ EXAMPLES: list[tuple[str, Path, list[str]]] = [
 ]
 
 
-def run_mypy(name: str, directory: Path, targets: list[str]) -> bool:
+def run_mypy(
+    name: str, directory: Path, targets: list[str], *, use_current_ai: bool
+) -> bool:
     header = f"{'=' * 20} {name} {'=' * 20}"
     print(header)
 
@@ -57,20 +60,18 @@ def run_mypy(name: str, directory: Path, targets: list[str]) -> bool:
     for dep in [MYPY_VERSION]:
         with_args.extend(["--with", dep])
 
-    cmd = [
-        "uv",
-        "run",
-        "--frozen",
-        "--group",
-        "dev",
-        "--with-editable",
-        str(REPO),
-        *with_args,
-        "mypy",
-        "--config-file",
-        str(REPO / "pyproject.toml"),
-        *targets,
-    ]
+    cmd = ["uv", "run", "--frozen", "--group", "dev"]
+    if use_current_ai:
+        cmd.extend(["--with-editable", str(REPO)])
+    cmd.extend(
+        [
+            *with_args,
+            "mypy",
+            "--config-file",
+            str(REPO / "pyproject.toml"),
+            *targets,
+        ]
+    )
 
     env = {k: v for k, v in os.environ.items() if k != "VIRTUAL_ENV"}
     sys.stdout.flush()
@@ -81,9 +82,19 @@ def run_mypy(name: str, directory: Path, targets: list[str]) -> bool:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--no-current-ai",
+        action="store_true",
+        help="check against the ai version specified by each example",
+    )
+    args = parser.parse_args()
+
     results: list[tuple[str, bool]] = []
     for name, directory, targets in EXAMPLES:
-        ok = run_mypy(name, directory, targets)
+        ok = run_mypy(
+            name, directory, targets, use_current_ai=not args.no_current_ai
+        )
         results.append((name, ok))
 
     print("=" * 60)
