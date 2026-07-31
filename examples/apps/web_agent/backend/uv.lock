@@ -479,6 +479,9 @@ requires-dist = [
     { name = "fastapi", extras = ["standard"], specifier = ">=0.128.1" },
 ]
 
+[package.metadata.requires-dev]
+dev = []
+
 [[package]]
 name = "pydantic"
 version = "2.13.4"
