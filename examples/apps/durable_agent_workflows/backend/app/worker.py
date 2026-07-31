@@ -5,21 +5,18 @@ import traceback
 from collections.abc import AsyncGenerator
 from typing import Any, ClassVar
 
-import vercel._internal.workflow.py_sandbox
-
-# The workflow sandbox re-imports non-passthrough modules under determinism
-# restrictions, which the ai package (via httpx -> tempfile -> shutil) does
-# not survive. Share the host's ai module instead. This must be registered
-# here: the worker service is the process that runs the sandbox.
-vercel._internal.workflow.py_sandbox._PASSTHROUGHS.update({"ai"})
-
-import ai  # noqa: E402
-import pydantic  # noqa: E402
-import vercel.workflow  # noqa: E402
+import ai
+import pydantic
+import vercel.workflow
 
 # The app uses one registry for all workflow decorators so queue messages
 # are dispatched by the same Workflows instance.
-workflow = vercel.workflow.Workflows()
+workflow = vercel.workflow.Workflows(
+    sandbox_policy=vercel.workflow.SandboxPolicy(
+        passthrough_modules=frozenset({"ai"}),
+        cleanups=vercel.workflow.sandbox.ALL_CLEANUPS,
+    )
+)
 
 MODEL_ID = "gateway:anthropic/claude-sonnet-4.6"
 SYSTEM_PROMPT = """\
@@ -43,6 +40,7 @@ class TurnOutput(pydantic.BaseModel):
     error: str | None = None
 
 
+# llm_step will retry by default up to 3 times
 @workflow.step
 async def llm_step(
     model_data: dict[str, object],
@@ -55,23 +53,19 @@ async def llm_step(
     ]
     tools = [ai.Tool.model_validate(tool) for tool in tools_data]
 
-    message: ai.messages.Message | None = None
     async with ai.stream(model, messages, tools=tools) as model_stream:
-        async for event in model_stream:
-            if isinstance(event, ai.events.StreamEnd):
-                message = event.message
+        async for _event in model_stream:
+            pass
 
-        if message is None:
-            message = model_stream.message
-
-    return message.model_dump(mode="json")
+    return model_stream.message.model_dump(mode="json")
 
 
-llm_step.max_retries = 0
-
-
-@workflow.step
-async def _bash(command: str, timeout: int | None = None) -> str:
+@ai.tool
+# We disable retries on bash because it isn't idempotent.  We'll let
+# it fail and then the agent can figure out how to react.
+@workflow.step(max_retries=0)
+async def bash(command: str, timeout: int | None = None) -> str:
+    """Execute a bash command. Use timeout in seconds to limit long commands."""
     proc = await asyncio.create_subprocess_exec(
         "bash",
         "-c",
@@ -90,15 +84,6 @@ async def _bash(command: str, timeout: int | None = None) -> str:
     if proc.returncode != 0:
         return f"[exit code {proc.returncode}]\n{output}"
     return output
-
-
-_bash.max_retries = 0
-
-
-@ai.tool
-async def bash(command: str, timeout: int | None = None) -> str:
-    """Execute a bash command. Use timeout in seconds to limit long commands."""
-    return await _bash(command, timeout)
 
 
 class DurableAgent(ai.Agent):
@@ -163,6 +148,7 @@ async def _run_turn(turn_input: dict[str, Any]) -> TurnOutput:
 
 
 @workflow.workflow
+@ai.messages.use_random(vercel.workflow.random)
 async def run_turn(turn_input: dict[str, Any]) -> dict[str, Any]:
     try:
         output = await _run_turn(turn_input)

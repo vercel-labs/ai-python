@@ -33,7 +33,7 @@ EXAMPLES: list[tuple[str, Path, list[str]]] = [
     ),
     (
         "durable_agent_temporal",
-        _EXAMPLES_DIR / "apps" / "durable_agent_temporal",
+        _EXAMPLES_DIR / "apps" / "durable_agent_temporal" / "backend",
         ["."],
     ),
     (

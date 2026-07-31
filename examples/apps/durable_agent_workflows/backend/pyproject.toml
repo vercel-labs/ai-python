@@ -5,10 +5,15 @@ description = "Durable AI SDK Python agent using Vercel Workflows"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi[standard]>=0.115.0",
-    "vercel>=0.5.9",
-    "vercel-workers>=0.0.22",
+    "vercel>=0.7.2",
     "ai",
 ]
+
+[tool.vercel]
+entrypoint = "app.server:app"
+
+[[tool.vercel.workflows]]
+entrypoint = "app.worker:workflow"
 
 [tool.mypy]
 python_version = "3.12"
@@ -31,7 +36,6 @@ exclude-newer = "2 days"
 
 [tool.uv.sources]
 ai = { path = "../../../..", editable = true }
-vercel = { git = "https://github.com/vercel/vercel-py", rev = "47d881242e35b18dcbc7d58b7018e1188894f332" }
 
 [dependency-groups]
 dev = [

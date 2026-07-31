@@ -1,20 +1,15 @@
 {
-  "fluid": true,
-  "experimentalServices": {
+  "services": {
     "frontend": {
-      "framework": "vite",
-      "entrypoint": "frontend",
-      "routePrefix": "/"
+      "root": "frontend/"
     },
     "backend": {
-      "framework": "fastapi",
-      "entrypoint": "backend/app/server.py",
-      "routePrefix": "/api"
-    },
-    "agent": {
-      "type": "worker",
-      "entrypoint": "backend/app/worker.py",
-      "topics": ["__wkf_*"]
+      "root": "backend/",
+      "entrypoint": "pyproject.toml"
     }
-  }
+  },
+  "rewrites": [
+    { "source": "/api/(.*)", "destination": { "service": "backend" } },
+    { "source": "/(.*)", "destination": { "service": "frontend" } }
+  ]
 }
