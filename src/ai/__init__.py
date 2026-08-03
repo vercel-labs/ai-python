@@ -1,4 +1,12 @@
-from . import errors, experimental_telemetry, models, providers, ui, util
+from . import (
+    errors,
+    experimental_telemetry,
+    models,
+    providers,
+    testing,
+    ui,
+    util,
+)
 from .agents import (
     Agent,
     AgentTool,
@@ -196,6 +204,7 @@ __all__ = [
     "resolve_hook",
     "stream",
     "system_message",
+    "testing",
     "text_part",
     "thinking",
     "tool",
