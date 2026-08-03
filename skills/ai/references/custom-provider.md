@@ -1,14 +1,12 @@
----
-name: ai-python-custom-provider
-description: Use for implementing custom providers in AI SDK for Python.
-metadata:
-  sdk-version: "0.4.0"
----
+# Writing a custom provider
 
-# ai-python-custom-provider
+Only implement a custom provider when adding a new upstream API adapter. For
+normal app configuration prefer `ai.get_provider(...)`, `ai.get_model(...)`,
+or a protocol override (see `https://ai-python.dev/docs/basics/providers.md`).
 
-Providers emit model events. They do not run Python tools. `ai.stream` collects
-events into a `Message`. `ai.Agent` adds tool execution, hooks, and replay.
+Providers emit model events. They do not run Python tools. `ai.stream`
+collects events into a `Message`. `ai.Agent` adds tool execution, hooks, and
+replay.
 
 Minimal shape:
 
@@ -73,11 +71,15 @@ class MyProvider(ai.Provider[Any]):
 model = ai.Model(id="my-model", provider=MyProvider(client=client))
 ```
 
-Set response metadata on `StreamEnd` (new in 0.4.0). Normalize the upstream
-API's native stop reason into the shared vocabulary: `stop`, `length`,
-`content_filter`, `tool_call`, `error`, or `other`. Keep the raw value in 
-`provider_metadata`. Set `response_id` and `response_model` when the upstream
-API reports them.
+`provider_class_id` is the serialization discriminator used to restore the
+concrete class. Optionally set the `handles: ClassVar[tuple[str, ...]]` class
+attribute to register prefixes for `ai.get_provider(...)` /
+`ai.get_model("handle/...")` lookup.
+
+Set response metadata on `StreamEnd`. Normalize the upstream API's native
+stop reason into the shared vocabulary: `stop`, `length`, `content_filter`,
+`tool_call`, `error`, or `other`. Keep the raw value in `provider_metadata`.
+Set `response_id` and `response_model` when the upstream API reports them.
 
 For Python tool calls, emit `ToolStart`, `ToolDelta`, and `ToolEnd`:
 
@@ -95,7 +97,3 @@ Then `Agent` resolves and runs the tool.
 
 If the provider runs its own built-in tool, emit `BuiltinToolStart`,
 `BuiltinToolDelta`, `BuiltinToolEnd`, and `BuiltinToolResult` instead.
-
-Do not implement a custom provider for normal app configuration. Prefer
-`ai.get_provider(...)`, `ai.get_model(...)`, or a protocol override unless you
-are adding a new upstream API adapter.

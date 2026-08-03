@@ -1,13 +1,9 @@
----
-name: ai-python-ui-adapter
-description: Use when connecting AI SDK for Python streams to AI SDK UI useChat clients.
-metadata:
-  sdk-version: "0.4.0"
----
+# AI SDK UI: frontend wiring and hook deferral
 
-# ai-python-ui-adapter
+Read `https://ai-python.dev/docs/basics/ai-sdk-ui.md` first for the backend
+adapter. Below are additional frontend and defer-hook details.
 
-Frontend:
+## Frontend
 
 ```tsx
 const chat = useChat({
@@ -19,21 +15,16 @@ const chat = useChat({
 Use `chat.sendMessage(...)` to send user input. Use
 `chat.addToolApprovalResponse(...)` from approval buttons.
 
-Backend request:
+## Deferring hooks in the SSE stream
 
-```python
-class ChatRequest(pydantic.BaseModel):
-    messages: list[ai.ui.ai_sdk.UIMessage]
-
-messages, approvals = ai.ui.ai_sdk.to_messages(request.messages)
-ai.ui.ai_sdk.apply_approvals(approvals)
-```
-
-Backend stream:
+Serverless UI backends must defer pending hooks before the response ends.
+Wrap the event stream before `to_sse`:
 
 ```python
 async def body():
     async with agent.run(model, messages) as stream:
+        ai.ui.ai_sdk.apply_approvals(approvals)
+
         async def events():
             async for event in stream:
                 if (
@@ -52,14 +43,12 @@ return StreamingResponse(
 )
 ```
 
+`apply_approvals` pre-registers with the current hook registry, so call it
+inside the `agent.run(...)` block (or pass `registry=`).
+
+## Responsibility split
+
 The adapter handles `UIMessage` parsing, message IDs, tool state, approvals,
-subagent `MessageBundle` values, and AI SDK UI stream events.
-
-You handle the HTTP route, auth, storage, session lookup, frontend rendering,
-and when to defer hooks.
-
-For saved UI history, use:
-
-```python
-ui_messages = ai.ui.ai_sdk.to_ui_messages(messages)
-```
+subagent `MessageBundle` values, and AI SDK UI stream events. You handle the
+HTTP route, auth, storage, session lookup, frontend rendering, and when to
+defer hooks.
