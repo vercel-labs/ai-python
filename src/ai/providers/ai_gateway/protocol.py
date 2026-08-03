@@ -15,6 +15,7 @@ from pydantic.alias_generators import to_camel
 from ... import types
 from ...models import core
 from ...models.core import params as params_
+from ...ops import images
 from .. import base, history_utils
 from . import client as gateway_client
 from . import errors
@@ -48,6 +49,53 @@ def _provider_params_value(
             f"must be {params_type.__name__}"
         )
     return provider_params
+
+
+# ---------------------------------------------------------------------------
+# Media request helpers
+# ---------------------------------------------------------------------------
+
+
+def _extract_prompt(messages: list[types.messages.Message]) -> str:
+    """Concatenate all text from user/system messages into one prompt."""
+    parts: list[str] = []
+    for msg in messages:
+        if msg.role in ("user", "system"):
+            for p in msg.parts:
+                if isinstance(p, types.messages.TextPart):
+                    parts.append(p.text)
+    return " ".join(parts)
+
+
+def _extract_input_files(
+    messages: list[types.messages.Message],
+) -> list[types.messages.FilePart]:
+    """Collect all file parts from user messages."""
+    files_: list[types.messages.FilePart] = []
+    for msg in messages:
+        if msg.role == "user":
+            for p in msg.parts:
+                if isinstance(p, types.messages.FilePart):
+                    files_.append(p)
+    return files_
+
+
+def _file_part_to_v3_image(part: types.messages.FilePart) -> dict[str, Any]:
+    """Convert a :class:`FilePart` to the image-model input-file wire format.
+
+    Unlike ``_file_part_to_v3`` (the language prompt encoding), the
+    image-model endpoint accepts URLs directly (``{"type": "url"}``), so
+    they are passed through instead of downloaded; inline data is raw
+    base64, not a data URL.
+    """
+    data = part.data
+    if isinstance(data, str) and types.media.is_url(data):
+        return {"type": "url", "url": data}
+    return {
+        "type": "file",
+        "data": types.media.data_to_base64(data),
+        "mediaType": part.media_type,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -1038,6 +1086,62 @@ async def stream(
         raise errors.map_error(response_error) from exc
 
 
+# ---------------------------------------------------------------------------
+# Image generation
+# ---------------------------------------------------------------------------
+
+
+async def generate_image(
+    gateway: gateway_client.GatewayClient,
+    model: core.model.Model,
+    messages: list[types.messages.Message],
+    *,
+    params: images.ImageParams,
+) -> types.messages.Message:
+    """Hit ``/image-model`` and return a Message with FileParts."""
+    body: dict[str, Any] = {
+        "prompt": _extract_prompt(messages),
+        "n": params.n,
+    }
+    if params.size is not None:
+        body["size"] = params.size
+    if params.aspect_ratio is not None:
+        body["aspectRatio"] = params.aspect_ratio
+    if params.seed is not None:
+        body["seed"] = params.seed
+    if params.provider_options:
+        body["providerOptions"] = dict(params.provider_options)
+    input_files = _extract_input_files(messages)
+    if input_files:
+        body["files"] = [_file_part_to_v3_image(f) for f in input_files]
+
+    try:
+        response = await gateway.post(
+            "image-model", body, model=model, model_type="image"
+        )
+    except client_errors.GatewayError as exc:
+        raise errors.map_error(exc) from exc
+
+    data = response.json()
+    raw_images: list[str] = data.get("images", [])
+    usage_data = data.get("usage")
+    usage = None
+    if usage_data:
+        usage = types.usage.Usage(
+            input_tokens=usage_data.get("inputTokens") or 0,
+            output_tokens=usage_data.get("outputTokens") or 0,
+        )
+
+    parts: list[types.messages.Part] = []
+    for img_b64 in raw_images:
+        media_type = types.media.detect_image_media_type(img_b64) or "image/png"
+        parts.append(
+            types.messages.FilePart(data=img_b64, media_type=media_type)
+        )
+
+    return types.messages.Message(role="assistant", parts=parts, usage=usage)
+
+
 class GatewayV3Protocol(base.ProviderProtocol[gateway_client.GatewayClient]):
     """AI Gateway v3 wire protocol."""
 
@@ -1063,3 +1167,15 @@ class GatewayV3Protocol(base.ProviderProtocol[gateway_client.GatewayClient]):
             output_type=output_type,
             params=params,
         )
+
+    async def generate_image(
+        self,
+        client: gateway_client.GatewayClient,
+        model: core.model.Model,
+        messages: list[types.messages.Message],
+        *,
+        params: images.ImageParams,
+        provider: str,
+    ) -> types.messages.Message:
+        _ = provider
+        return await generate_image(client, model, messages, params=params)

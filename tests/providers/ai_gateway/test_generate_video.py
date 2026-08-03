@@ -17,9 +17,9 @@ from __future__ import annotations
 
 import pytest
 
-# Media generation is temporarily disconnected from experimental_generate();
-# these tests come back with the dedicated media module.
-pytest.skip("media generation is temporarily disabled", allow_module_level=True)
+# Video generation is temporarily disconnected; these tests come back
+# when ai.ops grows generate_video.
+pytest.skip("video generation is temporarily disabled", allow_module_level=True)
 
 import base64
 import json

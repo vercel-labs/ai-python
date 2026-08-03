@@ -24,6 +24,7 @@ if TYPE_CHECKING:
 
     from ..models.core import model as model_
     from ..models.core import params as params_
+    from ..ops import images
     from ..types import events
     from ..types import messages as messages_
     from ..types import tools as tools_
@@ -167,6 +168,21 @@ class ProviderProtocol(pydantic.BaseModel, Generic[ClientT]):
         """
         raise NotImplementedError(
             f"protocol {type(self).__name__!r} does not support generate()"
+        )
+
+    async def generate_image(
+        self,
+        client: ClientT,
+        model: model_.Model,
+        messages: list[messages_.Message],
+        *,
+        params: images.ImageParams,
+        provider: str,
+    ) -> messages_.Message:
+        """Generate images with a dedicated image model using *client*."""
+        raise NotImplementedError(
+            f"protocol {type(self).__name__!r} does not support "
+            f"generate_image()"
         )
 
 
@@ -408,6 +424,23 @@ class Provider(pydantic.BaseModel, Generic[ClientT]):
             messages,
             tools=tools,
             output_type=output_type,
+            params=params,
+            provider=self.name,
+        )
+
+    async def generate_image(
+        self,
+        model: model_.Model,
+        messages: list[messages_.Message],
+        *,
+        params: images.ImageParams,
+    ) -> messages_.Message:
+        """Generate images with this provider's dedicated image model."""
+        selected_protocol = model.protocol or self.protocol
+        return await selected_protocol.generate_image(
+            self.client,
+            model,
+            messages,
             params=params,
             provider=self.name,
         )

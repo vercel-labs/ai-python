@@ -1,10 +1,10 @@
 """Integration tests for the AI Gateway v3 image generation adapter.
 
-Every test exercises the real ``generate()`` function with a provider
-wired to an ``httpx.MockTransport``, so the full production code path
-is covered:
+Every test exercises the real ``ops.generate_image()`` function with a
+provider wired to an ``httpx.MockTransport``, so the full production
+code path is covered:
 
-    generate(model, messages, ImageParams(...))
+    ops.generate_image(model, messages, params=ImageParams(...))
       -> extract prompt/images from messages
       -> httpx POST (mock) to /image-model
       -> JSON response parsing
@@ -12,24 +12,17 @@ is covered:
       -> return Message with FileParts
 """
 
-# ruff: noqa: E402
 from __future__ import annotations
-
-import pytest
-
-# Media generation is temporarily disconnected from experimental_generate();
-# these tests come back with the dedicated media module.
-pytest.skip("media generation is temporarily disabled", allow_module_level=True)
 
 import base64
 import json
 from typing import Any
 
 import httpx
+import pytest
 
 import ai
-from ai.models.core import api
-from ai.models.core.params import ImageParams
+from ai import ops
 from ai.types import messages
 
 from .conftest import mock_model, user_msg
@@ -63,9 +56,7 @@ class TestGenerate:
         model = mock_model(
             httpx.MockTransport(handler), model_id=_IMAGE_MODEL_ID
         )
-        msg = await api.experimental_generate(
-            model, [user_msg("A sunset over Tokyo")], ImageParams()
-        )
+        msg = await ops.generate_image(model, [user_msg("A sunset over Tokyo")])
 
         assert msg.role == "assistant"
         assert len(msg.images) == 1
@@ -83,10 +74,10 @@ class TestGenerate:
                 json={"images": [_PNG_B64, _JPEG_B64, _PNG_B64]},
             )
 
-        msg = await api.experimental_generate(
+        msg = await ops.generate_image(
             mock_model(httpx.MockTransport(handler), model_id=_IMAGE_MODEL_ID),
             [user_msg("Three cats")],
-            params=ImageParams(n=3),
+            params=ops.ImageParams(n=3),
         )
 
         assert len(msg.images) == 3
@@ -106,10 +97,9 @@ class TestGenerate:
                 },
             )
 
-        msg = await api.experimental_generate(
+        msg = await ops.generate_image(
             mock_model(httpx.MockTransport(handler), model_id=_IMAGE_MODEL_ID),
             [user_msg("a dog")],
-            ImageParams(),
         )
 
         assert msg.usage is not None
@@ -135,7 +125,7 @@ class TestRequest:
             api_key="sk-test",
             model_id="openai/gpt-image-1",
         )
-        await api.experimental_generate(model, [user_msg("Hi")], ImageParams())
+        await ops.generate_image(model, [user_msg("Hi")])
 
         assert captured["authorization"] == "Bearer sk-test"
         assert captured["ai-image-model-specification-version"] == "3"
@@ -156,10 +146,10 @@ class TestRequest:
                 messages.FilePart(data=_PNG_B64, media_type="image/png"),
             ],
         )
-        await api.experimental_generate(
+        await ops.generate_image(
             mock_model(httpx.MockTransport(handler), model_id=_IMAGE_MODEL_ID),
             [msg],
-            params=ImageParams(
+            params=ops.ImageParams(
                 n=2,
                 size="1024x1024",
                 aspect_ratio="16:9",
@@ -181,6 +171,46 @@ class TestRequest:
         assert captured_body["files"][0]["type"] == "file"
         assert captured_body["files"][0]["mediaType"] == "image/png"
 
+    async def test_url_file_part_sent_as_url(self) -> None:
+        captured_body: dict[str, Any] = {}
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            captured_body.update(json.loads(req.content))
+            return httpx.Response(200, json={"images": [_PNG_B64]})
+
+        msg = messages.Message(
+            role="user",
+            parts=[
+                messages.TextPart(text="make it watercolor"),
+                messages.FilePart(
+                    data="https://example.com/photo.jpg",
+                    media_type="image/jpeg",
+                ),
+            ],
+        )
+        await ops.generate_image(
+            mock_model(httpx.MockTransport(handler), model_id=_IMAGE_MODEL_ID),
+            [msg],
+        )
+
+        assert captured_body["files"] == [
+            {"type": "url", "url": "https://example.com/photo.jpg"}
+        ]
+
+    async def test_defaults_omit_unset_parameters(self) -> None:
+        captured_body: dict[str, Any] = {}
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            captured_body.update(json.loads(req.content))
+            return httpx.Response(200, json={"images": [_PNG_B64]})
+
+        await ops.generate_image(
+            mock_model(httpx.MockTransport(handler), model_id=_IMAGE_MODEL_ID),
+            [user_msg("test")],
+        )
+
+        assert captured_body == {"prompt": "test", "n": 1}
+
     async def test_url_posts_to_image_model_endpoint(self) -> None:
         captured_url: list[str] = []
 
@@ -188,10 +218,9 @@ class TestRequest:
             captured_url.append(str(req.url))
             return httpx.Response(200, json={"images": [_PNG_B64]})
 
-        await api.experimental_generate(
+        await ops.generate_image(
             mock_model(httpx.MockTransport(handler), model_id=_IMAGE_MODEL_ID),
             [user_msg("test")],
-            ImageParams(),
         )
 
         assert captured_url[0] == "https://gw.test/v3/ai/image-model"
@@ -216,12 +245,11 @@ class TestErrors:
             )
 
         with pytest.raises(ai.ProviderAuthenticationError):
-            await api.experimental_generate(
+            await ops.generate_image(
                 mock_model(
                     httpx.MockTransport(handler), model_id=_IMAGE_MODEL_ID
                 ),
                 [user_msg("test")],
-                ImageParams(),
             )
 
     async def test_429_rate_limit_error(self) -> None:
@@ -237,12 +265,11 @@ class TestErrors:
             )
 
         with pytest.raises(ai.ProviderRateLimitError):
-            await api.experimental_generate(
+            await ops.generate_image(
                 mock_model(
                     httpx.MockTransport(handler), model_id=_IMAGE_MODEL_ID
                 ),
                 [user_msg("test")],
-                ImageParams(),
             )
 
     async def test_empty_images_returns_empty_message(self) -> None:
@@ -251,9 +278,8 @@ class TestErrors:
         def handler(req: httpx.Request) -> httpx.Response:
             return httpx.Response(200, json={"images": []})
 
-        msg = await api.experimental_generate(
+        msg = await ops.generate_image(
             mock_model(httpx.MockTransport(handler), model_id=_IMAGE_MODEL_ID),
             [user_msg("test")],
-            ImageParams(),
         )
         assert len(msg.images) == 0
