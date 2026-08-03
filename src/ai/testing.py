@@ -1,15 +1,21 @@
-"""Test a model / agent interaction against a script.
+"""Test a model / agent interaction against scripted conversations.
 
-:class:`FakeModel` is a drop-in :class:`~ai.models.core.model.Model`
-that replays scripted assistant messages::
+A script is a plain list of messages. :class:`FakeModel` is a drop-in
+:class:`~ai.Model` that replays it::
 
-    calls = [ai.testing.tool_call(lookup, topic="mars")]
     model = ai.testing.FakeModel([
-        (ai.user_message("hi"), [
-            ai.assistant_message("checking", *calls),
-            ai.assistant_message("done"),
-        ]),
+        ai.user_message("hi"),
+        ai.assistant_message(
+            "checking", ai.testing.tool_call(lookup, topic="mars")
+        ),
+        ai.assistant_message("done"),
     ])
+
+* tool messages may be left out of a script.
+* include a tool message ``ai.tool_message(...)`` to additionally assert
+  the exact results.
+* unscripted system messages are ignored, so system prompt doesn't need
+  to appear in the script.
 """
 
 from __future__ import annotations
@@ -36,7 +42,6 @@ __all__ = ["FakeModel", "fingerprint", "tool_call"]
 _VOLATILE_MESSAGE_FIELDS = ("id", "turn_id", "usage", "provider_metadata")
 _VOLATILE_PART_FIELDS = (
     "id",
-    "tool_call_id",
     "provider_metadata",
     "model_input",
     "cached_result",
@@ -44,22 +49,26 @@ _VOLATILE_PART_FIELDS = (
 
 
 def fingerprint(message: messages_.Message) -> str:
-    """Serialize message and drop volatile fields.
+    """Serialize a message, dropping volatile fields.
 
-    :class:`FakeModel` uses this to match incoming conversations against script
-    keys; the same dump appears in its error messages.
+    :class:`FakeModel` compares fingerprints to match incoming
+    conversations against scripts.
     """
     data = message.model_dump(mode="json")
     for field in _VOLATILE_MESSAGE_FIELDS:
         data.pop(field, None)
-    for part in data.get("parts", []):
+    parts = data.get("parts", [])
+    for part in parts:
         for field in _VOLATILE_PART_FIELDS:
             part.pop(field, None)
+    if data.get("role") == "tool":
+        # parallel tools finish in arbitrary order
+        parts.sort(key=lambda part: part.get("tool_call_id", ""))
     return json.dumps(data, sort_keys=True, indent=2)
 
 
 def tool_call(
-    tool: agents.AgentTool | str, **kwargs: Any
+    tool: agents.AgentTool | str, /, **kwargs: Any
 ) -> messages_.ToolCallPart:
     """Build a :class:`ToolCallPart` for a scripted assistant message.
 
@@ -80,85 +89,149 @@ def tool_call(
 
 
 @dataclasses.dataclass
-class _Entry:
-    key: messages_.Message
-    key_fingerprint: str
-    responses: list[messages_.Message]
-    played: int = 0
+class _Script:
+    messages: list[messages_.Message]
+    fingerprints: list[str]
+    played: set[int] = dataclasses.field(default_factory=set)
 
-    @property
-    def exhausted(self) -> bool:
-        return self.played >= len(self.responses)
+    def label(self) -> str:
+        return f"script starting with {self.messages[0].text[:60]!r}"
 
 
-type _Script = Sequence[
-    tuple[
-        messages_.Message,
-        messages_.Message | Sequence[messages_.Message],
-    ]
-]
+@dataclasses.dataclass
+class _NoMatch:
+    matched: int  # incoming messages matched before giving up
+    reason: str
 
 
-def _parse_script(
-    script: _Script,
-) -> tuple[list[_Entry], dict[str, str]]:
-    """Validate the script; return entries and a tool_call_id -> name map."""
-    entries: list[_Entry] = []
-    tool_names: dict[str, str] = {}
-    for index, (key, value) in enumerate(script):
-        responses = (
-            [value] if isinstance(value, messages_.Message) else list(value)
-        )
-        where = f"script entry {index} ({key.text[:60]!r})"
-        if not responses:
-            raise ValueError(f"{where}: no response messages")
-        for position, message in enumerate(responses):
-            if message.role != "assistant":
-                raise ValueError(
-                    f"{where}: response {position} has role "
-                    f"{message.role!r}; scripted responses must be "
-                    "assistant messages"
-                )
-            is_last = position == len(responses) - 1
-            if not is_last and not message.tool_calls:
-                raise ValueError(
-                    f"{where}: response {position} has no tool calls, so "
-                    "the turn ends there and later responses can never "
-                    "play"
-                )
+def _parse_scripts(
+    scripts: Sequence[Sequence[messages_.Message]],
+) -> list[_Script]:
+    parsed: list[_Script] = []
+    seen_call_ids: set[str] = set()
+    for index, messages in enumerate(scripts):
+        where = f"script {index}"
+        messages = list(messages)
+        if not messages:
+            raise ValueError(f"{where}: empty script")
+        if not any(m.role == "assistant" for m in messages):
+            raise ValueError(f"{where}: no assistant messages to play")
+        for position, message in enumerate(messages):
             for part in message.tool_calls:
-                if part.tool_call_id in tool_names:
+                if part.tool_call_id in seen_call_ids:
                     raise ValueError(
                         f"{where}: duplicate tool_call_id "
                         f"{part.tool_call_id!r}; build each call with its "
                         "own ai.testing.tool_call(...)"
                     )
-                tool_names[part.tool_call_id] = part.tool_name
-        entries.append(
-            _Entry(
-                key=key,
-                key_fingerprint=fingerprint(key),
-                responses=responses,
+                seen_call_ids.add(part.tool_call_id)
+            if (
+                position > 0
+                and message.role == "assistant"
+                and messages[position - 1].role == "assistant"
+                and not messages[position - 1].tool_calls
+            ):
+                raise ValueError(
+                    f"{where}: message {position - 1} is an assistant "
+                    "message with no tool calls, so the turn ends there "
+                    f"and the assistant message {position} can never play"
+                )
+        parsed.append(
+            _Script(
+                messages=messages,
+                fingerprints=[fingerprint(m) for m in messages],
             )
         )
-    return entries, tool_names
+    return parsed
+
+
+def _walk(
+    script: _Script,
+    got: Sequence[messages_.Message],
+    got_fingerprints: Sequence[str],
+) -> int | _NoMatch:
+    """Match an incoming conversation against a script.
+
+    Returns the index of the next scripted message to play, or a
+    :class:`_NoMatch` explaining where the conversation diverges.
+    """
+    expected = script.messages
+    at = 0  # index into expected
+    matched = 0
+    pending: set[str] = set()  # scripted tool calls awaiting results
+    for position, (message, print_) in enumerate(
+        zip(got, got_fingerprints, strict=True)
+    ):
+        if at < len(expected) and script.fingerprints[at] == print_:
+            if message.role == "tool":
+                pending -= {p.tool_call_id for p in message.tool_results}
+            pending |= {p.tool_call_id for p in expected[at].tool_calls}
+            at += 1
+            matched += 1
+        elif message.role == "tool":
+            # unscripted tool message: results are not asserted, but they
+            # must answer tool calls this script played.
+            ids = {p.tool_call_id for p in message.tool_results}
+            if not ids <= pending:
+                return _NoMatch(
+                    matched,
+                    f"message {position} answers tool calls "
+                    f"{sorted(ids - pending)} that this script never made",
+                )
+            pending -= ids
+        elif message.role == "system":
+            continue  # e.g. an agent's system prompt
+        elif at < len(expected):
+            return _NoMatch(
+                matched,
+                f"message {position} does not match.\n"
+                f"expected:\n{script.fingerprints[at]}\n"
+                f"got:\n{print_}",
+            )
+        else:
+            return _NoMatch(
+                matched, f"the script ended before message {position}"
+            )
+    if at >= len(expected):
+        return _NoMatch(
+            matched,
+            "all scripted messages played, but the model was called again",
+        )
+    nxt = expected[at]
+    if nxt.role != "assistant":
+        return _NoMatch(
+            matched,
+            f"the next scripted message has role {nxt.role!r} and nothing "
+            f"in the conversation matches it:\n{script.fingerprints[at]}",
+        )
+    if pending:
+        return _NoMatch(
+            matched,
+            f"scripted tool calls {sorted(pending)} have no results yet, "
+            f"so the next assistant message cannot play",
+        )
+    return at
 
 
 class _FakeProvider(models.Provider):
-    """Provider backing :class:`FakeModel`; replays the script."""
+    """Provider backing :class:`FakeModel`; replays the scripts."""
 
     provider_class_id: Literal["testing-fake-model"] = "testing-fake-model"
     name: str = "fake"
     default_base_url: str = "http://fake.invalid"
 
-    _entries: list[_Entry] = pydantic.PrivateAttr(default_factory=list)
-    _tool_names: dict[str, str] = pydantic.PrivateAttr(default_factory=dict)
-    _pending: dict[frozenset[str], _Entry] = pydantic.PrivateAttr(
-        default_factory=dict
-    )
+    _scripts: list[_Script] = pydantic.PrivateAttr(default_factory=list)
     _calls: list[list[messages_.Message]] = pydantic.PrivateAttr(
         default_factory=list
     )
+
+    def __init__(
+        self,
+        scripts: Sequence[Sequence[messages_.Message]] = (),
+        **data: Any,
+    ) -> None:
+        super().__init__(**data)
+        self._scripts = _parse_scripts(scripts)
 
     async def list_models(self) -> list[str]:
         return []
@@ -189,89 +262,45 @@ class _FakeProvider(models.Provider):
         self._calls.append([m.model_copy(deep=True) for m in messages])
         if not messages:
             raise AssertionError("FakeModel was called with no messages")
-        last = messages[-1]
+        fingerprints = [fingerprint(m) for m in messages]
+        failures: list[tuple[_Script, _NoMatch]] = []
+        for script in self._scripts:
+            result = _walk(script, messages, fingerprints)
+            if isinstance(result, int):
+                script.played.add(result)
+                return script.messages[result]
+            failures.append((script, result))
+        raise AssertionError(self._no_match_error(fingerprints, failures))
 
-        # middle of a turn: answer tool calls with a tool message,
-        # route by tool_call_id.
-        results = last.tool_results
-        if results:
-            ids = frozenset(part.tool_call_id for part in results)
-            entry = self._pending.pop(ids, None)
-            if entry is None:
-                raise AssertionError(self._mismatched_results_error(results))
-            return self._play(entry)
-
-        # start of a turn: match the injected message against the keys.
-        key_fingerprint = fingerprint(last)
-        for entry in self._entries:
-            if entry.played == 0 and entry.key_fingerprint == key_fingerprint:
-                return self._play(entry)
-        raise AssertionError(self._no_entry_error(key_fingerprint))
-
-    def _play(self, entry: _Entry) -> messages_.Message:
-        if entry.exhausted:
-            raise AssertionError(
-                f"FakeModel: entry {entry.key.text[:60]!r} already played "
-                f"all {len(entry.responses)} scripted messages, but the "
-                "model was called again in that conversation"
-            )
-        message = entry.responses[entry.played]
-        entry.played += 1
-        ids = frozenset(part.tool_call_id for part in message.tool_calls)
-        if ids:
-            self._pending[ids] = entry
-        return message
-
-    def _describe(self, ids: frozenset[str]) -> str:
-        return ", ".join(
-            f"{self._tool_names.get(i, '?')}#{i}" for i in sorted(ids)
-        )
-
-    def _mismatched_results_error(
-        self, results: Sequence[messages_.ToolResultPart]
+    def _no_match_error(
+        self,
+        fingerprints: list[str],
+        failures: list[tuple[_Script, _NoMatch]],
     ) -> str:
-        got = ", ".join(
-            f"{part.tool_name}#{part.tool_call_id}"
-            for part in sorted(results, key=lambda p: p.tool_call_id)
-        )
-        expected = [self._describe(ids) for ids in self._pending] or [
-            "(none pending)"
+        lines = [
+            "FakeModel: no script continues this conversation.",
+            f"The model was called with {len(fingerprints)} message(s); "
+            "the last one:",
+            fingerprints[-1],
         ]
-        return (
-            "FakeModel: got tool results answering [{got}], but the "
-            "pending scripted tool calls are: {expected}".format(
-                got=got, expected="; ".join(expected)
+        if failures:
+            script, no_match = max(failures, key=lambda f: f[1].matched)
+            lines.append(
+                f"Closest is the {script.label()} "
+                f"(matched {no_match.matched} message(s)): {no_match.reason}"
             )
-        )
-
-    def _no_entry_error(self, key_fingerprint: str) -> str:
-        unused = [
-            entry.key_fingerprint
-            for entry in self._entries
-            if entry.played == 0
-        ]
-        return (
-            "FakeModel: no scripted entry matches the last message.\n"
-            f"Got:\n{key_fingerprint}\n"
-            "Unused keys:\n" + ("\n".join(unused) if unused else "(none)")
-        )
+        return "\n".join(lines)
 
 
 class FakeModel(models.Model):
-    """A model that replays a script instead of calling a provider.
-
-    ``script`` is a sequence of ``(input message, response(s))`` pairs.
-    """
+    """A model that replays scripted conversations."""
 
     def __init__(
         self,
-        script: _Script,
-        *,
+        *scripts: Sequence[messages_.Message],
         id: str = "fake-model",
     ) -> None:
-        provider = _FakeProvider()
-        provider._entries, provider._tool_names = _parse_script(script)
-        super().__init__(id=id, provider=provider)
+        super().__init__(id=id, provider=_FakeProvider(scripts=scripts))
 
     @property
     def _fake(self) -> _FakeProvider:
@@ -284,10 +313,13 @@ class FakeModel(models.Model):
 
     @property
     def unused(self) -> list[messages_.Message]:
-        """Keys of entries with scripted messages that never played.
+        """Scripted assistant messages that never played.
 
         A finished test normally asserts ``not model.unused``.
         """
         return [
-            entry.key for entry in self._fake._entries if not entry.exhausted
+            message
+            for script in self._fake._scripts
+            for index, message in enumerate(script.messages)
+            if message.role == "assistant" and index not in script.played
         ]

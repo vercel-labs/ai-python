@@ -2,7 +2,8 @@
 
 Temporary, deliberately non-trivial examples exercising the scripted
 fake model: parallel tool calls, parallel subagents that themselves
-call tools, plain ai.stream replay, and the failure modes.
+call tools, plain ai.stream replay, multi-turn scripts, and the
+failure modes.
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ import pytest
 
 import ai
 from ai.types import events as events_
+from ai.types import messages as messages_
 
 
 @ai.tool
@@ -31,13 +33,9 @@ async def test_four_parallel_tool_calls() -> None:
     calls = [ai.testing.tool_call(double, word=w) for w in "abcd"]
     model = ai.testing.FakeModel(
         [
-            (
-                ai.user_message("double these: a b c d"),
-                [
-                    ai.assistant_message("doubling", *calls),
-                    ai.assistant_message("done: aa bb cc dd"),
-                ],
-            ),
+            ai.user_message("double these: a b c d"),
+            ai.assistant_message("doubling", *calls),
+            ai.assistant_message("done: aa bb cc dd"),
         ]
     )
 
@@ -86,32 +84,24 @@ async def test_parallel_subagents_with_tool_calls() -> None:
     ]
     model = ai.testing.FakeModel(
         [
-            (
-                ai.user_message("compare mars and venus"),
-                [
-                    ai.assistant_message("researching both", *research_calls),
-                    ai.assistant_message("mars: 2 moons; venus: 0 moons"),
-                ],
+            ai.user_message("compare mars and venus"),
+            ai.assistant_message("researching both", *research_calls),
+            ai.assistant_message("mars: 2 moons; venus: 0 moons"),
+        ],
+        [
+            ai.user_message("research: mars"),
+            ai.assistant_message(
+                "checking", ai.testing.tool_call(moons, planet="mars")
             ),
-            (
-                ai.user_message("research: mars"),
-                [
-                    ai.assistant_message(
-                        "checking", ai.testing.tool_call(moons, planet="mars")
-                    ),
-                    ai.assistant_message("mars has 2 moons"),
-                ],
+            ai.assistant_message("mars has 2 moons"),
+        ],
+        [
+            ai.user_message("research: venus"),
+            ai.assistant_message(
+                "checking", ai.testing.tool_call(moons, planet="venus")
             ),
-            (
-                ai.user_message("research: venus"),
-                [
-                    ai.assistant_message(
-                        "checking", ai.testing.tool_call(moons, planet="venus")
-                    ),
-                    ai.assistant_message("venus has 0 moons"),
-                ],
-            ),
-        ]
+            ai.assistant_message("venus has 0 moons"),
+        ],
     )
     model_ref.append(model)
 
@@ -135,12 +125,65 @@ async def test_parallel_subagents_with_tool_calls() -> None:
     assert not model.unused
 
 
+async def test_multi_turn_with_repeated_user_message() -> None:
+    model = ai.testing.FakeModel(
+        [
+            ai.user_message("hi"),
+            ai.assistant_message("hello"),
+            ai.user_message("hi"),
+            ai.assistant_message("hello again"),
+        ]
+    )
+
+    agent = ai.Agent()
+    history: list[messages_.Message] = [ai.user_message("hi")]
+    async with agent.run(model, history) as stream:
+        async for _ in stream:
+            pass
+    assert stream.messages[-1].text == "hello"
+
+    history = [*stream.messages, ai.user_message("hi")]
+    async with agent.run(model, history) as stream:
+        async for _ in stream:
+            pass
+    assert stream.messages[-1].text == "hello again"
+    assert not model.unused
+
+
+async def test_scripted_tool_message_asserts_results() -> None:
+    # A tool message in the script is an assertion on the actual results.
+    call = ai.testing.tool_call(double, word="hi")
+    script = [
+        ai.user_message("double hi"),
+        ai.assistant_message("on it", call),
+        ai.tool_message(
+            tool_call_id=call.tool_call_id, tool_name="double", result="WRONG"
+        ),
+        ai.assistant_message("done"),
+    ]
+    model = ai.testing.FakeModel(script)
+
+    agent = ai.Agent(tools=[double])
+    # agent.run wraps errors from its task groups in ExceptionGroups
+    expected_error = pytest.RaisesGroup(
+        pytest.RaisesExc(AssertionError, match="WRONG"),
+        flatten_subgroups=True,
+    )
+    with expected_error:
+        async with agent.run(model, [ai.user_message("double hi")]) as stream:
+            async for _ in stream:
+                pass
+
+    assert model.unused  # "done" never played
+
+
 async def test_plain_stream_replays_tool_calls() -> None:
     # ai.stream does not execute tools: a single response, one model call
     call = ai.testing.tool_call(double, word="hi")
     model = ai.testing.FakeModel(
         [
-            (ai.user_message("double hi"), ai.assistant_message("sure", call)),
+            ai.user_message("double hi"),
+            ai.assistant_message("sure", call),
         ]
     )
 
@@ -157,7 +200,8 @@ async def test_plain_stream_replays_tool_calls() -> None:
 async def test_unmatched_input_fails_with_dump() -> None:
     model = ai.testing.FakeModel(
         [
-            (ai.user_message("expected input"), ai.assistant_message("hi")),
+            ai.user_message("expected input"),
+            ai.assistant_message("hi"),
         ]
     )
 
@@ -167,26 +211,22 @@ async def test_unmatched_input_fails_with_dump() -> None:
                 pass
 
     assert "surprise!" in str(err.value)  # what arrived, as a dump
-    assert "expected input" in str(err.value)  # the unused keys
+    assert "expected input" in str(err.value)  # where the script diverges
     assert model.unused  # nothing was consumed
 
 
-async def test_wrong_tool_results_fail_with_ids() -> None:
-    # Script expects both calls answered; drive the follow-up by hand
-    # with only one of them.
+async def test_missing_tool_results_fail_with_ids() -> None:
+    # Script makes two calls; drive the follow-up by hand answering
+    # only one of them.
     calls = [
         ai.testing.tool_call(double, word="a"),
         ai.testing.tool_call(double, word="b"),
     ]
     model = ai.testing.FakeModel(
         [
-            (
-                ai.user_message("go"),
-                [
-                    ai.assistant_message("on it", *calls),
-                    ai.assistant_message("done"),
-                ],
-            ),
+            ai.user_message("go"),
+            ai.assistant_message("on it", *calls),
+            ai.assistant_message("done"),
         ]
     )
 
@@ -208,6 +248,35 @@ async def test_wrong_tool_results_fail_with_ids() -> None:
             async for _ in stream:
                 pass
 
-    message = str(err.value)
-    assert calls[0].tool_call_id in message  # what was answered
-    assert calls[1].tool_call_id in message  # what the script expects
+    # the unanswered call is named
+    assert calls[1].tool_call_id in str(err.value)
+
+
+async def test_foreign_tool_results_fail() -> None:
+    # Results answering a call the script never made are rejected.
+    call = ai.testing.tool_call(double, word="a")
+    model = ai.testing.FakeModel(
+        [
+            ai.user_message("go"),
+            ai.assistant_message("on it", call),
+            ai.assistant_message("done"),
+        ]
+    )
+
+    async with ai.stream(model, [ai.user_message("go")]) as stream:
+        async for _ in stream:
+            pass
+
+    history = [
+        ai.user_message("go"),
+        stream.message,
+        ai.tool_message(
+            tool_call_id="call_bogus", tool_name="double", result="zz"
+        ),
+    ]
+    with pytest.raises(AssertionError) as err:
+        async with ai.stream(model, history) as stream:
+            async for _ in stream:
+                pass
+
+    assert "call_bogus" in str(err.value)
