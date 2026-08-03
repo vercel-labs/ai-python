@@ -171,6 +171,8 @@ def main() -> None:
             )
         elif "model" in kwargs and kwargs["model"] is not None:
             kwargs["model"] = with_selected_protocol(kwargs["model"])
+        elif kwargs.get("context") is not None:
+            kwargs["context"] = PatchedContext(kwargs["context"])
         return await original_generate(*call_args, **kwargs)
 
     class PatchedModel(_model.Model):
@@ -203,6 +205,9 @@ def main() -> None:
         cast("Any", core).stream = patched_stream
         cast("Any", _api).stream = patched_stream
 
+        cast("Any", ai).experimental_generate = patched_generate
+        cast("Any", models).experimental_generate = patched_generate
+        cast("Any", core).experimental_generate = patched_generate
         cast("Any", _api).experimental_generate = patched_generate
 
     sys.argv = [args.file]

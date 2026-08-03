@@ -12,7 +12,14 @@ is covered:
       -> return Message with FileParts
 """
 
+# ruff: noqa: E402
 from __future__ import annotations
+
+import pytest
+
+# Media generation is temporarily disconnected from experimental_generate();
+# these tests come back with the dedicated media module.
+pytest.skip("media generation is temporarily disabled", allow_module_level=True)
 
 import base64
 import json
@@ -20,7 +27,6 @@ from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import httpx
-import pytest
 
 import ai
 from ai.models.core import api

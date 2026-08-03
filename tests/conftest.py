@@ -8,7 +8,6 @@ import pytest
 
 import ai
 from ai import models
-from ai.models.core import params
 from ai.providers import history_utils
 from ai.types import builders
 from ai.types import events as agent_events_
@@ -72,23 +71,36 @@ class MockProvider(models.Provider):
         self,
         model: models.Model,
         messages: list[messages_.Message],
-        params: params.GenerateParams,
+        *,
+        tools: Sequence[ai.tools.Tool] | None = None,
+        output_type: type[pydantic.BaseModel] | None = None,
+        params: models.InferenceRequestParams | None = None,
     ) -> messages_.Message:
         if model.protocol is not None:
             return await model.protocol.generate(
                 None,
                 model,
                 messages,
-                params,
+                tools=tools,
+                output_type=output_type,
+                params=params,
                 provider=self.name,
             )
         if self._generate_impl is None:
-            raise RuntimeError(
+            # Mirrors the base class: providers without a native
+            # generate() make ai.experimental_generate() fall back to streaming.
+            raise NotImplementedError(
                 "MockProvider: no generate implementation configured"
             )
         return cast(
             "messages_.Message",
-            await self._generate_impl(model, messages, params),
+            await self._generate_impl(
+                model,
+                messages,
+                tools=tools,
+                output_type=output_type,
+                params=params,
+            ),
         )
 
 
@@ -213,43 +225,6 @@ async def collect_messages(
         ):
             result.append(event.message)
     return result
-
-
-class MockGenerateAdapter:
-    """Mock generate adapter that returns pre-configured responses.
-
-    Each call pops the next response.  Tracks ``call_count`` for assertions.
-    """
-
-    def __init__(self, responses: list[messages_.Message]) -> None:
-        self._responses = list(responses)
-        self._call_index = 0
-        self.call_count = 0
-
-    async def generate(
-        self,
-        model: models.Model,
-        messages: list[messages_.Message],
-        params: params.GenerateParams,
-    ) -> messages_.Message:
-        if self._call_index >= len(self._responses):
-            raise RuntimeError(
-                "MockGenerateAdapter: no more responses configured"
-            )
-        self.call_count += 1
-        msg = self._responses[self._call_index]
-        self._call_index += 1
-        return msg
-
-
-def mock_generate(responses: list[messages_.Message]) -> MockGenerateAdapter:
-    """Create a MockGenerateAdapter and attach it to the shared mock provider.
-
-    Returns the adapter so tests can inspect ``call_count``.
-    """
-    adapter = MockGenerateAdapter(responses)
-    MOCK_PROVIDER._generate_impl = adapter.generate
-    return adapter
 
 
 # ── Helpers ──────────────────────────────────────────────────────

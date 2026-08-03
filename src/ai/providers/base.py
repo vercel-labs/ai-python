@@ -154,11 +154,17 @@ class ProviderProtocol(pydantic.BaseModel, Generic[ClientT]):
         client: ClientT,
         model: model_.Model,
         messages: list[messages_.Message],
-        params: params_.GenerateParams,
         *,
+        tools: Sequence[tools_.Tool] | None = None,
+        output_type: type[pydantic.BaseModel] | None = None,
+        params: params_.InferenceRequestParams | None = None,
         provider: str,
     ) -> messages_.Message:
-        """Generate a non-streaming response using *client*."""
+        """Generate a non-streaming language-model response using *client*.
+
+        Optional: protocols that don't implement it fall back to the
+        streaming path in :func:`ai.experimental_generate`.
+        """
         raise NotImplementedError(
             f"protocol {type(self).__name__!r} does not support generate()"
         )
@@ -385,15 +391,24 @@ class Provider(pydantic.BaseModel, Generic[ClientT]):
         self,
         model: model_.Model,
         messages: list[messages_.Message],
-        params: params_.GenerateParams,
+        *,
+        tools: Sequence[tools_.Tool] | None = None,
+        output_type: type[pydantic.BaseModel] | None = None,
+        params: params_.InferenceRequestParams | None = None,
     ) -> messages_.Message:
-        """Generate a non-streaming response from this provider."""
+        """Generate a non-streaming response from this provider.
+
+        Optional: providers that don't implement it fall back to the
+        streaming path in :func:`ai.experimental_generate`.
+        """
         selected_protocol = model.protocol or self.protocol
         return await selected_protocol.generate(
             self.client,
             model,
             messages,
-            params,
+            tools=tools,
+            output_type=output_type,
+            params=params,
             provider=self.name,
         )
 

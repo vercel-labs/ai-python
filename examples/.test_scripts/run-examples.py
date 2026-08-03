@@ -41,6 +41,7 @@ class Sample:
 
 TEXT_SAMPLES = [
     Sample("models/stream.py"),
+    Sample("models/generate.py"),
     Sample("models/gateway/stream.py"),
     Sample("models/anthropic/stream.py"),
     Sample("models/openai/stream.py"),
@@ -60,16 +61,17 @@ TEXT_SAMPLES = [
 ]
 
 IMAGE_SAMPLES = [
-    Sample("media/image_generation.py"),
-    Sample("media/image_edit.py"),
     Sample("media/inline_image.py"),
 ]
 
-VIDEO_SAMPLES = [
+VIDEO_SAMPLES: list[Sample] = []
+
+# media generation is disconnected from experimental_generate()
+BROKEN_SAMPLES: list[Sample] = [
+    Sample("media/image_generation.py"),
+    Sample("media/image_edit.py"),
     Sample("media/video_generation.py"),
 ]
-
-BROKEN_SAMPLES: list[Sample] = []
 
 # E2E tests pick non-default ports so they don't collide with a running
 # dev server on 8000/5173. Each test gets its own ports so that --parallel

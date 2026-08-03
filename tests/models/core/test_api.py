@@ -8,7 +8,6 @@ import pytest
 
 import ai
 from ai import models
-from ai.models.core import api, params
 from ai.types import events as events_
 from ai.types import messages as messages_
 
@@ -332,7 +331,7 @@ async def test_generate_dispatches_to_provider(recorder: Recorder) -> None:
     )
     sentinel = messages_.Message(
         role="assistant",
-        parts=[messages_.FilePart(data=b"\x89PNG", media_type="image/png")],
+        parts=[messages_.TextPart(text="native")],
         usage=ai.types.usage.Usage(input_tokens=3, output_tokens=7),
     )
     called = False
@@ -340,7 +339,10 @@ async def test_generate_dispatches_to_provider(recorder: Recorder) -> None:
     async def _generate(
         model: models.Model,
         messages: list[messages_.Message],
-        params: params.GenerateParams,
+        *,
+        tools: Sequence[ai.tools.Tool] | None = None,
+        output_type: type[pydantic.BaseModel] | None = None,
+        params: models.InferenceRequestParams | None = None,
     ) -> messages_.Message:
         nonlocal called
         called = True
@@ -348,11 +350,7 @@ async def test_generate_dispatches_to_provider(recorder: Recorder) -> None:
 
     provider._generate_impl = _generate
 
-    result = await api.experimental_generate(
-        model,
-        [ai.user_message("A cat")],
-        params.ImageParams(n=1),
-    )
+    result = await models.experimental_generate(model, [ai.user_message("Hi")])
 
     assert called
     assert result is sentinel
@@ -365,10 +363,46 @@ async def test_generate_dispatches_to_provider(recorder: Recorder) -> None:
     assert span.data.usage == sentinel.usage
 
 
+async def test_generate_falls_back_to_stream(recorder: Recorder) -> None:
+    # MOCK_PROVIDER has no native generate(): experimental_generate drains the
+    # stream and returns the aggregated message.
+    mock_llm([[text_msg("streamed reply")]])
+
+    result = await models.experimental_generate(
+        MOCK_MODEL, [ai.user_message("Hi")]
+    )
+
+    assert result.text == "streamed reply"
+
+    (span,) = [s for s in recorder.ended if s.name == "ai_generate"]
+    assert isinstance(span.data, ai.experimental_telemetry.AiGenerateSpanData)
+    assert span.data.message is not None
+    assert span.data.message.text == "streamed reply"
+
+
+async def test_generate_fallback_dying_stream_raises() -> None:
+    async def _dying_stream(
+        model: models.Model,
+        messages: list[messages_.Message],
+        **kwargs: Any,
+    ) -> AsyncGenerator[events_.Event]:
+        yield events_.StreamStart()
+        yield events_.TextStart(block_id="text")
+        yield events_.TextDelta(block_id="text", chunk="partial")
+        # no StreamEnd: transport dropped mid-response
+
+    provider = MockProvider()
+    provider._stream_impl = _dying_stream
+    model = models.Model(id="dying-model", provider=provider)
+
+    with pytest.raises(ai.errors.ProviderIncompleteResponseError):
+        await models.experimental_generate(model, [ai.user_message("Hi")])
+
+
 async def test_generate_uses_model_protocol() -> None:
     sentinel = messages_.Message(
         role="assistant",
-        parts=[messages_.FilePart(data=b"\x89PNG", media_type="image/png")],
+        parts=[messages_.TextPart(text="native")],
     )
 
     class OverrideProtocol(models.ProviderProtocol[Any]):
@@ -381,17 +415,18 @@ async def test_generate_uses_model_protocol() -> None:
             client: Any,
             model: models.Model,
             messages: list[messages_.Message],
-            params: params.GenerateParams,
             *,
+            tools: Sequence[ai.tools.Tool] | None = None,
+            output_type: type[pydantic.BaseModel] | None = None,
+            params: models.InferenceRequestParams | None = None,
             provider: str,
         ) -> messages_.Message:
-            _ = client, model, messages, params, provider
+            _ = client, model, messages, tools, output_type, params, provider
             return sentinel
 
-    result = await api.experimental_generate(
+    result = await models.experimental_generate(
         MOCK_MODEL.with_protocol(OverrideProtocol()),
-        [ai.user_message("A cat")],
-        params.ImageParams(n=1),
+        [ai.user_message("Hi")],
     )
 
     assert result is sentinel

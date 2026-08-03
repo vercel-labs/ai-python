@@ -592,32 +592,29 @@ def test_semconv_message_content_shapes() -> None:
 def test_generate_span_attributes() -> None:
     data = ai.experimental_telemetry.AiGenerateSpanData(
         model="mock-model",
-        messages=[ai.user_message("draw")],
-        params=core_params.ImageParams(n=2, seed=7),
+        messages=[ai.user_message("hi")],
+        params=core_params.InferenceRequestParams(
+            output=core_params.OutputParams(max_tokens=64),
+        ),
         provider="mock",
+        finish_reason="stop",
+        response_id="resp-1",
+        response_model="mock-model-2",
     )
     sp = ai.experimental_telemetry.Span(
         name="ai_generate", data=data, id="span-1", trace_id="trace-1"
     )
+    assert otel._semconv_name(sp) == "chat mock-model"
     attrs = otel._attributes(sp, capture_content=False)
-    assert attrs["gen_ai.operation.name"] == "generate_content"
+    assert attrs["gen_ai.operation.name"] == "chat"
     assert attrs["gen_ai.provider.name"] == "mock"
-    assert attrs["gen_ai.request.choice.count"] == 2
-    assert attrs["gen_ai.request.seed"] == 7
-    assert attrs["gen_ai.output.type"] == "image"
-
-    data = ai.experimental_telemetry.AiGenerateSpanData(
-        model="mock-model",
-        messages=[ai.user_message("film")],
-        params=core_params.VideoParams(),
-        provider="mock",
-    )
-    sp = ai.experimental_telemetry.Span(
-        name="ai_generate", data=data, id="span-2", trace_id="trace-1"
-    )
-    attrs = otel._attributes(sp, capture_content=False)
-    assert attrs["gen_ai.output.type"] == "video"
-    assert "gen_ai.request.choice.count" not in attrs
+    assert attrs["gen_ai.request.model"] == "mock-model"
+    assert attrs["gen_ai.request.stream"] is False
+    assert attrs["gen_ai.request.max_tokens"] == 64
+    assert attrs["gen_ai.response.finish_reasons"] == ["stop"]
+    assert attrs["gen_ai.response.id"] == "resp-1"
+    assert attrs["gen_ai.response.model"] == "mock-model-2"
+    assert "gen_ai.response.time_to_first_chunk" not in attrs
 
 
 def test_run_span_attributes() -> None:

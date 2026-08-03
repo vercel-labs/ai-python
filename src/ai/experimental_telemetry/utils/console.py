@@ -37,7 +37,12 @@ def _label(sp: telemetry.Span) -> str:
             )
             return f"chat {d.model}{tokens}"
         case telemetry.AiGenerateSpanData() as d:
-            return f"generate {d.model}"
+            tokens = (
+                f"  in:{d.usage.input_tokens} out:{d.usage.output_tokens} tok"
+                if d.usage is not None
+                else ""
+            )
+            return f"generate {d.model}{tokens}"
         case telemetry.ToolExecutionSpanData() as d:
             args = ", ".join(f"{k}={v!r}" for k, v in (d.args or {}).items())
             return f"tool {d.tool_name}({_short(args)})"

@@ -44,7 +44,7 @@ if TYPE_CHECKING:
     import pydantic
 
     from ..models.core.model import Model
-    from ..models.core.params import GenerateParams
+    from ..models.core.params import InferenceRequestParams
     from ..types import events as events_
     from ..types.tools import Tool
     from .agent import Context
@@ -70,14 +70,18 @@ class ModelContext:
 
 @dataclasses.dataclass(frozen=True)
 class GenerateContext:
-    """Context for a model generate call (images, video, etc.)."""
+    """Context for a non-streaming model call."""
 
     model: Model
     messages: list[messages_.Message]
-    params: GenerateParams
+    tools: Sequence[Tool] | None
+    output_type: type[pydantic.BaseModel] | None
+    params: InferenceRequestParams | None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "messages", list(self.messages))
+        if self.tools is not None:
+            object.__setattr__(self, "tools", list(self.tools))
 
 
 @dataclasses.dataclass(frozen=True)
@@ -179,7 +183,7 @@ class _Middleware:
         call: GenerateContext,
         next: Callable[[GenerateContext], Awaitable[_Message]],
     ) -> _Message:
-        """Wrap a model generate call (images, video, etc.)."""
+        """Wrap a non-streaming model call."""
         return await next(call)
 
     async def wrap_tool(
