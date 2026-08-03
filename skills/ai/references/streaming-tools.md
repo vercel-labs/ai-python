@@ -2,7 +2,7 @@
 
 Read `https://ai-python.dev/docs/basics/tools.md` (streaming tools) and
 `https://ai-python.dev/docs/basics/subagents-and-multi-agent.md` first.
-These details are not stated there:
+Additional rules:
 
 ## Custom aggregation
 

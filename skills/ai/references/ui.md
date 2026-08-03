@@ -1,9 +1,7 @@
 # AI SDK UI: frontend wiring and hook deferral
 
 Read `https://ai-python.dev/docs/basics/ai-sdk-ui.md` first for the backend
-adapter (`ai.ui.ai_sdk`: `UIMessage`, `to_messages`, `apply_approvals`,
-`to_sse`, `to_ui_messages`). This file adds the frontend snippet and the
-defer-hook wiring the docs do not show.
+adapter. Below are additional frontend and defer-hook details.
 
 ## Frontend
 

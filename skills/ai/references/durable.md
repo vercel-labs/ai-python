@@ -1,7 +1,7 @@
 # Durable execution: extra rules
 
-Read `https://ai-python.dev/docs/basics/durable-execution.md` first. These
-details are not stated there:
+Read `https://ai-python.dev/docs/basics/durable-execution.md` first.
+Additional invariants:
 
 - Use the durable model step's result as a complete `Message`. Do not wrap it
   in `ai.Stream`, `ai.events.replay_message_events`, or `ai.util.merge` —

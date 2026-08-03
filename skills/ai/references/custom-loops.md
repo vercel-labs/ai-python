@@ -1,7 +1,7 @@
 # Custom loop rules
 
-Read `https://ai-python.dev/docs/basics/custom-loops.md` first for the
-standard loop shape. These rules are not stated there:
+Read `https://ai-python.dev/docs/basics/custom-loops.md` first. Additional
+invariants:
 
 - `context.resolve(event.tool_call)` handles argument validation, approval
   gates, and cached replay results. Do not call `tool.fn` directly unless you
