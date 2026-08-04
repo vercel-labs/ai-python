@@ -768,6 +768,24 @@ async def test_image_usage_parsing() -> None:
     assert msg.usage.output_tokens == 100
 
 
+async def test_image_provider_metadata_passthrough() -> None:
+    """``providerMetadata`` from the response lands on the message."""
+    metadata = {"gateway": {"cost": "0.05", "generationId": "gen-123"}}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"images": [_PNG_B64], "providerMetadata": metadata},
+        )
+
+    msg = await ops.generate_image(
+        mock_model(httpx.MockTransport(handler), model_id=_IMAGE_MODEL_ID),
+        [user_msg("a dog")],
+    )
+
+    assert msg.provider_metadata == metadata
+
+
 async def test_image_protocol_headers() -> None:
     captured: dict[str, str] = {}
 

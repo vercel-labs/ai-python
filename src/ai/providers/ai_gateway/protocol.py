@@ -15,7 +15,7 @@ from pydantic.alias_generators import to_camel
 from ... import types
 from ...models import core
 from ...models.core import params as params_
-from ...ops import images
+from ...ops import images, videos
 from .. import base, history_utils
 from . import client as gateway_client
 from . import errors
@@ -80,13 +80,13 @@ def _extract_input_files(
     return files_
 
 
-def _file_part_to_v3_image(part: types.messages.FilePart) -> dict[str, Any]:
-    """Convert a :class:`FilePart` to the image-model input-file wire format.
+def _file_part_to_v3_media(part: types.messages.FilePart) -> dict[str, Any]:
+    """Convert a :class:`FilePart` to the media-model input-file wire format.
 
     Unlike ``_file_part_to_v3`` (the language prompt encoding), the
-    image-model endpoint accepts URLs directly (``{"type": "url"}``), so
-    they are passed through instead of downloaded; inline data is raw
-    base64, not a data URL.
+    image- and video-model endpoints accept URLs directly
+    (``{"type": "url"}``), so they are passed through instead of
+    downloaded; inline data is raw base64, not a data URL.
     """
     data = part.data
     if isinstance(data, str) and types.media.is_url(data):
@@ -1113,7 +1113,7 @@ async def generate_image(
         body["providerOptions"] = dict(params.provider_options)
     input_files = _extract_input_files(messages)
     if input_files:
-        body["files"] = [_file_part_to_v3_image(f) for f in input_files]
+        body["files"] = [_file_part_to_v3_media(f) for f in input_files]
 
     try:
         response = await gateway.post(
@@ -1139,7 +1139,102 @@ async def generate_image(
             types.messages.FilePart(data=img_b64, media_type=media_type)
         )
 
-    return types.messages.Message(role="assistant", parts=parts, usage=usage)
+    return types.messages.Message(
+        role="assistant",
+        parts=parts,
+        usage=usage,
+        provider_metadata=data.get("providerMetadata"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Video generation
+# ---------------------------------------------------------------------------
+
+
+async def generate_video(
+    gateway: gateway_client.GatewayClient,
+    model: core.model.Model,
+    messages: list[types.messages.Message],
+    *,
+    params: videos.VideoParams,
+) -> types.messages.Message:
+    """Hit ``/video-model`` (SSE) and return a Message with FileParts."""
+    body: dict[str, Any] = {
+        "prompt": _extract_prompt(messages),
+        "n": params.n,
+    }
+    if params.aspect_ratio is not None:
+        body["aspectRatio"] = params.aspect_ratio
+    if params.resolution is not None:
+        body["resolution"] = params.resolution
+    if params.duration is not None:
+        body["duration"] = params.duration
+    if params.fps is not None:
+        body["fps"] = params.fps
+    if params.seed is not None:
+        body["seed"] = params.seed
+    if params.provider_options:
+        body["providerOptions"] = dict(params.provider_options)
+    input_files = _extract_input_files(messages)
+    if input_files:
+        body["image"] = _file_part_to_v3_media(input_files[0])
+
+    try:
+        async with gateway.stream(
+            "video-model",
+            body,
+            model=model,
+            model_type="video",
+            accept="text/event-stream",
+            timeout=httpx.Timeout(timeout=600.0, connect=10.0),
+        ) as response:
+            event_data: dict[str, Any] = {}
+            async for parsed in gateway.iter_sse(response):
+                event_data = parsed
+                break
+
+        if not event_data:
+            raise client_errors.GatewayResponseError(
+                "SSE stream ended without any data events",
+            )
+
+        if event_data.get("type") == "error":
+            raise client_errors.GatewayInvalidRequestError(
+                message=event_data.get("message", "unknown error"),
+                status_code=event_data.get("statusCode", 400),
+            )
+    except client_errors.GatewayError as exc:
+        raise errors.map_error(exc) from exc
+
+    raw_videos: list[dict[str, Any]] = event_data.get("videos", [])
+    parts: list[types.messages.Part] = []
+    for video_data in raw_videos:
+        vtype = video_data.get("type", "base64")
+        media_type = video_data.get("mediaType", "video/mp4")
+
+        if vtype == "url":
+            downloaded_bytes, content_type = await core.helpers.files.download(
+                video_data["url"]
+            )
+            if content_type:
+                media_type = content_type
+            parts.append(
+                types.messages.FilePart(
+                    data=downloaded_bytes, media_type=media_type
+                )
+            )
+        else:
+            raw_data = video_data.get("data", "")
+            parts.append(
+                types.messages.FilePart(data=raw_data, media_type=media_type)
+            )
+
+    return types.messages.Message(
+        role="assistant",
+        parts=parts,
+        provider_metadata=event_data.get("providerMetadata"),
+    )
 
 
 class GatewayV3Protocol(base.ProviderProtocol[gateway_client.GatewayClient]):
@@ -1179,3 +1274,15 @@ class GatewayV3Protocol(base.ProviderProtocol[gateway_client.GatewayClient]):
     ) -> types.messages.Message:
         _ = provider
         return await generate_image(client, model, messages, params=params)
+
+    async def generate_video(
+        self,
+        client: gateway_client.GatewayClient,
+        model: core.model.Model,
+        messages: list[types.messages.Message],
+        *,
+        params: videos.VideoParams,
+        provider: str,
+    ) -> types.messages.Message:
+        _ = provider
+        return await generate_video(client, model, messages, params=params)

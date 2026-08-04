@@ -1,10 +1,10 @@
 """Integration tests for the AI Gateway v3 video generation adapter.
 
-Every test exercises the real ``generate()`` function with a provider
-wired to an ``httpx.MockTransport``, so the full production code path
-is covered:
+Every test exercises the real ``ops.generate_video()`` function with a
+provider wired to an ``httpx.MockTransport``, so the full production
+code path is covered:
 
-    generate(model, messages, VideoParams(...))
+    ops.generate_video(model, messages, params=VideoParams(...))
       -> extract prompt/image from messages
       -> httpx POST (mock) to /video-model with SSE accept
       -> SSE event parsing
@@ -12,14 +12,7 @@ is covered:
       -> return Message with FileParts
 """
 
-# ruff: noqa: E402
 from __future__ import annotations
-
-import pytest
-
-# Video generation is temporarily disconnected; these tests come back
-# when ai.ops grows generate_video.
-pytest.skip("video generation is temporarily disabled", allow_module_level=True)
 
 import base64
 import json
@@ -27,10 +20,10 @@ from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import httpx
+import pytest
 
 import ai
-from ai.models.core import api
-from ai.models.core.params import VideoParams
+from ai import ops
 from ai.types import messages
 
 from .conftest import mock_model, sse, user_msg
@@ -72,10 +65,9 @@ class TestGenerate:
         def handler(req: httpx.Request) -> httpx.Response:
             return httpx.Response(200, text=body)
 
-        msg = await api.experimental_generate(
+        msg = await ops.generate_video(
             mock_model(httpx.MockTransport(handler), model_id=_VIDEO_MODEL_ID),
             [user_msg("A cat walking on a beach")],
-            params=VideoParams(),
         )
 
         assert msg.role == "assistant"
@@ -110,10 +102,9 @@ class TestGenerate:
             new_callable=AsyncMock,
             return_value=(_MP4_HEADER, "video/mp4"),
         ) as mock_dl:
-            msg = await api.experimental_generate(
+            msg = await ops.generate_video(
                 model,
                 [user_msg("A sunset timelapse")],
-                params=VideoParams(),
             )
 
         mock_dl.assert_called_once_with("https://storage.example.com/video.mp4")
@@ -143,14 +134,45 @@ class TestGenerate:
         def handler(req: httpx.Request) -> httpx.Response:
             return httpx.Response(200, text=body)
 
-        msg = await api.experimental_generate(
+        msg = await ops.generate_video(
             mock_model(httpx.MockTransport(handler), model_id=_VIDEO_MODEL_ID),
             [user_msg("Two versions")],
-            params=VideoParams(n=2),
+            params=ops.VideoParams(n=2),
         )
         assert len(msg.videos) == 2
         assert msg.videos[0].media_type == "video/mp4"
         assert msg.videos[1].media_type == "video/webm"
+
+    async def test_provider_metadata_passthrough(self) -> None:
+        """``providerMetadata`` from the result event lands on the message."""
+        metadata = {
+            "gateway": {"cost": "0.20", "generationId": "gen-xyz-789"},
+            "fal": {"usage": {"computeUnits": 10}},
+        }
+        body = sse(
+            {
+                "type": "result",
+                "videos": [
+                    {
+                        "type": "base64",
+                        "data": _MP4_B64,
+                        "mediaType": "video/mp4",
+                    }
+                ],
+                "providerMetadata": metadata,
+            }
+        )
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, text=body)
+
+        msg = await ops.generate_video(
+            mock_model(httpx.MockTransport(handler), model_id=_VIDEO_MODEL_ID),
+            [user_msg("a dog")],
+        )
+
+        assert msg.provider_metadata == metadata
+        assert msg.usage is None
 
 
 # ---------------------------------------------------------------------------
@@ -185,11 +207,7 @@ class TestRequest:
             api_key="sk-test",
             model_id=_VIDEO_MODEL_ID,
         )
-        await api.experimental_generate(
-            model,
-            [user_msg("test")],
-            params=VideoParams(),
-        )
+        await ops.generate_video(model, [user_msg("test")])
 
         assert captured["authorization"] == "Bearer sk-test"
         assert captured["ai-video-model-specification-version"] == "3"
@@ -228,10 +246,10 @@ class TestRequest:
                 messages.FilePart(data=png_b64, media_type="image/png"),
             ],
         )
-        await api.experimental_generate(
+        await ops.generate_video(
             mock_model(httpx.MockTransport(handler), model_id=_VIDEO_MODEL_ID),
             [msg],
-            params=VideoParams(
+            params=ops.VideoParams(
                 n=2,
                 aspect_ratio="16:9",
                 resolution="1920x1080",
@@ -256,6 +274,34 @@ class TestRequest:
         assert captured_body["image"]["type"] == "file"
         assert captured_body["image"]["mediaType"] == "image/png"
 
+    async def test_defaults_omit_unset_parameters(self) -> None:
+        captured_body: dict[str, Any] = {}
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            captured_body.update(json.loads(req.content))
+            return httpx.Response(
+                200,
+                text=sse(
+                    {
+                        "type": "result",
+                        "videos": [
+                            {
+                                "type": "base64",
+                                "data": _MP4_B64,
+                                "mediaType": "video/mp4",
+                            }
+                        ],
+                    }
+                ),
+            )
+
+        await ops.generate_video(
+            mock_model(httpx.MockTransport(handler), model_id=_VIDEO_MODEL_ID),
+            [user_msg("test")],
+        )
+
+        assert captured_body == {"prompt": "test", "n": 1}
+
     async def test_url_posts_to_video_model_endpoint(self) -> None:
         captured_url: list[str] = []
 
@@ -277,10 +323,9 @@ class TestRequest:
                 ),
             )
 
-        await api.experimental_generate(
+        await ops.generate_video(
             mock_model(httpx.MockTransport(handler), model_id=_VIDEO_MODEL_ID),
             [user_msg("test")],
-            params=VideoParams(),
         )
         assert captured_url[0] == "https://gw.test/v3/ai/video-model"
 
@@ -307,12 +352,11 @@ class TestErrors:
             return httpx.Response(200, text=body)
 
         with pytest.raises(ai.ProviderBadRequestError, match="Content policy"):
-            await api.experimental_generate(
+            await ops.generate_video(
                 mock_model(
                     httpx.MockTransport(handler), model_id=_VIDEO_MODEL_ID
                 ),
                 [user_msg("test")],
-                params=VideoParams(),
             )
 
     async def test_401_authentication_error(self) -> None:
@@ -328,12 +372,11 @@ class TestErrors:
             )
 
         with pytest.raises(ai.ProviderAuthenticationError):
-            await api.experimental_generate(
+            await ops.generate_video(
                 mock_model(
                     httpx.MockTransport(handler), model_id=_VIDEO_MODEL_ID
                 ),
                 [user_msg("test")],
-                params=VideoParams(),
             )
 
     async def test_empty_sse_stream(self) -> None:
@@ -343,10 +386,9 @@ class TestErrors:
             return httpx.Response(200, text="")
 
         with pytest.raises(ai.ProviderResponseError, match="SSE stream ended"):
-            await api.experimental_generate(
+            await ops.generate_video(
                 mock_model(
                     httpx.MockTransport(handler), model_id=_VIDEO_MODEL_ID
                 ),
                 [user_msg("test")],
-                params=VideoParams(),
             )

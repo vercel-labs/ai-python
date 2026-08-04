@@ -17,13 +17,8 @@ REPO = Path(__file__).resolve().parent.parent.parent
 MYPY_VERSION = f"mypy=={mypy.version.__version__}"
 _EXAMPLES_DIR = REPO / "examples"
 
-# media generation is disconnected from experimental_generate();
 # keep in sync with BROKEN_SAMPLES in run-examples.py
-_BROKEN_SAMPLES = {
-    "media/image_generation.py",
-    "media/image_edit.py",
-    "media/video_generation.py",
-}
+_BROKEN_SAMPLES: set[str] = set()
 
 _SAMPLE_FILES = sorted(
     str(p.relative_to(_EXAMPLES_DIR))
