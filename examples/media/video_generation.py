@@ -6,13 +6,10 @@ import pathlib
 
 import ai
 
-model = ai.get_model("google/veo-3.0-generate-001")
+model = ai.get_model("google/veo-3.1-fast-generate-001")
 
 messages = [
-    ai.user_message(
-        "A slow aerial shot over a mountain lake at sunrise, with mist "
-        "rising from the water and birds taking flight."
-    ),
+    ai.user_message("A paper boat drifting across a puddle in the rain."),
 ]
 
 
@@ -22,7 +19,7 @@ async def main() -> None:
     result = await ai.ops.generate_video(
         model,
         messages,
-        params=ai.ops.VideoParams(aspect_ratio="16:9", duration=8),
+        params=ai.ops.VideoParams(aspect_ratio="16:9", duration=4),
     )
 
     print(f"Generated {len(result.videos)} video(s)")
