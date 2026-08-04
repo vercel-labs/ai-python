@@ -707,7 +707,7 @@ async def experimental_generate(
             pass
 
         # no native generate; drain the stream and take the message.
-        # reconstruct the stream instead of genegating to existing _stream()
+        # reconstruct the stream instead of delegating to existing _stream()
         # to avoid nested telemetry spans.
         s: Stream[Any] = Stream(
             _default_executor._do_stream(request),
