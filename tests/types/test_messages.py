@@ -219,6 +219,95 @@ def test_tool_result_content_output_with_file_part_round_trip() -> None:
     assert file_part.media_type == "image/png"
 
 
+def test_tool_result_special_model_input_round_trip() -> None:
+    """A special ``model_input`` is rebuilt independently from ``result``."""
+    content = messages.ContentOutput(
+        value=[
+            messages.FilePart(data=b"fake-image-data", media_type="image/png")
+        ]
+    )
+    trp = messages.ToolResultPart(
+        tool_call_id="tc1",
+        tool_name="draw",
+        result={"image_id": "img1"},
+    )
+    trp.set_model_input(content)
+
+    restored = messages.ToolResultPart.model_validate_json(
+        trp.model_dump_json()
+    )
+
+    assert restored.result == {"image_id": "img1"}
+    assert restored.result_kind == "json"
+    assert restored.model_input_kind == "special"
+    assert isinstance(restored.get_model_input(), messages.ContentOutput)
+    [file_part] = restored.get_model_input().value
+    assert isinstance(file_part, messages.FilePart)
+    assert file_part.media_type == "image/png"
+
+
+def test_tool_result_derives_model_input_kind_at_construction() -> None:
+    content = messages.ContentOutput(
+        value=[messages.TextPart(text="model only")]
+    )
+    trp = messages.ToolResultPart(
+        tool_call_id="tc1",
+        tool_name="summarize",
+        result={"full": "result"},
+        model_input=content,
+    )
+
+    assert trp.model_input_kind == "special"
+    restored = messages.ToolResultPart.model_validate_json(
+        trp.model_dump_json()
+    )
+    assert isinstance(restored.get_model_input(), messages.ContentOutput)
+
+
+def test_tool_result_only_serializes_special_model_input_kind() -> None:
+    unset = messages.ToolResultPart(
+        tool_call_id="tc1",
+        tool_name="summarize",
+        result={"full": "result"},
+    )
+    assert "model_input_kind" not in unset.model_dump()
+
+    json_input = unset.model_copy(update={"model_input": {"summary": "short"}})
+    assert "model_input_kind" not in json_input.model_dump()
+
+    special_input = messages.ToolResultPart(
+        tool_call_id="tc1",
+        tool_name="summarize",
+        result={"full": "result"},
+        model_input=messages.ContentOutput(
+            value=[messages.TextPart(text="short")]
+        ),
+    )
+    assert special_input.model_dump()["model_input_kind"] == "special"
+
+
+def test_tool_result_special_result_with_json_model_input() -> None:
+    """A JSON ``model_input`` stays plain when ``result`` is special."""
+    trp = messages.ToolResultPart(
+        tool_call_id="tc1",
+        tool_name="draw",
+        result=messages.ContentOutput(value=[messages.TextPart(text="ok")]),
+        result_kind="special",
+    )
+    trp.set_model_input({"type": "content", "value": "plain data"})
+
+    restored = messages.ToolResultPart.model_validate_json(
+        trp.model_dump_json()
+    )
+
+    assert isinstance(restored.result, messages.ContentOutput)
+    assert restored.model_input_kind == "json"
+    assert restored.get_model_input() == {
+        "type": "content",
+        "value": "plain data",
+    }
+
+
 def test_tool_result_validates_result_from_context_tools() -> None:
     class Weather(pydantic.BaseModel):
         temp: int
@@ -397,7 +486,7 @@ def test_tool_result_file_part_base64_valid_after_round_trip() -> None:
 def test_tool_result_without_model_input_serializes_after_deep_copy() -> None:
     """A deep-copied ToolResultPart with no model_input still serializes.
 
-    ``model_input`` defaults to the ``_MODEL_INPUT_UNSET`` singleton, and
+    ``model_input`` defaults to the ``MODEL_INPUT_UNSET`` singleton, and
     the sentinel checks (``exclude_if``, ``has_model_input``,
     ``get_model_input``) test for it by type.  ``model_copy(deep=True)``
     rebuilds the sentinel into a *new* instance: an identity (``is``) check

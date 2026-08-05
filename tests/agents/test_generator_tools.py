@@ -72,8 +72,10 @@ async def test_generator_tool_streams_and_returns_result() -> None:
         e for e in all_events if isinstance(e, agent_events_.ToolCallResult)
     ]
     assert len(tool_results) >= 1
-    tr = tool_results[0].results[0].result
-    assert tr == "Answer for test"
+    part = tool_results[0].results[0]
+    assert part.result == "Answer for test"
+    assert part.has_model_input
+    assert part.get_model_input() == "Answer for test"
 
 
 # ---------------------------------------------------------------------------
