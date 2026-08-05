@@ -519,6 +519,10 @@ class Message(pydantic.BaseModel):
     def videos(self) -> list[FilePart]:
         return [p for p in self.files if p.media_type.startswith("video/")]
 
+    @property
+    def audio(self) -> list[FilePart]:
+        return [p for p in self.files if p.media_type.startswith("audio/")]
+
     @overload
     def get_output(self, output_type: None = None) -> str: ...
     @overload
