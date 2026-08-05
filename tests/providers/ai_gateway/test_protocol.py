@@ -719,12 +719,10 @@ async def test_basic_image_generation() -> None:
         )
 
     model = mock_model(httpx.MockTransport(handler), model_id=_IMAGE_MODEL_ID)
-    msg = await ops.generate_image(model, [user_msg("A sunset over Tokyo")])
-
-    assert msg.role == "assistant"
-    assert len(msg.images) == 1
-    assert msg.images[0].data == _PNG_B64
-    assert msg.images[0].media_type == "image/png"
+    result = await ops.generate_image(model, [user_msg("A sunset over Tokyo")])
+    assert len(result.value) == 1
+    assert result.value[0].data == _PNG_B64
+    assert result.value[0].media_type == "image/png"
 
 
 async def test_multiple_images() -> None:
@@ -738,20 +736,20 @@ async def test_multiple_images() -> None:
             json={"images": [_PNG_B64, _JPEG_B64, _PNG_B64]},
         )
 
-    msg = await ops.generate_image(
+    result = await ops.generate_image(
         mock_model(httpx.MockTransport(handler), model_id=_IMAGE_MODEL_ID),
         [user_msg("Three cats")],
         params=ops.ImageParams(n=3),
     )
 
-    assert len(msg.images) == 3
-    assert msg.images[0].media_type == "image/png"
-    assert msg.images[1].media_type == "image/jpeg"
-    assert msg.images[2].media_type == "image/png"
+    assert len(result.value) == 3
+    assert result.value[0].media_type == "image/png"
+    assert result.value[1].media_type == "image/jpeg"
+    assert result.value[2].media_type == "image/png"
 
 
 async def test_image_usage_parsing() -> None:
-    """Usage data from response surfaces on the Message."""
+    """Usage data from response surfaces on the Item."""
 
     def handler(req: httpx.Request) -> httpx.Response:
         return httpx.Response(
@@ -762,18 +760,18 @@ async def test_image_usage_parsing() -> None:
             },
         )
 
-    msg = await ops.generate_image(
+    result = await ops.generate_image(
         mock_model(httpx.MockTransport(handler), model_id=_IMAGE_MODEL_ID),
         [user_msg("a dog")],
     )
 
-    assert msg.usage is not None
-    assert msg.usage.input_tokens == 50
-    assert msg.usage.output_tokens == 100
+    assert result.usage is not None
+    assert result.usage.input_tokens == 50
+    assert result.usage.output_tokens == 100
 
 
 async def test_image_provider_metadata_passthrough() -> None:
-    """``providerMetadata`` from the response lands on the message."""
+    """``providerMetadata`` from the response lands on the item."""
     metadata = {"gateway": {"cost": "0.05", "generationId": "gen-123"}}
 
     def handler(req: httpx.Request) -> httpx.Response:
@@ -782,12 +780,12 @@ async def test_image_provider_metadata_passthrough() -> None:
             json={"images": [_PNG_B64], "providerMetadata": metadata},
         )
 
-    msg = await ops.generate_image(
+    result = await ops.generate_image(
         mock_model(httpx.MockTransport(handler), model_id=_IMAGE_MODEL_ID),
         [user_msg("a dog")],
     )
 
-    assert msg.provider_metadata == metadata
+    assert result.provider_metadata == metadata
 
 
 async def test_image_protocol_headers() -> None:
@@ -943,17 +941,17 @@ async def test_image_429_rate_limit_error() -> None:
         )
 
 
-async def test_empty_images_returns_empty_message() -> None:
-    """Gateway returns empty images array -> message with no parts."""
+async def test_empty_images_returns_empty_item() -> None:
+    """Gateway returns empty images array -> item with empty value."""
 
     def handler(req: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"images": []})
 
-    msg = await ops.generate_image(
+    result = await ops.generate_image(
         mock_model(httpx.MockTransport(handler), model_id=_IMAGE_MODEL_ID),
         [user_msg("test")],
     )
-    assert len(msg.images) == 0
+    assert len(result.value) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -991,15 +989,13 @@ async def test_basic_video_generation_base64() -> None:
     def handler(req: httpx.Request) -> httpx.Response:
         return httpx.Response(200, text=body)
 
-    msg = await ops.generate_video(
+    result = await ops.generate_video(
         mock_model(httpx.MockTransport(handler), model_id=_VIDEO_MODEL_ID),
         [user_msg("A cat walking on a beach")],
     )
-
-    assert msg.role == "assistant"
-    assert len(msg.videos) == 1
-    assert msg.videos[0].data == _MP4_B64
-    assert msg.videos[0].media_type == "video/mp4"
+    assert len(result.value) == 1
+    assert result.value[0].data == _MP4_B64
+    assert result.value[0].media_type == "video/mp4"
 
 
 async def test_video_generation_url() -> None:
@@ -1027,15 +1023,15 @@ async def test_video_generation_url() -> None:
         new_callable=AsyncMock,
         return_value=(_MP4_HEADER, "video/mp4"),
     ) as mock_dl:
-        msg = await ops.generate_video(
+        result = await ops.generate_video(
             model,
             [user_msg("A sunset timelapse")],
         )
 
     mock_dl.assert_called_once_with("https://storage.example.com/video.mp4")
-    assert len(msg.videos) == 1
-    assert msg.videos[0].data == _MP4_HEADER
-    assert msg.videos[0].media_type == "video/mp4"
+    assert len(result.value) == 1
+    assert result.value[0].data == _MP4_HEADER
+    assert result.value[0].media_type == "video/mp4"
 
 
 async def test_multiple_videos() -> None:
@@ -1060,18 +1056,18 @@ async def test_multiple_videos() -> None:
     def handler(req: httpx.Request) -> httpx.Response:
         return httpx.Response(200, text=body)
 
-    msg = await ops.generate_video(
+    result = await ops.generate_video(
         mock_model(httpx.MockTransport(handler), model_id=_VIDEO_MODEL_ID),
         [user_msg("Two versions")],
         params=ops.VideoParams(n=2),
     )
-    assert len(msg.videos) == 2
-    assert msg.videos[0].media_type == "video/mp4"
-    assert msg.videos[1].media_type == "video/webm"
+    assert len(result.value) == 2
+    assert result.value[0].media_type == "video/mp4"
+    assert result.value[1].media_type == "video/webm"
 
 
 async def test_video_provider_metadata_passthrough() -> None:
-    """``providerMetadata`` from the result event lands on the message."""
+    """``providerMetadata`` from the result event lands on the item."""
     metadata = {
         "gateway": {"cost": "0.20", "generationId": "gen-xyz-789"},
         "fal": {"usage": {"computeUnits": 10}},
@@ -1093,13 +1089,13 @@ async def test_video_provider_metadata_passthrough() -> None:
     def handler(req: httpx.Request) -> httpx.Response:
         return httpx.Response(200, text=body)
 
-    msg = await ops.generate_video(
+    result = await ops.generate_video(
         mock_model(httpx.MockTransport(handler), model_id=_VIDEO_MODEL_ID),
         [user_msg("a dog")],
     )
 
-    assert msg.provider_metadata == metadata
-    assert msg.usage is None
+    assert result.provider_metadata == metadata
+    assert result.usage is None
 
 
 async def test_video_protocol_headers() -> None:
@@ -1331,12 +1327,10 @@ async def test_basic_speech_generation() -> None:
         )
 
     model = mock_model(httpx.MockTransport(handler), model_id=_SPEECH_MODEL_ID)
-    msg = await ops.generate_audio(model, [user_msg("Hello world")])
-
-    assert msg.role == "assistant"
-    assert len(msg.audio) == 1
-    assert msg.audio[0].data == _MP3_B64
-    assert msg.audio[0].media_type == "audio/mpeg"
+    result = await ops.generate_audio(model, [user_msg("Hello world")])
+    assert len(result.value) == 1
+    assert result.value[0].data == _MP3_B64
+    assert result.value[0].media_type == "audio/mpeg"
 
 
 async def test_wav_media_type_detection() -> None:
@@ -1345,13 +1339,13 @@ async def test_wav_media_type_detection() -> None:
     def handler(req: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"audio": _WAV_B64})
 
-    msg = await ops.generate_audio(
+    result = await ops.generate_audio(
         mock_model(httpx.MockTransport(handler), model_id=_SPEECH_MODEL_ID),
         [user_msg("Hello world")],
         params=ops.AudioParams(output_format="wav"),
     )
 
-    assert msg.audio[0].media_type == "audio/wav"
+    assert result.value[0].media_type == "audio/wav"
 
 
 async def test_unknown_bytes_fall_back_to_mpeg() -> None:
@@ -1361,16 +1355,16 @@ async def test_unknown_bytes_fall_back_to_mpeg() -> None:
     def handler(req: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"audio": unknown_b64})
 
-    msg = await ops.generate_audio(
+    result = await ops.generate_audio(
         mock_model(httpx.MockTransport(handler), model_id=_SPEECH_MODEL_ID),
         [user_msg("Hello world")],
     )
 
-    assert msg.audio[0].media_type == "audio/mpeg"
+    assert result.value[0].media_type == "audio/mpeg"
 
 
 async def test_audio_provider_metadata_passthrough() -> None:
-    """``providerMetadata`` from the response lands on the message."""
+    """``providerMetadata`` from the response lands on the item."""
     metadata = {"gateway": {"cost": "0.05", "generationId": "gen-123"}}
 
     def handler(req: httpx.Request) -> httpx.Response:
@@ -1379,12 +1373,12 @@ async def test_audio_provider_metadata_passthrough() -> None:
             json={"audio": _MP3_B64, "providerMetadata": metadata},
         )
 
-    msg = await ops.generate_audio(
+    result = await ops.generate_audio(
         mock_model(httpx.MockTransport(handler), model_id=_SPEECH_MODEL_ID),
         [user_msg("Hello world")],
     )
 
-    assert msg.provider_metadata == metadata
+    assert result.provider_metadata == metadata
 
 
 async def test_audio_protocol_headers() -> None:
@@ -1504,14 +1498,14 @@ async def test_audio_429_rate_limit_error() -> None:
         )
 
 
-async def test_missing_audio_returns_empty_message() -> None:
-    """Gateway returns no audio -> message with no parts."""
+async def test_missing_audio_returns_empty_item() -> None:
+    """Gateway returns no audio -> item with empty value."""
 
     def handler(req: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"audio": ""})
 
-    msg = await ops.generate_audio(
+    result = await ops.generate_audio(
         mock_model(httpx.MockTransport(handler), model_id=_SPEECH_MODEL_ID),
         [user_msg("test")],
     )
-    assert len(msg.audio) == 0
+    assert len(result.value) == 0

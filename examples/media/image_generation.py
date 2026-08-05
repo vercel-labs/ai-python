@@ -22,8 +22,8 @@ async def main() -> None:
         model, messages, params=ai.ops.ImageParams(n=2, aspect_ratio="16:9")
     )
 
-    print(f"Generated {len(result.images)} image(s)")
-    for i, img in enumerate(result.images):
+    print(f"Generated {len(result.value)} image(s)")
+    for i, img in enumerate(result.value):
         filename = f"generated_{i}.png"
         data = (
             img.data

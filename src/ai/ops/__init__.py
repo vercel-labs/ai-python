@@ -2,11 +2,13 @@
 
 from .audio import AudioParams, generate_audio
 from .images import ImageParams, generate_image
+from .items import Item
 from .videos import VideoParams, generate_video
 
 __all__ = [
     "AudioParams",
     "ImageParams",
+    "Item",
     "VideoParams",
     "generate_audio",
     "generate_image",

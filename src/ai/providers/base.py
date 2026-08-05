@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 
     from ..models.core import model as model_
     from ..models.core import params as params_
-    from ..ops import audio, images, videos
+    from ..ops import audio, images, items, videos
     from ..types import events
     from ..types import messages as messages_
     from ..types import tools as tools_
@@ -178,7 +178,7 @@ class ProviderProtocol(pydantic.BaseModel, Generic[ClientT]):
         *,
         params: images.ImageParams,
         provider: str,
-    ) -> messages_.Message:
+    ) -> items.Item[list[messages_.FilePart]]:
         """Generate images with a dedicated image model using *client*."""
         raise NotImplementedError(
             f"protocol {type(self).__name__!r} does not support "
@@ -193,7 +193,7 @@ class ProviderProtocol(pydantic.BaseModel, Generic[ClientT]):
         *,
         params: videos.VideoParams,
         provider: str,
-    ) -> messages_.Message:
+    ) -> items.Item[list[messages_.FilePart]]:
         """Generate videos with a dedicated video model using *client*."""
         raise NotImplementedError(
             f"protocol {type(self).__name__!r} does not support "
@@ -208,7 +208,7 @@ class ProviderProtocol(pydantic.BaseModel, Generic[ClientT]):
         *,
         params: audio.AudioParams,
         provider: str,
-    ) -> messages_.Message:
+    ) -> items.Item[list[messages_.FilePart]]:
         """Generate speech with a dedicated speech model using *client*."""
         raise NotImplementedError(
             f"protocol {type(self).__name__!r} does not support "
@@ -464,7 +464,7 @@ class Provider(pydantic.BaseModel, Generic[ClientT]):
         messages: list[messages_.Message],
         *,
         params: images.ImageParams,
-    ) -> messages_.Message:
+    ) -> items.Item[list[messages_.FilePart]]:
         """Generate images with this provider's dedicated image model."""
         selected_protocol = model.protocol or self.protocol
         return await selected_protocol.generate_image(
@@ -481,7 +481,7 @@ class Provider(pydantic.BaseModel, Generic[ClientT]):
         messages: list[messages_.Message],
         *,
         params: videos.VideoParams,
-    ) -> messages_.Message:
+    ) -> items.Item[list[messages_.FilePart]]:
         """Generate videos with this provider's dedicated video model."""
         selected_protocol = model.protocol or self.protocol
         return await selected_protocol.generate_video(
@@ -498,7 +498,7 @@ class Provider(pydantic.BaseModel, Generic[ClientT]):
         messages: list[messages_.Message],
         *,
         params: audio.AudioParams,
-    ) -> messages_.Message:
+    ) -> items.Item[list[messages_.FilePart]]:
         """Generate speech with this provider's dedicated speech model."""
         selected_protocol = model.protocol or self.protocol
         return await selected_protocol.generate_audio(

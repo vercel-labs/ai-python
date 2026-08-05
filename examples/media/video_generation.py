@@ -22,8 +22,8 @@ async def main() -> None:
         params=ai.ops.VideoParams(aspect_ratio="16:9", duration=4),
     )
 
-    print(f"Generated {len(result.videos)} video(s)")
-    for i, vid in enumerate(result.videos):
+    print(f"Generated {len(result.value)} video(s)")
+    for i, vid in enumerate(result.value):
         ext = "mp4" if "mp4" in vid.media_type else "webm"
         filename = f"generated_{i}.{ext}"
         data = (
