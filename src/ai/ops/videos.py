@@ -7,8 +7,8 @@
     model = ai.get_model("google/veo-3.0-generate-001")
     msgs = [ai.user_message("A cat walking on a beach")]
 
-    message = await ai.ops.generate_video(model, msgs)
-    message.videos  # list[FilePart]
+    result = await ai.ops.generate_video(model, msgs)
+    result.value  # list[FilePart]
 """
 
 from __future__ import annotations
@@ -21,6 +21,7 @@ if TYPE_CHECKING:
 
     from .. import types
     from ..models.core import model as model_
+    from . import items
 
 
 @dataclasses.dataclass(frozen=True, kw_only=True)
@@ -49,15 +50,15 @@ async def generate_video(
     messages: list[types.messages.Message],
     *,
     params: VideoParams | None = None,
-) -> types.messages.Message:
+) -> items.Item[list[types.messages.FilePart]]:
     """Generate videos with a dedicated video model.
 
     The prompt is the text of the user/system messages; an input image
     for image-to-video rides along as a ``FilePart`` part in a user
-    message. Returns a complete assistant message whose parts are the
-    generated videos (``message.videos``). Video models do not report
-    token usage; cost information, when the provider sends it, is on
-    ``message.provider_metadata``.
+    message. Returns an :class:`~ai.ops.Item` whose ``value`` is the
+    generated videos. Video models do not report token usage; cost
+    information, when the provider sends it, is on
+    ``.provider_metadata``.
     """
     return await model.provider.generate_video(
         model, messages, params=params or VideoParams()

@@ -7,8 +7,8 @@
     model = ai.get_model("openai/tts-1")
     msgs = [ai.user_message("Hello from the AI SDK!")]
 
-    message = await ai.ops.generate_audio(model, msgs)
-    message.audio  # list[FilePart]
+    result = await ai.ops.generate_audio(model, msgs)
+    result.value  # list[FilePart]
 """
 
 from __future__ import annotations
@@ -21,6 +21,7 @@ if TYPE_CHECKING:
 
     from .. import types
     from ..models.core import model as model_
+    from . import items
 
 
 @dataclasses.dataclass(frozen=True, kw_only=True)
@@ -48,14 +49,13 @@ async def generate_audio(
     messages: list[types.messages.Message],
     *,
     params: AudioParams | None = None,
-) -> types.messages.Message:
+) -> items.Item[list[types.messages.FilePart]]:
     """Generate speech audio with a dedicated speech model.
 
-    The text to speak is the text of the user/system messages. Returns a
-    complete assistant message whose parts are the generated audio files
-    (``message.audio``). Speech models do not report token usage; cost
-    information, when the provider sends it, is on
-    ``message.provider_metadata``.
+    The text to speak is the text of the user/system messages. Returns an
+    :class:`~ai.ops.Item` whose ``value`` is the generated audio files.
+    Speech models do not report token usage; cost information, when the
+    provider sends it, is on ``.provider_metadata``.
     """
     return await model.provider.generate_audio(
         model, messages, params=params or AudioParams()

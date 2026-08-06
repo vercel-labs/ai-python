@@ -15,7 +15,7 @@ from pydantic.alias_generators import to_camel
 from ... import types
 from ...models import core
 from ...models.core import params as params_
-from ...ops import audio, images, videos
+from ...ops import audio, images, items, videos
 from .. import base, history_utils
 from . import client as gateway_client
 from . import errors
@@ -1097,8 +1097,8 @@ async def generate_image(
     messages: list[types.messages.Message],
     *,
     params: images.ImageParams,
-) -> types.messages.Message:
-    """Hit ``/image-model`` and return a Message with FileParts."""
+) -> items.Item[list[types.messages.FilePart]]:
+    """Hit ``/image-model`` and return an Item with FileParts."""
     body: dict[str, Any] = {
         "prompt": _extract_prompt(messages),
         "n": params.n,
@@ -1132,16 +1132,15 @@ async def generate_image(
             output_tokens=usage_data.get("outputTokens") or 0,
         )
 
-    parts: list[types.messages.Part] = []
+    files: list[types.messages.FilePart] = []
     for img_b64 in raw_images:
         media_type = types.media.detect_image_media_type(img_b64) or "image/png"
-        parts.append(
+        files.append(
             types.messages.FilePart(data=img_b64, media_type=media_type)
         )
 
-    return types.messages.Message(
-        role="assistant",
-        parts=parts,
+    return items.Item(
+        value=files,
         usage=usage,
         provider_metadata=data.get("providerMetadata"),
     )
@@ -1158,8 +1157,8 @@ async def generate_video(
     messages: list[types.messages.Message],
     *,
     params: videos.VideoParams,
-) -> types.messages.Message:
-    """Hit ``/video-model`` (SSE) and return a Message with FileParts."""
+) -> items.Item[list[types.messages.FilePart]]:
+    """Hit ``/video-model`` (SSE) and return an Item with FileParts."""
     body: dict[str, Any] = {
         "prompt": _extract_prompt(messages),
         "n": params.n,
@@ -1208,7 +1207,7 @@ async def generate_video(
         raise errors.map_error(exc) from exc
 
     raw_videos: list[dict[str, Any]] = event_data.get("videos", [])
-    parts: list[types.messages.Part] = []
+    files: list[types.messages.FilePart] = []
     for video_data in raw_videos:
         vtype = video_data.get("type", "base64")
         media_type = video_data.get("mediaType", "video/mp4")
@@ -1219,20 +1218,19 @@ async def generate_video(
             )
             if content_type:
                 media_type = content_type
-            parts.append(
+            files.append(
                 types.messages.FilePart(
                     data=downloaded_bytes, media_type=media_type
                 )
             )
         else:
             raw_data = video_data.get("data", "")
-            parts.append(
+            files.append(
                 types.messages.FilePart(data=raw_data, media_type=media_type)
             )
 
-    return types.messages.Message(
-        role="assistant",
-        parts=parts,
+    return items.Item(
+        value=files,
         provider_metadata=event_data.get("providerMetadata"),
     )
 
@@ -1248,8 +1246,8 @@ async def generate_audio(
     messages: list[types.messages.Message],
     *,
     params: audio.AudioParams,
-) -> types.messages.Message:
-    """Hit ``/speech-model`` and return a Message with a FilePart."""
+) -> items.Item[list[types.messages.FilePart]]:
+    """Hit ``/speech-model`` and return an Item with a FilePart."""
     body: dict[str, Any] = {
         "text": _extract_prompt(messages),
     }
@@ -1276,18 +1274,17 @@ async def generate_audio(
     data = response.json()
     audio_b64: str = data.get("audio") or ""
 
-    parts: list[types.messages.Part] = []
+    files: list[types.messages.FilePart] = []
     if audio_b64:
         media_type = (
             types.media.detect_audio_media_type(audio_b64) or "audio/mpeg"
         )
-        parts.append(
+        files.append(
             types.messages.FilePart(data=audio_b64, media_type=media_type)
         )
 
-    return types.messages.Message(
-        role="assistant",
-        parts=parts,
+    return items.Item(
+        value=files,
         provider_metadata=data.get("providerMetadata"),
     )
 
@@ -1326,7 +1323,7 @@ class GatewayV3Protocol(base.ProviderProtocol[gateway_client.GatewayClient]):
         *,
         params: images.ImageParams,
         provider: str,
-    ) -> types.messages.Message:
+    ) -> items.Item[list[types.messages.FilePart]]:
         _ = provider
         return await generate_image(client, model, messages, params=params)
 
@@ -1338,7 +1335,7 @@ class GatewayV3Protocol(base.ProviderProtocol[gateway_client.GatewayClient]):
         *,
         params: videos.VideoParams,
         provider: str,
-    ) -> types.messages.Message:
+    ) -> items.Item[list[types.messages.FilePart]]:
         _ = provider
         return await generate_video(client, model, messages, params=params)
 
@@ -1350,6 +1347,6 @@ class GatewayV3Protocol(base.ProviderProtocol[gateway_client.GatewayClient]):
         *,
         params: audio.AudioParams,
         provider: str,
-    ) -> types.messages.Message:
+    ) -> items.Item[list[types.messages.FilePart]]:
         _ = provider
         return await generate_audio(client, model, messages, params=params)

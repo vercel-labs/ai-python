@@ -21,8 +21,8 @@ async def main() -> None:
         model, messages, params=ai.ops.AudioParams(voice="alloy")
     )
 
-    print(f"Generated {len(result.audio)} audio file(s)")
-    for i, clip in enumerate(result.audio):
+    print(f"Generated {len(result.value)} audio file(s)")
+    for i, clip in enumerate(result.value):
         ext = "mp3" if clip.media_type == "audio/mpeg" else "bin"
         filename = f"generated_{i}.{ext}"
         data = (

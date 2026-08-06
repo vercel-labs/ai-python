@@ -36,8 +36,8 @@ async def main() -> None:
         model, messages, params=ai.ops.ImageParams(size="1024x1024")
     )
 
-    print(f"Generated {len(result.images)} edited image(s)")
-    for i, img in enumerate(result.images):
+    print(f"Generated {len(result.value)} edited image(s)")
+    for i, img in enumerate(result.value):
         filename = f"watercolor_edit_{i}.png"
         data = (
             img.data
