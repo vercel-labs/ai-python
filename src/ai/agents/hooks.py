@@ -332,7 +332,9 @@ def resolve_hook(
     # Path 1: live hook — resolve the future directly.
     if label in reg._live_hooks:
         future, _, _rt = reg._live_hooks[label]
-        if isinstance(resolution, BaseException):
+        if future.cancelled():
+            pass
+        elif isinstance(resolution, BaseException):
             future.set_exception(resolution)
         else:
             future.set_result(resolution)
