@@ -1,11 +1,10 @@
-"""Image generation — dedicated image model via experimental_generate()."""
+"""Image generation — dedicated image model via ai.ops.generate_image()."""
 
 import asyncio
 import base64
 import pathlib
 
 import ai
-from ai.models.core import api, params
 
 model = ai.get_model("google/imagen-4.0-generate-001")
 
@@ -19,8 +18,8 @@ messages = [
 
 
 async def main() -> None:
-    result = await api.experimental_generate(
-        model, messages, params.ImageParams(n=2, aspect_ratio="16:9")
+    result = await ai.ops.generate_image(
+        model, messages, params=ai.ops.ImageParams(n=2, aspect_ratio="16:9")
     )
 
     print(f"Generated {len(result.images)} image(s)")

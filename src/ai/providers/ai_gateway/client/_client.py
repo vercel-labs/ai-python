@@ -19,13 +19,14 @@ if TYPE_CHECKING:
 _PROTOCOL_VERSION = "0.0.1"
 
 AuthMethod = Literal["api-key", "oidc"]
+ModelType = Literal["language", "image"]
 
 
 class GatewayClient:
     """Small async HTTP client for Gateway provider endpoints.
 
     This intentionally implements only the calls used by the current provider:
-    config/credits reads and language streaming.
+    config/credits reads, language streaming, and image generation.
     """
 
     def __init__(
@@ -69,15 +70,20 @@ class GatewayClient:
         self,
         model: model_.Model,
         *,
+        model_type: ModelType = "language",
         streaming: bool = False,
         accept: str | None = None,
     ) -> dict[str, str]:
         headers = self.protocol_headers()
         headers["Content-Type"] = "application/json"
 
-        headers["ai-language-model-specification-version"] = "3"
-        headers["ai-language-model-id"] = model.id
-        headers["ai-language-model-streaming"] = str(streaming).lower()
+        if model_type == "language":
+            headers["ai-language-model-specification-version"] = "3"
+            headers["ai-language-model-id"] = model.id
+            headers["ai-language-model-streaming"] = str(streaming).lower()
+        else:
+            headers["ai-image-model-specification-version"] = "3"
+            headers["ai-model-id"] = model.id
 
         if accept is not None:
             headers["accept"] = accept
@@ -106,6 +112,30 @@ class GatewayClient:
             raise errors.GatewayResponseError(
                 message=f"Gateway request failed: {exc}",
             ) from exc
+
+    async def post(
+        self,
+        path: str,
+        body: dict[str, Any],
+        *,
+        model: model_.Model,
+        model_type: ModelType,
+    ) -> httpx.Response:
+        headers = self.model_headers(model, model_type=model_type)
+        try:
+            response = await self._http.post(
+                self.url(path),
+                json=body,
+                headers=headers,
+            )
+        except httpx.TimeoutException as exc:
+            raise errors.GatewayTimeoutError() from exc
+        except httpx.HTTPError as exc:
+            raise errors.GatewayResponseError(
+                message=f"Gateway request failed: {exc}",
+            ) from exc
+        await self.raise_for_error(response)
+        return response
 
     async def list_model_ids(self) -> list[str]:
         """List available model IDs from the Gateway config endpoint."""
