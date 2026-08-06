@@ -8,6 +8,8 @@ Focus areas:
 - ``generate_image``: the image-model endpoint, exercised end-to-end via
   ``ops.generate_image()`` with a provider wired to an
   ``httpx.MockTransport``
+- ``generate_video``: the video-model endpoint (SSE), exercised the same
+  way via ``ops.generate_video()``
 
 Note: tool serialization and provider_options passthrough are tested
 end-to-end in ``test_stream.py`` via real HTTP round-trips.
@@ -31,7 +33,7 @@ from ai.providers.ai_gateway import protocol
 from ai.types import events as events_
 from ai.types import messages
 
-from .conftest import mock_model, user_msg
+from .conftest import mock_model, sse, user_msg
 
 # ---------------------------------------------------------------------------
 # _messages_to_prompt
@@ -768,6 +770,24 @@ async def test_image_usage_parsing() -> None:
     assert msg.usage.output_tokens == 100
 
 
+async def test_image_provider_metadata_passthrough() -> None:
+    """``providerMetadata`` from the response lands on the message."""
+    metadata = {"gateway": {"cost": "0.05", "generationId": "gen-123"}}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"images": [_PNG_B64], "providerMetadata": metadata},
+        )
+
+    msg = await ops.generate_image(
+        mock_model(httpx.MockTransport(handler), model_id=_IMAGE_MODEL_ID),
+        [user_msg("a dog")],
+    )
+
+    assert msg.provider_metadata == metadata
+
+
 async def test_image_protocol_headers() -> None:
     captured: dict[str, str] = {}
 
@@ -932,3 +952,353 @@ async def test_empty_images_returns_empty_message() -> None:
         [user_msg("test")],
     )
     assert len(msg.images) == 0
+
+
+# ---------------------------------------------------------------------------
+# generate_video (video-model endpoint, SSE, via ops.generate_video)
+# ---------------------------------------------------------------------------
+
+# MP4 magic bytes (ftyp box)
+_MP4_HEADER = bytes(
+    [0x00, 0x00, 0x00, 0x20, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6F, 0x6D]
+)
+_MP4_B64 = base64.b64encode(_MP4_HEADER).decode()
+
+# WebM magic bytes
+_WEBM_HEADER = bytes([0x1A, 0x45, 0xDF, 0xA3])
+_WEBM_B64 = base64.b64encode(_WEBM_HEADER).decode()
+
+_VIDEO_MODEL_ID = "google/veo-3.0-generate-001"
+
+
+async def test_basic_video_generation_base64() -> None:
+    """Simple prompt -> one MP4 video back via base64."""
+    body = sse(
+        {
+            "type": "result",
+            "videos": [
+                {
+                    "type": "base64",
+                    "data": _MP4_B64,
+                    "mediaType": "video/mp4",
+                }
+            ],
+        }
+    )
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=body)
+
+    msg = await ops.generate_video(
+        mock_model(httpx.MockTransport(handler), model_id=_VIDEO_MODEL_ID),
+        [user_msg("A cat walking on a beach")],
+    )
+
+    assert msg.role == "assistant"
+    assert len(msg.videos) == 1
+    assert msg.videos[0].data == _MP4_B64
+    assert msg.videos[0].media_type == "video/mp4"
+
+
+async def test_video_generation_url() -> None:
+    """Video returned as URL -> downloaded automatically."""
+    body = sse(
+        {
+            "type": "result",
+            "videos": [
+                {
+                    "type": "url",
+                    "url": "https://storage.example.com/video.mp4",
+                    "mediaType": "video/mp4",
+                }
+            ],
+        }
+    )
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=body)
+
+    model = mock_model(httpx.MockTransport(handler), model_id=_VIDEO_MODEL_ID)
+
+    with patch(
+        "ai.models.core.helpers.files.download",
+        new_callable=AsyncMock,
+        return_value=(_MP4_HEADER, "video/mp4"),
+    ) as mock_dl:
+        msg = await ops.generate_video(
+            model,
+            [user_msg("A sunset timelapse")],
+        )
+
+    mock_dl.assert_called_once_with("https://storage.example.com/video.mp4")
+    assert len(msg.videos) == 1
+    assert msg.videos[0].data == _MP4_HEADER
+    assert msg.videos[0].media_type == "video/mp4"
+
+
+async def test_multiple_videos() -> None:
+    body = sse(
+        {
+            "type": "result",
+            "videos": [
+                {
+                    "type": "base64",
+                    "data": _MP4_B64,
+                    "mediaType": "video/mp4",
+                },
+                {
+                    "type": "base64",
+                    "data": _WEBM_B64,
+                    "mediaType": "video/webm",
+                },
+            ],
+        }
+    )
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=body)
+
+    msg = await ops.generate_video(
+        mock_model(httpx.MockTransport(handler), model_id=_VIDEO_MODEL_ID),
+        [user_msg("Two versions")],
+        params=ops.VideoParams(n=2),
+    )
+    assert len(msg.videos) == 2
+    assert msg.videos[0].media_type == "video/mp4"
+    assert msg.videos[1].media_type == "video/webm"
+
+
+async def test_video_provider_metadata_passthrough() -> None:
+    """``providerMetadata`` from the result event lands on the message."""
+    metadata = {
+        "gateway": {"cost": "0.20", "generationId": "gen-xyz-789"},
+        "fal": {"usage": {"computeUnits": 10}},
+    }
+    body = sse(
+        {
+            "type": "result",
+            "videos": [
+                {
+                    "type": "base64",
+                    "data": _MP4_B64,
+                    "mediaType": "video/mp4",
+                }
+            ],
+            "providerMetadata": metadata,
+        }
+    )
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=body)
+
+    msg = await ops.generate_video(
+        mock_model(httpx.MockTransport(handler), model_id=_VIDEO_MODEL_ID),
+        [user_msg("a dog")],
+    )
+
+    assert msg.provider_metadata == metadata
+    assert msg.usage is None
+
+
+async def test_video_protocol_headers() -> None:
+    captured: dict[str, str] = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        captured.update(dict(req.headers))
+        return httpx.Response(
+            200,
+            text=sse(
+                {
+                    "type": "result",
+                    "videos": [
+                        {
+                            "type": "base64",
+                            "data": _MP4_B64,
+                            "mediaType": "video/mp4",
+                        }
+                    ],
+                }
+            ),
+        )
+
+    model = mock_model(
+        httpx.MockTransport(handler),
+        api_key="sk-test",
+        model_id=_VIDEO_MODEL_ID,
+    )
+    await ops.generate_video(model, [user_msg("test")])
+
+    assert captured["authorization"] == "Bearer sk-test"
+    assert captured["ai-video-model-specification-version"] == "3"
+    assert captured["ai-model-id"] == "google/veo-3.0-generate-001"
+    assert captured["accept"] == "text/event-stream"
+    assert captured["ai-gateway-auth-method"] == "api-key"
+
+
+async def test_video_request_body_forwards_parameters_and_input_image() -> None:
+    captured_body: dict[str, Any] = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        captured_body.update(json.loads(req.content))
+        return httpx.Response(
+            200,
+            text=sse(
+                {
+                    "type": "result",
+                    "videos": [
+                        {
+                            "type": "base64",
+                            "data": _MP4_B64,
+                            "mediaType": "video/mp4",
+                        }
+                    ],
+                }
+            ),
+        )
+
+    png_b64 = base64.b64encode(b"\x89PNG").decode()
+    msg = messages.Message(
+        role="user",
+        parts=[
+            messages.TextPart(text="sunset"),
+            messages.FilePart(data=png_b64, media_type="image/png"),
+        ],
+    )
+    await ops.generate_video(
+        mock_model(httpx.MockTransport(handler), model_id=_VIDEO_MODEL_ID),
+        [msg],
+        params=ops.VideoParams(
+            n=2,
+            aspect_ratio="16:9",
+            resolution="1920x1080",
+            duration=5,
+            fps=30,
+            seed=42,
+            provider_options={"google": {"enhancePrompt": True}},
+        ),
+    )
+
+    assert captured_body["prompt"] == "sunset"
+    assert captured_body["n"] == 2
+    assert captured_body["aspectRatio"] == "16:9"
+    assert captured_body["resolution"] == "1920x1080"
+    assert captured_body["duration"] == 5
+    assert captured_body["fps"] == 30
+    assert captured_body["seed"] == 42
+    assert captured_body["providerOptions"] == {
+        "google": {"enhancePrompt": True}
+    }
+    assert "image" in captured_body
+    assert captured_body["image"]["type"] == "file"
+    assert captured_body["image"]["mediaType"] == "image/png"
+
+
+async def test_video_defaults_omit_unset_parameters() -> None:
+    captured_body: dict[str, Any] = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        captured_body.update(json.loads(req.content))
+        return httpx.Response(
+            200,
+            text=sse(
+                {
+                    "type": "result",
+                    "videos": [
+                        {
+                            "type": "base64",
+                            "data": _MP4_B64,
+                            "mediaType": "video/mp4",
+                        }
+                    ],
+                }
+            ),
+        )
+
+    await ops.generate_video(
+        mock_model(httpx.MockTransport(handler), model_id=_VIDEO_MODEL_ID),
+        [user_msg("test")],
+    )
+
+    assert captured_body == {"prompt": "test", "n": 1}
+
+
+async def test_url_posts_to_video_model_endpoint() -> None:
+    captured_url: list[str] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        captured_url.append(str(req.url))
+        return httpx.Response(
+            200,
+            text=sse(
+                {
+                    "type": "result",
+                    "videos": [
+                        {
+                            "type": "base64",
+                            "data": _MP4_B64,
+                            "mediaType": "video/mp4",
+                        }
+                    ],
+                }
+            ),
+        )
+
+    await ops.generate_video(
+        mock_model(httpx.MockTransport(handler), model_id=_VIDEO_MODEL_ID),
+        [user_msg("test")],
+    )
+    assert captured_url[0] == "https://gw.test/v3/ai/video-model"
+
+
+async def test_video_sse_error_event() -> None:
+    """Gateway returns an SSE error event -> raises."""
+    body = sse(
+        {
+            "type": "error",
+            "message": "Content policy violation",
+            "errorType": "content_filter",
+            "statusCode": 400,
+            "param": None,
+        }
+    )
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=body)
+
+    with pytest.raises(ai.ProviderBadRequestError, match="Content policy"):
+        await ops.generate_video(
+            mock_model(httpx.MockTransport(handler), model_id=_VIDEO_MODEL_ID),
+            [user_msg("test")],
+        )
+
+
+async def test_video_401_authentication_error() -> None:
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            401,
+            json={
+                "error": {
+                    "message": "Bad key",
+                    "type": "authentication_error",
+                }
+            },
+        )
+
+    with pytest.raises(ai.ProviderAuthenticationError):
+        await ops.generate_video(
+            mock_model(httpx.MockTransport(handler), model_id=_VIDEO_MODEL_ID),
+            [user_msg("test")],
+        )
+
+
+async def test_video_empty_sse_stream() -> None:
+    """SSE stream with no data events -> raises."""
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text="")
+
+    with pytest.raises(ai.ProviderResponseError, match="SSE stream ended"):
+        await ops.generate_video(
+            mock_model(httpx.MockTransport(handler), model_id=_VIDEO_MODEL_ID),
+            [user_msg("test")],
+        )

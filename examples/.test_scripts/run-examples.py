@@ -62,16 +62,15 @@ TEXT_SAMPLES = [
 
 IMAGE_SAMPLES = [
     Sample("media/inline_image.py"),
-]
-
-VIDEO_SAMPLES: list[Sample] = []
-
-# media generation is disconnected from experimental_generate()
-BROKEN_SAMPLES: list[Sample] = [
     Sample("media/image_generation.py"),
     Sample("media/image_edit.py"),
+]
+
+VIDEO_SAMPLES: list[Sample] = [
     Sample("media/video_generation.py"),
 ]
+
+BROKEN_SAMPLES: list[Sample] = []
 
 # E2E tests pick non-default ports so they don't collide with a running
 # dev server on 8000/5173. Each test gets its own ports so that --parallel

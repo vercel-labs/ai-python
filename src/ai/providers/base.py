@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 
     from ..models.core import model as model_
     from ..models.core import params as params_
-    from ..ops import images
+    from ..ops import images, videos
     from ..types import events
     from ..types import messages as messages_
     from ..types import tools as tools_
@@ -183,6 +183,21 @@ class ProviderProtocol(pydantic.BaseModel, Generic[ClientT]):
         raise NotImplementedError(
             f"protocol {type(self).__name__!r} does not support "
             f"generate_image()"
+        )
+
+    async def generate_video(
+        self,
+        client: ClientT,
+        model: model_.Model,
+        messages: list[messages_.Message],
+        *,
+        params: videos.VideoParams,
+        provider: str,
+    ) -> messages_.Message:
+        """Generate videos with a dedicated video model using *client*."""
+        raise NotImplementedError(
+            f"protocol {type(self).__name__!r} does not support "
+            f"generate_video()"
         )
 
 
@@ -438,6 +453,23 @@ class Provider(pydantic.BaseModel, Generic[ClientT]):
         """Generate images with this provider's dedicated image model."""
         selected_protocol = model.protocol or self.protocol
         return await selected_protocol.generate_image(
+            self.client,
+            model,
+            messages,
+            params=params,
+            provider=self.name,
+        )
+
+    async def generate_video(
+        self,
+        model: model_.Model,
+        messages: list[messages_.Message],
+        *,
+        params: videos.VideoParams,
+    ) -> messages_.Message:
+        """Generate videos with this provider's dedicated video model."""
+        selected_protocol = model.protocol or self.protocol
+        return await selected_protocol.generate_video(
             self.client,
             model,
             messages,

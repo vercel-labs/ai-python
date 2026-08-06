@@ -19,14 +19,14 @@ if TYPE_CHECKING:
 _PROTOCOL_VERSION = "0.0.1"
 
 AuthMethod = Literal["api-key", "oidc"]
-ModelType = Literal["language", "image"]
+ModelType = Literal["language", "image", "video"]
 
 
 class GatewayClient:
     """Small async HTTP client for Gateway provider endpoints.
 
     This intentionally implements only the calls used by the current provider:
-    config/credits reads, language streaming, and image generation.
+    config/credits reads, language streaming, and image/video generation.
     """
 
     def __init__(
@@ -81,8 +81,11 @@ class GatewayClient:
             headers["ai-language-model-specification-version"] = "3"
             headers["ai-language-model-id"] = model.id
             headers["ai-language-model-streaming"] = str(streaming).lower()
-        else:
+        elif model_type == "image":
             headers["ai-image-model-specification-version"] = "3"
+            headers["ai-model-id"] = model.id
+        else:
+            headers["ai-video-model-specification-version"] = "3"
             headers["ai-model-id"] = model.id
 
         if accept is not None:
@@ -176,6 +179,7 @@ class GatewayClient:
         body: dict[str, Any],
         *,
         model: model_.Model,
+        model_type: ModelType = "language",
         streaming: bool = False,
         accept: str | None = None,
         headers: dict[str, str] | None = None,
@@ -184,6 +188,7 @@ class GatewayClient:
     ) -> AsyncIterator[httpx.Response]:
         request_headers = self.model_headers(
             model,
+            model_type=model_type,
             streaming=streaming,
             accept=accept,
         )
