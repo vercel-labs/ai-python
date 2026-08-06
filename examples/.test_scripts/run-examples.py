@@ -70,6 +70,10 @@ VIDEO_SAMPLES: list[Sample] = [
     Sample("media/video_generation.py"),
 ]
 
+AUDIO_SAMPLES: list[Sample] = [
+    Sample("media/speech_generation.py"),
+]
+
 BROKEN_SAMPLES: list[Sample] = []
 
 # E2E tests pick non-default ports so they don't collide with a running
@@ -99,6 +103,7 @@ KNOWN_SAMPLES = [
     *TEXT_SAMPLES,
     *IMAGE_SAMPLES,
     *VIDEO_SAMPLES,
+    *AUDIO_SAMPLES,
     *BROKEN_SAMPLES,
     *E2E_TESTS,
 ]
@@ -241,6 +246,9 @@ def main() -> None:
         "--video", action="store_true", help="include video samples"
     )
     parser.add_argument(
+        "--audio", action="store_true", help="include audio samples"
+    )
+    parser.add_argument(
         "--broken", action="store_true", help="include broken samples"
     )
     parser.add_argument(
@@ -278,7 +286,12 @@ def main() -> None:
     args = parser.parse_args()
 
     has_category = (
-        args.text or args.image or args.video or args.broken or args.e2e
+        args.text
+        or args.image
+        or args.video
+        or args.audio
+        or args.broken
+        or args.e2e
     )
 
     samples: list[Sample] = []
@@ -295,6 +308,8 @@ def main() -> None:
         samples.extend(IMAGE_SAMPLES)
     if not args.examples and (args.video or args.all):
         samples.extend(VIDEO_SAMPLES)
+    if not args.examples and (args.audio or args.all):
+        samples.extend(AUDIO_SAMPLES)
     if not args.examples and (args.broken or args.all):
         samples.extend(BROKEN_SAMPLES)
     if not args.examples and (args.e2e or args.all):

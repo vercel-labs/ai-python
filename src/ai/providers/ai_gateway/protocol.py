@@ -15,7 +15,7 @@ from pydantic.alias_generators import to_camel
 from ... import types
 from ...models import core
 from ...models.core import params as params_
-from ...ops import images, videos
+from ...ops import audio, images, videos
 from .. import base, history_utils
 from . import client as gateway_client
 from . import errors
@@ -1237,6 +1237,61 @@ async def generate_video(
     )
 
 
+# ---------------------------------------------------------------------------
+# Speech generation
+# ---------------------------------------------------------------------------
+
+
+async def generate_audio(
+    gateway: gateway_client.GatewayClient,
+    model: core.model.Model,
+    messages: list[types.messages.Message],
+    *,
+    params: audio.AudioParams,
+) -> types.messages.Message:
+    """Hit ``/speech-model`` and return a Message with a FilePart."""
+    body: dict[str, Any] = {
+        "text": _extract_prompt(messages),
+    }
+    if params.voice is not None:
+        body["voice"] = params.voice
+    if params.output_format is not None:
+        body["outputFormat"] = params.output_format
+    if params.instructions is not None:
+        body["instructions"] = params.instructions
+    if params.speed is not None:
+        body["speed"] = params.speed
+    if params.language is not None:
+        body["language"] = params.language
+    if params.provider_options:
+        body["providerOptions"] = dict(params.provider_options)
+
+    try:
+        response = await gateway.post(
+            "speech-model", body, model=model, model_type="speech"
+        )
+    except client_errors.GatewayError as exc:
+        raise errors.map_error(exc) from exc
+
+    data = response.json()
+    audio_b64: str = data.get("audio") or ""
+
+    parts: list[types.messages.Part] = []
+    if audio_b64:
+        media_type = (
+            types.media.detect_audio_media_type(audio_b64) or "audio/mpeg"
+        )
+        parts.append(
+            types.messages.FilePart(data=audio_b64, media_type=media_type)
+        )
+
+    return types.messages.Message(
+        role="assistant",
+        parts=parts,
+        provider_metadata=data.get("providerMetadata"),
+    )
+
+
 class GatewayV3Protocol(base.ProviderProtocol[gateway_client.GatewayClient]):
     """AI Gateway v3 wire protocol."""
 
@@ -1286,3 +1341,15 @@ class GatewayV3Protocol(base.ProviderProtocol[gateway_client.GatewayClient]):
     ) -> types.messages.Message:
         _ = provider
         return await generate_video(client, model, messages, params=params)
+
+    async def generate_audio(
+        self,
+        client: gateway_client.GatewayClient,
+        model: core.model.Model,
+        messages: list[types.messages.Message],
+        *,
+        params: audio.AudioParams,
+        provider: str,
+    ) -> types.messages.Message:
+        _ = provider
+        return await generate_audio(client, model, messages, params=params)

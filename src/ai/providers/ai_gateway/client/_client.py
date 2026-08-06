@@ -19,14 +19,15 @@ if TYPE_CHECKING:
 _PROTOCOL_VERSION = "0.0.1"
 
 AuthMethod = Literal["api-key", "oidc"]
-ModelType = Literal["language", "image", "video"]
+ModelType = Literal["language", "image", "video", "speech"]
 
 
 class GatewayClient:
     """Small async HTTP client for Gateway provider endpoints.
 
     This intentionally implements only the calls used by the current provider:
-    config/credits reads, language streaming, and image/video generation.
+    config/credits reads, language streaming, and image/video/speech
+    generation.
     """
 
     def __init__(
@@ -84,8 +85,11 @@ class GatewayClient:
         elif model_type == "image":
             headers["ai-image-model-specification-version"] = "3"
             headers["ai-model-id"] = model.id
-        else:
+        elif model_type == "video":
             headers["ai-video-model-specification-version"] = "3"
+            headers["ai-model-id"] = model.id
+        else:
+            headers["ai-speech-model-specification-version"] = "3"
             headers["ai-model-id"] = model.id
 
         if accept is not None:

@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 
     from ..models.core import model as model_
     from ..models.core import params as params_
-    from ..ops import images, videos
+    from ..ops import audio, images, videos
     from ..types import events
     from ..types import messages as messages_
     from ..types import tools as tools_
@@ -198,6 +198,21 @@ class ProviderProtocol(pydantic.BaseModel, Generic[ClientT]):
         raise NotImplementedError(
             f"protocol {type(self).__name__!r} does not support "
             f"generate_video()"
+        )
+
+    async def generate_audio(
+        self,
+        client: ClientT,
+        model: model_.Model,
+        messages: list[messages_.Message],
+        *,
+        params: audio.AudioParams,
+        provider: str,
+    ) -> messages_.Message:
+        """Generate speech with a dedicated speech model using *client*."""
+        raise NotImplementedError(
+            f"protocol {type(self).__name__!r} does not support "
+            f"generate_audio()"
         )
 
 
@@ -470,6 +485,23 @@ class Provider(pydantic.BaseModel, Generic[ClientT]):
         """Generate videos with this provider's dedicated video model."""
         selected_protocol = model.protocol or self.protocol
         return await selected_protocol.generate_video(
+            self.client,
+            model,
+            messages,
+            params=params,
+            provider=self.name,
+        )
+
+    async def generate_audio(
+        self,
+        model: model_.Model,
+        messages: list[messages_.Message],
+        *,
+        params: audio.AudioParams,
+    ) -> messages_.Message:
+        """Generate speech with this provider's dedicated speech model."""
+        selected_protocol = model.protocol or self.protocol
+        return await selected_protocol.generate_audio(
             self.client,
             model,
             messages,
