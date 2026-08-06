@@ -10,6 +10,7 @@ import pydantic
 import pytest
 
 import ai
+from ai.types import events as events_
 
 # Declaring a tool with a plain `def` is a type error by design; go
 # through an untyped view of the decorator to reach the runtime check.
@@ -91,6 +92,27 @@ async def test_tool_call_with_json_args() -> None:
 # -- ToolCall binds a ToolCallPart to a Tool and returns tool messages ----
 
 
+async def test_tool_runner_discard_cancels_and_omits_task() -> None:
+    """Discarded speculative calls do not produce tool events or messages."""
+    started = asyncio.Event()
+
+    async def speculative() -> events_.ToolCallResult:
+        started.set()
+        await asyncio.Future()
+        return ai.tool_result(tool_call_id="tc-speculative", result="unused")
+
+    async with ai.ToolRunner() as runner:
+        task = runner.schedule(speculative)
+        assert isinstance(task, asyncio.Task)
+        await started.wait()
+        runner.discard(task)
+
+        assert [event async for event in runner.events()] == []
+        assert runner.get_tool_message() is None
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+
 async def test_tool_call_returns_tool_message() -> None:
     @ai.tool
     async def double(x: int) -> int:
@@ -115,6 +137,33 @@ async def test_tool_call_returns_tool_message() -> None:
     assert out == 10
     assert not result.results[0].is_error
     assert not result.results[0].has_model_input
+
+
+async def test_cancelled_tool_call_returns_error_result() -> None:
+    started = asyncio.Event()
+
+    @ai.tool
+    async def wait_forever() -> str:
+        """Wait until cancelled."""
+        started.set()
+        await asyncio.Future()
+        return "unreachable"
+
+    part = ai.messages.ToolCallPart(
+        tool_call_id="tc-cancelled",
+        tool_name="wait_forever",
+        tool_args="{}",
+    )
+    task = asyncio.create_task(
+        ai.agents.BoundToolCall(part=part, tool=wait_forever)()
+    )
+    await started.wait()
+    task.cancel()
+    result = await task
+
+    assert result.results[0].is_error
+    assert "CancelledError" in str(result.results[0].result)
+    assert isinstance(result.exception, asyncio.CancelledError)
 
 
 async def test_tool_call_catches_errors() -> None:

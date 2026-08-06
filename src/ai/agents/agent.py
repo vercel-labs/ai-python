@@ -719,7 +719,7 @@ class BoundToolCall:
                         f"async iterable, not {type(returned).__name__}; "
                         f"declare it with `async def`"
                     )
-            except Exception as exc:
+            except (Exception, asyncio.CancelledError) as exc:
                 return _error_tool_result(
                     exc,
                     tool_call_id=call.tool_call_id,
@@ -846,7 +846,6 @@ class _RestartableToolStream:
 
 class ToolRunner:
     def __init__(self) -> None:
-        self._new_results: list[events_.ToolCallResult] = []
         self._tool_results: list[events_.ToolCallResult] = []
         self._tg_base = util.TaskGroup()
         self._waiter: util.MultiWaiter[events_.ToolCallResult] = (
@@ -864,7 +863,9 @@ class ToolRunner:
     def events(self) -> _RestartableToolStream:
         return _RestartableToolStream(self)
 
-    def schedule(self, tc: ToolCallCallable) -> None:
+    def schedule(
+        self, tc: ToolCallCallable
+    ) -> asyncio.Task[events_.ToolCallResult]:
         """Schedule a tool call (or any callable producing a ToolCallResult).
 
         See :class:`ToolCallCallable` — accepts both :class:`ToolCall` and
@@ -872,8 +873,20 @@ class ToolRunner:
         :class:`ToolCallResult`.  The latter lets you wrap a ``ToolCall``
         in custom logic (e.g. an approval hook await) and still ride the
         runner's merge-and-iterate flow.
+
+        Returns the task.
         """
-        self._waiter.add(self._tg.create_task(tc()))
+        task = self._tg.create_task(tc())
+        self._waiter.add(task)
+        return task
+
+    def discard(self, task: asyncio.Task[events_.ToolCallResult]) -> None:
+        """Discard a task from the ToolRunner.
+
+        Cancel the task and ignore its result.
+        """
+        self._waiter.discard(task)
+        task.cancel()
 
     def add_result(self, res: events_.ToolCallResult) -> None:
         async def _feed() -> events_.ToolCallResult:
@@ -889,8 +902,7 @@ class ToolRunner:
         return None
 
     async def _iterate(self) -> AsyncGenerator[events_.ToolCallResult]:
-        while self._waiter.tasks():
-            t = await self._waiter
+        while t := await self._waiter:
             try:
                 res = t.result()
             except asyncio.CancelledError:
