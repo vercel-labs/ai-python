@@ -95,6 +95,12 @@ exclude = [
     "examples/apps/durable_agent_workflows/",
     # depends on slack-bolt, which is not part of this project's env
     "examples/apps/slack_agent/",
+    # media generation is temporarily disabled
+    "examples/media/image_generation.py",
+    "examples/media/image_edit.py",
+    "examples/media/video_generation.py",
+    "tests/providers/ai_gateway/test_generate_image.py",
+    "tests/providers/ai_gateway/test_generate_video.py",
 ]
 
 [tool.ty.environment]
@@ -104,6 +110,9 @@ root = ["./src", "./"]
 [tool.ty.src]
 exclude = [
     "examples/",
+    # media generation is temporarily disabled
+    "tests/providers/ai_gateway/test_generate_image.py",
+    "tests/providers/ai_gateway/test_generate_video.py",
 ]
 
 [tool.pytest.ini_options]

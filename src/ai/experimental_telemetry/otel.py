@@ -66,10 +66,10 @@ def _should_capture_content() -> bool:
 
 def _semconv_name(sp: telemetry.Span) -> str:
     match sp.data:
-        case telemetry.AiStreamSpanData() as d:
+        case (
+            (telemetry.AiStreamSpanData() | telemetry.AiGenerateSpanData()) as d
+        ):
             return f"chat {d.model}"
-        case telemetry.AiGenerateSpanData() as d:
-            return f"generate_content {d.model}"
         case telemetry.ToolExecutionSpanData() as d:
             return f"execute_tool {d.tool_name}"
         case telemetry.RunSpanData() as d:
@@ -211,13 +211,6 @@ def _hack_get_field(obj: Any, name: str) -> Any:
     return getattr(obj, name, None)
 
 
-def _hack_has_field(obj: Any, name: str) -> bool:
-    # this also
-    if isinstance(obj, dict):
-        return name in obj
-    return hasattr(obj, name)
-
-
 _SEMCONV_SAMPLER_FIELDS = (
     "temperature",
     "top_k",
@@ -292,20 +285,24 @@ def _attributes(sp: telemetry.Span, *, capture_content: bool) -> dict[str, Any]:
     if sp.replay:
         attrs["ai.replay"] = True
     match sp.data:
-        case telemetry.AiStreamSpanData() as d:
+        case (
+            (telemetry.AiStreamSpanData() | telemetry.AiGenerateSpanData()) as d
+        ):
             attrs["gen_ai.operation.name"] = "chat"
             if d.provider is not None:
                 attrs["gen_ai.provider.name"] = d.provider
             attrs["gen_ai.request.model"] = d.model
-            attrs["gen_ai.request.stream"] = True
+            streamed = isinstance(d, telemetry.AiStreamSpanData)
+            attrs["gen_ai.request.stream"] = streamed
             if d.output_type is not None:
                 # Structured output was requested; the semconv value is
                 # the output kind, not the Python type name.
                 attrs["gen_ai.output.type"] = "json"
             attrs |= _semconv_request_attributes(d.params)
-            ttfc = _time_to_first_chunk(sp)
-            if ttfc is not None:
-                attrs["gen_ai.response.time_to_first_chunk"] = ttfc
+            if streamed:
+                ttfc = _time_to_first_chunk(sp)
+                if ttfc is not None:
+                    attrs["gen_ai.response.time_to_first_chunk"] = ttfc
             if d.finish_reason is not None:
                 attrs["gen_ai.response.finish_reasons"] = [d.finish_reason]
             if d.response_id is not None:
@@ -324,28 +321,6 @@ def _attributes(sp: telemetry.Span, *, capture_content: bool) -> dict[str, Any]:
                     d.message,
                     error=sp.error is not None,
                     finish_reason=d.finish_reason,
-                )
-        case telemetry.AiGenerateSpanData() as d:
-            attrs["gen_ai.operation.name"] = "generate_content"
-            if d.provider is not None:
-                attrs["gen_ai.provider.name"] = d.provider
-            attrs["gen_ai.request.model"] = d.model
-            n = _hack_get_field(d.params, "n")
-            if isinstance(n, int) and n != 1:
-                attrs["gen_ai.request.choice.count"] = n
-            seed = _hack_get_field(d.params, "seed")
-            if isinstance(seed, int):
-                attrs["gen_ai.request.seed"] = seed
-            if d.params is not None:
-                # ImageParams vs VideoParams: only the latter has fps.
-                attrs["gen_ai.output.type"] = (
-                    "video" if _hack_has_field(d.params, "fps") else "image"
-                )
-            if d.usage is not None:
-                attrs |= _semconv_usage_attributes(d.usage)
-            if capture_content:
-                attrs |= _semconv_content_attributes(
-                    d.messages, d.message, error=sp.error is not None
                 )
         case telemetry.ToolExecutionSpanData() as d:
             attrs["gen_ai.operation.name"] = "execute_tool"

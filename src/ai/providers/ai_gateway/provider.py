@@ -139,15 +139,6 @@ class GatewayProvider(base.Provider[gateway_client.GatewayClient]):
             params=params,
         )
 
-    async def generate(
-        self,
-        model: model_.Model,
-        messages: list[messages_.Message],
-        params: params_.GenerateParams,
-    ) -> messages_.Message:
-        """Generate media via the AI Gateway v3 protocol."""
-        return await super().generate(model, messages, params)
-
     @classmethod
     def from_modelsdev_provider(
         cls,

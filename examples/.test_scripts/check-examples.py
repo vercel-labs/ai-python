@@ -17,11 +17,20 @@ REPO = Path(__file__).resolve().parent.parent.parent
 MYPY_VERSION = f"mypy=={mypy.version.__version__}"
 _EXAMPLES_DIR = REPO / "examples"
 
+# media generation is disconnected from experimental_generate();
+# keep in sync with BROKEN_SAMPLES in run-examples.py
+_BROKEN_SAMPLES = {
+    "media/image_generation.py",
+    "media/image_edit.py",
+    "media/video_generation.py",
+}
+
 _SAMPLE_FILES = sorted(
     str(p.relative_to(_EXAMPLES_DIR))
     for p in _EXAMPLES_DIR.rglob("*.py")
     if ".test_scripts" not in p.parts
     and p.relative_to(_EXAMPLES_DIR).parts[:1] != ("apps",)
+    and str(p.relative_to(_EXAMPLES_DIR)) not in _BROKEN_SAMPLES
 )
 
 # Each entry: (display name, directory to check, targets)

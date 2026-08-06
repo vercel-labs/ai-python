@@ -120,10 +120,8 @@ if TYPE_CHECKING:
     # also, importing without a guard would cause a circular import
     # in models/core/api.py
     _InferenceParams = params_.InferenceRequestParams
-    _GenerateParams = params_.GenerateParams
 else:
     _InferenceParams = Any
-    _GenerateParams = Any
 
 logger = logging.getLogger(__name__)
 
@@ -249,18 +247,24 @@ class AiStreamSpanData(pydantic.BaseModel):
 
 
 class AiGenerateSpanData(pydantic.BaseModel):
-    """One non-streaming generation call (images, video, ...).
+    """One buffered (non-streaming) LLM call.
 
-    ``message``/``usage`` are set at span end.
+    ``message``/``usage`` and the response identity fields are set at
+    span end.
     """
 
     kind: Literal["ai_generate"] = "ai_generate"
     model: str
     messages: list[messages_.Message]
-    params: _GenerateParams | None = None
+    params: _InferenceParams | None = None
     provider: str | None = None
+    tool_names: list[str] | None = None
+    output_type: str | None = None
     message: messages_.Message | None = None
     usage: usage_.Usage | None = None
+    finish_reason: str | None = None
+    response_id: str | None = None
+    response_model: str | None = None
 
 
 class ToolExecutionSpanData(pydantic.BaseModel):

@@ -35,6 +35,7 @@ Usage::
 from ..providers.base import Provider, ProviderProtocol
 from .core.api import (
     Stream,
+    experimental_generate,
     probe,
     stream,
 )
@@ -107,6 +108,7 @@ __all__ = [
     "TopKSamplerParams",
     "TopPSamplerParams",
     "Unset",
+    "experimental_generate",
     "get_model",
     "probe",
     "stream",

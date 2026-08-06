@@ -44,13 +44,6 @@ class _StreamRequest:
     params: params_.InferenceRequestParams | None = None
 
 
-@dataclasses.dataclass(frozen=True)
-class _GenerateRequest:
-    model: model_.Model
-    messages: list[types.messages.Message]
-    params: params_.GenerateParams
-
-
 @runtime_checkable
 class _StreamExecutor(Protocol):
     def _do_stream(
@@ -62,7 +55,7 @@ class _StreamExecutor(Protocol):
 @runtime_checkable
 class _GenerateExecutor(Protocol):
     async def _do_generate(
-        self, request: _GenerateRequest
+        self, request: _StreamRequest
     ) -> types.messages.Message: ...
 
 
@@ -83,12 +76,14 @@ class _Executor:
             yield ev
 
     async def _do_generate(
-        self, request: _GenerateRequest
+        self, request: _StreamRequest
     ) -> types.messages.Message:
         return await request.model.provider.generate(
             request.model,
             request.messages,
-            request.params,
+            tools=request.tools,
+            output_type=request.output_type,
+            params=request.params,
         )
 
 
@@ -631,28 +626,104 @@ async def _stream(
             await s.aclose()
 
 
+@overload
+async def experimental_generate(
+    *,
+    context: StreamContext,
+    output_type: type[pydantic.BaseModel] | None = None,
+    params: params_.InferenceRequestParams | None = None,
+) -> types.messages.Message: ...
+@overload
 async def experimental_generate(
     model: model_.Model,
     messages: list[types.messages.Message],
-    params: params_.GenerateParams,
+    *,
+    tools: Sequence[types.tools.Tool] | None = None,
+    output_type: type[pydantic.BaseModel] | None = None,
+    params: params_.InferenceRequestParams | None = None,
+) -> types.messages.Message: ...
+async def experimental_generate(
+    model: model_.Model | None = None,
+    messages: list[types.messages.Message] | None = None,
+    *,
+    context: StreamContext | None = None,
+    tools: Sequence[types.tools.Tool] | None = None,
+    output_type: type[pydantic.BaseModel] | None = None,
+    params: params_.InferenceRequestParams | None = None,
 ) -> types.messages.Message:
-    """Generate a non-streaming response (images, video, etc.).
+    """Generate an LLM response and return the complete message.
+
+    ::
+        message = await ai.experimental_generate(model, messages)
+        message = await ai.experimental_generate(context=context)
+
+    When the provider implements a native non-streaming ``generate()``,
+    it is used; otherwise the response is streamed internally, drained,
+    and the resulting message returned.
 
     Experimental: not part of the stable API, may change or be removed.
     """
-    request = _GenerateRequest(model, list(messages), params)
-    async with telemetry.span(
-        telemetry.AiGenerateSpanData(
-            model=model.id,
-            messages=messages,
-            params=params,
-            provider=model.provider.name,
+    if context is not None:
+        if model is not None or messages is not None or tools is not None:
+            raise TypeError(
+                "experimental_generate() takes either model/messages/tools "
+                "or context=, not both"
+            )
+        model = context.model
+        messages = context.messages
+        tools = context.tools
+        if output_type is None:
+            output_type = context.output_type
+        if params is None:
+            params = context.params
+    elif model is None or messages is None:
+        raise TypeError(
+            "experimental_generate() requires either model and messages "
+            "or context="
         )
-    ) as sp:
-        message = await _default_executor._do_generate(request)
-        sp.data.message = message
-        sp.data.usage = message.usage
-        return message
+
+    request = _StreamRequest(
+        model=model,
+        messages=list(messages),
+        tools=tools,
+        output_type=output_type,
+        params=params,
+    )
+    data = telemetry.AiGenerateSpanData(
+        model=model.id,
+        messages=list(messages),
+        params=params,
+        provider=model.provider.name,
+        tool_names=[t.name for t in tools] if tools is not None else None,
+        output_type=output_type.__name__ if output_type is not None else None,
+    )
+    async with telemetry.span(data) as sp:
+        try:
+            message = await _default_executor._do_generate(request)
+            sp.data.message = message
+            sp.data.usage = message.usage
+            return message
+        except NotImplementedError:
+            pass
+
+        # no native generate; drain the stream and take the message.
+        # reconstruct the stream instead of delegating to existing _stream()
+        # to avoid nested telemetry spans.
+        s: Stream[Any] = Stream(
+            _default_executor._do_stream(request),
+            output_type=cast("type[Any] | None", output_type),
+        )
+        try:
+            async for _ in s:
+                pass
+        finally:
+            sp.data.message = s.message
+            sp.data.usage = s.usage
+            sp.data.finish_reason = s._finish_reason
+            sp.data.response_id = s._response_id
+            sp.data.response_model = s._response_model
+            await s.aclose()
+        return s.message
 
 
 async def probe(model: model_.Model) -> None:

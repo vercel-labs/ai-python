@@ -253,7 +253,10 @@ class _FakeProvider(models.Provider):
         self,
         model: models.Model,
         messages: list[messages_.Message],
-        params: params_.GenerateParams,
+        *,
+        tools: Sequence[tools_.Tool] | None = None,
+        output_type: type[pydantic.BaseModel] | None = None,
+        params: params_.InferenceRequestParams | None = None,
     ) -> messages_.Message:
         return self._next_response(messages)
 
