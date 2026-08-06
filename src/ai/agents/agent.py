@@ -174,9 +174,10 @@ def _populate_model_inputs(
 ) -> None:
     """Set ``model_input`` on tool results that arrived without one.
 
-    Tool execution sets ``model_input`` directly; this fills in the
-    value for tool results that were reconstructed from a wire round-
-    trip (e.g. the AI SDK UI inbound path) and never had it computed.
+    Aggregator tool execution sets ``model_input`` directly; this fills
+    in the value for aggregator results that were reconstructed from a
+    wire round-trip (e.g. the AI SDK UI inbound path) and never had it
+    computed.
     """
     for msg in messages:
         if msg.role != "tool":
@@ -684,7 +685,7 @@ class BoundToolCall:
             call: middleware_.ToolContext,
         ) -> events_.ToolCallResult:
             result: Any
-            model_input: Any
+            model_input: Any = types.messages.MODEL_INPUT_UNSET
             try:
                 kwargs = _validate_kwargs(tool, call.kwargs)
                 # The returned value decides how the tool runs, so a
@@ -712,7 +713,6 @@ class BoundToolCall:
                     model_input = agg.get_model_input()
                 elif inspect.isawaitable(returned):
                     result = await returned
-                    model_input = result
                 else:
                     raise TypeError(
                         f"tool {tool.name!r} must return an awaitable or an "
@@ -730,8 +730,8 @@ class BoundToolCall:
                 tool_name=call.tool_name,
                 result=result,
                 result_kind=types.messages.ToolResultPart.kind_for(result),
+                model_input=model_input,
             )
-            part.set_model_input(model_input)
             return tool_result(part)
 
         data.args = base_kwargs

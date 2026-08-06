@@ -44,6 +44,7 @@ _VOLATILE_PART_FIELDS = (
     "id",
     "provider_metadata",
     "model_input",
+    "model_input_kind",
     "cached_result",
 )
 

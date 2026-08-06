@@ -85,6 +85,7 @@ async def test_tool_call_with_json_args() -> None:
     result = await ai.agents.BoundToolCall(part=part, tool=add)()
     out = result.results[0].result
     assert out == 3
+    assert not result.results[0].has_model_input
 
 
 # -- ToolCall binds a ToolCallPart to a Tool and returns tool messages ----
@@ -113,6 +114,7 @@ async def test_tool_call_returns_tool_message() -> None:
     out = result.results[0].result
     assert out == 10
     assert not result.results[0].is_error
+    assert not result.results[0].has_model_input
 
 
 async def test_tool_call_catches_errors() -> None:
