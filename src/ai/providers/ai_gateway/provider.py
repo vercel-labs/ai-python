@@ -29,7 +29,7 @@ if TYPE_CHECKING:
     from ...types import messages as messages_
     from ...types import tools as tools_
 
-_BASE_URL = "https://ai-gateway.vercel.sh/v3/ai"
+_BASE_URL = "https://ai-gateway.vercel.sh/v4/ai"
 _API_KEY_ENV = "AI_GATEWAY_API_KEY"
 _VERCEL_ENV = "VERCEL"
 _OIDC_TOKEN_ENV = "VERCEL_OIDC_TOKEN"
@@ -93,7 +93,7 @@ class GatewayProvider(base.Provider[gateway_client.GatewayClient]):
         self,
     ) -> base.ProviderProtocol[gateway_client.GatewayClient]:
         """Return the default Gateway protocol."""
-        return protocol_module.GatewayV3Protocol()
+        return protocol_module.GatewayV4Protocol()
 
     def _gateway_auth(
         self,
@@ -130,7 +130,7 @@ class GatewayProvider(base.Provider[gateway_client.GatewayClient]):
         output_type: type[pydantic.BaseModel] | None = None,
         params: params_.InferenceRequestParams | None = None,
     ) -> AsyncGenerator[events.Event]:
-        """Stream via the AI Gateway v3 protocol."""
+        """Stream via the AI Gateway protocol."""
         return super().stream(
             model,
             messages,

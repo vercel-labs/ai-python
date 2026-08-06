@@ -110,7 +110,7 @@ import ai
 
 provider = ai.get_provider(
     "vercel",
-    base_url="https://gateway.example.com/v3/ai",
+    base_url="https://gateway.example.com/v4/ai",
     api_key="your_ai_gateway_api_key_here",
     headers={"X-Application": "example_application"},
 )
@@ -126,7 +126,7 @@ model = ai.Model(
 | Option | Description |
 | --- | --- |
 | `api_key` | API key used instead of `AI_GATEWAY_API_KEY` or OIDC. |
-| `base_url` | Gateway API base URL. The default is `https://ai-gateway.vercel.sh/v3/ai`. |
+| `base_url` | Gateway API base URL. The default is `https://ai-gateway.vercel.sh/v4/ai`. |
 | `headers` | Headers included with each Gateway request. |
 | `env` | Environment values used only by this provider instance. |
 | `client` | Custom `httpx.AsyncClient` used for requests. |
@@ -598,13 +598,19 @@ Fields:
 
 - `byok`: Mapping of provider names to timeout values in milliseconds.
 
-### GatewayV3Protocol
+### GatewayV4Protocol
 
-`GatewayV3Protocol` translates SDK messages, tools, request parameters, stream
-events, and generated media to and from the AI Gateway v3 API.
+`GatewayV4Protocol` translates SDK messages, tools, request parameters, stream
+events, and generated media to and from the AI Gateway v4 API.
 
 `GatewayProvider` uses this protocol by default. Pass it directly only when you
 need a protocol override.
+
+### GatewayV3Protocol
+
+`GatewayV3Protocol` speaks the previous AI Gateway v3 API. Pass it as a
+protocol override to keep using the v3 wire protocol; requests are routed to
+the matching `/v3/ai` endpoints automatically.
 
 ### Module exports
 
@@ -612,6 +618,7 @@ need a protocol override.
 
 - `GatewayProvider`.
 - `GatewayV3Protocol`.
+- `GatewayV4Protocol`.
 - `GatewayParams`.
 - `ProviderTimeoutsParams`.
 - `errors`.

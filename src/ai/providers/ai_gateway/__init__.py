@@ -33,13 +33,14 @@ Usage::
 
 from . import errors, tools
 from .params import GatewayParams, ProviderTimeoutsParams
-from .protocol import GatewayV3Protocol
+from .protocol import GatewayV3Protocol, GatewayV4Protocol
 from .provider import GatewayProvider
 
 __all__ = [
     "GatewayParams",
     "GatewayProvider",
     "GatewayV3Protocol",
+    "GatewayV4Protocol",
     "ProviderTimeoutsParams",
     "errors",
     "tools",

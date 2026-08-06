@@ -25,7 +25,7 @@ def mock_model(
     """Create a Gateway model wired to a mock transport."""
     provider = ai.get_provider(
         "vercel",
-        base_url="https://gw.test/v3/ai",
+        base_url="https://gw.test/v4/ai",
         api_key=api_key,
         client=httpx.AsyncClient(transport=handler),
     )
