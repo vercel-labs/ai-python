@@ -92,6 +92,8 @@ class MultiWaiter[T]:
         for task in tasks:
             self._tasks.pop(task, None)
             task.remove_done_callback(self._callback)
+            # Queue it up so that a waiter pops out of the loop
+            self._queue.put_nowait(task)
 
     def clear(self) -> None:
         for task in self._tasks:
