@@ -192,6 +192,31 @@ async def test_cleanup_with_non_generator_iterable() -> None:
     assert exc_info.group_contains(RuntimeError, match="boom")
 
 
+# -- MultiWaiter -------------------------------------------------------------
+
+
+async def test_empty_multiwaiter_returns_none() -> None:
+    """Waiting with no tracked futures finishes rather than blocking."""
+    assert await util.MultiWaiter[int]() is None
+
+
+async def test_multiwaiter_discard_ignores_completed_future() -> None:
+    """A queued completion from a discarded future is not returned later."""
+    loop = asyncio.get_running_loop()
+    discarded: asyncio.Future[int] = loop.create_future()
+    kept: asyncio.Future[int] = loop.create_future()
+    waiter = util.MultiWaiter(discarded)
+
+    discarded.set_result(1)
+    await asyncio.sleep(0)  # Let its done callback enqueue the future.
+    waiter.discard(discarded)
+    waiter.add(kept)
+    kept.set_result(2)
+
+    assert await waiter is kept
+    assert not waiter.tasks()
+
+
 # -- TaskGroup --------------------------------------------------------------
 
 
