@@ -5,7 +5,7 @@ import pytest
 
 import ai
 from ai import ConfigurationError, models
-from ai.providers.ai_gateway import GatewayV3Protocol
+from ai.providers.ai_gateway import GatewayV4Protocol
 from ai.providers.anthropic import AnthropicMessagesProtocol
 from ai.providers.openai import (
     OpenAIChatCompletionsProtocol,
@@ -34,7 +34,7 @@ def test_get_defaults_to_gateway_when_provider_is_omitted() -> None:
 
     assert model.id == "anthropic/claude-sonnet-4"
     assert model.provider.name == "ai-gateway"
-    assert isinstance(model.provider.protocol, GatewayV3Protocol)
+    assert isinstance(model.provider.protocol, GatewayV4Protocol)
 
 
 def test_get_uses_default_model_env_when_model_id_is_omitted(
@@ -46,7 +46,7 @@ def test_get_uses_default_model_env_when_model_id_is_omitted(
 
     assert model.id == "anthropic/claude-sonnet-4"
     assert model.provider.name == "ai-gateway"
-    assert isinstance(model.provider.protocol, GatewayV3Protocol)
+    assert isinstance(model.provider.protocol, GatewayV4Protocol)
 
 
 def test_get_rejects_missing_default_model_env(
@@ -170,12 +170,12 @@ def test_get_resolves_gateway_alias() -> None:
 
     assert model.id == "alibaba/qwen-3-14b"
     assert model.provider.name == "ai-gateway"
-    assert isinstance(model.provider.protocol, GatewayV3Protocol)
+    assert isinstance(model.provider.protocol, GatewayV4Protocol)
 
     gateway_model = models.get_model("gateway:alibaba/qwen-3-14b")
     assert gateway_model.id == model.id
     assert gateway_model.provider.name == model.provider.name
-    assert isinstance(gateway_model.provider.protocol, GatewayV3Protocol)
+    assert isinstance(gateway_model.provider.protocol, GatewayV4Protocol)
 
 
 def test_get_uses_model_provider_config_for_anthropic_compatibility() -> None:
@@ -249,7 +249,7 @@ def test_model_json_roundtrip_restores_gateway_provider() -> None:
     assert restored.id == "anthropic/claude-sonnet-4.6"
     assert restored.provider.name == "ai-gateway"
     assert isinstance(restored.provider, ai.providers.GatewayProvider)
-    assert isinstance(restored.provider.protocol, GatewayV3Protocol)
+    assert isinstance(restored.provider.protocol, GatewayV4Protocol)
 
 
 def test_model_json_roundtrip_preserves_explicit_provider_config() -> None:
