@@ -8,6 +8,8 @@ Focus areas:
 - ``v4.GatewayV4Protocol.embed``: the v4-only embedding endpoint,
   exercised end-to-end via ``ai.ops.embed`` with a provider wired to
   an ``httpx.MockTransport``
+- ``v4.GatewayV4Protocol.transcribe``: the v4-only transcription
+  endpoint, exercised end-to-end via ``ai.ops.transcribe``
 
 Version-independent pieces are tested in ``test_shared.py``; end-to-end
 request/response behavior in ``../test_stream.py``.
@@ -398,4 +400,215 @@ async def test_embed_401_authentication_error() -> None:
                 httpx.MockTransport(handler), model_id=_EMBEDDING_MODEL_ID
             ),
             ["test"],
+        )
+
+
+# ---------------------------------------------------------------------------
+# transcribe (transcription-model endpoint, via ops.transcribe)
+# ---------------------------------------------------------------------------
+
+_TRANSCRIPTION_MODEL_ID = "openai/whisper-1"
+
+# MP3 frame sync header (minimal valid MP3 for magic-byte detection)
+_MP3_HEADER = bytes([0xFF, 0xFB, 0x90, 0x64])
+_MP3_B64 = base64.b64encode(_MP3_HEADER).decode()
+
+
+async def test_basic_transcribe() -> None:
+    """Raw bytes in -> transcript with segments and metadata back."""
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "text": "Hello world",
+                "segments": [
+                    {"text": "Hello", "startSecond": 0.0, "endSecond": 0.4},
+                    {"text": "world", "startSecond": 0.4, "endSecond": 0.8},
+                ],
+                "language": "en",
+                "durationInSeconds": 0.8,
+            },
+        )
+
+    model = mock_model(
+        httpx.MockTransport(handler), model_id=_TRANSCRIPTION_MODEL_ID
+    )
+    result = await ops.transcribe(model, _MP3_HEADER)
+
+    assert result.value.text == "Hello world"
+    assert [s.text for s in result.value.segments] == ["Hello", "world"]
+    assert result.value.segments[1].start_second == 0.4
+    assert result.value.segments[1].end_second == 0.8
+    assert result.value.language == "en"
+    assert result.value.duration_seconds == 0.8
+    assert result.usage is None
+
+
+async def test_transcribe_request_body_and_url() -> None:
+    """Bytes are base64-encoded, media type detected from magic bytes."""
+    captured_body: dict[str, Any] = {}
+    captured_url: list[str] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        captured_body.update(json.loads(req.content))
+        captured_url.append(str(req.url))
+        return httpx.Response(200, json={"text": "hi"})
+
+    await ops.transcribe(
+        mock_model(
+            httpx.MockTransport(handler), model_id=_TRANSCRIPTION_MODEL_ID
+        ),
+        _MP3_HEADER,
+    )
+
+    assert captured_body == {"audio": _MP3_B64, "mediaType": "audio/mpeg"}
+    assert captured_url[0] == "https://gw.test/v4/ai/transcription-model"
+
+
+async def test_transcribe_unknown_bytes_fall_back_to_wav() -> None:
+    """Undetectable audio bytes default to audio/wav."""
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        body = json.loads(req.content)
+        assert body["mediaType"] == "audio/wav"
+        return httpx.Response(200, json={"text": "hi"})
+
+    await ops.transcribe(
+        mock_model(
+            httpx.MockTransport(handler), model_id=_TRANSCRIPTION_MODEL_ID
+        ),
+        b"\x01\x02\x03\x04",
+    )
+
+
+async def test_transcribe_file_part_media_type_wins() -> None:
+    """A FilePart's media_type is sent as-is, data passed through as b64."""
+    captured_body: dict[str, Any] = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        captured_body.update(json.loads(req.content))
+        return httpx.Response(200, json={"text": "hi"})
+
+    await ops.transcribe(
+        mock_model(
+            httpx.MockTransport(handler), model_id=_TRANSCRIPTION_MODEL_ID
+        ),
+        messages.FilePart(data=_MP3_B64, media_type="audio/mp4"),
+    )
+
+    assert captured_body == {"audio": _MP3_B64, "mediaType": "audio/mp4"}
+
+
+async def test_transcribe_file_part_url_is_downloaded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An http(s) FilePart is fetched client-side and sent inline."""
+    captured_body: dict[str, Any] = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        captured_body.update(json.loads(req.content))
+        return httpx.Response(200, json={"text": "hi"})
+
+    async def fake_download(url: str, **_: Any) -> tuple[bytes, str | None]:
+        assert url == "https://example.com/speech.mp3"
+        return _MP3_HEADER, "audio/mpeg"
+
+    monkeypatch.setattr(models.core.helpers.files, "download", fake_download)
+
+    await ops.transcribe(
+        mock_model(
+            httpx.MockTransport(handler),
+            model_id=_TRANSCRIPTION_MODEL_ID,
+        ),
+        messages.FilePart(
+            data="https://example.com/speech.mp3",
+            media_type="audio/mpeg",
+        ),
+    )
+
+    assert captured_body == {"audio": _MP3_B64, "mediaType": "audio/mpeg"}
+
+
+async def test_transcribe_protocol_headers() -> None:
+    captured: dict[str, str] = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        captured.update(dict(req.headers))
+        return httpx.Response(200, json={"text": "hi"})
+
+    model = mock_model(
+        httpx.MockTransport(handler),
+        api_key="sk-test",
+        model_id=_TRANSCRIPTION_MODEL_ID,
+    )
+    await ops.transcribe(model, _MP3_HEADER)
+
+    assert captured["authorization"] == "Bearer sk-test"
+    assert captured["ai-transcription-model-specification-version"] == "4"
+    assert captured["ai-model-id"] == _TRANSCRIPTION_MODEL_ID
+    assert captured["ai-gateway-auth-method"] == "api-key"
+
+
+async def test_transcribe_forwards_provider_options() -> None:
+    captured_body: dict[str, Any] = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        captured_body.update(json.loads(req.content))
+        return httpx.Response(200, json={"text": "hi"})
+
+    await ops.transcribe(
+        mock_model(
+            httpx.MockTransport(handler), model_id=_TRANSCRIPTION_MODEL_ID
+        ),
+        _MP3_HEADER,
+        params=ops.TranscribeParams(
+            provider_options={"openai": {"timestampGranularities": ["word"]}}
+        ),
+    )
+
+    assert captured_body["providerOptions"] == {
+        "openai": {"timestampGranularities": ["word"]}
+    }
+
+
+async def test_transcribe_provider_metadata_passthrough() -> None:
+    """``providerMetadata`` from the response lands on the item."""
+    metadata = {"gateway": {"cost": "0.006"}}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"text": "hi", "providerMetadata": metadata},
+        )
+
+    result = await ops.transcribe(
+        mock_model(
+            httpx.MockTransport(handler), model_id=_TRANSCRIPTION_MODEL_ID
+        ),
+        _MP3_HEADER,
+    )
+
+    assert result.provider_metadata == metadata
+
+
+async def test_transcribe_401_authentication_error() -> None:
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            401,
+            json={
+                "error": {
+                    "message": "Invalid API key",
+                    "type": "authentication_error",
+                }
+            },
+        )
+
+    with pytest.raises(ai.ProviderAuthenticationError):
+        await ops.transcribe(
+            mock_model(
+                httpx.MockTransport(handler),
+                model_id=_TRANSCRIPTION_MODEL_ID,
+            ),
+            _MP3_HEADER,
         )

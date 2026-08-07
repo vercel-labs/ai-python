@@ -572,6 +572,73 @@ async def embed(
     )
 
 
+# ---------------------------------------------------------------------------
+# Transcription
+# ---------------------------------------------------------------------------
+
+
+async def transcribe(
+    gateway: gateway_client.GatewayClient,
+    model: models.Model,
+    audio: types.messages.FilePart | bytes,
+    *,
+    params: ops.transcriptions.TranscribeParams,
+) -> ops.items.Item[ops.transcriptions.Transcription]:
+    """Hit ``/transcription-model`` and return an Item with a transcript."""
+    media_type: str | None = None
+    if isinstance(audio, types.messages.FilePart):
+        data = audio.data
+        media_type = audio.media_type
+        # The endpoint only accepts inline base64 (no url input type), so
+        # downloadable URLs are fetched client-side, like the AI SDK does.
+        if isinstance(data, str) and types.media.is_downloadable_url(data):
+            data, content_type = await models.core.helpers.files.download(data)
+            if content_type:
+                media_type = content_type
+    else:
+        data = audio
+    if media_type is None:
+        media_type = types.media.detect_audio_media_type(data) or "audio/wav"
+
+    body: dict[str, Any] = {
+        "audio": types.media.data_to_base64(data),
+        "mediaType": media_type,
+    }
+    if params.provider_options:
+        body["providerOptions"] = dict(params.provider_options)
+
+    try:
+        response = await gateway.post(
+            "transcription-model",
+            body,
+            model=model,
+            model_type="transcription",
+            spec_version=SPEC_VERSION,
+        )
+    except gateway_client.errors.GatewayError as exc:
+        raise errors.map_error(exc) from exc
+
+    data_out = response.json()
+    transcription = ops.transcriptions.Transcription(
+        text=data_out.get("text") or "",
+        segments=[
+            ops.transcriptions.TranscriptionSegment(
+                text=segment.get("text") or "",
+                start_second=segment.get("startSecond") or 0.0,
+                end_second=segment.get("endSecond") or 0.0,
+            )
+            for segment in data_out.get("segments") or []
+        ],
+        language=data_out.get("language"),
+        duration_seconds=data_out.get("durationInSeconds"),
+    )
+
+    return ops.items.Item(
+        value=transcription,
+        provider_metadata=data_out.get("providerMetadata"),
+    )
+
+
 class GatewayV4Protocol(base.ProviderProtocol[gateway_client.GatewayClient]):
     """AI Gateway v4 wire protocol."""
 
@@ -651,3 +718,15 @@ class GatewayV4Protocol(base.ProviderProtocol[gateway_client.GatewayClient]):
     ) -> ops.items.Item[list[list[float]]]:
         _ = provider
         return await embed(client, model, values, params=params)
+
+    async def transcribe(
+        self,
+        client: gateway_client.GatewayClient,
+        model: models.Model,
+        audio: types.messages.FilePart | bytes,
+        *,
+        params: ops.transcriptions.TranscribeParams,
+        provider: str,
+    ) -> ops.items.Item[ops.transcriptions.Transcription]:
+        _ = provider
+        return await transcribe(client, model, audio, params=params)

@@ -24,7 +24,14 @@ if TYPE_CHECKING:
 
     from ..models.core import model as model_
     from ..models.core import params as params_
-    from ..ops import audio, embeddings, images, items, videos
+    from ..ops import (
+        audio,
+        embeddings,
+        images,
+        items,
+        transcriptions,
+        videos,
+    )
     from ..types import events
     from ..types import messages as messages_
     from ..types import tools as tools_
@@ -227,6 +234,20 @@ class ProviderProtocol(pydantic.BaseModel, Generic[ClientT]):
         """Embed text values with a dedicated embedding model using *client*."""
         raise NotImplementedError(
             f"protocol {type(self).__name__!r} does not support embed()"
+        )
+
+    async def transcribe(
+        self,
+        client: ClientT,
+        model: model_.Model,
+        audio: messages_.FilePart | bytes,
+        *,
+        params: transcriptions.TranscribeParams,
+        provider: str,
+    ) -> items.Item[transcriptions.Transcription]:
+        """Transcribe audio with a transcription model using *client*."""
+        raise NotImplementedError(
+            f"protocol {type(self).__name__!r} does not support transcribe()"
         )
 
 
@@ -536,6 +557,23 @@ class Provider(pydantic.BaseModel, Generic[ClientT]):
             self.client,
             model,
             values,
+            params=params,
+            provider=self.name,
+        )
+
+    async def transcribe(
+        self,
+        model: model_.Model,
+        audio: messages_.FilePart | bytes,
+        *,
+        params: transcriptions.TranscribeParams,
+    ) -> items.Item[transcriptions.Transcription]:
+        """Transcribe audio with this provider's transcription model."""
+        selected_protocol = model.protocol or self.protocol
+        return await selected_protocol.transcribe(
+            self.client,
+            model,
+            audio,
             params=params,
             provider=self.name,
         )
