@@ -23,15 +23,17 @@ _PROTOCOL_VERSION = "0.0.1"
 _VERSIONED_BASE_RE = re.compile(r"/v\d+/ai$")
 
 AuthMethod = Literal["api-key", "oidc"]
-ModelType = Literal["language", "image", "video", "speech", "embedding"]
+ModelType = Literal[
+    "language", "image", "video", "speech", "embedding", "transcription"
+]
 
 
 class GatewayClient:
     """Small async HTTP client for Gateway provider endpoints.
 
     This intentionally implements only the calls used by the current provider:
-    config/credits reads, language streaming, and image/video/speech
-    generation.
+    config/credits reads, language streaming, image/video/speech
+    generation, embeddings, and transcription.
     """
 
     def __init__(
@@ -105,6 +107,11 @@ class GatewayClient:
             headers["ai-model-id"] = model.id
         elif model_type == "embedding":
             headers["ai-embedding-model-specification-version"] = spec_version
+            headers["ai-model-id"] = model.id
+        elif model_type == "transcription":
+            headers["ai-transcription-model-specification-version"] = (
+                spec_version
+            )
             headers["ai-model-id"] = model.id
         else:
             headers["ai-speech-model-specification-version"] = spec_version
