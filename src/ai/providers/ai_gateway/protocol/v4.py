@@ -639,6 +639,59 @@ async def transcribe(
     )
 
 
+# ---------------------------------------------------------------------------
+# Reranking
+# ---------------------------------------------------------------------------
+
+
+async def rerank(
+    gateway: gateway_client.GatewayClient,
+    model: models.Model,
+    documents: list[str] | list[dict[str, Any]],
+    query: str,
+    *,
+    params: ops.reranking.RerankParams,
+) -> ops.items.Item[list[ops.reranking.RankedDocument]]:
+    """Hit ``/reranking-model`` and return an Item with the ranking."""
+    body: dict[str, Any] = {
+        "query": query,
+        "documents": {
+            "type": "text" if isinstance(documents[0], str) else "object",
+            "values": documents,
+        },
+    }
+    if params.top_n is not None:
+        body["topN"] = params.top_n
+    if params.provider_options:
+        body["providerOptions"] = dict(params.provider_options)
+
+    try:
+        response = await gateway.post(
+            "reranking-model",
+            body,
+            model=model,
+            model_type="reranking",
+            spec_version=SPEC_VERSION,
+        )
+    except gateway_client.errors.GatewayError as exc:
+        raise errors.map_error(exc) from exc
+
+    data = response.json()
+    for warning in data.get("warnings") or []:
+        logger.warning("gateway rerank warning: %s", warning)
+
+    return ops.items.Item(
+        value=[
+            ops.reranking.RankedDocument(
+                index=entry["index"],
+                score=entry["relevanceScore"],
+            )
+            for entry in data.get("ranking") or []
+        ],
+        provider_metadata=data.get("providerMetadata"),
+    )
+
+
 class GatewayV4Protocol(base.ProviderProtocol[gateway_client.GatewayClient]):
     """AI Gateway v4 wire protocol."""
 
@@ -730,3 +783,16 @@ class GatewayV4Protocol(base.ProviderProtocol[gateway_client.GatewayClient]):
     ) -> ops.items.Item[ops.transcriptions.Transcription]:
         _ = provider
         return await transcribe(client, model, audio, params=params)
+
+    async def rerank(
+        self,
+        client: gateway_client.GatewayClient,
+        model: models.Model,
+        documents: list[str] | list[dict[str, Any]],
+        query: str,
+        *,
+        params: ops.reranking.RerankParams,
+        provider: str,
+    ) -> ops.items.Item[list[ops.reranking.RankedDocument]]:
+        _ = provider
+        return await rerank(client, model, documents, query, params=params)

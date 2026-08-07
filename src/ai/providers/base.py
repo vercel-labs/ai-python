@@ -29,6 +29,7 @@ if TYPE_CHECKING:
         embeddings,
         images,
         items,
+        reranking,
         transcriptions,
         videos,
     )
@@ -248,6 +249,21 @@ class ProviderProtocol(pydantic.BaseModel, Generic[ClientT]):
         """Transcribe audio with a transcription model using *client*."""
         raise NotImplementedError(
             f"protocol {type(self).__name__!r} does not support transcribe()"
+        )
+
+    async def rerank(
+        self,
+        client: ClientT,
+        model: model_.Model,
+        documents: list[str] | list[dict[str, Any]],
+        query: str,
+        *,
+        params: reranking.RerankParams,
+        provider: str,
+    ) -> items.Item[list[reranking.RankedDocument]]:
+        """Rerank documents with a dedicated reranking model using *client*."""
+        raise NotImplementedError(
+            f"protocol {type(self).__name__!r} does not support rerank()"
         )
 
 
@@ -574,6 +590,25 @@ class Provider(pydantic.BaseModel, Generic[ClientT]):
             self.client,
             model,
             audio,
+            params=params,
+            provider=self.name,
+        )
+
+    async def rerank(
+        self,
+        model: model_.Model,
+        documents: list[str] | list[dict[str, Any]],
+        query: str,
+        *,
+        params: reranking.RerankParams,
+    ) -> items.Item[list[reranking.RankedDocument]]:
+        """Rerank documents with this provider's reranking model."""
+        selected_protocol = model.protocol or self.protocol
+        return await selected_protocol.rerank(
+            self.client,
+            model,
+            documents,
+            query,
             params=params,
             provider=self.name,
         )
