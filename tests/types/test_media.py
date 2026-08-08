@@ -12,6 +12,10 @@ _RIFF_WEBP = bytes(
 _RIFF_WAVE = bytes(
     [0x52, 0x49, 0x46, 0x46, 0x00, 0x00, 0x00, 0x00, 0x57, 0x41, 0x56, 0x45]
 )
+_MP4 = bytes(
+    [0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6F, 0x6D]
+)
+_JPEG = bytes([0xFF, 0xD8, 0xFF, 0xE0])
 
 
 def test_data_to_base64_extracts_from_data_url() -> None:
@@ -90,3 +94,16 @@ def test_data_to_base64_str_passthrough() -> None:
     """Standard base-64 string passes through unchanged."""
     standard = "/9j/4AAQSkZJRg=="
     assert media.data_to_base64(standard) == standard
+
+
+def test_detect_video_media_type_mp4() -> None:
+    assert media.detect_video_media_type(_MP4) == "video/mp4"
+
+
+def test_detect_video_media_type_base64() -> None:
+    b64 = base64.b64encode(_MP4).decode()
+    assert media.detect_video_media_type(b64) == "video/mp4"
+
+
+def test_detect_video_media_type_rejects_image() -> None:
+    assert media.detect_video_media_type(_JPEG) is None
