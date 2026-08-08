@@ -143,14 +143,16 @@ class FilePart(pydantic.BaseModel):
     ) -> Self:
         """Create from raw bytes, detecting ``media_type`` via magic bytes.
 
-        Attempts image detection first, then audio.  Raises
+        Attempts image detection first, then audio, then video.  Raises
         :class:`ValueError` if no ``media_type`` is provided and
         detection fails.
         """
         if media_type is None:
-            media_type = media.detect_image_media_type(
-                data
-            ) or media.detect_audio_media_type(data)
+            media_type = (
+                media.detect_image_media_type(data)
+                or media.detect_audio_media_type(data)
+                or media.detect_video_media_type(data)
+            )
         if media_type is None:
             raise ValueError(
                 "Cannot detect media_type from bytes. "

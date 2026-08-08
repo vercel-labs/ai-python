@@ -118,6 +118,14 @@ def test_from_bytes_detects_audio() -> None:
     assert fp.media_type == "audio/wav"
 
 
+def test_from_bytes_detects_video() -> None:
+    data = bytes(
+        [0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6F, 0x6D]
+    )
+    fp = messages.FilePart.from_bytes(data)
+    assert fp.media_type == "video/mp4"
+
+
 def test_from_bytes_explicit_overrides() -> None:
     fp = messages.FilePart.from_bytes(b"\x00\x00", media_type="video/mp4")
     assert fp.media_type == "video/mp4"
