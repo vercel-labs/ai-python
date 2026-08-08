@@ -330,3 +330,8 @@ def detect_image_media_type(data: bytes | str) -> str | None:
 def detect_audio_media_type(data: bytes | str) -> str | None:
     """Detect audio format from magic bytes."""
     return detect_media_type(data, AUDIO_SIGNATURES)
+
+
+def detect_video_media_type(data: bytes | str) -> str | None:
+    """Detect video format from magic bytes."""
+    return detect_media_type(data, VIDEO_SIGNATURES)
