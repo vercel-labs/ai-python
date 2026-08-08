@@ -50,6 +50,29 @@ def _to_wire_output(snapshot: Any) -> Any:
     return snapshot
 
 
+_FINISH_REASON_TO_UI: dict[str, ui_events.FinishReason] = {
+    "stop": "stop",
+    "length": "length",
+    "content_filter": "content-filter",
+    "tool_call": "tool-calls",
+    "error": "error",
+    "other": "other",
+}
+
+
+def _finish_reason_to_ui(finish_reason: str | None) -> ui_events.FinishReason:
+    """Map an internal finish reason onto the AI SDK UI wire value.
+
+    Internal events use the OpenTelemetry ``gen_ai`` vocabulary
+    (``content_filter``, ``tool_call``) while the UI protocol uses kebab-case
+    (``content-filter``, ``tool-calls``).  Unknown values become ``other``
+    and a missing reason defaults to ``stop``.
+    """
+    if finish_reason is None:
+        return "stop"
+    return _FINISH_REASON_TO_UI.get(finish_reason, "other")
+
+
 class _StreamState:
     """Single-pass state across one ``to_stream()`` call."""
 
@@ -58,6 +81,7 @@ class _StreamState:
         self.emitted_start: bool = False
         self.in_step: bool = False
         self.step_ended: bool = False
+        self.finish_reason: str | None = None
 
         self.started_tool_inputs: set[str] = set()
         self.tool_names: dict[str, str] = {}
@@ -155,6 +179,7 @@ class _StreamState:
 
         match event:
             case events_.StreamEnd():
+                self.finish_reason = event.finish_reason
                 self.step_ended = True
 
             case events_.StreamStart():
@@ -566,7 +591,7 @@ class _StreamState:
         if self.emitted_start:
             events.append(
                 ui_events.UIFinishEvent(
-                    finish_reason="stop",
+                    finish_reason=_finish_reason_to_ui(self.finish_reason),
                     message_metadata=self._latest_assistant_metadata(),
                 )
             )
