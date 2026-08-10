@@ -1,0 +1,82 @@
+---
+title: "experimental_generate"
+description: Generate a buffered language-model response.
+type: reference
+summary: Reference for ai.experimental_generate.
+---
+
+`ai.experimental_generate` makes one language-model call and returns the
+complete assistant `Message` without exposing streamed events.
+
+This API is experimental and may change or be removed.
+
+```python
+message = await ai.experimental_generate(model, messages)
+print(message.text)
+```
+
+## Function
+
+```python
+await ai.experimental_generate(
+    model,
+    messages,
+    *,
+    tools=None,
+    output_type=None,
+    params=None,
+)
+```
+
+You can also pass an agent-loop context:
+
+```python
+message = await ai.experimental_generate(context=context)
+```
+
+Pass either `model` and `messages`, or `context=`, not both.
+
+## Arguments
+
+- `model`: `ai.Model`.
+- `messages`: List of `ai.messages.Message` values.
+- `tools`: Optional model-facing `ai.Tool` declarations.
+- `output_type`: Optional Pydantic model used to constrain structured output.
+- `params`: Optional `ai.InferenceRequestParams`.
+- `context`: Optional `ai.Context`. Its model, messages, tools, output type,
+  and params supply defaults for the call.
+
+When you pass `context=`, do not pass `model`, `messages`, or `tools`.
+`output_type` and `params` can override the values from the context.
+
+## Return value
+
+Returns the complete assistant `Message`. With structured output, parse the
+message using the same Pydantic model:
+
+```python
+import pydantic
+
+
+class Summary(pydantic.BaseModel):
+    title: str
+    points: list[str]
+
+
+message = await ai.experimental_generate(
+    model,
+    [ai.user_message("Summarize the mission as JSON.")],
+    output_type=Summary,
+)
+summary = message.get_output(Summary)
+```
+
+## Provider behavior
+
+The SDK uses the provider's native non-streaming generation method when it is
+available. Otherwise, it drains the provider's stream internally and returns
+the aggregated message.
+
+Use [`ai.stream`](/docs/reference/ai/stream) when your application needs events
+as the response arrives. Use `Agent.run` when the SDK should execute Python
+tools and continue the model loop.
