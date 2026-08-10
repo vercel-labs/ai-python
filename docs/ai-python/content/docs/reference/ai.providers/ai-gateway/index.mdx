@@ -545,13 +545,17 @@ See [`ai.errors`](/docs/reference/errors) for the complete error hierarchy.
 The Python provider currently supports:
 
 - Language model streaming.
+- Buffered language model responses through `ai.experimental_generate`.
 - Structured output.
 - Function and provider-executed tools.
 - Model listing and connection checks.
-- Image and video generation through the experimental generation API.
+- Image, video, speech generation, embeddings, transcription, and reranking through `ai.ops`.
 
-It does not currently expose reranking models, realtime sessions, credit
-queries, spend reports, or generation lookup helpers.
+It does not currently expose realtime sessions, credit queries, spend reports,
+or generation lookup helpers.
+
+See [Model Operations](/docs/basics/model-operations) for usage examples and
+[`ai.ops`](/docs/reference/ops) for the exact APIs.
 
 ## API reference
 
@@ -576,7 +580,12 @@ Methods and properties:
 - `list_models()`: Returns available model IDs.
 - `probe(model)`: Checks authentication and model availability.
 - `stream(...)`: Streams a language model response.
-- `generate(...)`: Generates image or video output.
+- `generate_image(...)`: Generates images.
+- `generate_video(...)`: Generates videos.
+- `generate_audio(...)`: Generates speech.
+- `embed(...)`: Embeds text values.
+- `transcribe(...)`: Transcribes audio.
+- `rerank(...)`: Reranks documents against a query.
 - `aclose()`: Closes provider-owned resources.
 
 ### GatewayParams
@@ -601,16 +610,10 @@ Fields:
 ### GatewayV4Protocol
 
 `GatewayV4Protocol` translates SDK messages, tools, request parameters, stream
-events, and generated media to and from the AI Gateway v4 API.
+events, and dedicated model operations to and from the AI Gateway v4 API.
 
 `GatewayProvider` uses this protocol by default. Pass it directly only when you
 need a protocol override.
-
-### GatewayV3Protocol
-
-`GatewayV3Protocol` speaks the previous AI Gateway v3 API. Pass it as a
-protocol override to keep using the v3 wire protocol; requests are routed to
-the matching `/v3/ai` endpoints automatically.
 
 ### Module exports
 

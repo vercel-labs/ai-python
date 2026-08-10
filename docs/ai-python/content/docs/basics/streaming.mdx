@@ -61,6 +61,18 @@ start, delta, and end events. Tool calls use `ToolStart`, `ToolDelta`, and
 `ToolEnd`. Generated files arrive as `FileEvent` and are added to the final
 message.
 
+## Generate without streamed events
+
+Use `ai.experimental_generate` when you only need the complete message:
+
+```python
+message = await ai.experimental_generate(model, messages)
+print(message.text)
+```
+
+The function accepts the same tools, output type, and request parameters as
+`ai.stream`. It is experimental and may change or be removed.
+
 ## Use structured output
 
 Pass a Pydantic model as `output_type` when you want to use structured outputs:

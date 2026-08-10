@@ -50,14 +50,14 @@ messages = [
 Messages round-trip through Pydantic:
 
 ```python
-encoded = [message.model_dump(mode="json") for message in stream.messages]
+encoded = [message.model_dump(mode="json") for message in messages]
 restored = [ai.messages.Message.model_validate(item) for item in encoded]
 ```
 
 ## Add files and multimodal input
 
-File parts let you send images, audio, or documents when the provider supports
-them.
+File parts let you send images, video, audio, or documents when the provider
+supports them.
 
 ```python
 message = ai.user_message(

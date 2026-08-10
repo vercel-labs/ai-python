@@ -15,6 +15,13 @@ registry.
 - `apply_approvals`
 
 ```python
-approvals = ai.ui.ai_sdk.extract_approvals(ui_messages)
-ai.ui.ai_sdk.apply_approvals(approvals)
+messages, approvals = ai.ui.ai_sdk.to_messages(ui_messages)
+
+async with agent.run(model, messages) as stream:
+    ai.ui.ai_sdk.apply_approvals(approvals)
+    async for event in stream:
+        ...
 ```
+
+Call `apply_approvals` inside the `agent.run` context before iteration, or pass
+the registry that the run uses with `registry=`.

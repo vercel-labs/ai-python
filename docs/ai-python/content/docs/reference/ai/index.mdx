@@ -21,6 +21,8 @@ These top-level exports have their own pages under `ai`.
 
 - [`stream`](/docs/reference/ai/stream): Call a model and iterate response
   events. The same page documents `Stream`.
+- [`experimental_generate`](/docs/reference/ai/experimental-generate): Call a
+  model and return a buffered `Message`.
 - [`get_model`](/docs/reference/ai/get-model): Resolve a model id into a
   `Model`.
 - [`get_provider`](/docs/reference/ai/get-provider): Resolve and configure a
@@ -38,10 +40,15 @@ These module aliases are also re-exported from `ai`.
 - [`messages`](/docs/reference/messages): Message and message part models.
 - `models`: Model namespace used by the top-level model exports on this page.
 - [`mcp`](/docs/reference/mcp): MCP tool loading helpers.
+- [`ops`](/docs/reference/ops): Dedicated model operations.
 - [`providers`](/docs/reference/ai.providers): Provider classes and
   provider-specific namespaces.
+- [`testing`](/docs/reference/testing): Scripted model and agent testing.
 - [`tools`](/docs/reference/tools): Model-facing tool schema types.
+- [`ui`](/docs/reference/ai.ui/ai-sdk): UI adapter namespaces.
 - [`util`](/docs/reference/util): Async utility helpers.
+- [`experimental_telemetry`](/docs/reference/telemetry): Tracing and
+  observability APIs.
 
 ## Models
 
@@ -101,10 +108,10 @@ code usually gets a provider with `get_provider`.
 
 ### ProviderProtocol
 
-`ProviderProtocol` translates messages, tools, params, and generated files to
-provider wire formats.
+`ProviderProtocol` translates messages, tools, params, and dedicated model
+operations to provider wire formats.
 
-Provider instances use a protocol for `stream` and `generate` calls.
+Provider instances use a protocol for language-model calls and `ai.ops`.
 
 ```python
 protocol.stream(
@@ -115,7 +122,15 @@ protocol.stream(
     params=params,
     provider=provider.name,
 )
-await protocol.generate(client, model, messages, params, provider=provider.name)
+await protocol.generate(
+    client,
+    model,
+    messages,
+    tools=tools,
+    output_type=output_type,
+    params=params,
+    provider=provider.name,
+)
 ```
 
 ## Request Params
@@ -178,6 +193,7 @@ Routing params:
 Message builders create `Message` values.
 
 ```python
+ai.message("Hello", role="user")
 ai.system_message("You are concise.")
 ai.user_message("Hello", ai.file_part(data, media_type="image/png"))
 ai.assistant_message("Hi")
@@ -186,6 +202,7 @@ ai.tool_message(tool_call_id="tc_1", result="done", tool_name="lookup")
 
 Message builder exports:
 
+- `message`
 - `system_message`
 - `user_message`
 - `assistant_message`
@@ -288,7 +305,7 @@ wants the runner to aggregate the result message.
 
 ### Streaming tool aliases
 
-Async-generator tools can yield partial output while they run.
+Async-iterable tools can yield partial output while they run.
 
 - `StreamingTextTool`: Concatenate yielded strings.
 - `StreamingStatusTool[T]`: Treat intermediate yields as status updates and
@@ -326,6 +343,15 @@ Hook exports:
 - `resolve_hook`: Resolve a live or future hook.
 - `defer_hook`: Mark a serialized deferred hook as aborted.
 - `cancel_hook`: Cancel a live hook by label.
+- `HookRegistry`: Store live and pre-registered hook resolutions.
+- `get_hook_registry`: Return the current hook registry.
+- `HookDeferredException`: Signal that a hook was deferred for a later run.
+
+### yield_from
+
+`yield_from` forwards values from an async iterable through the current agent
+runtime and returns the aggregator's model-facing result. See
+[`ai.agents`](/docs/reference/ai.agents) for the advanced API.
 
 ## Errors
 

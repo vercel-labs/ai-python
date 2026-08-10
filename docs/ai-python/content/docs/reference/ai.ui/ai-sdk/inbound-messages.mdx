@@ -12,4 +12,5 @@ approval responses.
 messages, approvals = ai.ui.ai_sdk.to_messages(ui_messages)
 ```
 
-Call `apply_approvals` before resuming an agent run with extracted approvals.
+Call `apply_approvals` inside the `agent.run` context, before iteration, when
+resuming a run with extracted approvals.

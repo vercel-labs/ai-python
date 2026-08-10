@@ -19,6 +19,23 @@ provider-specific namespaces.
 - `GatewayProvider`
 - `history_utils`
 
+## Provider operations
+
+`Provider` and `ProviderProtocol` define these model operations:
+
+- `stream`: Stream a language-model response.
+- `generate`: Generate a buffered language-model response.
+- `generate_image`: Generate images.
+- `generate_video`: Generate videos.
+- `generate_audio`: Generate speech.
+- `embed`: Embed text values.
+- `transcribe`: Transcribe audio.
+- `rerank`: Rerank documents against a query.
+
+Application code normally uses `ai.stream`, `ai.experimental_generate`, or
+[`ai.ops`](/docs/reference/ops) instead of calling provider methods directly.
+A protocol only needs to implement the operations that it supports.
+
 ## ai.providers.history_utils
 
 Message-history repair utilities. `ai.stream` passes history to the

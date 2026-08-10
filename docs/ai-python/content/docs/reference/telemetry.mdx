@@ -88,7 +88,7 @@ Built-in data types:
 | `RunSpanData` | `run` | One `Agent.run`: the whole loop. |
 | `LoopTurnSpanData` | `loop_turn` | One turn of the default agent loop. |
 | `AiStreamSpanData` | `ai_stream` | One streaming model call. |
-| `AiGenerateSpanData` | `ai_generate` | One non-streaming generation call (images, video). |
+| `AiGenerateSpanData` | `ai_generate` | One buffered language-model call. |
 | `ToolExecutionSpanData` | `tool_execution` | One tool execution, from dispatch to result. |
 | `HookSpanData` | `hook` | One hook suspension, from deferred until resolved or cancelled. |
 | `CustomSpanData` | `custom` | A user span made with `span("name")`; its attributes live in `attrs`. |
@@ -100,6 +100,9 @@ parameters; `blocked`, `final_message`, and `usage` are set at span end.
 `AiStreamSpanData` carries the model, messages, parameters, and tool names of
 one call; the response `message`, `usage`, `finish_reason`, `response_id`,
 and `response_model` are set at span end.
+
+`AiGenerateSpanData` carries the same request and response fields for
+`ai.experimental_generate` calls.
 
 `ToolExecutionSpanData` carries `tool_name`, `tool_call_id`,
 `tool_description`, and `args`; `result`, `model_input`, and `is_error` are
