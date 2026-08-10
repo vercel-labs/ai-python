@@ -30,12 +30,12 @@ Custom aggregators implement `ai.events.Aggregator`.
 
 ## Rules
 
-- Streaming tools must be async generators, and every streaming tool needs an
-  aggregator — usually supplied by the return type alias.
+- Streaming tools must return async iterables, and every streaming tool needs
+  an aggregator — usually supplied by the return type alias.
 - Do not append a subagent's child messages to the parent history yourself.
   The tool result stores the child transcript as a typed `MessageBundle`.
 - When saving history, keep the typed message data. Do not stringify
-  `MessageBundle` or drop `result_kind`:
+  `MessageBundle` or drop `result_kind` or `model_input_kind`:
 
   ```python
   data = message.model_dump(mode="json")

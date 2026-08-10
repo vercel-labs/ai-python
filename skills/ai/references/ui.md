@@ -52,3 +52,6 @@ The adapter handles `UIMessage` parsing, message IDs, tool state, approvals,
 subagent `MessageBundle` values, and AI SDK UI stream events. You handle the
 HTTP route, auth, storage, session lookup, frontend rendering, and when to
 defer hooks.
+
+The outbound adapter emits step boundaries between model turns. Pass agent
+events to `to_sse` or `to_stream`; do not synthesize step events separately.

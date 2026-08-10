@@ -161,7 +161,8 @@ ai.resolve_hook("approve_send_email", {"granted": True, "reason": "approved"})
 Focused samples live in category directories under `examples/`.
 
 - `examples/agents/` - agent loops, tools, hooks, and MCP
-- `examples/media/` - image, video, and multimodal input/output
+- `examples/media/` - image, video, speech, transcription, embeddings,
+  reranking, and multimodal input/output
 - `examples/models/` - streaming, structured output, and provider examples
 - `examples/apps/` - end-to-end demos
 
