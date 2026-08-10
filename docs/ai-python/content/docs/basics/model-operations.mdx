@@ -1,0 +1,176 @@
+---
+title: Non-LLM models
+description: Generate media, embed text, transcribe audio, and rerank documents.
+type: guide
+summary: Use dedicated models for images, video, speech, embeddings, transcription, and reranking.
+---
+
+Use `ai.ops` for model calls that do not produce a language-model message.
+These operations return an `ai.ops.Item` instead of adding output to message
+history.
+
+The built-in provider currently supports these operations through AI Gateway.
+Use an unprefixed model ID to route the request through Gateway.
+
+## Generate images
+
+Pass an image model and a prompt message to `generate_image`:
+
+```python title="generate_image.py"
+import asyncio
+import base64
+import pathlib
+
+import ai
+
+
+async def main() -> None:
+    model = ai.get_model("google/imagen-4.0-generate-001")
+    messages = [ai.user_message("A watercolor cabin at sunset.")]
+
+    result = await ai.ops.generate_image(
+        model,
+        messages,
+        params=ai.ops.ImageParams(aspect_ratio="16:9"),
+    )
+
+    image = result.value[0]
+    data = (
+        image.data
+        if isinstance(image.data, bytes)
+        else base64.b64decode(image.data)
+    )
+    pathlib.Path("cabin.png").write_bytes(data)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+Use `ImageParams` to set the number of images, size, aspect ratio, or seed.
+To edit an image, add its `FilePart` to the user message with the instructions.
+
+## Generate video
+
+Use `generate_video` with a dedicated video model:
+
+```python
+result = await ai.ops.generate_video(
+    ai.get_model("google/veo-3.1-fast-generate-001"),
+    [ai.user_message("A paper boat drifting across a puddle in the rain.")],
+    params=ai.ops.VideoParams(
+        aspect_ratio="16:9",
+        duration=4,
+    ),
+)
+
+video = result.value[0]
+```
+
+`VideoParams` can also set the number of videos, resolution, frames per
+second, and seed. Add an image `FilePart` to the prompt for image-to-video
+models.
+
+## Generate speech
+
+Use `generate_audio` to turn message text into speech:
+
+```python
+result = await ai.ops.generate_audio(
+    ai.get_model("openai/tts-1"),
+    [ai.user_message("The robots have reached the mothership.")],
+    params=ai.ops.AudioParams(
+        voice="alloy",
+        output_format="mp3",
+    ),
+)
+
+audio = result.value[0]
+```
+
+`AudioParams` can also set delivery instructions, speed, and language.
+
+Image, video, and speech operations return `FilePart` values. Their `data`
+field contains bytes or base64 text and can be saved in the same way as the
+image example.
+
+## Embed text
+
+Use `embed` to create one vector for each input string:
+
+```python
+values = [
+    "The robots reached the mothership.",
+    "The machines arrived at the command ship.",
+]
+
+result = await ai.ops.embed(
+    ai.get_model("openai/text-embedding-3-small"),
+    values,
+)
+
+first_vector = result.value[0]
+```
+
+Vectors stay in the same order as the input strings. When the provider reports
+token usage, it is available on `result.usage`.
+
+## Transcribe audio
+
+Pass audio bytes or an audio `FilePart` to `transcribe`:
+
+```python
+import pathlib
+
+audio = pathlib.Path("meeting.mp3").read_bytes()
+result = await ai.ops.transcribe(
+    ai.get_model("openai/whisper-1"),
+    audio,
+)
+
+print(result.value.text)
+for segment in result.value.segments:
+    print(segment.start_second, segment.end_second, segment.text)
+```
+
+The result can also include the detected language and total duration when the
+provider reports them.
+
+## Rerank documents
+
+Use `rerank` to order documents by their relevance to a query:
+
+```python
+documents = [
+    "Reset your password from the sign-in page.",
+    "The office opens at 9 AM.",
+    "Contact support through the chat widget.",
+]
+
+result = await ai.ops.rerank(
+    ai.get_model("cohere/rerank-v3.5"),
+    documents,
+    "How do I change my password?",
+    params=ai.ops.RerankParams(top_n=2),
+)
+
+for ranked in result.value:
+    print(ranked.score, documents[ranked.index])
+```
+
+Each result contains the document's original index and relevance score. Results
+are ordered from the highest score to the lowest.
+
+## Read operation metadata
+
+Every operation returns `ai.ops.Item`:
+
+```python
+result.value
+result.usage
+result.provider_metadata
+```
+
+`value` contains the operation output. `usage` is `None` when the provider does
+not report token usage. Provider-specific response data is available on
+`provider_metadata`.
