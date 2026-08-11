@@ -81,17 +81,79 @@ video = result.value[0]
 `VideoParams` can also set the number of videos, resolution, frames per
 second, seed, and whether to generate audio alongside the video.
 
-For image-to-video models, pass a `VideoPrompt` with the starting image:
+For models that accept input media, pass a `VideoPrompt`:
+
+<CodeBlockTabs defaultValue="start-image">
+  <CodeBlockTabsList>
+    <CodeBlockTabsTrigger value="start-image">Start image</CodeBlockTabsTrigger>
+    <CodeBlockTabsTrigger value="frames">First and last frame</CodeBlockTabsTrigger>
+    <CodeBlockTabsTrigger value="references">Reference media</CodeBlockTabsTrigger>
+    <CodeBlockTabsTrigger value="extend">Extend a video</CodeBlockTabsTrigger>
+  </CodeBlockTabsList>
+  <CodeBlockTab value="start-image">
 
 ```python
 prompt = ai.ops.VideoPrompt(
     text="The boat sails away.",
     image="https://example.com/boat.jpg",
 )
+
+result = await ai.ops.generate_video(model, prompt)
 ```
 
-`VideoPrompt` also accepts role-tagged first/last-frame images through
-`frame_images` and reference media through `references`.
+  </CodeBlockTab>
+  <CodeBlockTab value="frames">
+
+```python
+prompt = ai.ops.VideoPrompt(
+    text="The paper boat drifts from the puddle's edge to the drain.",
+    frame_images=[
+        ai.ops.FrameImage(
+            image=pathlib.Path("boat-start.png").read_bytes(),
+            frame_type="first_frame",
+        ),
+        ai.ops.FrameImage(
+            image=pathlib.Path("boat-end.png").read_bytes(),
+            frame_type="last_frame",
+        ),
+    ],
+)
+
+result = await ai.ops.generate_video(model, prompt)
+```
+
+  </CodeBlockTab>
+  <CodeBlockTab value="references">
+
+```python
+prompt = ai.ops.VideoPrompt(
+    text="The same paper boat, now sailing through a storm.",
+    references=[
+        "https://example.com/boat-closeup.jpg",
+        "https://example.com/boat-side.jpg",
+    ],
+)
+
+result = await ai.ops.generate_video(model, prompt)
+```
+
+  </CodeBlockTab>
+  <CodeBlockTab value="extend">
+
+```python
+prompt = ai.ops.VideoPrompt(
+    text="The boat sails on into the storm.",
+    references=["https://example.com/boat.mp4"],
+)
+
+result = await ai.ops.generate_video(model, prompt)
+```
+
+  </CodeBlockTab>
+</CodeBlockTabs>
+
+Video inputs and parameters are provider-dependent. Check the
+model's documentation.
 
 ## Generate speech
 

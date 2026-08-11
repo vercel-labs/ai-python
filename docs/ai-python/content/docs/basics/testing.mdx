@@ -56,6 +56,8 @@ async def test_weather_agent() -> None:
     assert not model.unused
 ```
 
+`model.calls` records each model invocation.
+
 You can leave tool messages out of a script when the exact result does not
 matter. The fake model accepts the agent's tool message and continues with the
 next scripted assistant message.
@@ -74,12 +76,14 @@ model = ai.testing.FakeModel(
         ai.tool_message(
             tool_call_id=tool_call.tool_call_id,
             tool_name="get_weather",
-            result="Sunny",
+            result={"temp_f": 64, "conditions": "sunny"},
         ),
         ai.assistant_message("It is sunny."),
     ]
 )
 ```
+
+`result` accepts any JSON-serializable value or Pydantic model.
 
 The test fails with an `AssertionError` when the actual conversation diverges
 from every script.
@@ -102,3 +106,36 @@ that it is empty when the test should exercise the complete script.
 
 Unscripted system messages are ignored, so an agent's system prompt does not
 need to appear in every script.
+
+## Test structured output
+
+`FakeModel` replays scripted messages as-is, so structured output works like
+it does with a real model: script an assistant message whose text is the JSON
+payload.
+
+```python
+import pydantic
+
+
+class Weather(pydantic.BaseModel):
+    city: str
+    conditions: str
+
+
+model = ai.testing.FakeModel(
+    [
+        ai.user_message("Weather in San Francisco as JSON."),
+        ai.assistant_message('{"city": "San Francisco", "conditions": "sunny"}'),
+    ]
+)
+
+message = await ai.experimental_generate(
+    model,
+    [ai.user_message("Weather in San Francisco as JSON.")],
+    output_type=Weather,
+)
+assert message.get_output(Weather).conditions == "sunny"
+```
+
+The fake does not validate scripted text against the schema; parsing happens only
+when the test calls `get_output`.
