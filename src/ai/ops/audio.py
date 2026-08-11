@@ -5,9 +5,8 @@
     import ai
 
     model = ai.get_model("openai/tts-1")
-    msgs = [ai.user_message("Hello from the AI SDK!")]
 
-    result = await ai.ops.generate_audio(model, msgs)
+    result = await ai.ops.generate_audio(model, "Hello from the AI SDK!")
     result.value  # list[FilePart]
 """
 
@@ -25,6 +24,16 @@ if TYPE_CHECKING:
 
 
 @dataclasses.dataclass(frozen=True, kw_only=True)
+class AudioPrompt:
+    """Prompt for speech generation: the text plus delivery instructions."""
+
+    text: str
+    """The text to convert to speech."""
+    instructions: str | None = None
+    """Instructions for speech delivery, e.g. tone or emotion."""
+
+
+@dataclasses.dataclass(frozen=True, kw_only=True)
 class AudioParams:
     """Parameters for speech generation."""
 
@@ -32,8 +41,6 @@ class AudioParams:
     """Provider-specific voice ID or name."""
     output_format: str | None = None
     """Audio output format, e.g. ``"mp3"`` or ``"wav"``."""
-    instructions: str | None = None
-    """Instructions for speech delivery, e.g. tone or emotion."""
     speed: float | None = None
     """Speech speed multiplier."""
     language: str | None = None
@@ -46,17 +53,20 @@ class AudioParams:
 
 async def generate_audio(
     model: model_.Model,
-    messages: list[types.messages.Message],
+    prompt: str | AudioPrompt,
     *,
     params: AudioParams | None = None,
 ) -> items.Item[list[types.messages.FilePart]]:
     """Generate speech audio with a dedicated speech model.
 
-    The text to speak is the text of the user/system messages. Returns an
+    ``prompt`` is the text to speak, or an :class:`AudioPrompt` carrying
+    delivery instructions alongside the text. Returns an
     :class:`~ai.ops.Item` whose ``value`` is the generated audio files.
     Speech models do not report token usage; cost information, when the
     provider sends it, is on ``.provider_metadata``.
     """
+    if isinstance(prompt, str):
+        prompt = AudioPrompt(text=prompt)
     return await model.provider.generate_audio(
-        model, messages, params=params or AudioParams()
+        model, prompt, params=params or AudioParams()
     )

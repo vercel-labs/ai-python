@@ -1,8 +1,8 @@
 """Image editing with a dedicated image model.
 
 Demonstrates sending an input image to be edited/transformed by the
-image model. The input image is passed as a FilePart in the user
-message, and the model returns the edited version.
+image model. The input image goes in the ImagePrompt alongside the
+text, and the model returns the edited version.
 """
 
 import asyncio
@@ -15,25 +15,18 @@ model = ai.get_model("openai/gpt-image-1")
 
 
 async def main() -> None:
-    # Load an existing image to use as input for editing.
-    # In practice you would load a real image file and pass its bytes
-    # with media_type="image/png".
-    input_image = ai.messages.FilePart(
-        data="https://picsum.photos/id/237/400/300.jpg",
-        media_type="image/jpeg",
-    )
-
-    messages = [
-        ai.user_message(
+    # An input image can be a URL, raw bytes, base-64 data, or a FilePart.
+    prompt = ai.ops.ImagePrompt(
+        text=(
             "Transform this photo into a soft watercolor painting style. "
             "Keep the composition and subject the same but make it look "
-            "like a hand-painted watercolor.",
-            input_image,
+            "like a hand-painted watercolor."
         ),
-    ]
+        images=["https://picsum.photos/id/237/400/300.jpg"],
+    )
 
     result = await ai.ops.generate_image(
-        model, messages, params=ai.ops.ImageParams(size="1024x1024")
+        model, prompt, params=ai.ops.ImageParams(size="1024x1024")
     )
 
     print(f"Generated {len(result.value)} edited image(s)")

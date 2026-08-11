@@ -749,12 +749,9 @@ async def test_rerank_forwards_provider_options() -> None:
     }
 
 
-async def test_rerank_provider_metadata_and_warnings(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """``providerMetadata`` lands on the item; warnings are logged."""
+async def test_rerank_provider_metadata_and_warnings() -> None:
+    """``providerMetadata`` lands on the item; warnings surface on it."""
     metadata = {"gateway": {"cost": "0.002"}}
-    warning = {"type": "other", "message": "topN clamped"}
 
     def handler(req: httpx.Request) -> httpx.Response:
         return httpx.Response(
@@ -762,21 +759,20 @@ async def test_rerank_provider_metadata_and_warnings(
             json={
                 "ranking": _RANKING,
                 "providerMetadata": metadata,
-                "warnings": [warning],
+                "warnings": [{"type": "other", "message": "topN clamped"}],
             },
         )
 
-    with caplog.at_level("WARNING", logger=v4.logger.name):
-        result = await ops.rerank(
-            mock_model(
-                httpx.MockTransport(handler), model_id=_RERANKING_MODEL_ID
-            ),
-            _DOCUMENTS,
-            "tokyo",
-        )
+    result = await ops.rerank(
+        mock_model(httpx.MockTransport(handler), model_id=_RERANKING_MODEL_ID),
+        _DOCUMENTS,
+        "tokyo",
+    )
 
     assert result.provider_metadata == metadata
-    assert str(warning) in caplog.text
+    assert result.warnings == [
+        ops.Warning(kind="other", message="topN clamped")
+    ]
 
 
 async def test_rerank_401_authentication_error() -> None:

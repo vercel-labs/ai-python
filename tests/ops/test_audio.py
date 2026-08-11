@@ -10,15 +10,13 @@ from __future__ import annotations
 import ai
 from ai import ops
 
-from ..providers.ai_gateway.conftest import user_msg
-
 
 async def test_generate_audio_raises_not_implemented() -> None:
     provider = ai.get_provider("openai", api_key="sk-test")
     model = ai.Model(id="tts-1", provider=provider)
 
     try:
-        await ops.generate_audio(model, [user_msg("Hello!")])
+        await ops.generate_audio(model, "Hello!")
     except NotImplementedError as exc:
         assert "generate_audio" in str(exc)
     else:
