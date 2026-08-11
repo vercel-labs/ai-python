@@ -14,7 +14,7 @@ Use an unprefixed model ID to route the request through Gateway.
 
 ## Generate images
 
-Pass an image model and a prompt message to `generate_image`:
+Pass an image model and a prompt string to `generate_image`:
 
 ```python title="generate_image.py"
 import asyncio
@@ -26,11 +26,10 @@ import ai
 
 async def main() -> None:
     model = ai.get_model("google/imagen-4.0-generate-001")
-    messages = [ai.user_message("A watercolor cabin at sunset.")]
 
     result = await ai.ops.generate_image(
         model,
-        messages,
+        "A watercolor cabin at sunset.",
         params=ai.ops.ImageParams(aspect_ratio="16:9"),
     )
 
@@ -48,7 +47,19 @@ if __name__ == "__main__":
 ```
 
 Use `ImageParams` to set the number of images, size, aspect ratio, or seed.
-To edit an image, add its `FilePart` to the user message with the instructions.
+
+To edit an image, pass an `ImagePrompt` with the input images alongside the
+text. Input images accept a `FilePart`, raw bytes, or a URL or base64 string.
+Use `mask` for inpainting operations:
+
+```python
+prompt = ai.ops.ImagePrompt(
+    text="Make this photo look like a watercolor painting.",
+    images=["https://example.com/photo.jpg"],
+)
+
+result = await ai.ops.generate_image(model, prompt)
+```
 
 ## Generate video
 
@@ -57,7 +68,7 @@ Use `generate_video` with a dedicated video model:
 ```python
 result = await ai.ops.generate_video(
     ai.get_model("google/veo-3.1-fast-generate-001"),
-    [ai.user_message("A paper boat drifting across a puddle in the rain.")],
+    "A paper boat drifting across a puddle in the rain.",
     params=ai.ops.VideoParams(
         aspect_ratio="16:9",
         duration=4,
@@ -68,17 +79,28 @@ video = result.value[0]
 ```
 
 `VideoParams` can also set the number of videos, resolution, frames per
-second, and seed. Add an image `FilePart` to the prompt for image-to-video
-models.
+second, seed, and whether to generate audio alongside the video.
+
+For image-to-video models, pass a `VideoPrompt` with the starting image:
+
+```python
+prompt = ai.ops.VideoPrompt(
+    text="The boat sails away.",
+    image="https://example.com/boat.jpg",
+)
+```
+
+`VideoPrompt` also accepts role-tagged first/last-frame images through
+`frame_images` and reference media through `references`.
 
 ## Generate speech
 
-Use `generate_audio` to turn message text into speech:
+Use `generate_audio` to turn text into speech:
 
 ```python
 result = await ai.ops.generate_audio(
     ai.get_model("openai/tts-1"),
-    [ai.user_message("The robots have reached the mothership.")],
+    "The robots have reached the mothership.",
     params=ai.ops.AudioParams(
         voice="alloy",
         output_format="mp3",
@@ -88,7 +110,15 @@ result = await ai.ops.generate_audio(
 audio = result.value[0]
 ```
 
-`AudioParams` can also set delivery instructions, speed, and language.
+`AudioParams` can also set speed and language. To control tone or emotion,
+pass an `AudioPrompt` with delivery instructions:
+
+```python
+prompt = ai.ops.AudioPrompt(
+    text="The robots have reached the mothership.",
+    instructions="Speak in a calm, reassuring tone.",
+)
+```
 
 Image, video, and speech operations return `FilePart` values. Their `data`
 field contains bytes or base64 text and can be saved in the same way as the
@@ -168,9 +198,11 @@ Every operation returns `ai.ops.Item`:
 ```python
 result.value
 result.usage
+result.warnings
 result.provider_metadata
 ```
 
 `value` contains the operation output. `usage` is `None` when the provider does
-not report token usage. Provider-specific response data is available on
-`provider_metadata`.
+not report token usage. `warnings` lists provider warnings, such as an ignored
+parameter; it is empty when there are none. Provider-specific response data is
+available on `provider_metadata`.
