@@ -8,17 +8,15 @@ import ai
 
 model = ai.get_model("openai/tts-1")
 
-messages = [
-    ai.user_message(
-        "The quick brown fox jumps over the lazy dog. "
-        "Pack my box with five dozen liquor jugs."
-    ),
-]
+prompt = (
+    "The quick brown fox jumps over the lazy dog. "
+    "Pack my box with five dozen liquor jugs."
+)
 
 
 async def main() -> None:
     result = await ai.ops.generate_audio(
-        model, messages, params=ai.ops.AudioParams(voice="alloy")
+        model, prompt, params=ai.ops.AudioParams(voice="alloy")
     )
 
     print(f"Generated {len(result.value)} audio file(s)")

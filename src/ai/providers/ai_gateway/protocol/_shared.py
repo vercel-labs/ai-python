@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any
 
 import httpx
@@ -20,46 +20,65 @@ from .. import params as gateway_params
 # ---------------------------------------------------------------------------
 
 
-def _extract_prompt(messages: list[types.messages.Message]) -> str:
-    """Concatenate all text from user/system messages into one prompt."""
-    parts: list[str] = []
-    for msg in messages:
-        if msg.role in ("user", "system"):
-            for p in msg.parts:
-                if isinstance(p, types.messages.TextPart):
-                    parts.append(p.text)
-    return " ".join(parts)
+def _detect_image_or_video(data: bytes | str) -> str | None:
+    return types.media.detect_image_media_type(
+        data
+    ) or types.media.detect_media_type(data, types.media.VIDEO_SIGNATURES)
 
 
-def _extract_input_files(
-    messages: list[types.messages.Message],
-) -> list[types.messages.FilePart]:
-    """Collect all file parts from user messages."""
-    files_: list[types.messages.FilePart] = []
-    for msg in messages:
-        if msg.role == "user":
-            for p in msg.parts:
-                if isinstance(p, types.messages.FilePart):
-                    files_.append(p)
-    return files_
-
-
-def _file_part_to_media(part: types.messages.FilePart) -> dict[str, Any]:
-    """Convert a :class:`FilePart` to the media-model input-file wire format.
+def _file_input_to_wire(
+    value: types.messages.FilePart | bytes | str,
+    *,
+    detect: Callable[[bytes | str], str | None],
+    default_media_type: str,
+) -> dict[str, Any]:
+    """Convert a prompt file input to the media-model input-file wire format.
 
     Unlike the language prompt encodings, the image- and video-model
-    endpoints accept URLs directly (``{"type": "url"}``) in every protocol
-    version, so they are passed through instead of downloaded; inline data
-    is raw base64, not a data URL.
+    endpoints accept ``http(s)`` URLs directly (``{"type": "url"}``) in
+    every protocol version, so they are passed through instead of
+    downloaded; inline data is raw base64, not a data URL.  ``data:`` URLs
+    are decoded into inline data.  The media type comes from the
+    :class:`FilePart` / data URL when available, magic-byte detection via
+    *detect* with *default_media_type* as the fallback otherwise.
     """
-    data = part.data
-    if isinstance(data, str) and types.media.is_url(data):
-        return {"type": "url", "url": data}
+    media_type: str | None = None
+    if isinstance(value, types.messages.FilePart):
+        media_type = value.media_type
+        value = value.data
+    if isinstance(value, str):
+        if types.media.is_downloadable_url(value):
+            wire: dict[str, Any] = {"type": "url", "url": value}
+            if media_type is not None:
+                wire["mediaType"] = media_type
+            return wire
+        if value.startswith("data:"):
+            data_url_media_type, b64 = types.media.split_data_url(value)
+            media_type = media_type or data_url_media_type
+            value = b64 if b64 is not None else value
+    data = types.media.data_to_base64(value)
     return {
         "type": "file",
-        "data": types.media.data_to_base64(data),
-        "mediaType": part.media_type,
+        "data": data,
+        "mediaType": media_type or detect(data) or default_media_type,
     }
+
+
+def parse_warnings(data: Any) -> list[ops.items.Warning]:
+    """Parse the wire ``warnings`` array into :class:`~ai.ops.Warning`."""
+    if not isinstance(data, list):
+        return []
+    return [
+        ops.items.Warning(
+            kind=entry.get("type") or "other",
+            message=entry.get("message"),
+            feature=entry.get("feature"),
+            setting=entry.get("setting"),
+            details=entry.get("details"),
+        )
+        for entry in data
+        if isinstance(entry, dict)
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -584,19 +603,28 @@ def parse_usage(data: Any) -> types.usage.Usage:
 # ---------------------------------------------------------------------------
 
 
+def _image_to_wire(
+    value: types.messages.FilePart | bytes | str,
+) -> dict[str, Any]:
+    return _file_input_to_wire(
+        value,
+        detect=types.media.detect_image_media_type,
+        default_media_type="image/png",
+    )
+
+
 async def generate_image(
     gateway: gateway_client.GatewayClient,
     model: models.Model,
-    messages: list[types.messages.Message],
+    prompt: ops.images.ImagePrompt,
     *,
     params: ops.images.ImageParams,
     spec_version: str = "3",
 ) -> ops.items.Item[list[types.messages.FilePart]]:
     """Hit ``/image-model`` and return an Item with FileParts."""
-    body: dict[str, Any] = {
-        "prompt": _extract_prompt(messages),
-        "n": params.n,
-    }
+    body: dict[str, Any] = {"n": params.n}
+    if prompt.text is not None:
+        body["prompt"] = prompt.text
     if params.size is not None:
         body["size"] = params.size
     if params.aspect_ratio is not None:
@@ -605,9 +633,10 @@ async def generate_image(
         body["seed"] = params.seed
     if params.provider_options:
         body["providerOptions"] = dict(params.provider_options)
-    input_files = _extract_input_files(messages)
-    if input_files:
-        body["files"] = [_file_part_to_media(f) for f in input_files]
+    if prompt.images:
+        body["files"] = [_image_to_wire(image) for image in prompt.images]
+    if prompt.mask is not None:
+        body["mask"] = _image_to_wire(prompt.mask)
 
     try:
         response = await gateway.post(
@@ -640,6 +669,7 @@ async def generate_image(
     return ops.items.Item(
         value=files,
         usage=usage,
+        warnings=parse_warnings(data.get("warnings")),
         provider_metadata=data.get("providerMetadata"),
     )
 
@@ -649,19 +679,61 @@ async def generate_image(
 # ---------------------------------------------------------------------------
 
 
+def _video_reference_to_wire(
+    value: types.messages.FilePart | bytes | str,
+) -> dict[str, Any]:
+    return _file_input_to_wire(
+        value,
+        detect=_detect_image_or_video,
+        default_media_type="image/png",
+    )
+
+
 async def generate_video(
     gateway: gateway_client.GatewayClient,
     model: models.Model,
-    messages: list[types.messages.Message],
+    prompt: ops.videos.VideoPrompt,
     *,
     params: ops.videos.VideoParams,
     spec_version: str = "3",
 ) -> ops.items.Item[list[types.messages.FilePart]]:
-    """Hit ``/video-model`` (SSE) and return an Item with FileParts."""
-    body: dict[str, Any] = {
-        "prompt": _extract_prompt(messages),
-        "n": params.n,
-    }
+    """Hit ``/video-model`` (SSE) and return an Item with FileParts.
+
+    Normalizes the prompt into the spec slots: a ``first_frame`` frame
+    image takes precedence over ``prompt.image`` as the start image, and
+    frame images suppress references (the spec forbids combining them);
+    both conflicts surface as warnings on the returned Item.
+    """
+    warnings: list[ops.items.Warning] = []
+    frame_images = list(prompt.frame_images)
+    references = list(prompt.references)
+    if frame_images and references:
+        warnings.append(
+            ops.items.Warning(
+                message="references were ignored because frame_images "
+                "were provided; frame_images and references cannot be "
+                "combined."
+            )
+        )
+        references = []
+    first_frame = next(
+        (f.image for f in frame_images if f.frame_type == "first_frame"),
+        None,
+    )
+    image = prompt.image
+    if image is not None and first_frame is not None:
+        warnings.append(
+            ops.items.Warning(
+                message="image was ignored because a first_frame frame "
+                "image was provided; the first_frame image takes "
+                "precedence as the start image."
+            )
+        )
+    start_image = first_frame if first_frame is not None else image
+
+    body: dict[str, Any] = {"n": params.n}
+    if prompt.text is not None:
+        body["prompt"] = prompt.text
     if params.aspect_ratio is not None:
         body["aspectRatio"] = params.aspect_ratio
     if params.resolution is not None:
@@ -672,11 +744,24 @@ async def generate_video(
         body["fps"] = params.fps
     if params.seed is not None:
         body["seed"] = params.seed
+    if params.generate_audio is not None:
+        body["generateAudio"] = params.generate_audio
     if params.provider_options:
         body["providerOptions"] = dict(params.provider_options)
-    input_files = _extract_input_files(messages)
-    if input_files:
-        body["image"] = _file_part_to_media(input_files[0])
+    if start_image is not None:
+        body["image"] = _image_to_wire(start_image)
+    if frame_images:
+        body["frameImages"] = [
+            {
+                "image": _image_to_wire(frame.image),
+                "frameType": frame.frame_type,
+            }
+            for frame in frame_images
+        ]
+    if references:
+        body["inputReferences"] = [
+            _video_reference_to_wire(reference) for reference in references
+        ]
 
     try:
         async with gateway.stream(
@@ -732,6 +817,7 @@ async def generate_video(
 
     return ops.items.Item(
         value=files,
+        warnings=warnings + parse_warnings(event_data.get("warnings")),
         provider_metadata=event_data.get("providerMetadata"),
     )
 
@@ -744,21 +830,21 @@ async def generate_video(
 async def generate_audio(
     gateway: gateway_client.GatewayClient,
     model: models.Model,
-    messages: list[types.messages.Message],
+    prompt: ops.audio.AudioPrompt,
     *,
     params: ops.audio.AudioParams,
     spec_version: str = "3",
 ) -> ops.items.Item[list[types.messages.FilePart]]:
     """Hit ``/speech-model`` and return an Item with a FilePart."""
     body: dict[str, Any] = {
-        "text": _extract_prompt(messages),
+        "text": prompt.text,
     }
+    if prompt.instructions is not None:
+        body["instructions"] = prompt.instructions
     if params.voice is not None:
         body["voice"] = params.voice
     if params.output_format is not None:
         body["outputFormat"] = params.output_format
-    if params.instructions is not None:
-        body["instructions"] = params.instructions
     if params.speed is not None:
         body["speed"] = params.speed
     if params.language is not None:
@@ -791,5 +877,6 @@ async def generate_audio(
 
     return ops.items.Item(
         value=files,
+        warnings=parse_warnings(data.get("warnings")),
         provider_metadata=data.get("providerMetadata"),
     )

@@ -182,7 +182,7 @@ class ProviderProtocol(pydantic.BaseModel, Generic[ClientT]):
         self,
         client: ClientT,
         model: model_.Model,
-        messages: list[messages_.Message],
+        prompt: images.ImagePrompt,
         *,
         params: images.ImageParams,
         provider: str,
@@ -197,7 +197,7 @@ class ProviderProtocol(pydantic.BaseModel, Generic[ClientT]):
         self,
         client: ClientT,
         model: model_.Model,
-        messages: list[messages_.Message],
+        prompt: videos.VideoPrompt,
         *,
         params: videos.VideoParams,
         provider: str,
@@ -212,7 +212,7 @@ class ProviderProtocol(pydantic.BaseModel, Generic[ClientT]):
         self,
         client: ClientT,
         model: model_.Model,
-        messages: list[messages_.Message],
+        prompt: audio.AudioPrompt,
         *,
         params: audio.AudioParams,
         provider: str,
@@ -512,7 +512,7 @@ class Provider(pydantic.BaseModel, Generic[ClientT]):
     async def generate_image(
         self,
         model: model_.Model,
-        messages: list[messages_.Message],
+        prompt: images.ImagePrompt,
         *,
         params: images.ImageParams,
     ) -> items.Item[list[messages_.FilePart]]:
@@ -521,7 +521,7 @@ class Provider(pydantic.BaseModel, Generic[ClientT]):
         return await selected_protocol.generate_image(
             self.client,
             model,
-            messages,
+            prompt,
             params=params,
             provider=self.name,
         )
@@ -529,7 +529,7 @@ class Provider(pydantic.BaseModel, Generic[ClientT]):
     async def generate_video(
         self,
         model: model_.Model,
-        messages: list[messages_.Message],
+        prompt: videos.VideoPrompt,
         *,
         params: videos.VideoParams,
     ) -> items.Item[list[messages_.FilePart]]:
@@ -538,7 +538,7 @@ class Provider(pydantic.BaseModel, Generic[ClientT]):
         return await selected_protocol.generate_video(
             self.client,
             model,
-            messages,
+            prompt,
             params=params,
             provider=self.name,
         )
@@ -546,7 +546,7 @@ class Provider(pydantic.BaseModel, Generic[ClientT]):
     async def generate_audio(
         self,
         model: model_.Model,
-        messages: list[messages_.Message],
+        prompt: audio.AudioPrompt,
         *,
         params: audio.AudioParams,
     ) -> items.Item[list[messages_.FilePart]]:
@@ -555,7 +555,7 @@ class Provider(pydantic.BaseModel, Generic[ClientT]):
         return await selected_protocol.generate_audio(
             self.client,
             model,
-            messages,
+            prompt,
             params=params,
             provider=self.name,
         )

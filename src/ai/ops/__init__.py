@@ -1,9 +1,9 @@
 """Model operations beyond LLM chat: media generation and friends."""
 
-from .audio import AudioParams, generate_audio
+from .audio import AudioParams, AudioPrompt, generate_audio
 from .embeddings import EmbedParams, embed
-from .images import ImageParams, generate_image
-from .items import Item
+from .images import ImageParams, ImagePrompt, generate_image
+from .items import Item, Warning
 from .reranking import RankedDocument, RerankParams, rerank
 from .transcriptions import (
     TranscribeParams,
@@ -11,12 +11,15 @@ from .transcriptions import (
     TranscriptionSegment,
     transcribe,
 )
-from .videos import VideoParams, generate_video
+from .videos import FrameImage, VideoParams, VideoPrompt, generate_video
 
 __all__ = [
     "AudioParams",
+    "AudioPrompt",
     "EmbedParams",
+    "FrameImage",
     "ImageParams",
+    "ImagePrompt",
     "Item",
     "RankedDocument",
     "RerankParams",
@@ -24,6 +27,8 @@ __all__ = [
     "Transcription",
     "TranscriptionSegment",
     "VideoParams",
+    "VideoPrompt",
+    "Warning",
     "embed",
     "generate_audio",
     "generate_image",

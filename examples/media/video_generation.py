@@ -8,17 +8,13 @@ import ai
 
 model = ai.get_model("google/veo-3.1-fast-generate-001")
 
-messages = [
-    ai.user_message("A paper boat drifting across a puddle in the rain."),
-]
-
 
 async def main() -> None:
     print("Generating video (this may take a minute or two)...")
 
     result = await ai.ops.generate_video(
         model,
-        messages,
+        "A paper boat drifting across a puddle in the rain.",
         params=ai.ops.VideoParams(aspect_ratio="16:9", duration=4),
     )
 

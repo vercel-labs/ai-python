@@ -8,18 +8,16 @@ import ai
 
 model = ai.get_model("google/imagen-4.0-generate-001")
 
-messages = [
-    ai.user_message(
-        "A watercolor painting of a cozy cabin in the mountains at sunset, "
-        "with warm light spilling from the windows and smoke rising from "
-        "the chimney."
-    ),
-]
+prompt = (
+    "A watercolor painting of a cozy cabin in the mountains at sunset, "
+    "with warm light spilling from the windows and smoke rising from "
+    "the chimney."
+)
 
 
 async def main() -> None:
     result = await ai.ops.generate_image(
-        model, messages, params=ai.ops.ImageParams(n=2, aspect_ratio="16:9")
+        model, prompt, params=ai.ops.ImageParams(n=2, aspect_ratio="16:9")
     )
 
     print(f"Generated {len(result.value)} image(s)")

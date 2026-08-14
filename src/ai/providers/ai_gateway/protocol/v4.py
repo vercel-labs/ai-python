@@ -568,6 +568,7 @@ async def embed(
     return ops.items.Item(
         value=data.get("embeddings", []),
         usage=usage,
+        warnings=_shared.parse_warnings(data.get("warnings")),
         provider_metadata=data.get("providerMetadata"),
     )
 
@@ -635,6 +636,7 @@ async def transcribe(
 
     return ops.items.Item(
         value=transcription,
+        warnings=_shared.parse_warnings(data_out.get("warnings")),
         provider_metadata=data_out.get("providerMetadata"),
     )
 
@@ -677,8 +679,6 @@ async def rerank(
         raise errors.map_error(exc) from exc
 
     data = response.json()
-    for warning in data.get("warnings") or []:
-        logger.warning("gateway rerank warning: %s", warning)
 
     return ops.items.Item(
         value=[
@@ -688,6 +688,7 @@ async def rerank(
             )
             for entry in data.get("ranking") or []
         ],
+        warnings=_shared.parse_warnings(data.get("warnings")),
         provider_metadata=data.get("providerMetadata"),
     )
 
@@ -722,42 +723,42 @@ class GatewayV4Protocol(base.ProviderProtocol[gateway_client.GatewayClient]):
         self,
         client: gateway_client.GatewayClient,
         model: models.Model,
-        messages: list[types.messages.Message],
+        prompt: ops.images.ImagePrompt,
         *,
         params: ops.images.ImageParams,
         provider: str,
     ) -> ops.items.Item[list[types.messages.FilePart]]:
         _ = provider
         return await _shared.generate_image(
-            client, model, messages, params=params, spec_version=SPEC_VERSION
+            client, model, prompt, params=params, spec_version=SPEC_VERSION
         )
 
     async def generate_video(
         self,
         client: gateway_client.GatewayClient,
         model: models.Model,
-        messages: list[types.messages.Message],
+        prompt: ops.videos.VideoPrompt,
         *,
         params: ops.videos.VideoParams,
         provider: str,
     ) -> ops.items.Item[list[types.messages.FilePart]]:
         _ = provider
         return await _shared.generate_video(
-            client, model, messages, params=params, spec_version=SPEC_VERSION
+            client, model, prompt, params=params, spec_version=SPEC_VERSION
         )
 
     async def generate_audio(
         self,
         client: gateway_client.GatewayClient,
         model: models.Model,
-        messages: list[types.messages.Message],
+        prompt: ops.audio.AudioPrompt,
         *,
         params: ops.audio.AudioParams,
         provider: str,
     ) -> ops.items.Item[list[types.messages.FilePart]]:
         _ = provider
         return await _shared.generate_audio(
-            client, model, messages, params=params, spec_version=SPEC_VERSION
+            client, model, prompt, params=params, spec_version=SPEC_VERSION
         )
 
     async def embed(
