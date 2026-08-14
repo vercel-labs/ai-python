@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 
     from ..models.core import model as model_
     from ..models.core import params as params_
-    from ..ops import audio, images, items, videos
+    from ..ops import audio, embeddings, images, items, videos
     from ..types import events
     from ..types import messages as messages_
     from ..types import tools as tools_
@@ -213,6 +213,20 @@ class ProviderProtocol(pydantic.BaseModel, Generic[ClientT]):
         raise NotImplementedError(
             f"protocol {type(self).__name__!r} does not support "
             f"generate_audio()"
+        )
+
+    async def embed(
+        self,
+        client: ClientT,
+        model: model_.Model,
+        values: list[str],
+        *,
+        params: embeddings.EmbedParams,
+        provider: str,
+    ) -> items.Item[list[list[float]]]:
+        """Embed text values with a dedicated embedding model using *client*."""
+        raise NotImplementedError(
+            f"protocol {type(self).__name__!r} does not support embed()"
         )
 
 
@@ -505,6 +519,23 @@ class Provider(pydantic.BaseModel, Generic[ClientT]):
             self.client,
             model,
             messages,
+            params=params,
+            provider=self.name,
+        )
+
+    async def embed(
+        self,
+        model: model_.Model,
+        values: list[str],
+        *,
+        params: embeddings.EmbedParams,
+    ) -> items.Item[list[list[float]]]:
+        """Embed text values with this provider's embedding model."""
+        selected_protocol = model.protocol or self.protocol
+        return await selected_protocol.embed(
+            self.client,
+            model,
+            values,
             params=params,
             provider=self.name,
         )

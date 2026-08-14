@@ -5,6 +5,9 @@ Focus areas:
 - ``v4._apply_reasoning``: the standardized effort field
 - ``v4._parse_stream_part``: object finish reasons, tagged file data,
   response metadata, error parts, warnings
+- ``v4.GatewayV4Protocol.embed``: the v4-only embedding endpoint,
+  exercised end-to-end via ``ai.ops.embed`` with a provider wired to
+  an ``httpx.MockTransport``
 
 Version-independent pieces are tested in ``test_shared.py``; end-to-end
 request/response behavior in ``../test_stream.py``.
@@ -13,15 +16,20 @@ request/response behavior in ``../test_stream.py``.
 from __future__ import annotations
 
 import base64
+import json
 from typing import Any
 
+import httpx
 import pytest
 
-from ai import models
+import ai
+from ai import models, ops
 from ai.providers.ai_gateway.client import errors as client_errors
 from ai.providers.ai_gateway.protocol import v4
 from ai.types import events as events_
 from ai.types import messages
+
+from ..conftest import mock_model
 
 # ---------------------------------------------------------------------------
 # _messages_to_prompt, v4 encoding
@@ -267,3 +275,127 @@ def test_tool_result_file_content() -> None:
         },
         "filename": "out.png",
     }
+
+
+# ---------------------------------------------------------------------------
+# embed (embedding-model endpoint, via ops.embed)
+# ---------------------------------------------------------------------------
+
+_EMBEDDING_MODEL_ID = "openai/text-embedding-3-small"
+_EMBEDDINGS = [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]]
+
+
+async def test_basic_embed() -> None:
+    """Two strings in -> two vectors back, with usage."""
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"embeddings": _EMBEDDINGS, "usage": {"tokens": 4}},
+        )
+
+    model = mock_model(
+        httpx.MockTransport(handler), model_id=_EMBEDDING_MODEL_ID
+    )
+    result = await ops.embed(model, ["hello", "world"])
+
+    assert result.value == _EMBEDDINGS
+    assert result.usage is not None
+    assert result.usage.input_tokens == 4
+    assert result.usage.output_tokens == 0
+
+
+async def test_embed_request_body_and_url() -> None:
+    captured_body: dict[str, Any] = {}
+    captured_url: list[str] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        captured_body.update(json.loads(req.content))
+        captured_url.append(str(req.url))
+        return httpx.Response(200, json={"embeddings": _EMBEDDINGS})
+
+    await ops.embed(
+        mock_model(httpx.MockTransport(handler), model_id=_EMBEDDING_MODEL_ID),
+        ["hello", "world"],
+    )
+
+    assert captured_body == {"values": ["hello", "world"]}
+    assert captured_url[0] == "https://gw.test/v4/ai/embedding-model"
+
+
+async def test_embed_protocol_headers() -> None:
+    captured: dict[str, str] = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        captured.update(dict(req.headers))
+        return httpx.Response(200, json={"embeddings": _EMBEDDINGS})
+
+    model = mock_model(
+        httpx.MockTransport(handler),
+        api_key="sk-test",
+        model_id=_EMBEDDING_MODEL_ID,
+    )
+    await ops.embed(model, ["hi"])
+
+    assert captured["authorization"] == "Bearer sk-test"
+    assert captured["ai-embedding-model-specification-version"] == "4"
+    assert captured["ai-model-id"] == _EMBEDDING_MODEL_ID
+    assert captured["ai-gateway-auth-method"] == "api-key"
+
+
+async def test_embed_forwards_provider_options() -> None:
+    captured_body: dict[str, Any] = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        captured_body.update(json.loads(req.content))
+        return httpx.Response(200, json={"embeddings": _EMBEDDINGS})
+
+    await ops.embed(
+        mock_model(httpx.MockTransport(handler), model_id=_EMBEDDING_MODEL_ID),
+        ["hello"],
+        params=ops.EmbedParams(
+            provider_options={"openai": {"dimensions": 256}}
+        ),
+    )
+
+    assert captured_body["providerOptions"] == {"openai": {"dimensions": 256}}
+
+
+async def test_embed_provider_metadata_and_missing_usage() -> None:
+    """``providerMetadata`` lands on the item; absent usage stays None."""
+    metadata = {"gateway": {"cost": "0.0001"}}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"embeddings": _EMBEDDINGS, "providerMetadata": metadata},
+        )
+
+    result = await ops.embed(
+        mock_model(httpx.MockTransport(handler), model_id=_EMBEDDING_MODEL_ID),
+        ["hello"],
+    )
+
+    assert result.provider_metadata == metadata
+    assert result.usage is None
+
+
+async def test_embed_401_authentication_error() -> None:
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            401,
+            json={
+                "error": {
+                    "message": "Invalid API key",
+                    "type": "authentication_error",
+                }
+            },
+        )
+
+    with pytest.raises(ai.ProviderAuthenticationError):
+        await ops.embed(
+            mock_model(
+                httpx.MockTransport(handler), model_id=_EMBEDDING_MODEL_ID
+            ),
+            ["test"],
+        )

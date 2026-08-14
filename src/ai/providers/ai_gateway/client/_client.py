@@ -23,7 +23,7 @@ _PROTOCOL_VERSION = "0.0.1"
 _VERSIONED_BASE_RE = re.compile(r"/v\d+/ai$")
 
 AuthMethod = Literal["api-key", "oidc"]
-ModelType = Literal["language", "image", "video", "speech"]
+ModelType = Literal["language", "image", "video", "speech", "embedding"]
 
 
 class GatewayClient:
@@ -102,6 +102,9 @@ class GatewayClient:
             headers["ai-model-id"] = model.id
         elif model_type == "video":
             headers["ai-video-model-specification-version"] = spec_version
+            headers["ai-model-id"] = model.id
+        elif model_type == "embedding":
+            headers["ai-embedding-model-specification-version"] = spec_version
             headers["ai-model-id"] = model.id
         else:
             headers["ai-speech-model-specification-version"] = spec_version

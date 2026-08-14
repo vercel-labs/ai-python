@@ -527,6 +527,51 @@ async def stream(
         raise errors.map_error(response_error) from exc
 
 
+# ---------------------------------------------------------------------------
+# Embeddings
+# ---------------------------------------------------------------------------
+
+
+async def embed(
+    gateway: gateway_client.GatewayClient,
+    model: models.Model,
+    values: list[str],
+    *,
+    params: ops.embeddings.EmbedParams,
+) -> ops.items.Item[list[list[float]]]:
+    """Hit ``/embedding-model`` and return an Item with vectors."""
+    body: dict[str, Any] = {"values": values}
+    if params.provider_options:
+        body["providerOptions"] = dict(params.provider_options)
+
+    try:
+        response = await gateway.post(
+            "embedding-model",
+            body,
+            model=model,
+            model_type="embedding",
+            spec_version=SPEC_VERSION,
+        )
+    except gateway_client.errors.GatewayError as exc:
+        raise errors.map_error(exc) from exc
+
+    data = response.json()
+    usage_data = data.get("usage")
+    usage = None
+    if usage_data:
+        # Embedding models only consume input tokens.
+        usage = types.usage.Usage(
+            input_tokens=usage_data.get("tokens") or 0,
+            raw=usage_data,
+        )
+
+    return ops.items.Item(
+        value=data.get("embeddings", []),
+        usage=usage,
+        provider_metadata=data.get("providerMetadata"),
+    )
+
+
 class GatewayV4Protocol(base.ProviderProtocol[gateway_client.GatewayClient]):
     """AI Gateway v4 wire protocol."""
 
@@ -594,3 +639,15 @@ class GatewayV4Protocol(base.ProviderProtocol[gateway_client.GatewayClient]):
         return await _shared.generate_audio(
             client, model, messages, params=params, spec_version=SPEC_VERSION
         )
+
+    async def embed(
+        self,
+        client: gateway_client.GatewayClient,
+        model: models.Model,
+        values: list[str],
+        *,
+        params: ops.embeddings.EmbedParams,
+        provider: str,
+    ) -> ops.items.Item[list[list[float]]]:
+        _ = provider
+        return await embed(client, model, values, params=params)
