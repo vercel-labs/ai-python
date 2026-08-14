@@ -4,6 +4,7 @@ from .audio import AudioParams, generate_audio
 from .embeddings import EmbedParams, embed
 from .images import ImageParams, generate_image
 from .items import Item
+from .reranking import RankedDocument, RerankParams, rerank
 from .transcriptions import (
     TranscribeParams,
     Transcription,
@@ -17,6 +18,8 @@ __all__ = [
     "EmbedParams",
     "ImageParams",
     "Item",
+    "RankedDocument",
+    "RerankParams",
     "TranscribeParams",
     "Transcription",
     "TranscriptionSegment",
@@ -25,5 +28,6 @@ __all__ = [
     "generate_audio",
     "generate_image",
     "generate_video",
+    "rerank",
     "transcribe",
 ]

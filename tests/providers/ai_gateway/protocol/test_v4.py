@@ -10,6 +10,8 @@ Focus areas:
   an ``httpx.MockTransport``
 - ``v4.GatewayV4Protocol.transcribe``: the v4-only transcription
   endpoint, exercised end-to-end via ``ai.ops.transcribe``
+- ``v4.GatewayV4Protocol.rerank``: the v4-only reranking endpoint,
+  exercised end-to-end via ``ai.ops.rerank``
 
 Version-independent pieces are tested in ``test_shared.py``; end-to-end
 request/response behavior in ``../test_stream.py``.
@@ -611,4 +613,189 @@ async def test_transcribe_401_authentication_error() -> None:
                 model_id=_TRANSCRIPTION_MODEL_ID,
             ),
             _MP3_HEADER,
+        )
+
+
+# ---------------------------------------------------------------------------
+# rerank (reranking-model endpoint, via ops.rerank)
+# ---------------------------------------------------------------------------
+
+_RERANKING_MODEL_ID = "cohere/rerank-v3.5"
+_RANKING = [
+    {"index": 2, "relevanceScore": 0.9},
+    {"index": 0, "relevanceScore": 0.4},
+]
+_DOCUMENTS = ["apple pie", "stock market", "capital of Japan"]
+
+
+async def test_basic_rerank() -> None:
+    """Documents in -> ranking of index/score pairs back, server order."""
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"ranking": _RANKING})
+
+    model = mock_model(
+        httpx.MockTransport(handler), model_id=_RERANKING_MODEL_ID
+    )
+    result = await ops.rerank(model, _DOCUMENTS, "tokyo")
+
+    assert result.value == [
+        ops.RankedDocument(index=2, score=0.9),
+        ops.RankedDocument(index=0, score=0.4),
+    ]
+    assert result.usage is None
+
+
+async def test_rerank_request_body_and_url() -> None:
+    captured_body: dict[str, Any] = {}
+    captured_url: list[str] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        captured_body.update(json.loads(req.content))
+        captured_url.append(str(req.url))
+        return httpx.Response(200, json={"ranking": _RANKING})
+
+    await ops.rerank(
+        mock_model(httpx.MockTransport(handler), model_id=_RERANKING_MODEL_ID),
+        _DOCUMENTS,
+        "tokyo",
+    )
+
+    assert captured_body == {
+        "query": "tokyo",
+        "documents": {"type": "text", "values": _DOCUMENTS},
+    }
+    assert captured_url[0] == "https://gw.test/v4/ai/reranking-model"
+
+
+async def test_rerank_object_documents() -> None:
+    """dict documents are sent with the ``object`` wire type."""
+    captured_body: dict[str, Any] = {}
+    documents = [{"title": "pie"}, {"title": "tokyo"}]
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        captured_body.update(json.loads(req.content))
+        return httpx.Response(200, json={"ranking": _RANKING})
+
+    await ops.rerank(
+        mock_model(httpx.MockTransport(handler), model_id=_RERANKING_MODEL_ID),
+        documents,
+        "tokyo",
+    )
+
+    assert captured_body["documents"] == {
+        "type": "object",
+        "values": documents,
+    }
+
+
+async def test_rerank_top_n_only_when_set() -> None:
+    captured_bodies: list[dict[str, Any]] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        captured_bodies.append(json.loads(req.content))
+        return httpx.Response(200, json={"ranking": _RANKING})
+
+    model = mock_model(
+        httpx.MockTransport(handler), model_id=_RERANKING_MODEL_ID
+    )
+    await ops.rerank(model, _DOCUMENTS, "tokyo")
+    await ops.rerank(
+        model, _DOCUMENTS, "tokyo", params=ops.RerankParams(top_n=2)
+    )
+
+    assert "topN" not in captured_bodies[0]
+    assert captured_bodies[1]["topN"] == 2
+
+
+async def test_rerank_protocol_headers() -> None:
+    captured: dict[str, str] = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        captured.update(dict(req.headers))
+        return httpx.Response(200, json={"ranking": _RANKING})
+
+    model = mock_model(
+        httpx.MockTransport(handler),
+        api_key="sk-test",
+        model_id=_RERANKING_MODEL_ID,
+    )
+    await ops.rerank(model, _DOCUMENTS, "tokyo")
+
+    assert captured["authorization"] == "Bearer sk-test"
+    assert captured["ai-reranking-model-specification-version"] == "4"
+    assert captured["ai-model-id"] == _RERANKING_MODEL_ID
+    assert captured["ai-gateway-auth-method"] == "api-key"
+
+
+async def test_rerank_forwards_provider_options() -> None:
+    captured_body: dict[str, Any] = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        captured_body.update(json.loads(req.content))
+        return httpx.Response(200, json={"ranking": _RANKING})
+
+    await ops.rerank(
+        mock_model(httpx.MockTransport(handler), model_id=_RERANKING_MODEL_ID),
+        _DOCUMENTS,
+        "tokyo",
+        params=ops.RerankParams(
+            provider_options={"cohere": {"maxTokensPerDoc": 512}}
+        ),
+    )
+
+    assert captured_body["providerOptions"] == {
+        "cohere": {"maxTokensPerDoc": 512}
+    }
+
+
+async def test_rerank_provider_metadata_and_warnings(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """``providerMetadata`` lands on the item; warnings are logged."""
+    metadata = {"gateway": {"cost": "0.002"}}
+    warning = {"type": "other", "message": "topN clamped"}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "ranking": _RANKING,
+                "providerMetadata": metadata,
+                "warnings": [warning],
+            },
+        )
+
+    with caplog.at_level("WARNING", logger=v4.logger.name):
+        result = await ops.rerank(
+            mock_model(
+                httpx.MockTransport(handler), model_id=_RERANKING_MODEL_ID
+            ),
+            _DOCUMENTS,
+            "tokyo",
+        )
+
+    assert result.provider_metadata == metadata
+    assert str(warning) in caplog.text
+
+
+async def test_rerank_401_authentication_error() -> None:
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            401,
+            json={
+                "error": {
+                    "message": "Invalid API key",
+                    "type": "authentication_error",
+                }
+            },
+        )
+
+    with pytest.raises(ai.ProviderAuthenticationError):
+        await ops.rerank(
+            mock_model(
+                httpx.MockTransport(handler), model_id=_RERANKING_MODEL_ID
+            ),
+            _DOCUMENTS,
+            "tokyo",
         )
