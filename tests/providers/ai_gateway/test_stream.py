@@ -24,7 +24,11 @@ import pytest
 import ai
 from ai import models
 from ai.models.core import model as model_
-from ai.providers.ai_gateway import GatewayParams, ProviderTimeoutsParams
+from ai.providers.ai_gateway import (
+    GatewayParams,
+    GatewayV3Protocol,
+    ProviderTimeoutsParams,
+)
 from ai.types import events, messages
 
 from .conftest import mock_client, mock_model, sse, user_msg
@@ -67,8 +71,8 @@ class TestStreaming:
     async def test_text_stream(self) -> None:
         body = sse(
             {"type": "text-start", "id": "t1"},
-            {"type": "text-delta", "id": "t1", "textDelta": "Hello"},
-            {"type": "text-delta", "id": "t1", "textDelta": " World"},
+            {"type": "text-delta", "id": "t1", "delta": "Hello"},
+            {"type": "text-delta", "id": "t1", "delta": " World"},
             {"type": "text-end", "id": "t1"},
             {
                 "type": "finish",
@@ -93,7 +97,7 @@ class TestStreaming:
     async def test_finish_reason_normalized_on_stream_end(self) -> None:
         body = sse(
             {"type": "text-start", "id": "t1"},
-            {"type": "text-delta", "id": "t1", "textDelta": "x"},
+            {"type": "text-delta", "id": "t1", "delta": "x"},
             {"type": "text-end", "id": "t1"},
             {"type": "finish", "finishReason": "tool-calls", "usage": {}},
         )
@@ -113,7 +117,7 @@ class TestStreaming:
     async def test_unmapped_finish_reason_becomes_other(self) -> None:
         body = sse(
             {"type": "text-start", "id": "t1"},
-            {"type": "text-delta", "id": "t1", "textDelta": "x"},
+            {"type": "text-delta", "id": "t1", "delta": "x"},
             {"type": "text-end", "id": "t1"},
             {
                 "type": "finish",
@@ -138,7 +142,7 @@ class TestStreaming:
     async def test_unknown_finish_reason_becomes_none(self) -> None:
         body = sse(
             {"type": "text-start", "id": "t1"},
-            {"type": "text-delta", "id": "t1", "textDelta": "x"},
+            {"type": "text-delta", "id": "t1", "delta": "x"},
             {"type": "text-end", "id": "t1"},
             {"type": "finish", "finishReason": "unknown", "usage": {}},
         )
@@ -161,7 +165,7 @@ class TestStreaming:
             {"type": "reasoning-delta", "id": "r1", "delta": "think"},
             {"type": "reasoning-end", "id": "r1"},
             {"type": "text-start", "id": "t1"},
-            {"type": "text-delta", "id": "t1", "textDelta": "42"},
+            {"type": "text-delta", "id": "t1", "delta": "42"},
             {"type": "text-end", "id": "t1"},
             {"type": "finish", "finishReason": "stop", "usage": {}},
         )
@@ -211,7 +215,7 @@ class TestStreaming:
             {
                 "type": "text-delta",
                 "id": "t1",
-                "textDelta": "Here is an image:",
+                "delta": "Here is an image:",
             },
             {"type": "text-end", "id": "t1"},
             {
@@ -367,10 +371,33 @@ class TestRequest:
 
         assert captured["authorization"] == "Bearer sk-test"
         assert captured["ai-gateway-protocol-version"] == "0.0.1"
-        assert captured["ai-language-model-specification-version"] == "3"
+        assert captured["ai-language-model-specification-version"] == "4"
         assert captured["ai-language-model-id"] == "anthropic/claude-sonnet-4"
         assert captured["ai-language-model-streaming"] == "true"
         assert captured["ai-gateway-auth-method"] == "api-key"
+
+    async def test_v3_protocol_override_rewrites_url_and_headers(self) -> None:
+        """A v3 protocol override hits /v3/ai with version-3 headers."""
+        captured: dict[str, str] = {}
+        captured_url: list[str] = []
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            captured.update(dict(req.headers))
+            captured_url.append(str(req.url))
+            return httpx.Response(
+                200,
+                text=sse(
+                    {"type": "finish", "finishReason": "stop", "usage": {}}
+                ),
+            )
+
+        model = mock_model(httpx.MockTransport(handler)).with_protocol(
+            GatewayV3Protocol()
+        )
+        await _collect(model, [user_msg("Hi")])
+
+        assert captured_url[0] == "https://gw.test/v3/ai/language-model"
+        assert captured["ai-language-model-specification-version"] == "3"
 
     async def test_body_prompt_format(self) -> None:
         captured_body: dict[str, Any] = {}

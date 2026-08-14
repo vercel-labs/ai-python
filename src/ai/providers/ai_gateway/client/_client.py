@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import urlparse
@@ -17,6 +18,9 @@ if TYPE_CHECKING:
     from ....models.core import model as model_
 
 _PROTOCOL_VERSION = "0.0.1"
+
+# Version segment of the default gateway base URLs, e.g. ``.../v4/ai``.
+_VERSIONED_BASE_RE = re.compile(r"/v\d+/ai$")
 
 AuthMethod = Literal["api-key", "oidc"]
 ModelType = Literal["language", "image", "video", "speech"]
@@ -52,8 +56,18 @@ class GatewayClient:
         if self._owns_http and not self._http.is_closed:
             await self._http.aclose()
 
-    def url(self, path: str) -> str:
-        return f"{self.base_url.rstrip('/')}/{path.lstrip('/')}"
+    def url(self, path: str, *, spec_version: str | None = None) -> str:
+        """Join *path* onto the base URL.
+
+        When ``spec_version`` is given and the base URL ends in a
+        ``/v<n>/ai`` segment, that segment is rewritten to match — so one
+        client serves both the v3 and v4 protocols.  Custom base URLs
+        without a version segment are used as-is.
+        """
+        base = self.base_url.rstrip("/")
+        if spec_version is not None:
+            base = _VERSIONED_BASE_RE.sub(f"/v{spec_version}/ai", base)
+        return f"{base}/{path.lstrip('/')}"
 
     def origin_url(self, path: str) -> str:
         parsed = urlparse(self.base_url.rstrip("/"))
@@ -74,22 +88,23 @@ class GatewayClient:
         model_type: ModelType = "language",
         streaming: bool = False,
         accept: str | None = None,
+        spec_version: str = "3",
     ) -> dict[str, str]:
         headers = self.protocol_headers()
         headers["Content-Type"] = "application/json"
 
         if model_type == "language":
-            headers["ai-language-model-specification-version"] = "3"
+            headers["ai-language-model-specification-version"] = spec_version
             headers["ai-language-model-id"] = model.id
             headers["ai-language-model-streaming"] = str(streaming).lower()
         elif model_type == "image":
-            headers["ai-image-model-specification-version"] = "3"
+            headers["ai-image-model-specification-version"] = spec_version
             headers["ai-model-id"] = model.id
         elif model_type == "video":
-            headers["ai-video-model-specification-version"] = "3"
+            headers["ai-video-model-specification-version"] = spec_version
             headers["ai-model-id"] = model.id
         else:
-            headers["ai-speech-model-specification-version"] = "3"
+            headers["ai-speech-model-specification-version"] = spec_version
             headers["ai-model-id"] = model.id
 
         if accept is not None:
@@ -127,11 +142,14 @@ class GatewayClient:
         *,
         model: model_.Model,
         model_type: ModelType,
+        spec_version: str = "3",
     ) -> httpx.Response:
-        headers = self.model_headers(model, model_type=model_type)
+        headers = self.model_headers(
+            model, model_type=model_type, spec_version=spec_version
+        )
         try:
             response = await self._http.post(
-                self.url(path),
+                self.url(path, spec_version=spec_version),
                 json=body,
                 headers=headers,
             )
@@ -189,20 +207,23 @@ class GatewayClient:
         headers: dict[str, str] | None = None,
         query: Mapping[str, Any] | None = None,
         timeout: httpx.Timeout | float | None = None,
+        spec_version: str = "3",
     ) -> AsyncIterator[httpx.Response]:
         request_headers = self.model_headers(
             model,
             model_type=model_type,
             streaming=streaming,
             accept=accept,
+            spec_version=spec_version,
         )
         if headers:
             request_headers.update(headers)
 
+        url = self.url(path, spec_version=spec_version)
         stream = (
             self._http.stream(
                 "POST",
-                self.url(path),
+                url,
                 json=body,
                 headers=request_headers,
                 params=query,
@@ -210,7 +231,7 @@ class GatewayClient:
             if timeout is None
             else self._http.stream(
                 "POST",
-                self.url(path),
+                url,
                 json=body,
                 headers=request_headers,
                 params=query,

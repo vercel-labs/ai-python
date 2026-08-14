@@ -9,7 +9,26 @@ import httpx
 import pytest
 
 import ai
-from ai.providers.ai_gateway.client import errors
+from ai.providers.ai_gateway.client import GatewayClient, errors
+
+
+def test_url_rewrites_version_segment() -> None:
+    client = GatewayClient(base_url="https://gw.test/v4/ai")
+    assert (
+        client.url("language-model") == "https://gw.test/v4/ai/language-model"
+    )
+    assert (
+        client.url("language-model", spec_version="3")
+        == "https://gw.test/v3/ai/language-model"
+    )
+
+
+def test_url_leaves_unversioned_base_untouched() -> None:
+    client = GatewayClient(base_url="https://gw.test/custom")
+    assert (
+        client.url("language-model", spec_version="4")
+        == "https://gw.test/custom/language-model"
+    )
 
 
 def _set_oidc_token(
