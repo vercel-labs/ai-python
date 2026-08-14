@@ -32,8 +32,7 @@ async def ask_mothership(topic: str) -> ai.SubAgentTool:
 ```
 
 This allows the framework to stream partial outputs, keep nested chat history
-in `ai.MessageBundle` (which is a marker type for `list[ai.Message]`), and
-pass the final output to the parent agent.
+in a typed `ai.MessageBundle`, and pass the final output to the parent agent.
 
 `ai.SubAgentTool` declares the aggregator for nested agent events. The parent
 consumer receives each nested event as `PartialToolCallResult.value`:

@@ -87,3 +87,7 @@ async with ai.Stream.replay_message(message) as stream:
 If the provider stream ends before a finish event, iteration raises
 `ai.errors.ProviderIncompleteResponseError`. The partial message is still on
 `stream.message`.
+
+Use
+[`ai.experimental_generate`](/docs/reference/ai/experimental-generate) when
+you need the complete message without consuming streamed events.

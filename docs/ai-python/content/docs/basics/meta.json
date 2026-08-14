@@ -3,10 +3,12 @@
   "description": "Build applications with the AI SDK for Python.",
   "pages": [
     "streaming",
+    "model-operations",
     "messages-and-events",
     "providers",
     "tools",
     "agents",
+    "testing",
     "custom-loops",
     "durable-execution",
     "subagents-and-multi-agent",

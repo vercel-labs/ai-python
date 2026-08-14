@@ -1,8 +1,8 @@
 ---
 name: ai
-description: AI SDK for Python (the `ai` package). Use when writing Python that calls LLMs or builds agents — model calls, streaming, tool calling, subagents, human-in-the-loop approvals, durable/serverless execution, telemetry, AI SDK UI chat backends, custom providers.
+description: AI SDK for Python (the `ai` package). Use when writing Python that calls LLMs or dedicated image, video, speech, embedding, transcription, or reranking models; builds agents; tests model interactions; or implements tool calling, subagents, approvals, durable execution, telemetry, AI SDK UI backends, and custom providers.
 metadata:
-  sdk-version: "0.4.0"
+  sdk-version: "0.5.0"
 ---
 
 # AI SDK for Python
@@ -70,9 +70,12 @@ read the listed local notes before writing code.
 |---|---|---|
 | Provider clients, options, discovery | `basics/providers.md` | — |
 | Structured output, complex streams | `basics/streaming.md` | — |
+| Buffered language-model calls | `basics/streaming.md` | — |
+| Images, video, speech, embeddings, transcription, reranking | `basics/model-operations.md` | — |
 | Events and serialization | `basics/messages-and-events.md` | — |
 | Advanced tools, streaming, aggregation | `basics/tools.md` | [streaming-tools.md](references/streaming-tools.md) |
 | Advanced agent behavior | `basics/agents.md` | — |
+| Deterministic model and agent tests | `basics/testing.md` | — |
 | Subagents and multi-agent | `basics/subagents-and-multi-agent.md` | [streaming-tools.md](references/streaming-tools.md) |
 | Custom agent loops | `basics/custom-loops.md` | [custom-loops.md](references/custom-loops.md) |
 | Approvals and hooks | `basics/human-in-the-loop.md` | — |

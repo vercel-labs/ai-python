@@ -1,0 +1,67 @@
+---
+title: "ai.testing"
+description: Reference for scripted model and agent testing.
+type: reference
+summary: Reference for FakeModel, tool_call, and fingerprint.
+---
+
+`ai.testing` provides a model that replays scripted conversations without
+calling a provider.
+
+## FakeModel
+
+```python
+model = ai.testing.FakeModel(
+    script,
+    another_script,
+    id="fake-model",
+)
+```
+
+Each script is a sequence of `ai.messages.Message` values. A model call matches
+the script that continues the supplied conversation and returns its next
+assistant message.
+
+Matching behavior:
+
+- Unscripted system messages are ignored.
+- Tool messages may be omitted. When included, they assert the exact tool
+  results.
+- Every scripted tool call must receive a result before the next assistant
+  message can play.
+- Tool call IDs must be unique across all scripts on one model.
+- A completed assistant response can only be followed by new user input. Two
+  consecutive scripted assistant messages require tool calls on the first.
+
+The model raises `AssertionError` when no script continues the conversation.
+The error includes the received message and the closest matching script.
+
+Properties:
+
+- `calls`: Copies of the input messages from every model call, in call order.
+- `unused`: Scripted assistant messages that have not played.
+
+`FakeModel` works with both `ai.stream` and `Agent.run`.
+
+## tool_call
+
+```python
+part = ai.testing.tool_call(tool, city="San Francisco")
+part = ai.testing.tool_call("get_weather", city="San Francisco")
+```
+
+`tool_call(tool, **kwargs)` builds a `ToolCallPart` with a new tool call ID. If
+`tool` is an `AgentTool`, the helper validates the arguments against its
+signature. A string supplies only the tool name.
+
+## fingerprint
+
+```python
+value = ai.testing.fingerprint(message)
+```
+
+`fingerprint` returns the normalized JSON string that `FakeModel` uses for
+comparison. It omits volatile runtime data such as generated IDs, usage,
+provider metadata, cached results, and stored model-input state. Tool results
+are sorted by tool call ID so concurrently completed tools compare
+deterministically.

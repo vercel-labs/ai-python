@@ -24,12 +24,16 @@ async def name(...) -> Result: ...
 async def name(...) -> Result: ...
 
 @ai.tool(aggregator=...)
-async def name(...) -> AsyncGenerator[Item]: ...
+async def name(...) -> AsyncIterable[Item]: ...
 ```
 
 The function name becomes the tool name. The docstring becomes the tool
 description. The function signature becomes a Pydantic validator and JSON
 schema.
+
+The decorated callable must return an awaitable or an async iterable. Every
+async iterable tool needs an aggregator. Pass `aggregator=` or annotate the
+return type with an `ai.agents.Aggregate` marker, but do not use both.
 
 For model-facing tool declarations and provider-executed tools, use
 [`ai.tools`](/docs/reference/tools).

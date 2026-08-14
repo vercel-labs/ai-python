@@ -3,6 +3,8 @@
   "description": "API reference for public AI SDK for Python APIs.",
   "pages": [
     "ai",
+    "ops",
+    "testing",
     "ai.providers",
     "ai.agents",
     "ai.ui",

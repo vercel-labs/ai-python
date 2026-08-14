@@ -1,0 +1,141 @@
+---
+title: Testing
+description: Test model and agent behavior with scripted conversations.
+type: guide
+summary: Use FakeModel to run deterministic tests without calling a provider.
+---
+
+Use `ai.testing.FakeModel` to test model and agent behavior without making
+network requests. A fake model replays assistant messages from a scripted
+conversation and checks that the application sends the expected history.
+
+Install your test runner and async plugin if your project does not already use
+them:
+
+```bash title="Terminal"
+uv add --dev pytest pytest-asyncio
+```
+
+## Test an agent with a tool
+
+Build a script from normal SDK messages. Use `ai.testing.tool_call` to create a
+tool call with validated arguments and a unique call ID:
+
+```python title="test_weather_agent.py"
+import ai
+import pytest
+
+
+@ai.tool
+async def get_weather(city: str) -> str:
+    """Get the weather for a city."""
+    return "Sunny"
+
+
+@pytest.mark.asyncio
+async def test_weather_agent() -> None:
+    tool_call = ai.testing.tool_call(get_weather, city="San Francisco")
+    model = ai.testing.FakeModel(
+        [
+            ai.user_message("What is the weather in San Francisco?"),
+            ai.assistant_message("I will check.", tool_call),
+            ai.assistant_message("It is sunny in San Francisco."),
+        ]
+    )
+
+    agent = ai.Agent(tools=[get_weather])
+    async with agent.run(
+        model,
+        [ai.user_message("What is the weather in San Francisco?")],
+    ) as stream:
+        async for _event in stream:
+            pass
+
+    assert stream.output == "It is sunny in San Francisco."
+    assert len(model.calls) == 2
+    assert not model.unused
+```
+
+`model.calls` records each model invocation.
+
+You can leave tool messages out of a script when the exact result does not
+matter. The fake model accepts the agent's tool message and continues with the
+next scripted assistant message.
+
+## Assert an exact tool result
+
+Include a tool message when the test must verify the result sent back to the
+model:
+
+```python
+tool_call = ai.testing.tool_call(get_weather, city="San Francisco")
+model = ai.testing.FakeModel(
+    [
+        ai.user_message("Check the weather."),
+        ai.assistant_message(tool_call),
+        ai.tool_message(
+            tool_call_id=tool_call.tool_call_id,
+            tool_name="get_weather",
+            result={"temp_f": 64, "conditions": "sunny"},
+        ),
+        ai.assistant_message("It is sunny."),
+    ]
+)
+```
+
+`result` accepts any JSON-serializable value or Pydantic model.
+
+The test fails with an `AssertionError` when the actual conversation diverges
+from every script.
+
+## Inspect model calls
+
+`model.calls` contains the exact input messages from each model call, in call
+order. Use it to check what an agent sent after tools ran:
+
+```python
+assert [message.role for message in model.calls[1]] == [
+    "user",
+    "assistant",
+    "tool",
+]
+```
+
+`model.unused` contains scripted assistant messages that never played. Assert
+that it is empty when the test should exercise the complete script.
+
+Unscripted system messages are ignored, so an agent's system prompt does not
+need to appear in every script.
+
+## Test structured output
+
+`FakeModel` replays scripted messages as-is, so structured output works like
+it does with a real model: script an assistant message whose text is the JSON
+payload.
+
+```python
+import pydantic
+
+
+class Weather(pydantic.BaseModel):
+    city: str
+    conditions: str
+
+
+model = ai.testing.FakeModel(
+    [
+        ai.user_message("Weather in San Francisco as JSON."),
+        ai.assistant_message('{"city": "San Francisco", "conditions": "sunny"}'),
+    ]
+)
+
+message = await ai.experimental_generate(
+    model,
+    [ai.user_message("Weather in San Francisco as JSON.")],
+    output_type=Weather,
+)
+assert message.get_output(Weather).conditions == "sunny"
+```
+
+The fake does not validate scripted text against the schema; parsing happens only
+when the test calls `get_output`.

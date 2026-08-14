@@ -73,8 +73,15 @@ model = ai.Model(id="my-model", provider=MyProvider(client=client))
 
 `provider_class_id` is the serialization discriminator used to restore the
 concrete class. Optionally set the `handles: ClassVar[tuple[str, ...]]` class
-attribute to register prefixes for `ai.get_provider(...)` /
-`ai.get_model("handle/...")` lookup.
+attribute to register an implementation for matching models.dev provider IDs.
+Direct provider model IDs use `ai.get_model("handle:model")`; slash-separated
+IDs route through AI Gateway.
+
+Implement `ProviderProtocol.generate` when the upstream API has a native
+buffered language-model endpoint. Otherwise, `ai.experimental_generate` falls
+back to `stream`. Implement `generate_image`, `generate_video`,
+`generate_audio`, `embed`, `transcribe`, or `rerank` only for the dedicated
+model operations that the provider supports.
 
 Set response metadata on `StreamEnd`. Normalize the upstream API's native
 stop reason into the shared vocabulary: `stop`, `length`, `content_filter`,

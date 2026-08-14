@@ -66,6 +66,16 @@ Tool and runtime parts:
 most tools this is the same as `result`. Aggregator-backed tools can store a
 rich `result` while sending a simpler model-facing value.
 
+Fields and helpers for model-facing values:
+
+- `model_input`: Explicit model-facing value. Normal tools omit it from
+  serialized data.
+- `model_input_kind`: Shape of `model_input`: `json` or `special`.
+- `get_model_input()`: Return `model_input`, or fall back to `result` when no
+  explicit value is stored.
+- `has_model_input`: Whether an explicit model-facing value is stored.
+- `set_model_input(value)`: Store a model-facing value and set its kind.
+
 ## Message Bundles
 
 Message bundle types are used when a tool or adapter needs to carry multiple
@@ -78,6 +88,8 @@ message-layer values as one result.
   message bundles.
 - `ResultKind`: The coarse tag for a tool result shape: `error`, `json`, or
   `special`.
+- `ModelInputKind`: The coarse tag for a model-facing value: `json` or
+  `special`.
 
 ## Message IDs
 
@@ -89,6 +101,17 @@ message_id = ai.messages.generate_id("msg")
 
 Pass a prefix to control the ID family. If no prefix is supplied, the helper
 returns an unprefixed generated ID.
+
+`use_random` overrides the random source used for message and part IDs within
+an async context. Use it with a replay-safe random source inside durable
+workflows:
+
+```python
+@workflow.workflow
+@ai.messages.use_random(workflow.random)
+async def run_turn(...):
+    ...
+```
 
 ## Serialization
 

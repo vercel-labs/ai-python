@@ -30,6 +30,18 @@ Another important caveat to durable execution is that it normally does not
 support async generators. Depending on the framework, additional work may be
 required for your streaming setup.
 
+## Use deterministic message IDs
+
+Message and part IDs must remain stable when a workflow replays. Use the
+workflow's replay-safe random source:
+
+```python
+@workflow.workflow
+@ai.messages.use_random(vercel.workflow.random)  # temporal has it's own random api too
+async def run_turn(turn_input):
+    ...
+```
+
 ## Example: Vercel Workflows
 
 Wrap the model call in a step that returns the final assistant `Message`,
@@ -63,6 +75,9 @@ async def ask_mothership(question: str) -> str:
     response = await mothership_client.ask(question)
     return response.summary
 ```
+
+Allow retries for idempotent model steps. Disable retries for tool steps that
+perform non-idempotent side effects, or make those tools idempotent.
 
 Then use a custom loop that calls the model step, schedules tool work, and
 stores the resulting messages:

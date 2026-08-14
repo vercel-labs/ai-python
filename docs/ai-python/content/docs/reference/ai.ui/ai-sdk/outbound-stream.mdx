@@ -34,3 +34,13 @@ return fastapi.responses.StreamingResponse(
     headers=ai.ui.ai_sdk.UI_MESSAGE_STREAM_HEADERS,
 )
 ```
+
+## Step boundaries
+
+The adapter starts a UI step with the first model event. When a new
+`StreamStart` follows a completed model stream, it finishes the previous step
+and starts another. Tool results and approval events emitted between the two
+model streams stay in the step that requested them.
+
+The adapter finishes the active step and message when the input event stream
+ends.

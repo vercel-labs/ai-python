@@ -47,9 +47,8 @@ The original exception is available on `event.exception` for logging.
 
 ## Declare tools that stream output
 
-AI SDK for Python supports tools that are async-generators. You might want to
-use those when your tools need to return partial output, e.g. when wrapping
-subagents.
+AI SDK for Python supports tools that return async iterables. Use a streaming tool 
+when it needs to return partial output, such as when wrapping a subagent.
 
 Streaming tools use aggregators. An aggregator solves two problems: the tool can
 yield many values over time, but the agent still needs one final tool result;
@@ -87,6 +86,10 @@ result is a message bundle, and the model sees the final assistant text.
 
 The agent emits `PartialToolCallResult` events for those values, then sends
 the aggregated result back to the model on the next turn.
+
+Every tool must return an awaitable or an async iterable. Every async iterable 
+tool needs an aggregator, either through its return annotation or the
+`aggregator=` argument.
 
 ## Understand tool anatomy
 

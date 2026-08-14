@@ -1,0 +1,239 @@
+---
+title: "ai.ops"
+description: Reference for dedicated model operations.
+type: reference
+summary: Reference for image, video, speech, embedding, transcription, and reranking APIs.
+---
+
+`ai.ops` contains model operations that return standalone values instead of
+language-model messages.
+
+## Item
+
+Every operation returns `Item[T]`.
+
+Fields:
+
+- `value`: The operation result.
+- `usage`: Normalized token usage, or `None` when the provider does not report
+  it.
+- `warnings`: `Warning` values reported during the operation. Empty when there
+  are none.
+- `provider_metadata`: Provider-specific response data, or `None`.
+
+## Warning
+
+A warning reported while running an operation, such as an unsupported or
+partially applied feature.
+
+Fields:
+
+- `kind`: Warning category: `"unsupported"`, `"compatibility"`,
+  `"deprecated"`, or `"other"`.
+- `message`: Human-readable description, or `None`.
+- `feature`: The affected feature, for unsupported and compatibility warnings.
+- `setting`: The deprecated setting name, for deprecated warnings.
+- `details`: Additional detail, or `None`.
+
+## generate_image
+
+```python
+await ai.ops.generate_image(
+    model,
+    prompt,
+    *,
+    params=None,
+)
+```
+
+Arguments:
+
+- `model`: Image model.
+- `prompt`: Text prompt as a string, or an `ImagePrompt`.
+- `params`: Optional `ImageParams`.
+
+Returns `Item[list[FilePart]]`.
+
+`ImagePrompt` fields:
+
+- `text`: Text prompt. Optional for operations that do not need one, such as
+  upscaling.
+- `images`: Input images for editing or variation generation. Each accepts a
+  `FilePart`, raw bytes, or a URL or base64 string.
+- `mask`: Mask image for inpainting operations.
+
+`ImageParams` fields:
+
+- `n`: Number of images. The default is `1`.
+- `size`: Image size such as `"1024x1024"`.
+- `aspect_ratio`: Aspect ratio such as `"16:9"`.
+- `seed`: Reproducibility seed.
+- `provider_options`: Provider-specific options keyed by provider name.
+
+## generate_video
+
+```python
+await ai.ops.generate_video(
+    model,
+    prompt,
+    *,
+    params=None,
+)
+```
+
+Arguments:
+
+- `model`: Video model.
+- `prompt`: Text prompt as a string, or a `VideoPrompt`.
+- `params`: Optional `VideoParams`.
+
+Returns `Item[list[FilePart]]`.
+
+`VideoPrompt` fields:
+
+- `text`: Text prompt.
+- `image`: Input image for image-to-video generation, used as the starting
+  frame. Accepts a `FilePart`, raw bytes, or a URL or base64 string.
+- `frame_images`: Role-tagged `FrameImage` values. A `first_frame` entry takes
+  precedence over `image` as the start image.
+- `references`: Reference images or videos for reference-to-video generation.
+  Cannot be combined with `frame_images`.
+
+`FrameImage` fields:
+
+- `image`: The image as a `FilePart`, raw bytes, or a URL or base64 string.
+- `frame_type`: `"first_frame"` to animate from the image, or `"last_frame"`
+  to animate towards it.
+
+`VideoParams` fields:
+
+- `n`: Number of videos. The default is `1`.
+- `aspect_ratio`: Aspect ratio such as `"16:9"`.
+- `resolution`: Resolution such as `"1920x1080"`.
+- `duration`: Duration in seconds.
+- `fps`: Frames per second.
+- `seed`: Reproducibility seed.
+- `generate_audio`: Whether the model should generate audio alongside the
+  video.
+- `provider_options`: Provider-specific options keyed by provider name.
+
+## generate_audio
+
+```python
+await ai.ops.generate_audio(
+    model,
+    prompt,
+    *,
+    params=None,
+)
+```
+
+Arguments:
+
+- `model`: Speech model.
+- `prompt`: The text to speak as a string, or an `AudioPrompt`.
+- `params`: Optional `AudioParams`.
+
+Returns `Item[list[FilePart]]`.
+
+`AudioPrompt` fields:
+
+- `text`: The text to convert to speech.
+- `instructions`: Instructions for tone, emotion, or delivery.
+
+`AudioParams` fields:
+
+- `voice`: Provider voice ID or name.
+- `output_format`: Audio format such as `"mp3"` or `"wav"`.
+- `speed`: Speech speed multiplier.
+- `language`: ISO 639-1 language code.
+- `provider_options`: Provider-specific options keyed by provider name.
+
+## embed
+
+```python
+await ai.ops.embed(
+    model,
+    values,
+    *,
+    params=None,
+)
+```
+
+Arguments:
+
+- `model`: Embedding model.
+- `values`: Text strings to embed.
+- `params`: Optional `EmbedParams`.
+
+Returns `Item[list[list[float]]]` with one vector per input string, in input
+order.
+
+`EmbedParams` contains `provider_options`, keyed by provider name.
+
+## transcribe
+
+```python
+await ai.ops.transcribe(
+    model,
+    audio,
+    *,
+    params=None,
+)
+```
+
+Arguments:
+
+- `model`: Transcription model.
+- `audio`: Audio as a `FilePart` or raw bytes.
+- `params`: Optional `TranscribeParams`.
+
+Returns `Item[Transcription]`.
+
+`TranscribeParams` contains `provider_options`, keyed by provider name.
+
+`Transcription` fields:
+
+- `text`: Complete transcript.
+- `segments`: Timed `TranscriptionSegment` values when reported.
+- `language`: Detected ISO 639-1 language code when reported.
+- `duration_seconds`: Total input duration when reported.
+
+`TranscriptionSegment` fields:
+
+- `text`: Segment text.
+- `start_second`: Segment start time.
+- `end_second`: Segment end time.
+
+## rerank
+
+```python
+await ai.ops.rerank(
+    model,
+    documents,
+    query,
+    *,
+    params=None,
+)
+```
+
+Arguments:
+
+- `model`: Reranking model.
+- `documents`: Text strings or JSON objects to rank.
+- `query`: Query used to score the documents.
+- `params`: Optional `RerankParams`.
+
+Returns `Item[list[RankedDocument]]`, ordered by descending relevance score.
+Passing an empty document list returns an empty result without calling the
+provider.
+
+`RerankParams` fields:
+
+- `top_n`: Maximum number of results. The default returns all documents.
+- `provider_options`: Provider-specific options keyed by provider name.
+
+`RankedDocument` fields:
+
+- `index`: Position of the document in the original input list.
+- `score`: Relevance score for the query.

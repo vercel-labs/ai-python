@@ -26,10 +26,10 @@ Use `to_sse` to convert agent events to AI SDK UI stream chunks:
 @app.post("/chat")
 async def chat(request: ChatRequest) -> fastapi.responses.StreamingResponse:
     messages, approvals = ai.ui.ai_sdk.to_messages(request.messages)
-    ai.ui.ai_sdk.apply_approvals(approvals)
 
     async def stream_response():
         async with chat_agent.run(model, messages) as stream:
+            ai.ui.ai_sdk.apply_approvals(approvals)
             async for chunk in ai.ui.ai_sdk.to_sse(stream):
                 yield chunk
 
@@ -101,11 +101,11 @@ Register extracted approvals before resuming the agent:
 
 ```python
 messages, approvals = ai.ui.ai_sdk.to_messages(request.messages)
-ai.ui.ai_sdk.apply_approvals(approvals)
 
 async with chat_agent.run(model, messages) as stream:
+    ai.ui.ai_sdk.apply_approvals(approvals)
     ...
 ```
 
-The hook registry stores each approval until the matching tool-approval hook
-runs.
+Call `apply_approvals` inside the `agent.run` context, before iteration. The
+hook registry stores each approval until the matching tool-approval hook runs.

@@ -25,14 +25,20 @@ APIs:
 
 Custom aggregators implement `ai.events.Aggregator`.
 
-`yield_from` forwards events from a nested async generator and returns the
-nested generator result.
+`yield_from` forwards values from an async iterable and returns the
+aggregator's model-facing result.
 
 ```python
-result = await ai.agents.yield_from(generator)
+result = await ai.agents.yield_from(
+    stream,
+    aggregator=ai.agents.MessageAggregator,
+)
 ```
 
-## Tool Calls
+Optional `tool_name`, `tool_call_id`, and `label` values are attached to the
+forwarded `PartialToolCallResult` events.
+
+## Tool calls
 
 - `BoundToolCall`
 - `ToolCallCallable`
