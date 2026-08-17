@@ -17,6 +17,7 @@ from ...models import core
 from ...models.core import params as params_
 from .. import base, history_utils
 from . import _sdk, errors
+from . import params as openai_params
 
 if TYPE_CHECKING:
     import openai
@@ -460,6 +461,18 @@ def _apply_common_openai_params(
         api_kwargs["safety_identifier"] = request_params.safety_identifier
     if request_params.metadata is not None:
         api_kwargs["metadata"] = dict(request_params.metadata)
+
+    provider_params = request_params.provider_params
+    if provider_params is not None:
+        openai_value = provider_params.get(openai_params.OpenAIParams)
+        if openai_value is not None and not isinstance(
+            openai_value, openai_params.OpenAIParams
+        ):
+            raise TypeError(
+                "openai provider_params[OpenAIParams] must be OpenAIParams"
+            )
+        if openai_value is not None and openai_value.store is not None:
+            api_kwargs["store"] = openai_value.store
 
     if request_params.context_management is not None:
         context_management = request_params.context_management
