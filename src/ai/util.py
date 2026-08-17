@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import dataclasses
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
     from collections.abc import (
@@ -76,7 +76,7 @@ class MultiWaiter[T]:
 
     def __init__(self, *tasks: asyncio.Future[T]) -> None:
         self._queue: asyncio.Queue[asyncio.Future[T]] = asyncio.Queue(0)
-        self._tasks: dict[asyncio.Future[T], None] = {}
+        self._tasks: dict[asyncio.Future[T], Literal[True]] = {}
 
         # We bind this to an attribute so that the bound method is
         # always the same and can be passed to remove_done_callback.
@@ -85,8 +85,15 @@ class MultiWaiter[T]:
 
     def add(self, *tasks: asyncio.Future[T]) -> None:
         for task in tasks:
-            self._tasks[task] = None
+            self._tasks[task] = True
             task.add_done_callback(self._callback)
+
+    def discard(self, *tasks: asyncio.Future[T]) -> None:
+        for task in tasks:
+            self._tasks.pop(task, None)
+            task.remove_done_callback(self._callback)
+            # Queue it up so that a waiter pops out of the loop
+            self._queue.put_nowait(task)
 
     def clear(self) -> None:
         for task in self._tasks:
@@ -96,12 +103,15 @@ class MultiWaiter[T]:
     def tasks(self) -> Collection[asyncio.Future[T]]:
         return self._tasks.keys()
 
-    async def wait(self) -> asyncio.Future[T]:
-        t = await self._queue.get()
-        self._tasks.pop(t, None)
-        return t
+    async def wait(self) -> asyncio.Future[T] | None:
+        while self._tasks:
+            t = await self._queue.get()
+            # Only return the future if it hasn't been discarded
+            if self._tasks.pop(t, None):
+                return t
+        return None
 
-    def __await__(self) -> Generator[Any, Any, asyncio.Future[T]]:
+    def __await__(self) -> Generator[Any, Any, asyncio.Future[T] | None]:
         return self.wait().__await__()
 
     async def __aenter__(self) -> MultiWaiter[T]:
@@ -271,9 +281,7 @@ async def merge[T](
         mw.add(*[t for t in tasks if t])
 
         top_fired = False
-        while mw.tasks():
-            t = await mw
-
+        while t := await mw:
             idx = tasks.index(t)
             val = t.result()
             if val is _EMPTY:
