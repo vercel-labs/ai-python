@@ -263,6 +263,93 @@ async def test_finish_metadata_ignores_empty_messages() -> None:
     assert finish.message_metadata is None
 
 
+async def test_finish_reason_defaults_to_stop() -> None:
+    out = await _collect(
+        [
+            events_.StreamStart(),
+            events_.TextStart(block_id="t1"),
+            events_.TextEnd(block_id="t1"),
+            events_.StreamEnd(),
+        ]
+    )
+
+    finish = next(
+        event for event in out if isinstance(event, ui_events.UIFinishEvent)
+    )
+    assert finish.finish_reason == "stop"
+
+
+async def test_finish_reason_propagates_from_stream_end() -> None:
+    out = await _collect(
+        [
+            events_.StreamStart(),
+            events_.StreamEnd(finish_reason="stop"),
+        ]
+    )
+
+    finish = next(
+        event for event in out if isinstance(event, ui_events.UIFinishEvent)
+    )
+    assert finish.finish_reason == "stop"
+
+
+async def test_finish_reason_maps_content_filter() -> None:
+    out = await _collect(
+        [
+            events_.StreamStart(),
+            events_.StreamEnd(finish_reason="content_filter"),
+        ]
+    )
+
+    finish = next(
+        event for event in out if isinstance(event, ui_events.UIFinishEvent)
+    )
+    assert finish.finish_reason == "content-filter"
+
+
+async def test_finish_reason_maps_tool_call() -> None:
+    out = await _collect(
+        [
+            events_.StreamStart(),
+            events_.StreamEnd(finish_reason="tool_call"),
+        ]
+    )
+
+    finish = next(
+        event for event in out if isinstance(event, ui_events.UIFinishEvent)
+    )
+    assert finish.finish_reason == "tool-calls"
+
+
+async def test_finish_reason_passes_through_length_and_error() -> None:
+    for reason in ("length", "error"):
+        out = await _collect(
+            [
+                events_.StreamStart(),
+                events_.StreamEnd(finish_reason=reason),
+            ]
+        )
+
+        finish = next(
+            event for event in out if isinstance(event, ui_events.UIFinishEvent)
+        )
+        assert finish.finish_reason == reason
+
+
+async def test_finish_reason_maps_unknown_to_other() -> None:
+    out = await _collect(
+        [
+            events_.StreamStart(),
+            events_.StreamEnd(finish_reason="some_provider_reason"),
+        ]
+    )
+
+    finish = next(
+        event for event in out if isinstance(event, ui_events.UIFinishEvent)
+    )
+    assert finish.finish_reason == "other"
+
+
 async def test_tool_call_and_result_emit_terminal_events() -> None:
     """ToolCallResult emits tool input and output events."""
     tool_result_msg = messages_.Message(
