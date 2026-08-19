@@ -14,12 +14,14 @@ uses an SDK client.
 """
 
 from . import tools
+from .params import OpenAIParams
 from .protocol import OpenAIChatCompletionsProtocol, OpenAIResponsesProtocol
 from .provider import OpenAICompatibleProvider
 
 __all__ = [
     "OpenAIChatCompletionsProtocol",
     "OpenAICompatibleProvider",
+    "OpenAIParams",
     "OpenAIResponsesProtocol",
     "tools",
 ]

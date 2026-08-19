@@ -15,6 +15,7 @@ import pydantic
 import pytest
 
 import ai
+from ai.providers.openai import params as openai_params
 from ai.providers.openai import protocol
 from ai.providers.openai import tools as openai_tools
 from ai.types import events, messages, tools
@@ -194,6 +195,11 @@ async def test_responses_params_and_structured_output() -> None:
                     reasoning_summary="auto",
                     text_verbosity="low",
                 ),
+                provider_params={
+                    openai_params.OpenAIParams: (
+                        openai_params.OpenAIParams(store=False)
+                    )
+                },
                 extra_body={"future_option": True},
                 extra_headers={"x-openai-feature": "enabled"},
             ),
@@ -206,12 +212,57 @@ async def test_responses_params_and_structured_output() -> None:
         {"type": "compaction", "compact_threshold": 120_000}
     ]
     assert captured["include"] == ["file_search_call.results"]
+    assert captured["store"] is False
     assert captured["extra_headers"] == {"x-openai-feature": "enabled"}
     assert captured["extra_body"] == {"future_option": True}
     assert captured["text"]["verbosity"] == "low"
     assert captured["text"]["format"]["type"] == "json_schema"
     assert captured["text"]["format"]["name"] == "_Answer"
     assert captured["text"]["format"]["strict"] is True
+
+
+async def test_responses_store_false_inlines_response_items() -> None:
+    fake, captured = _patch_responses()
+    raw_item = {
+        "id": "fc_1",
+        "type": "function_call",
+        "call_id": "call_1",
+        "name": "weather",
+        "arguments": '{"city":"SF"}',
+    }
+    tool_call = messages.ToolCallPart(
+        tool_call_id="call_1",
+        tool_name="weather",
+        tool_args='{"city":"SF"}',
+        provider_metadata={"openai": {"item_id": "fc_1", "raw_item": raw_item}},
+    )
+
+    await _drain(
+        protocol.OpenAIResponsesProtocol().stream(
+            fake,
+            _MODEL,
+            [
+                ai.assistant_message(tool_call),
+                ai.tool_message(
+                    tool_call_id="call_1",
+                    tool_name="weather",
+                    result="sunny",
+                ),
+            ],
+            params=ai.InferenceRequestParams().with_provider_params(
+                openai_params.OpenAIParams(store=False)
+            ),
+            provider="openai",
+        )
+    )
+
+    assert captured["store"] is False
+    assert captured["input"][0] == raw_item
+    assert captured["input"][1] == {
+        "type": "function_call_output",
+        "call_id": "call_1",
+        "output": "sunny",
+    }
 
 
 async def test_chat_rejects_text_verbosity(
@@ -636,6 +687,11 @@ async def test_params_translate_to_sdk_kwargs(
                 },
                 output=ai.OutputParams(max_tokens=128),
                 provider_service=ai.ProviderServiceParams(service_tier="auto"),
+                provider_params={
+                    openai_params.OpenAIParams: openai_params.OpenAIParams(
+                        store=False
+                    )
+                },
                 extra_body={"future_option": True, "verbosity": "low"},
                 extra_headers={"x-openai-feature": "enabled"},
             ),
@@ -648,6 +704,7 @@ async def test_params_translate_to_sdk_kwargs(
     assert captured["seed"] == 123
     assert captured["max_completion_tokens"] == 128
     assert captured["service_tier"] == "auto"
+    assert captured["store"] is False
     assert captured["extra_body"] == {"future_option": True, "verbosity": "low"}
     assert captured["extra_headers"] == {"x-openai-feature": "enabled"}
 
