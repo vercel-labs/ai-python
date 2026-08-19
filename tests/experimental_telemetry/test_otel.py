@@ -617,6 +617,56 @@ def test_generate_span_attributes() -> None:
     assert "gen_ai.response.time_to_first_chunk" not in attrs
 
 
+def test_embed_span_attributes() -> None:
+    data = ai.experimental_telemetry.EmbedSpanData(
+        model="text-embedding-3-small",
+        provider="openai",
+        input_count=2,
+        output_count=2,
+        dimensions=1536,
+        usage=usage_.Usage(input_tokens=9),
+    )
+    sp = ai.experimental_telemetry.Span(
+        name="ops", data=data, id="span-1", trace_id="trace-1"
+    )
+    assert otel._semconv_name(sp) == "embeddings text-embedding-3-small"
+    assert otel._semconv_kind(sp) == SpanKind.CLIENT
+    attrs = otel._attributes(sp, capture_content=False)
+    assert attrs["gen_ai.operation.name"] == "embeddings"
+    assert attrs["gen_ai.provider.name"] == "openai"
+    assert attrs["gen_ai.request.model"] == "text-embedding-3-small"
+    assert attrs["gen_ai.embeddings.dimension.count"] == 1536
+    assert attrs["gen_ai.usage.input_tokens"] == 9
+
+
+def test_generate_image_span_operation_name() -> None:
+    data = ai.experimental_telemetry.GenerateImageSpanData(
+        model="imagen-4",
+        provider="google",
+    )
+    sp = ai.experimental_telemetry.Span(
+        name="ops", data=data, id="span-1", trace_id="trace-1"
+    )
+    assert otel._semconv_name(sp) == "generate_content imagen-4"
+    attrs = otel._attributes(sp, capture_content=False)
+    assert attrs["gen_ai.operation.name"] == "generate_content"
+    assert "gen_ai.embeddings.dimension.count" not in attrs
+
+
+def test_rerank_span_operation_name() -> None:
+    data = ai.experimental_telemetry.RerankSpanData(
+        input_count=1,
+        model="rerank-v3.5",
+        provider="cohere",
+    )
+    sp = ai.experimental_telemetry.Span(
+        name="ops", data=data, id="span-1", trace_id="trace-1"
+    )
+    assert otel._semconv_name(sp) == "rerank rerank-v3.5"
+    attrs = otel._attributes(sp, capture_content=False)
+    assert attrs["gen_ai.operation.name"] == "rerank"
+
+
 def test_run_span_attributes() -> None:
     data = ai.experimental_telemetry.RunSpanData(
         agent="MyAgent",

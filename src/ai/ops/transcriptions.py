@@ -18,6 +18,8 @@ from typing import TYPE_CHECKING, Any
 
 import pydantic
 
+from .. import experimental_telemetry as telemetry
+
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
@@ -75,6 +77,16 @@ async def transcribe(
     Transcription models do not report token usage; cost information,
     when the provider sends it, is on ``.provider_metadata``.
     """
-    return await model.provider.transcribe(
-        model, audio, params=params or TranscribeParams()
+    data = telemetry.TranscribeSpanData(
+        model=model.id,
+        provider=model.provider.name,
     )
+    async with telemetry.span(data) as sp:
+        item = await model.provider.transcribe(
+            model, audio, params=params or TranscribeParams()
+        )
+        sp.data.usage = item.usage
+        sp.data.duration_seconds = item.value.duration_seconds
+        if item.warnings:
+            sp.data.warnings = [w.model_dump() for w in item.warnings]
+        return item

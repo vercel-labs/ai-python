@@ -70,6 +70,20 @@ def _semconv_name(sp: telemetry.Span) -> str:
             (telemetry.AiStreamSpanData() | telemetry.AiGenerateSpanData()) as d
         ):
             return f"chat {d.model}"
+        case telemetry.EmbedSpanData() as d:
+            return f"embeddings {d.model}"
+        case (
+            (
+                telemetry.GenerateAudioSpanData()
+                | telemetry.GenerateImageSpanData()
+                | telemetry.GenerateVideoSpanData()
+            ) as d
+        ):
+            return f"generate_content {d.model}"
+        case telemetry.RerankSpanData() as d:
+            return f"rerank {d.model}"
+        case telemetry.TranscribeSpanData() as d:
+            return f"transcribe {d.model}"
         case telemetry.ToolExecutionSpanData() as d:
             return f"execute_tool {d.tool_name}"
         case telemetry.RunSpanData() as d:
@@ -82,7 +96,16 @@ def _semconv_kind(sp: telemetry.Span) -> opentelemetry.trace.SpanKind:
     # Inference spans SHOULD be CLIENT per semconv; agent and tool
     # spans run in-process and stay INTERNAL.
     match sp.data:
-        case telemetry.AiStreamSpanData() | telemetry.AiGenerateSpanData():
+        case (
+            telemetry.AiStreamSpanData()
+            | telemetry.AiGenerateSpanData()
+            | telemetry.EmbedSpanData()
+            | telemetry.GenerateAudioSpanData()
+            | telemetry.GenerateImageSpanData()
+            | telemetry.GenerateVideoSpanData()
+            | telemetry.RerankSpanData()
+            | telemetry.TranscribeSpanData()
+        ):
             return opentelemetry.trace.SpanKind.CLIENT
         case _:
             return opentelemetry.trace.SpanKind.INTERNAL
@@ -322,6 +345,42 @@ def _attributes(sp: telemetry.Span, *, capture_content: bool) -> dict[str, Any]:
                     error=sp.error is not None,
                     finish_reason=d.finish_reason,
                 )
+        case telemetry.EmbedSpanData() as d:
+            attrs["gen_ai.operation.name"] = "embeddings"
+            if d.provider is not None:
+                attrs["gen_ai.provider.name"] = d.provider
+            attrs["gen_ai.request.model"] = d.model
+            if d.dimensions is not None:
+                attrs["gen_ai.embeddings.dimension.count"] = d.dimensions
+            if d.usage is not None:
+                attrs |= _semconv_usage_attributes(d.usage)
+        case (
+            (
+                telemetry.GenerateAudioSpanData()
+                | telemetry.GenerateImageSpanData()
+                | telemetry.GenerateVideoSpanData()
+            ) as d
+        ):
+            attrs["gen_ai.operation.name"] = "generate_content"
+            if d.provider is not None:
+                attrs["gen_ai.provider.name"] = d.provider
+            attrs["gen_ai.request.model"] = d.model
+            if d.usage is not None:
+                attrs |= _semconv_usage_attributes(d.usage)
+        case telemetry.RerankSpanData() as d:
+            attrs["gen_ai.operation.name"] = "rerank"
+            if d.provider is not None:
+                attrs["gen_ai.provider.name"] = d.provider
+            attrs["gen_ai.request.model"] = d.model
+            if d.usage is not None:
+                attrs |= _semconv_usage_attributes(d.usage)
+        case telemetry.TranscribeSpanData() as d:
+            attrs["gen_ai.operation.name"] = "transcribe"
+            if d.provider is not None:
+                attrs["gen_ai.provider.name"] = d.provider
+            attrs["gen_ai.request.model"] = d.model
+            if d.usage is not None:
+                attrs |= _semconv_usage_attributes(d.usage)
         case telemetry.ToolExecutionSpanData() as d:
             attrs["gen_ai.operation.name"] = "execute_tool"
             attrs["gen_ai.tool.name"] = d.tool_name

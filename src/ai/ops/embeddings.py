@@ -15,6 +15,8 @@ from __future__ import annotations
 import dataclasses
 from typing import TYPE_CHECKING, Any
 
+from .. import experimental_telemetry as telemetry
+
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
@@ -44,6 +46,19 @@ async def embed(
     vector per input string, in input order. Embedding models report
     input token usage only.
     """
-    return await model.provider.embed(
-        model, values, params=params or EmbedParams()
+    data = telemetry.EmbedSpanData(
+        model=model.id,
+        provider=model.provider.name,
+        input_count=len(values),
     )
+    async with telemetry.span(data) as sp:
+        item = await model.provider.embed(
+            model, values, params=params or EmbedParams()
+        )
+        sp.data.usage = item.usage
+        sp.data.output_count = len(item.value)
+        if item.value:
+            sp.data.dimensions = len(item.value[0])
+        if item.warnings:
+            sp.data.warnings = [w.model_dump() for w in item.warnings]
+        return item

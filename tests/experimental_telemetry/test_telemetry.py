@@ -98,6 +98,26 @@ async def test_error_recorded_and_reraised(recorder: Recorder) -> None:
     assert span.ended_at is not None
 
 
+def test_embed_span_roundtrips() -> None:
+    data = ai.experimental_telemetry.EmbedSpanData(
+        model="m",
+        provider="p",
+        input_count=1,
+        output_count=1,
+        dimensions=8,
+    )
+    span = ai.experimental_telemetry.Span(
+        name="embed", data=data, id="span-1", trace_id="trace-1"
+    )
+
+    restored = ai.experimental_telemetry.Span.model_validate(
+        span.model_dump(mode="json")
+    )
+
+    assert isinstance(restored.data, ai.experimental_telemetry.EmbedSpanData)
+    assert restored.data.dimensions == 8
+
+
 async def test_set_attrs(recorder: Recorder) -> None:
     async with ai.experimental_telemetry.span("s") as span:
         span.set_attrs(a=1)
