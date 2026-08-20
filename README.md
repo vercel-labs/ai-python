@@ -1,3 +1,5 @@
+TEST
+
 # AI SDK for Python
 
 A toolkit for building LLM-powered applications and agent loops.
