@@ -267,6 +267,76 @@ class AiGenerateSpanData(pydantic.BaseModel):
     response_model: str | None = None
 
 
+class EmbedSpanData(pydantic.BaseModel):
+    """One embedding operation."""
+
+    kind: Literal["embed"] = "embed"
+    model: str
+    provider: str | None = None
+    input_count: int
+    usage: usage_.Usage | None = None
+    output_count: int | None = None
+    dimensions: int | None = None
+    warnings: list[dict[str, Any]] | None = None
+
+
+class GenerateAudioSpanData(pydantic.BaseModel):
+    """One audio generation operation."""
+
+    kind: Literal["generate_audio"] = "generate_audio"
+    model: str
+    provider: str | None = None
+    usage: usage_.Usage | None = None
+    output_count: int | None = None
+    warnings: list[dict[str, Any]] | None = None
+
+
+class GenerateImageSpanData(pydantic.BaseModel):
+    """One image generation operation."""
+
+    kind: Literal["generate_image"] = "generate_image"
+    model: str
+    provider: str | None = None
+    usage: usage_.Usage | None = None
+    output_count: int | None = None
+    warnings: list[dict[str, Any]] | None = None
+
+
+class GenerateVideoSpanData(pydantic.BaseModel):
+    """One video generation operation."""
+
+    kind: Literal["generate_video"] = "generate_video"
+    model: str
+    provider: str | None = None
+    usage: usage_.Usage | None = None
+    output_count: int | None = None
+    warnings: list[dict[str, Any]] | None = None
+
+
+class RerankSpanData(pydantic.BaseModel):
+    """One reranking operation."""
+
+    kind: Literal["rerank"] = "rerank"
+    model: str
+    provider: str | None = None
+    input_count: int
+    top_n: int | None = None
+    usage: usage_.Usage | None = None
+    output_count: int | None = None
+    warnings: list[dict[str, Any]] | None = None
+
+
+class TranscribeSpanData(pydantic.BaseModel):
+    """One transcription operation."""
+
+    kind: Literal["transcribe"] = "transcribe"
+    model: str
+    provider: str | None = None
+    usage: usage_.Usage | None = None
+    duration_seconds: float | None = None
+    warnings: list[dict[str, Any]] | None = None
+
+
 class ToolExecutionSpanData(pydantic.BaseModel):
     """One tool execution, from dispatch to result.
 
@@ -360,6 +430,12 @@ _FrameworkData = Annotated[
     | LoopTurnSpanData
     | AiStreamSpanData
     | AiGenerateSpanData
+    | EmbedSpanData
+    | GenerateAudioSpanData
+    | GenerateImageSpanData
+    | GenerateVideoSpanData
+    | RerankSpanData
+    | TranscribeSpanData
     | ToolExecutionSpanData
     | HookSpanData
     | CustomSpanData,

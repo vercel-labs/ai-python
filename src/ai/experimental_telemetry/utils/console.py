@@ -43,6 +43,23 @@ def _label(sp: telemetry.Span) -> str:
                 else ""
             )
             return f"generate {d.model}{tokens}"
+        case telemetry.EmbedSpanData() as d:
+            tokens = (
+                f"  in:{d.usage.input_tokens} out:{d.usage.output_tokens} tok"
+                if d.usage is not None
+                else ""
+            )
+            return f"embed {d.model}{tokens}"
+        case telemetry.GenerateAudioSpanData() as d:
+            return f"generate_audio {d.model}"
+        case telemetry.GenerateImageSpanData() as d:
+            return f"generate_image {d.model}"
+        case telemetry.GenerateVideoSpanData() as d:
+            return f"generate_video {d.model}"
+        case telemetry.RerankSpanData() as d:
+            return f"rerank {d.model}"
+        case telemetry.TranscribeSpanData() as d:
+            return f"transcribe {d.model}"
         case telemetry.ToolExecutionSpanData() as d:
             args = ", ".join(f"{k}={v!r}" for k, v in (d.args or {}).items())
             return f"tool {d.tool_name}({_short(args)})"

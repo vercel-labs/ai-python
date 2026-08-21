@@ -15,6 +15,8 @@ from __future__ import annotations
 import dataclasses
 from typing import TYPE_CHECKING, Any, Literal
 
+from .. import experimental_telemetry as telemetry
+
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
@@ -93,6 +95,16 @@ async def generate_video(
     """
     if isinstance(prompt, str):
         prompt = VideoPrompt(text=prompt)
-    return await model.provider.generate_video(
-        model, prompt, params=params or VideoParams()
+    data = telemetry.GenerateVideoSpanData(
+        model=model.id,
+        provider=model.provider.name,
     )
+    async with telemetry.span(data) as sp:
+        item = await model.provider.generate_video(
+            model, prompt, params=params or VideoParams()
+        )
+        sp.data.usage = item.usage
+        sp.data.output_count = len(item.value)
+        if item.warnings:
+            sp.data.warnings = [w.model_dump() for w in item.warnings]
+        return item

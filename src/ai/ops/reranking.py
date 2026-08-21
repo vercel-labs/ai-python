@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any
 
 import pydantic
 
+from .. import experimental_telemetry as telemetry
 from . import items
 
 if TYPE_CHECKING:
@@ -66,6 +67,19 @@ async def rerank(
     """
     if not documents:
         return items.Item(value=[])
-    return await model.provider.rerank(
-        model, documents, query, params=params or RerankParams()
+    params = params or RerankParams()
+    data = telemetry.RerankSpanData(
+        model=model.id,
+        provider=model.provider.name,
+        input_count=len(documents),
+        top_n=params.top_n,
     )
+    async with telemetry.span(data) as sp:
+        item = await model.provider.rerank(
+            model, documents, query, params=params
+        )
+        sp.data.usage = item.usage
+        sp.data.output_count = len(item.value)
+        if item.warnings:
+            sp.data.warnings = [w.model_dump() for w in item.warnings]
+        return item

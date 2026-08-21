@@ -6,6 +6,7 @@ import io
 
 import ai
 from ai.experimental_telemetry.utils import console
+from ai.types import usage
 
 
 async def test_console_prints_tree() -> None:
@@ -48,6 +49,25 @@ async def test_console_prints_live_span_events() -> None:
     text = out.getvalue()
     assert "·   first_token +" in text
     assert "ms (event_type='TextStart')" in text
+
+
+async def test_console_labels_ops_span() -> None:
+    out = io.StringIO()
+    adapter = console.ConsoleAdapter(out=out)
+    data = ai.experimental_telemetry.EmbedSpanData(
+        model="text-embedding-3-small",
+        input_count=1,
+    )
+    ai.experimental_telemetry.register(adapter)
+    try:
+        async with ai.experimental_telemetry.span(data) as sp:
+            sp.data.usage = usage.Usage(input_tokens=9)
+    finally:
+        ai.experimental_telemetry.unregister(adapter)
+
+    text = out.getvalue()
+    assert "▸ embed text-embedding-3-small" in text
+    assert "embed text-embedding-3-small  in:9 out:0 tok" in text
 
 
 async def test_console_tree_uses_response_complete_duration() -> None:

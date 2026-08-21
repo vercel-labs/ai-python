@@ -89,6 +89,12 @@ Built-in data types:
 | `LoopTurnSpanData` | `loop_turn` | One turn of the default agent loop. |
 | `AiStreamSpanData` | `ai_stream` | One streaming model call. |
 | `AiGenerateSpanData` | `ai_generate` | One buffered language-model call. |
+| `EmbedSpanData` | `embed` | One embedding operation. |
+| `GenerateAudioSpanData` | `generate_audio` | One audio generation operation. |
+| `GenerateImageSpanData` | `generate_image` | One image generation operation. |
+| `GenerateVideoSpanData` | `generate_video` | One video generation operation. |
+| `RerankSpanData` | `rerank` | One reranking operation. |
+| `TranscribeSpanData` | `transcribe` | One transcription operation. |
 | `ToolExecutionSpanData` | `tool_execution` | One tool execution, from dispatch to result. |
 | `HookSpanData` | `hook` | One hook suspension, from deferred until resolved or cancelled. |
 | `CustomSpanData` | `custom` | A user span made with `span("name")`; its attributes live in `attrs`. |
@@ -103,6 +109,9 @@ and `response_model` are set at span end.
 
 `AiGenerateSpanData` carries the same request and response fields for
 `ai.experimental_generate` calls.
+
+Each `ai.ops` function has it's own span data. All carry `model` and
+`provider`, as well as modality-specific fields.
 
 `ToolExecutionSpanData` carries `tool_name`, `tool_call_id`,
 `tool_description`, and `args`; `result`, `model_input`, and `is_error` are
@@ -385,7 +394,10 @@ The adapter names spans and sets attributes per the `gen_ai` conventions:
 | --- | --- | --- |
 | `RunSpanData` | `invoke_agent {agent}` | `invoke_agent` |
 | `AiStreamSpanData` | `chat {model}` | `chat` |
-| `AiGenerateSpanData` | `generate_content {model}` | `generate_content` |
+| `AiGenerateSpanData` | `chat {model}` | `chat` |
+| `EmbedSpanData` | `embeddings {model}` | `embeddings` |
+| `GenerateAudioSpanData`, `GenerateImageSpanData`, `GenerateVideoSpanData` | `generate_content {model}` | `generate_content` |
+| `TranscribeSpanData`, `RerankSpanData` | `{kind} {model}` | The span data kind |
 | `ToolExecutionSpanData` | `execute_tool {tool_name}` | `execute_tool` |
 | Other | The span's own name | — |
 
