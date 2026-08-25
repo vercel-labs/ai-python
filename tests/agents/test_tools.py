@@ -139,6 +139,28 @@ async def test_tool_call_returns_tool_message() -> None:
     assert not result.results[0].has_model_input
 
 
+async def test_current_tool_call() -> None:
+    seen: list[ai.ToolCall | None] = []
+
+    @ai.tool
+    async def inspect_call() -> str:
+        """Inspect the current tool call."""
+        seen.append(ai.ToolCall.current())
+        return "done"
+
+    part = ai.messages.ToolCallPart(
+        tool_call_id="tc-current",
+        tool_name="inspect_call",
+        tool_args="{}",
+    )
+    tc = ai.agents.BoundToolCall(part=part, tool=inspect_call)
+
+    assert ai.ToolCall.current() is None
+    await tc()
+    assert seen == [tc]
+    assert ai.ToolCall.current() is None
+
+
 async def test_cancelled_tool_call_returns_error_result() -> None:
     started = asyncio.Event()
 

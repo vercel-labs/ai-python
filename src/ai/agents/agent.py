@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import contextvars
 import dataclasses
 import inspect
 import json
@@ -599,7 +600,44 @@ def tool[**P, T, R](
         return wrap(fn)
 
 
-class BoundToolCall:
+class ToolCallCallable(Protocol):
+    """Anything ``ToolRunner.schedule`` can accept.
+
+    Satisfied by :class:`ToolCall` and by any zero-arg callable returning
+    a coroutine that resolves to a :class:`~ai.agents.events.ToolCallResult`
+    — e.g. an inline closure that gates the tool behind an approval hook.
+    """
+
+    def __call__(self) -> Coroutine[Any, Any, events_.ToolCallResult]: ...
+
+
+class ToolCall(ToolCallCallable, Protocol):
+    """Something with all the key information for a tool call."""
+
+    @classmethod
+    def current(cls) -> ToolCall | None:
+        """Return the tool call executing in the current context, if any."""
+        return _current_tool_call.get()
+
+    @property
+    def id(self) -> str: ...
+
+    @property
+    def name(self) -> str: ...
+
+    @property
+    def fn(self) -> Callable[..., Awaitable[Any]]: ...
+
+    @property
+    def kwargs(self) -> dict[str, Any]: ...
+
+
+_current_tool_call: contextvars.ContextVar[ToolCall | None] = (
+    contextvars.ContextVar("current_tool_call", default=None)
+)
+
+
+class BoundToolCall(ToolCall):
     """Callable that binds a :class:`ToolCallPart` to its :class:`AgentTool`.
 
     Calling it executes the tool and returns a ``role="tool"`` message.
@@ -637,6 +675,15 @@ class BoundToolCall:
 
     async def __call__(self, **overrides: Any) -> events_.ToolCallResult:
         """Execute the tool and return a :class:`ToolCallResult`."""
+        token = _current_tool_call.set(self)
+        try:
+            return await self._execute(overrides)
+        finally:
+            _current_tool_call.reset(token)
+
+    async def _execute(
+        self, overrides: dict[str, Any]
+    ) -> events_.ToolCallResult:
         spec = self._tool.tool.spec
         data = telemetry.ToolExecutionSpanData(
             tool_name=self._part.tool_name,
@@ -749,7 +796,7 @@ class BoundToolCall:
             return res
 
 
-class GatedToolCall:
+class GatedToolCall(ToolCall):
     """ToolCall-shaped wrapper that awaits an approval hook before executing.
 
     ``ToolRunner.schedule`` only consumes the ``__call__`` shape of
@@ -807,33 +854,6 @@ class GatedToolCall:
             result=f"Rejected: {approval.reason}",
             is_error=True,
         )
-
-
-class ToolCallCallable(Protocol):
-    """Anything ``ToolRunner.schedule`` can accept.
-
-    Satisfied by :class:`ToolCall` and by any zero-arg callable returning
-    a coroutine that resolves to a :class:`~ai.agents.events.ToolCallResult`
-    — e.g. an inline closure that gates the tool behind an approval hook.
-    """
-
-    def __call__(self) -> Coroutine[Any, Any, events_.ToolCallResult]: ...
-
-
-class ToolCall(ToolCallCallable, Protocol):
-    """Something with all the key information for a tool call."""
-
-    @property
-    def id(self) -> str: ...
-
-    @property
-    def name(self) -> str: ...
-
-    @property
-    def fn(self) -> Callable[..., Awaitable[Any]]: ...
-
-    @property
-    def kwargs(self) -> dict[str, Any]: ...
 
 
 class _RestartableToolStream:
