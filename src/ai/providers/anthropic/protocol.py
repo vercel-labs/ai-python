@@ -239,16 +239,18 @@ async def _messages_to_anthropic(
     extracted separately because the Anthropic API takes it as a
     top-level parameter.
     """
-    system_prompt: str | None = None
+    system_prompts: list[str] = []
     result: list[dict[str, Any]] = []
 
     for msg in history_utils.repair(messages):
         match msg.role:
             case "system":
-                system_prompt = "".join(
-                    p.text
-                    for p in msg.parts
-                    if isinstance(p, types.messages.TextPart)
+                system_prompts.append(
+                    "".join(
+                        p.text
+                        for p in msg.parts
+                        if isinstance(p, types.messages.TextPart)
+                    )
                 )
             case "assistant":
                 content: list[dict[str, Any]] = []
@@ -362,7 +364,7 @@ async def _messages_to_anthropic(
                     result.append({"role": "user", "content": user_content})
 
     result = _merge_consecutive_roles(result)
-    return system_prompt, result
+    return "\n\n".join(system_prompts) or None, result
 
 
 def _merge_consecutive_roles(
