@@ -53,6 +53,28 @@ async def _drain(stream: Any) -> None:
         pass
 
 
+async def test_multiple_system_messages_are_preserved(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake, captured = _patch_client(monkeypatch)
+
+    await _drain(
+        protocol.stream(
+            fake,
+            _MODEL,
+            [
+                ai.system_message("First instruction."),
+                ai.user_message("Hi"),
+                ai.system_message("Second instruction."),
+            ],
+            provider="anthropic",
+        )
+    )
+
+    assert captured["system"] == "First instruction.\n\nSecond instruction."
+    assert captured["messages"] == [{"role": "user", "content": "Hi"}]
+
+
 async def test_params_translate_to_sdk_kwargs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
