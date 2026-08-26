@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncGenerator, Callable
-from typing import Any, cast
+from typing import Annotated, Any, cast
 
 import pydantic
 import pytest
@@ -501,3 +501,140 @@ def test_to_model_input_with_aggregate_marker_is_rejected() -> None:
         async def t() -> ai.StreamingTextTool:
             """Stream."""
             yield "x"
+
+
+# -- Parameter descriptions -------------------------------------------------
+
+
+def test_annotated_field_description_lands_in_schema() -> None:
+    @ai.tool
+    async def get_weather(
+        city: Annotated[str, pydantic.Field(description="City name")],
+        days: Annotated[
+            int, pydantic.Field(ge=1, le=7, description="Forecast length")
+        ],
+    ) -> str:
+        """Get the weather."""
+        return "sunny"
+
+    props = _schema(get_weather)["properties"]
+    assert props["city"]["description"] == "City name"
+    assert props["days"]["description"] == "Forecast length"
+    assert props["days"]["minimum"] == 1
+    assert props["days"]["maximum"] == 7
+
+
+def test_annotated_inside_optional_is_not_stripped() -> None:
+    @ai.tool
+    async def search(
+        query: str,
+        limit: Annotated[int, pydantic.Field(ge=1, description="Max results")]
+        | None = None,
+    ) -> str:
+        """Search."""
+        return query
+
+    # For `X | None` unions the metadata lives on the non-null branch.
+    prop = _schema(search)["properties"]["limit"]
+    branch = next(b for b in prop["anyOf"] if b.get("type") == "integer")
+    assert branch["description"] == "Max results"
+    assert branch["minimum"] == 1
+
+
+def test_docstring_args_section_fills_descriptions() -> None:
+    @ai.tool
+    async def deliver(
+        address: str,
+        fragile: bool,
+        note: str = "",
+    ) -> str:
+        """Deliver a package.
+
+        Args:
+            address: Street address to ship to.
+                Can span multiple lines.
+            fragile: Whether the contents break easily.
+        """
+        return address
+
+    props = _schema(deliver)["properties"]
+    assert props["address"]["description"] == (
+        "Street address to ship to. Can span multiple lines."
+    )
+    assert (
+        props["fragile"]["description"] == "Whether the contents break easily."
+    )
+    # `note` has no docstring entry and no Field: no description is invented.
+    assert "description" not in props["note"]
+
+
+def test_annotated_description_wins_over_docstring() -> None:
+    @ai.tool
+    async def park(
+        plate: Annotated[
+            str, pydantic.Field(description="License plate number")
+        ],
+    ) -> str:
+        """Park a car.
+
+        Args:
+            plate: The plate, apparently.
+        """
+        return plate
+
+    assert (
+        _schema(park)["properties"]["plate"]["description"]
+        == "License plate number"
+    )
+
+
+def test_docstring_without_args_leaves_schema_untouched() -> None:
+    @ai.tool
+    async def ping(host: str) -> str:
+        """Ping a host. Returns latency in ms.
+
+        Returns:
+            Latency string.
+        """
+        return host
+
+    schema_before = {
+        "properties": {"host": {"title": "Host", "type": "string"}},
+        "required": ["host"],
+        "title": "ping_Args",
+        "type": "object",
+    }
+    assert _schema(ping) == schema_before
+
+
+def test_docstring_param_names_not_in_signature_are_ignored() -> None:
+    @ai.tool
+    async def bake(kind: str) -> str:
+        """Bake something.
+
+        Args:
+            kind: What to bake.
+            oven_secret: Not a real parameter.
+        """
+        return kind
+
+    props = _schema(bake)["properties"]
+    assert "oven_secret" not in props
+    assert props["kind"]["description"] == "What to bake."
+
+
+def test_plain_hints_schema_is_byte_identical_to_pre_change_behavior() -> None:
+    @ai.tool
+    async def greet(name: str, count: int = 1) -> str:
+        """Say hello."""
+        return "hi" * count
+
+    assert _schema(greet) == {
+        "properties": {
+            "count": {"default": 1, "title": "Count", "type": "integer"},
+            "name": {"title": "Name", "type": "string"},
+        },
+        "required": ["name"],
+        "title": "greet_Args",
+        "type": "object",
+    }
