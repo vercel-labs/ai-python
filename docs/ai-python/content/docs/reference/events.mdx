@@ -26,6 +26,13 @@ Text events:
 - `TextEnd`
 - `StreamEnd`
 
+Structured-output events:
+
+- `PartialOutput`: emitted while streaming with `output_type` set. `value` is
+  the best-effort parse of the JSON generated so far as a plain dict; it does
+  not validate against `output_type` (the validated instance is
+  `Stream.output` after the stream ends).
+
 `StreamEnd` carries the final response metadata. New in 0.4.0:
 
 - `finish_reason`: Why the model stopped: `stop`, `length`, `content_filter`,
