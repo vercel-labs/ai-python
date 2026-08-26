@@ -92,6 +92,21 @@ class TextEnd(ModelEvent):
     kind: Literal["text_end"] = "text_end"
 
 
+class PartialOutput(ModelEvent):
+    """Best-effort snapshot of structured output generated so far.
+
+    Emitted while streaming with ``output_type`` set, after each text
+    delta that changes the parse. ``value`` is the partial parse of the
+    JSON generated so far as a plain dict -- it does not validate
+    against ``output_type`` and grows toward the final object, which is
+    available validated via ``Stream.output`` when the stream ends.
+    """
+
+    value: dict[str, Any]
+
+    kind: Literal["partial_output"] = "partial_output"
+
+
 class ReasoningStart(ModelEvent):
     block_id: str = ""
 
@@ -179,6 +194,7 @@ Event = (
     | TextStart
     | TextDelta
     | TextEnd
+    | PartialOutput
     | ReasoningStart
     | ReasoningDelta
     | ReasoningEnd

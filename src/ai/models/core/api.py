@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import dataclasses
+from collections import deque
 from contextlib import AbstractAsyncContextManager
 from typing import (
     TYPE_CHECKING,
@@ -14,6 +15,7 @@ from typing import (
     runtime_checkable,
 )
 
+import json_repair
 import pydantic
 
 # ``typing.TypeVar`` lacks the ``default=`` kwarg on Python <3.13.
@@ -125,6 +127,11 @@ class Stream(Generic[StreamOutputT]):
         # (``Stream(gen)``, ``Stream.replay_message``).
         self._span: telemetry.Span[telemetry.AiStreamSpanData] | None = None
         self._first_output_seen = False
+        # Synthetic PartialOutput events waiting to be yielded ahead of the
+        # next provider event, plus the latest parsed snapshot behind
+        # ``Stream.partial_output``. Only active when ``output_type`` is set.
+        self._pending_events: deque[types.events.Event] = deque()
+        self._last_partial: dict[str, Any] | None = None
 
     @classmethod
     def replay_message(
@@ -192,19 +199,36 @@ class Stream(Generic[StreamOutputT]):
         return self
 
     async def __anext__(self: Self) -> types.events.Event:
-        try:
-            event = await self._gen.__anext__()
-        except StopAsyncIteration:
-            if not self._hydrator.ended:
-                raise errors.ProviderIncompleteResponseError(
-                    "provider stream ended without a finish event; "
-                    "the response is incomplete",
-                    # Premature termination is a transient transport or
-                    # provider failure: worth retrying.
-                    is_retryable=True,
-                ) from None
-            raise
-        event = self._hydrator.feed(event)
+        if self._pending_events:
+            event = self._pending_events.popleft()
+        else:
+            try:
+                event = await self._gen.__anext__()
+            except StopAsyncIteration:
+                if not self._hydrator.ended:
+                    raise errors.ProviderIncompleteResponseError(
+                        "provider stream ended without a finish event; "
+                        "the response is incomplete",
+                        # Premature termination is a transient transport or
+                        # provider failure: worth retrying.
+                        is_retryable=True,
+                    ) from None
+                raise
+            event = self._hydrator.feed(event)
+        # Structured-output streaming: after each text delta, re-parse the
+        # accumulated JSON and queue a best-effort snapshot ahead of the
+        # next provider event. ``stream_stable`` keeps truncated values as
+        # verbatim strings instead of creatively repairing them, so
+        # successive snapshots only grow toward the final object.
+        if self._output_type is not None and isinstance(
+            event, types.events.TextDelta
+        ):
+            parsed = json_repair.loads(self.message.text, stream_stable=True)
+            if isinstance(parsed, dict) and parsed != self._last_partial:
+                self._last_partial = parsed
+                self._pending_events.append(
+                    types.events.PartialOutput(value=parsed)
+                )
         # Milestones on the live span: replayed work gets no synthetic
         # timings (span.replay covers the replay branch of ``stream()``,
         # event.replay covers individual synthetic events).
@@ -272,6 +296,17 @@ class Stream(Generic[StreamOutputT]):
         it and returns the parsed instance.
         """
         return cast("StreamOutputT", self.message.get_output(self._output_type))
+
+    @property
+    def partial_output(self) -> dict[str, Any] | None:
+        """Latest best-effort parse of the structured output so far.
+
+        Only populated when ``output_type`` was set and at least one
+        text delta has arrived. The value is a plain dict and does not
+        validate against ``output_type``; use :attr:`output` for the
+        validated instance once the stream has ended.
+        """
+        return self._last_partial
 
 
 async def _replay_tool_calls(

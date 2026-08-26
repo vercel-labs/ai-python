@@ -111,6 +111,29 @@ if __name__ == "__main__":
 `stream.output` returns text by default. When you pass `output_type`, it returns
 an instance of that Pydantic model after the stream finishes.
 
+### Stream partial objects
+
+While streaming with `output_type`, the stream also emits
+`ai.events.PartialOutput` events: a best-effort parse of the JSON generated so
+far, updated as deltas arrive. The value is a plain dict and does not validate
+against the model -- use it for progressive rendering:
+
+```python
+async with ai.stream(model, messages, output_type=UprisingForecast) as stream:
+    async for event in stream:
+        match event:
+            case ai.events.PartialOutput(value=partial):
+                print(partial.get("eta", "..."))
+            case ai.events.TextDelta():
+                pass
+
+    forecast = stream.output  # validated instance, available after the stream
+```
+
+The latest snapshot is also available as `stream.partial_output`. Partials are
+not validated; `stream.output` remains the validated result once the stream has
+ended.
+
 ## Pass tools
 
 `ai.stream` accepts a list of `ai.Tool`, however, it does not execute function
