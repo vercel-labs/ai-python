@@ -34,6 +34,35 @@ The function name becomes the tool name. The docstring becomes the tool
 description. The function signature becomes a Pydantic validator and JSON
 schema.
 
+## Parameter descriptions
+
+Parameter descriptions reach the model's schema two ways:
+
+```python
+from typing import Annotated
+
+import ai
+from pydantic import Field
+
+
+@ai.tool
+async def get_weather(
+    city: Annotated[str, Field(description="City name")],
+    days: Annotated[int, Field(ge=1, le=7, description="Forecast length")] = 3,
+) -> str:
+    """Get the weather forecast.
+
+    Args:
+        city: City to forecast for.
+        days: Forecast length in days.
+    """
+    return "sunny"
+```
+
+`Field` metadata always survives into the JSON schema. A Google-style
+`Args:` section fills descriptions for parameters that have no `Field`
+description.
+
 The decorated callable must return an awaitable or an async iterable. Every
 async iterable tool needs an aggregator. Pass `aggregator=` or annotate the
 return type with an `ai.agents.Aggregate` marker, but do not use both.
