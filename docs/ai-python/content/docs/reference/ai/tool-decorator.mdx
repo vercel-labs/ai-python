@@ -25,6 +25,9 @@ async def name(...) -> Result: ...
 
 @ai.tool(aggregator=...)
 async def name(...) -> AsyncIterable[Item]: ...
+
+@ai.tool(to_model_input=...)
+async def name(...) -> Result: ...
 ```
 
 The function name becomes the tool name. The docstring becomes the tool
@@ -34,6 +37,35 @@ schema.
 The decorated callable must return an awaitable or an async iterable. Every
 async iterable tool needs an aggregator. Pass `aggregator=` or annotate the
 return type with an `ai.agents.Aggregate` marker, but do not use both.
+
+## Sending the model something else
+
+`to_model_input=` takes a callable that converts the tool's result into the
+value the model sees. The full result stays on the `ToolResultPart` for the UI
+and for session persistence:
+
+```python
+class EditResult(pydantic.BaseModel):
+    message: str
+    old_content: str
+    new_content: str
+
+
+@ai.tool(to_model_input=lambda r: r.message)
+async def edit(path: str, ...) -> EditResult:
+    """Edit a file."""
+    ...
+```
+
+The model sees `"Successfully replaced 2 block(s) in f.py."`; the UI still has
+both file versions to render a diff from.
+
+The callable receives the tool's return value, and is not called for a tool
+that raised.
+
+`to_model_input=` and an aggregator are mutually exclusive -- a streaming tool
+derives the model-facing value from its aggregator's own `to_model_input`, so
+declaring both raises `TypeError`.
 
 For model-facing tool declarations and provider-executed tools, use
 [`ai.tools`](/docs/reference/tools).

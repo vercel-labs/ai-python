@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import AsyncGenerator, Callable
 from typing import Any, cast
 
 import pydantic
@@ -16,6 +16,13 @@ from ai.types import events as events_
 # through an untyped view of the decorator to reach the runtime check.
 _untyped_tool = cast(
     "Callable[[Callable[..., Any]], ai.AgentTool]",
+    ai.tool,
+)
+
+# Combining an aggregator with to_model_input is a type error by
+# design; reach the runtime check the same way.
+_untyped_tool_kw = cast(
+    "Callable[..., Callable[[Callable[..., Any]], ai.AgentTool]]",
     ai.tool,
 )
 
@@ -393,3 +400,104 @@ async def test_tool_call_with_nested_pydantic_model() -> None:
     ), f"expected _NestedItem instances, got {[type(i) for i in received]}"
     assert received[0].key == "a"
     assert received[1].value == "2"
+
+
+# -- to_model_input -------------------------------------------------------
+
+
+async def _run_tool(tool: ai.AgentTool, args: str = "{}") -> Any:
+    part = ai.messages.ToolCallPart(
+        tool_call_id=f"tc-{tool.name}",
+        tool_name=tool.name,
+        tool_args=args,
+    )
+    result = await ai.agents.BoundToolCall(part=part, tool=tool)()
+    return result.results[0]
+
+
+class _EditResult(pydantic.BaseModel):
+    message: str
+    old_content: str
+    new_content: str
+
+
+async def test_to_model_input_transforms_what_the_model_sees() -> None:
+    """The result keeps the full value; the model sees the conversion."""
+
+    @ai.tool(to_model_input=lambda r: r.message)
+    async def edit(path: str) -> _EditResult:
+        """Edit a file."""
+        return _EditResult(
+            message=f"edited {path}", old_content="a", new_content="b"
+        )
+
+    part = await _run_tool(edit, '{"path": "f.py"}')
+
+    assert isinstance(part.result, _EditResult)
+    assert part.result.old_content == "a"
+    assert part.has_model_input
+    assert part.get_model_input() == "edited f.py"
+
+
+async def test_to_model_input_not_called_without_it() -> None:
+    @ai.tool
+    async def plain() -> str:
+        """Plain tool."""
+        return "hello"
+
+    part = await _run_tool(plain)
+
+    assert not part.has_model_input
+    assert part.get_model_input() == "hello"
+
+
+async def test_to_model_input_not_called_on_error() -> None:
+    calls: list[Any] = []
+
+    @ai.tool(to_model_input=calls.append)
+    async def boom() -> str:
+        """Always fails."""
+        raise RuntimeError("nope")
+
+    part = await _run_tool(boom)
+
+    assert part.is_error
+    assert not part.has_model_input
+    assert calls == []
+
+
+async def test_to_model_input_failure_becomes_a_tool_error() -> None:
+    def convert(result: str) -> str:
+        raise ValueError("bad conversion")
+
+    @ai.tool(to_model_input=convert)
+    async def t() -> str:
+        """Tool."""
+        return "ok"
+
+    part = await _run_tool(t)
+
+    assert part.is_error
+    assert "bad conversion" in str(part.result)
+
+
+def test_to_model_input_with_aggregator_is_rejected() -> None:
+    with pytest.raises(TypeError, match="cannot be combined"):
+
+        @_untyped_tool_kw(
+            aggregator=ai.agents.LastAggregator,
+            to_model_input=str,
+        )
+        async def t() -> AsyncGenerator[str]:
+            """Stream."""
+            yield "x"
+
+
+def test_to_model_input_with_aggregate_marker_is_rejected() -> None:
+    """The marker form of the aggregator conflicts too."""
+    with pytest.raises(TypeError, match="cannot be combined"):
+
+        @ai.tool(to_model_input=str)
+        async def t() -> ai.StreamingTextTool:
+            """Stream."""
+            yield "x"
