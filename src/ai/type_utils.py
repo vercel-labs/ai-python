@@ -25,9 +25,7 @@ def replace_typevars(value: Any, bindings: dict[Any, Any]) -> Any:
         return value
 
     if origin is typing.Annotated:
-        return typing.Annotated.__class_getitem__(
-            (replace_typevars(args[0], bindings), *args[1:])
-        )
+        return typing.Annotated[replace_typevars(args[0], bindings), *args[1:]]
 
     replaced = tuple(replace_typevars(arg, bindings) for arg in args)
     if origin in (typing.Union, types.UnionType):

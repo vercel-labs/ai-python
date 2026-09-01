@@ -109,6 +109,9 @@ exclude = [
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+filterwarnings = [
+    "ignore:'asyncio\\.DefaultEventLoopPolicy' is deprecated.*:DeprecationWarning:async_solipsism\\.loop",
+]
 
 [tool.ruff]
 line-length = 80
