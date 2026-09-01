@@ -396,6 +396,81 @@ async def test_decouple_forwards_exception_to_consumer() -> None:
     assert items == [1]
 
 
+async def test_decouple_lockstep() -> None:
+    """The worker only advances the source in response to a consumer
+    anext(): no buffering, no lookahead."""
+    advanced: list[int] = []
+
+    async def src() -> AsyncIterator[int]:
+        for i in range(10):
+            advanced.append(i)
+            yield i
+
+    it = util.decouple(src(), task_group=None)
+    async with util.maybe_aclosing(it):
+        for n in range(5):
+            assert await anext(it) == n
+            # Give the worker every opportunity to run ahead.
+            for _ in range(50):
+                await asyncio.sleep(0)
+            assert advanced == list(range(n + 1))
+
+
+async def test_decouple_buffer_bounded() -> None:
+    """buffer=k lets the worker run at most k elements ahead."""
+    advanced: list[int] = []
+
+    async def src() -> AsyncIterator[int]:
+        for i in range(10):
+            advanced.append(i)
+            yield i
+
+    it = util.decouple(src(), task_group=None, buffer=2)
+    async with util.maybe_aclosing(it):
+        for n in range(5):
+            assert await anext(it) == n
+            for _ in range(50):
+                await asyncio.sleep(0)
+            assert advanced == list(range(n + 3))
+
+
+async def test_decouple_buffer_unbounded() -> None:
+    """buffer=None drains the source eagerly, without waiting for demand."""
+    advanced: list[int] = []
+
+    async def src() -> AsyncIterator[int]:
+        for i in range(10):
+            advanced.append(i)
+            yield i
+
+    it = util.decouple(src(), task_group=None, buffer=None)
+    async with util.maybe_aclosing(it):
+        assert await anext(it) == 0
+        for _ in range(50):
+            await asyncio.sleep(0)
+        assert advanced == list(range(10))
+        assert [x async for x in it] == list(range(1, 10))
+
+
+async def test_merge_lockstep() -> None:
+    """merge doesn't demand a new element from the source that just
+    yielded until its own consumer asks for one."""
+    advanced: list[int] = []
+
+    async def src() -> AsyncIterator[int]:
+        for i in range(10):
+            advanced.append(i)
+            yield i
+
+    it = util.merge(src())
+    async with util.maybe_aclosing(it):
+        for n in range(5):
+            assert await anext(it) == n
+            for _ in range(50):
+                await asyncio.sleep(0)
+            assert advanced == list(range(n + 1))
+
+
 async def test_decouple_contextvar_stable_across_yields() -> None:
     """ContextVars set in the source persist across decouple yields."""
     var: contextvars.ContextVar[str] = contextvars.ContextVar("test")

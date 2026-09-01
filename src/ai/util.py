@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
     from collections.abc import (
+        AsyncGenerator,
         AsyncIterable,
         AsyncIterator,
         Collection,
@@ -195,14 +196,18 @@ async def decouple[T](
     iter: AsyncIterable[T],
     *,
     task_group: asyncio.TaskGroup | None,
-    size: int = 1,
-) -> AsyncIterator[T]:
+    buffer: int | None = 0,
+) -> AsyncGenerator[T]:
     """Drive ``iter`` from a single worker task and yield its items.
 
     Ensures every ``__anext__`` on ``iter`` runs in the same task context, so
     contextvars set or relied on by the iterable behave consistently across
     yields. Without this, callers that wrap each ``anext`` in a fresh task
     (e.g. ``merge``) would run each step in a different copy of the context.
+
+    ``buffer`` is how many elements the worker may run ahead of the
+    consumer. With 0, the default, the underlying iterable is run in
+    lockstep.
 
     We try pretty hard to make sure that ``iter`` gets aclose()d in
     the same task that it was run it.
@@ -211,7 +216,8 @@ async def decouple[T](
     generators are closed, so we should be OK.
 
     """
-    queue: AsyncIterableQueue[T] = AsyncIterableQueue(size)
+    queue: AsyncIterableQueue[T] = AsyncIterableQueue()
+    sem = None if buffer is None else asyncio.Semaphore(buffer)
 
     async def worker() -> None:
         async with maybe_aclosing(iter):
@@ -223,8 +229,14 @@ async def decouple[T](
                 #
                 # TODO: I'm not sure if this case can ever matter, but
                 # think about it more.
+
+                # We don't need to wait before the *first* iteration
+                # because we don't get spawned until the first anext()
+                # anyway.
                 async for x in iter:
                     await queue.put(x)
+                    if sem is not None:
+                        await sem.acquire()
             except Exception as e:
                 await queue.put(_Stop(exception=e))
                 return
@@ -238,6 +250,8 @@ async def decouple[T](
     try:
         async for el in queue:
             yield el
+            if sem is not None:
+                sem.release()
     finally:
         # cancel is a no-op if a task is already done or cancelled
         task.cancel()
@@ -247,8 +261,11 @@ async def decouple[T](
 
 async def merge[T](
     *aiterables: AsyncIterable[T], restart: bool = True
-) -> AsyncIterator[T]:
+) -> AsyncGenerator[T]:
     """Yield elements from async iterables as they arrive.
+
+    The first anext() call on each iterable is done eagerly, but
+    after that they run in lockstep with the consumer of merge.
 
     Additionally, if `restart` is True (the default), attempt to *restart*
     finished iterables when other iterables produce elements.
@@ -287,12 +304,12 @@ async def merge[T](
             if val is _EMPTY:
                 tasks[idx] = None
             else:
-                # Fire off a new task for the relevant iterator
-                top_fired = True
-                iter = aiters[idx]
-                tasks[idx] = nt = tg.create_task(anext(iter, _EMPTY))
-                mw.add(nt)
                 yield val
+                # Fire off a new task for the relevant iterator.
+                # Done after the yield to stay in lock-step with demand.
+                tasks[idx] = nt = tg.create_task(anext(aiters[idx], _EMPTY))
+                mw.add(nt)
+                top_fired = True
 
             if restart and (
                 val is not _EMPTY or (not mw.tasks() and top_fired)
