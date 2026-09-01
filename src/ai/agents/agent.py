@@ -174,10 +174,9 @@ def _populate_model_inputs(
 ) -> None:
     """Set ``model_input`` on tool results that arrived without one.
 
-    Aggregator tool execution sets ``model_input`` directly; this fills
-    in the value for aggregator results that were reconstructed from a
-    wire round-trip (e.g. the AI SDK UI inbound path) and never had it
-    computed.
+    Tool execution sets ``model_input`` directly; this fills in the
+    value for results that were reconstructed from a wire round-trip
+    (e.g. the AI SDK UI inbound path) and never had it computed.
     """
     for msg in messages:
         if msg.role != "tool":
@@ -188,10 +187,13 @@ def _populate_model_inputs(
             tool = tools_by_name.get(part.tool_name)
             if tool is None:
                 continue
-            agg_cls = _aggregator_cls(tool.aggregator)
-            if agg_cls is None:
-                continue
-            part.set_model_input(agg_cls.to_model_input(part.result))
+            convert = tool.to_model_input
+            if convert is None:
+                agg_cls = _aggregator_cls(tool.aggregator)
+                if agg_cls is None:
+                    continue
+                convert = agg_cls.to_model_input
+            part.set_model_input(convert(part.result))
 
 
 class SimpleAggregator[Item, Result](events_.Aggregator[Item, Result, Result]):
@@ -461,6 +463,7 @@ class AgentTool:
     fn: Callable[..., Any]
     validator: type[pydantic.BaseModel] | None = None
     aggregator: Callable[[], events_.Aggregator[Any, Any, Any]] | None = None
+    to_model_input: Callable[[Any], Any] | None = None
     return_type: Any = None
 
     @property
@@ -501,6 +504,7 @@ def tool[**P, T](fn: Callable[P, AsyncIterable[T]], /) -> AgentTool: ...
 def tool[**P](
     *,
     require_approval: bool,
+    to_model_input: Callable[[Any], Any] | None = None,
     return_type: Any = None,
 ) -> Callable[
     [Callable[P, Awaitable[Any] | AsyncIterable[Any]]], AgentTool
@@ -512,6 +516,7 @@ def tool[**P](
     *,
     return_type: Any,
     require_approval: bool = False,
+    to_model_input: Callable[[Any], Any] | None = None,
 ) -> Callable[
     [Callable[P, Awaitable[Any] | AsyncIterable[Any]]], AgentTool
 ]: ...
@@ -526,12 +531,24 @@ def tool[**P](
 ) -> Callable[[Callable[P, AsyncIterable[Any]]], AgentTool]: ...
 
 
+@overload
+def tool[**P](
+    *,
+    to_model_input: Callable[[Any], Any],
+    require_approval: bool = False,
+    return_type: Any = None,
+) -> Callable[
+    [Callable[P, Awaitable[Any] | AsyncIterable[Any]]], AgentTool
+]: ...
+
+
 def tool[**P, T, R](
     fn: Callable[P, Awaitable[R]] | Callable[P, AsyncIterable[T]] | None = None,
     /,
     *,
     aggregator: Callable[[], events_.Aggregator[Any, Any, Any]] | None = None,
     require_approval: bool = False,
+    to_model_input: Callable[[Any], Any] | None = None,
     return_type: Any = None,
 ) -> (
     Callable[[Callable[P, AsyncIterable[Any]]], AgentTool]
@@ -546,6 +563,18 @@ def tool[**P, T, R](
     or :data:`StreamingStatusTool` aliases).  Specifying both raises
     ``TypeError``. Pass ``return_type=`` to override the type used when
     validating round-tripped tool results.
+
+    Pass ``to_model_input=`` to send the model something other than the
+    result the tool produced -- useful when the result carries detail
+    the UI needs but the model shouldn't pay tokens for::
+
+        @ai.tool(to_model_input=lambda r: r.message)
+        async def edit(path: str) -> EditResult:
+            ...
+
+    It receives the tool's return value, and is mutually exclusive with
+    an aggregator -- a streaming tool derives the model-facing value
+    from the aggregator instead.
     """
 
     def wrap(fn: Any) -> AgentTool:
@@ -571,6 +600,12 @@ def tool[**P, T, R](
                 "in the return-type annotation; specify only one"
             )
         effective_aggregator = aggregator or annotated_aggregate
+        if effective_aggregator is not None and to_model_input is not None:
+            raise TypeError(
+                f"Tool {fn.__name__!r}: `to_model_input=` cannot be combined "
+                "with an aggregator; the aggregator's own `to_model_input` "
+                "already derives the model-facing value"
+            )
 
         tool_decl = Tool(
             kind="function",
@@ -587,6 +622,7 @@ def tool[**P, T, R](
             fn=fn,
             validator=validator,
             aggregator=effective_aggregator,
+            to_model_input=to_model_input,
             return_type=return_type
             or _tool_result_type_from_return_annotation(
                 annotated_return_type, effective_aggregator
@@ -719,6 +755,8 @@ class BoundToolCall:
                         f"async iterable, not {type(returned).__name__}; "
                         f"declare it with `async def`"
                     )
+                if tool.to_model_input is not None:
+                    model_input = tool.to_model_input(result)
             except (Exception, asyncio.CancelledError) as exc:
                 return _error_tool_result(
                     exc,
