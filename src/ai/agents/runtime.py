@@ -12,7 +12,7 @@ from ..types import messages as messages_
 from .mcp import client as mcp_client
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Awaitable
+    from collections.abc import AsyncGenerator
 
 
 class Runtime:
@@ -47,20 +47,13 @@ def get_runtime() -> Runtime:
     return _runtime.get()
 
 
-async def _stop_when_done(runtime: Runtime, task: Awaitable[None]) -> None:
-    try:
-        await task
-    finally:
-        await runtime.signal_done()
-
-
-async def run(
+def run(
     source: AsyncGenerator[events_.AgentEvent],
 ) -> AsyncGenerator[events_.AgentEvent]:
     """Run *source* and yield events put into the Runtime queue."""
     rt = Runtime()
 
-    async def _drain() -> None:
+    async def _drain() -> AsyncGenerator[events_.AgentEvent]:
         # We do all of the contextvar stuff in _drain so that we don't
         # yield while we have outstanding contextvar manipulations.
         token = _runtime.set(rt)
@@ -70,11 +63,9 @@ async def run(
         mcp_token = mcp_client._pool.set(mcp_pool)
 
         try:
-            # aclosing: if this task is cancelled while *source* sits
-            # suspended at a yield, close it here
             async with contextlib.aclosing(source) as events:
                 async for event in events:
-                    await rt.put_event(event)
+                    yield event
 
         finally:
             await mcp_client.close_connections()
@@ -82,8 +73,8 @@ async def run(
 
             _runtime.reset(token)
 
-    async with util.TaskGroup() as tg:
-        tg.create_task(_stop_when_done(rt, _drain()))
+            await rt.signal_done()
 
-        async for item in rt._event_queue:
-            yield item
+    # Merge while prioritizing the _event_queue, so that partial tool
+    # results will always precede the real tool result.
+    return util.merge(rt._event_queue, _drain(), restart=False, priority=True)

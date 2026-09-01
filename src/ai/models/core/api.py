@@ -20,7 +20,7 @@ import pydantic
 # Use the typing_extensions backport so this works on 3.12 too.
 from typing_extensions import TypeVar
 
-from ... import errors, types
+from ... import errors, types, util
 from ... import experimental_telemetry as telemetry
 
 if TYPE_CHECKING:
@@ -605,7 +605,9 @@ async def _stream(
             params=params,
         )
         s = Stream(
-            executor._do_stream(request),
+            # buffer the results so that consuming the network stream
+            # isn't held up by a consumer not reading.
+            util.decouple(executor._do_stream(request), buffer=None),
             output_type=cast("type[Any] | None", output_type),
         )
         replay = False

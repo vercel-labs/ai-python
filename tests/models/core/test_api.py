@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncGenerator, Sequence
 from typing import Any, Literal, cast
 
@@ -83,6 +84,39 @@ async def test_stream_aggregates_registered_adapter_events() -> None:
         assert mock.call_count == 1
         assert stream.text == "Hello world"
         assert "".join(deltas) == "Hello world"
+
+
+async def test_stream_drains_provider_eagerly() -> None:
+    """The adapter is read to completion even if the consumer stalls,
+    so a slow consumer can't backpressure the provider connection."""
+    emitted: list[str] = []
+
+    async def _eager_stream(
+        model: models.Model,
+        messages: list[messages_.Message],
+        **kwargs: Any,
+    ) -> AsyncGenerator[events_.Event]:
+        yield events_.StreamStart()
+        yield events_.TextStart()
+        for i in range(5):
+            emitted.append(str(i))
+            yield events_.TextDelta(chunk=str(i))
+        yield events_.TextEnd()
+        emitted.append("end")
+        yield events_.StreamEnd()
+
+    MOCK_PROVIDER._stream_impl = _eager_stream
+
+    async with models.stream(MOCK_MODEL, [ai.user_message("Hi")]) as stream:
+        await anext(aiter(stream))
+        # Stall the consumer; the wire should still be drained.
+        for _ in range(50):
+            await asyncio.sleep(0)
+        assert emitted == ["0", "1", "2", "3", "4", "end"]
+        assert stream.text == ""  # nothing consumed beyond StreamStart
+        async for _event in stream:
+            pass
+        assert stream.text == "01234"
 
 
 async def test_stream_tool_end_includes_aggregated_tool_call() -> None:

@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
+from collections.abc import AsyncGenerator
+
 import ai
-from ai.types import messages
+from ai.agents import runtime
+from ai.types import events, messages
 
 from ..conftest import (
     MOCK_MODEL,
@@ -26,6 +31,93 @@ async def double(x: int) -> int:
 async def concat(a: str, b: str) -> str:
     """Concatenate strings."""
     return a + b
+
+
+# -- runtime.run ------------------------------------------------------------
+
+
+async def test_run_source_lockstep() -> None:
+    """run() only advances its source when the consumer asks for an event."""
+    advanced: list[int] = []
+
+    async def src() -> AsyncGenerator[events.AgentEvent]:
+        for i in range(10):
+            advanced.append(i)
+            yield events.TextDelta(chunk=str(i))
+
+    it = runtime.run(src())
+    async with contextlib.aclosing(it):
+        for n in range(5):
+            ev = await anext(it)
+            assert isinstance(ev, events.TextDelta)
+            assert ev.chunk == str(n)
+            # Give the pipeline every opportunity to run ahead.
+            for _ in range(50):
+                await asyncio.sleep(0)
+            assert advanced == list(range(n + 1))
+
+
+async def test_run_delivers_put_events() -> None:
+    """Events put on the Runtime queue by the source are yielded too."""
+
+    async def src() -> AsyncGenerator[events.AgentEvent]:
+        await runtime.get_runtime().put_event(events.TextDelta(chunk="side"))
+        yield events.TextDelta(chunk="main")
+
+    chunks: set[str] = set()
+    async with contextlib.aclosing(runtime.run(src())) as it:
+        async for ev in it:
+            assert isinstance(ev, events.TextDelta)
+            chunks.add(ev.chunk)
+    assert chunks == {"side", "main"}
+
+
+# -- Agent.run buffer -------------------------------------------------------
+
+
+class _CountingAgent(ai.Agent):
+    """Loop that records how far it has advanced."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.advanced: list[int] = []
+
+    async def loop(
+        self, context: ai.Context
+    ) -> AsyncGenerator[events.AgentEvent]:
+        for i in range(10):
+            self.advanced.append(i)
+            yield events.TextDelta(chunk=str(i))
+
+
+async def test_agent_run_buffers_by_default() -> None:
+    """With the default buffer, the loop keeps going while the consumer
+    is between reads."""
+    agent = _CountingAgent()
+    async with agent.run(MOCK_MODEL, [ai.user_message("go")]) as stream:
+        await anext(aiter(stream))
+        for _ in range(50):
+            await asyncio.sleep(0)
+        assert agent.advanced == list(range(10))
+        assert [
+            e.chunk async for e in stream if isinstance(e, events.TextDelta)
+        ] == [str(i) for i in range(1, 10)]
+
+
+async def test_agent_run_buffer_zero_is_lockstep() -> None:
+    """With buffer=0 the loop is only advanced when the consumer asks."""
+    agent = _CountingAgent()
+    async with agent.run(
+        MOCK_MODEL, [ai.user_message("go")], buffer=0
+    ) as stream:
+        it = aiter(stream)
+        for n in range(5):
+            ev = await anext(it)
+            assert isinstance(ev, events.TextDelta)
+            assert ev.chunk == str(n)
+            for _ in range(50):
+                await asyncio.sleep(0)
+            assert agent.advanced == list(range(n + 1))
 
 
 # -- Agent default loop: single turn (no tools) ----------------------------

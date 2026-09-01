@@ -10,12 +10,15 @@ branching. While the SDK defines the loop as a Python async generator, it still
 uses a few framework components. Reuse those to retain framework-controlled
 behavior.
 
-Note that `loop` does not run in lock-step with the code that iterates the
-stream. The framework runs it as a separate asyncio task that puts events on a
-queue, and the `agent.run` stream reads from that queue. This means the loop
-can keep making progress (for example, launching tools) while the consumer is
-between reads, and events you `yield` may be consumed later than they are
-produced.
+Note that, by default, `loop` does not run in lock-step with the code
+that iterates the stream. The framework runs it as a separate asyncio
+task that puts events on a queue, and the `agent.run` stream reads
+from that queue. This means the loop can keep making progress (for
+example, launching tools) while the consumer is between reads, and
+events you `yield` may be consumed later than they are produced.
+This is controlled by the `buffer` parameter to `Agent.run`: with `None`,
+the default, an unbounded number of events will be buffer. With `0`,
+the `loop` will run in lockstep.
 
 ## Explore the standard loop shape
 
@@ -58,5 +61,5 @@ class CustomAgent(ai.Agent):
                 context.add(tool_runner.get_tool_message())
 ```
 
-You can modify most of the loop and extend `CustomAgent` to fit your application's needs, 
+You can modify most of the loop and extend `CustomAgent` to fit your application's needs,
 and the SDK will keep working as long as the loop is still an async generator of events.

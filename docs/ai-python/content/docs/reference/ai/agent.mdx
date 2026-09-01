@@ -23,6 +23,7 @@ async with agent.run(
     messages,
     output_type=None,
     params=None,
+    buffer=None,
 ) as stream:
     async for event in stream:
         ...
@@ -34,6 +35,9 @@ Arguments:
 - `messages`: initial list of `ai.messages.Message`.
 - `output_type`: optional Pydantic model for final JSON output.
 - `params`: optional `ai.InferenceRequestParams`.
+- `buffer`: how many events the loop may run ahead of the consumer. `None`
+  (the default) is unbounded, so the loop keeps going while the consumer is
+  between reads. `0` runs the loop in lockstep with the consumer.
 
 ## AgentStream
 
