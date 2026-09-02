@@ -195,26 +195,25 @@ async def maybe_aclosing(
 async def decouple[T](
     iter: AsyncIterable[T],
     *,
-    task_group: asyncio.TaskGroup | None,
-    buffer: int | None = 0,
+    task_group: asyncio.TaskGroup | None = None,
+    buffer: int | None,
 ) -> AsyncGenerator[T]:
     """Drive ``iter`` from a single worker task and yield its items.
 
-    Ensures every ``__anext__`` on ``iter`` runs in the same task context, so
-    contextvars set or relied on by the iterable behave consistently across
-    yields. Without this, callers that wrap each ``anext`` in a fresh task
-    (e.g. ``merge``) would run each step in a different copy of the context.
+    Ensures every ``__anext__`` on ``iter`` runs in the same task context,
+    which makes it safe to call ``anext`` on the result of ``decouple`` from
+    different tasks. (Async generators may depend on both context vars
+    and the current task identity, so in general should be run on one task.)
 
     ``buffer`` is how many elements the worker may run ahead of the
-    consumer. With 0, the default, the underlying iterable is run in
-    lockstep.
+    consumer. With buffer=0 the underlying iterable is run in
+    lockstep with the consumer.
 
     We try pretty hard to make sure that ``iter`` gets aclose()d in
     the same task that it was run it.
 
     On asyncio shutdown, tasks all get canceled before async
     generators are closed, so we should be OK.
-
     """
     queue: AsyncIterableQueue[T] = AsyncIterableQueue()
     sem = None if buffer is None else asyncio.Semaphore(buffer)
@@ -292,7 +291,9 @@ async def merge[T](
 
     async with TaskGroup() as tg:
         raw_aiters = [aiter(iter) for iter in aiterables]
-        aiters = [decouple(iter, task_group=tg) for iter in raw_aiters]
+        aiters = [
+            decouple(iter, task_group=tg, buffer=0) for iter in raw_aiters
+        ]
         # We consider anything that doesn't __aiter__ to itself to be
         # potentially restartable.
         restartable = [
@@ -350,6 +351,6 @@ async def merge[T](
                 ):
                     if ok and otask is None and idx not in fired:
                         niter = aiters[idx] = decouple(
-                            aiterables[idx], task_group=tg
+                            aiterables[idx], buffer=0, task_group=tg
                         )
                         tasks[idx] = tg.create_task(anext(niter, _EMPTY))
