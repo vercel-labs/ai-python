@@ -260,12 +260,19 @@ async def decouple[T](
 
 
 async def merge[T](
-    *aiterables: AsyncIterable[T], restart: bool = True
+    *aiterables: AsyncIterable[T],
+    restart: bool = True,
+    priority: bool = False,
 ) -> AsyncGenerator[T]:
     """Yield elements from async iterables as they arrive.
 
     The first anext() call on each iterable is done eagerly, but
     after that they run in lockstep with the consumer of merge.
+
+    If `priority` is True (default is False), then earlier async
+    iterables take priority over later ones. We will always yield
+    a value if available from an earlier one before yielding from
+    a later.
 
     Additionally, if `restart` is True (the default), attempt to *restart*
     finished iterables when other iterables produce elements.
@@ -277,11 +284,13 @@ async def merge[T](
     Restarts are only attempted for iterables that are not their own
     iterators (importantly, this means that async generators are not
     restarted).
+
+    Restart and priority are incompatible.
     """
-    async with (
-        TaskGroup() as tg,
-        MultiWaiter[T]() as mw,
-    ):
+    if priority and restart:
+        raise ValueError("cannot specify priority=True and restart=True")
+
+    async with TaskGroup() as tg:
         raw_aiters = [aiter(iter) for iter in aiterables]
         aiters = [decouple(iter, task_group=tg) for iter in raw_aiters]
         # We consider anything that doesn't __aiter__ to itself to be
@@ -295,40 +304,52 @@ async def merge[T](
         tasks: list[asyncio.Future[T] | None] = [
             tg.create_task(anext(iter, _EMPTY)) for iter in aiters
         ]
-        mw.add(*[t for t in tasks if t])
 
-        top_fired = False
-        while t := await mw:
-            idx = tasks.index(t)
-            val = t.result()
-            if val is _EMPTY:
-                tasks[idx] = None
-            else:
-                yield val
-                # Fire off a new task for the relevant iterator.
-                # Done after the yield to stay in lock-step with demand.
-                tasks[idx] = nt = tg.create_task(anext(aiters[idx], _EMPTY))
-                mw.add(nt)
-                top_fired = True
+        while any(tasks):
+            pending = [t for t in tasks if t]
+            done_set, _ = await asyncio.wait(
+                pending,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            # We might see an exception before the callback that
+            # cancels the main task makes it in, so check.
+            if any(t.exception() for t in done_set):
+                return
 
-            if restart and (
-                val is not _EMPTY or (not mw.tasks() and top_fired)
-            ):
-                if not mw.tasks():
-                    top_fired = False
+            done = sorted(done_set, key=pending.index)
+
+            fired = []
+            for t in done:
+                idx = tasks.index(t)
+                val = t.result()
+                if val is _EMPTY:
+                    tasks[idx] = None
+                else:
+                    yield val
+                    # Fire off a new task for the relevant iterator
+                    fired.append(idx)
+                    iter = aiters[idx]
+                    tasks[idx] = tg.create_task(anext(iter, _EMPTY))
+                    # sleep(0) to approximate 3.14's eager_start. Make
+                    # sure that a trivially read task (like a get() on
+                    # a queue with elements) can run to completion.
+                    await asyncio.sleep(0)
+
+                if priority:
+                    break
+
+            if restart and fired:
                 # Also, we try *restarting* other stopped streams
                 # that may have more to do now.
-                #
                 # N.B: We do this *after* the values are yielded, so
-                # they've had a chance to trigger things, and we also
-                # do it if we would otherwise terminate and we have
-                # seen any elements since the start or the last time
-                # we may have been exhausted.
+                # they've had a chance to trigger things, and we do it
+                # after *all* tasks have been handled, so that if a
+                # task *just* finished, we still restart it.
                 for idx, (ok, otask) in enumerate(
                     zip(restartable, tasks, strict=True)
                 ):
-                    if ok and otask is None:
-                        niter = decouple(aiterables[idx], task_group=tg)
-                        aiters[idx] = niter
-                        tasks[idx] = nt = tg.create_task(anext(niter, _EMPTY))
-                        mw.add(nt)
+                    if ok and otask is None and idx not in fired:
+                        niter = aiters[idx] = decouple(
+                            aiterables[idx], task_group=tg
+                        )
+                        tasks[idx] = tg.create_task(anext(niter, _EMPTY))

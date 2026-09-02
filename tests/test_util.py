@@ -471,6 +471,89 @@ async def test_merge_lockstep() -> None:
             assert advanced == list(range(n + 1))
 
 
+# -- merge: priority=True ---------------------------------------------------
+
+
+async def test_merge_priority_rejects_restart() -> None:
+    """priority=True with restart=True (the default) is an error."""
+    with pytest.raises(ValueError, match="priority"):
+        await _collect(util.merge(_from_list([1]), priority=True))
+
+
+async def test_merge_priority_buffered_elements_first() -> None:
+    """Elements queued on the high-priority iterable before a
+    low-priority element was produced always come out first, even
+    with a prompt consumer -- no stalls anywhere."""
+    for n_queued in (1, 2, 3, 5, 8):
+        queue: util.AsyncIterableQueue[str] = util.AsyncIterableQueue()
+
+        async def src(
+            n: int = n_queued,
+            q: util.AsyncIterableQueue[str] = queue,
+        ) -> AsyncIterator[str]:
+            for i in range(n):
+                await q.put(f"q{i}")
+            yield "src"
+            await q.astop()
+
+        got = await _collect(
+            util.merge(queue, src(), restart=False, priority=True)
+        )
+        assert got == [f"q{i}" for i in range(n_queued)] + ["src"], n_queued
+
+
+async def test_merge_priority_interleaved_puts() -> None:
+    """Puts interleaved with source yields precede the *next* source
+    element, round after round."""
+    queue: util.AsyncIterableQueue[str] = util.AsyncIterableQueue()
+
+    async def src() -> AsyncIterator[str]:
+        for i in range(20):
+            await queue.put(f"q{i}a")
+            await queue.put(f"q{i}b")
+            yield f"s{i}"
+        await queue.astop()
+
+    got = await _collect(util.merge(queue, src(), restart=False, priority=True))
+    for i in range(20):
+        a, b, s = got.index(f"q{i}a"), got.index(f"q{i}b"), got.index(f"s{i}")
+        assert a < b < s, (i, got)
+
+
+async def test_merge_priority_position_breaks_ties() -> None:
+    """When several iterables have elements ready, the earliest one
+    wins, repeatedly, until it runs dry."""
+    q1: util.AsyncIterableQueue[str] = util.AsyncIterableQueue()
+    q2: util.AsyncIterableQueue[str] = util.AsyncIterableQueue()
+    for q, tag in ((q1, "a"), (q2, "b")):
+        q.put_nowait(f"{tag}1")
+        q.put_nowait(f"{tag}2")
+        await q.astop()
+
+    got = await _collect(util.merge(q1, q2, restart=False, priority=True))
+    assert got == ["a1", "a2", "b1", "b2"]
+
+
+async def test_merge_priority_source_lockstep() -> None:
+    """A low-priority source still follows the demand contract while a
+    high-priority iterable sits idle."""
+    advanced: list[int] = []
+    queue: util.AsyncIterableQueue[int] = util.AsyncIterableQueue()
+
+    async def src() -> AsyncIterator[int]:
+        for i in range(10):
+            advanced.append(i)
+            yield i
+
+    it = util.merge(queue, src(), restart=False, priority=True)
+    async with util.maybe_aclosing(it):
+        for n in range(5):
+            assert await anext(it) == n
+            for _ in range(50):
+                await asyncio.sleep(0)
+            assert advanced == list(range(n + 1))
+
+
 async def test_decouple_contextvar_stable_across_yields() -> None:
     """ContextVars set in the source persist across decouple yields."""
     var: contextvars.ContextVar[str] = contextvars.ContextVar("test")
@@ -612,7 +695,7 @@ async def test_merge_restarts_restartable_iterable() -> None:
     result = await _collect(util.merge(driver(), src))
     assert sorted(result) == ["d1", "d2", "d3", "r1", "r2", "r3", "r4"]
     # __aiter__ called once initially, and once more at the end.
-    assert src.iter_count == 5
+    assert src.iter_count == 4
 
 
 async def test_merge_does_not_restart_async_generator() -> None:
@@ -667,7 +750,7 @@ async def test_merge_restart_with_no_new_items_terminates() -> None:
     result = await _collect(util.merge(driver(), src))
     assert sorted(result) == ["d1", "d2", "only"]
     # Still re-iterated once per driver yield, and once more at the end.
-    assert src.iter_count == 4
+    assert src.iter_count == 3
 
 
 async def test_merge_restart_with_multiple_restartables() -> None:
@@ -685,8 +768,8 @@ async def test_merge_restart_with_multiple_restartables() -> None:
 
     result = await _collect(util.merge(driver(), a, b))
     assert sorted(result) == ["a1", "a2", "b1", "b2", "d1"]
-    assert a.iter_count == 3
-    assert b.iter_count == 3
+    assert a.iter_count == 2
+    assert b.iter_count == 2
 
 
 async def test_merge_restart_only_after_other_iterable_yields() -> None:
@@ -698,7 +781,7 @@ async def test_merge_restart_only_after_other_iterable_yields() -> None:
     # __aiter__ being called again, and once more at the end.
     result = await _collect(util.merge(src))
     assert result == ["r1"]
-    assert src.iter_count == 2
+    assert src.iter_count == 1
 
 
 async def test_merge_restart_when_yield_and_stop_collide() -> None:
