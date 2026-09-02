@@ -365,7 +365,7 @@ async def test_maybe_aclosing_runs_aclose_on_exception() -> None:
 async def test_decouple_yields_all_items() -> None:
     """Basic: every item from the source is yielded in order."""
     result = await _collect(
-        util.decouple(_from_list([1, 2, 3]), task_group=None)
+        util.decouple(_from_list([1, 2, 3]), task_group=None, buffer=0)
     )
     assert result == [1, 2, 3]
 
@@ -376,7 +376,7 @@ async def test_decouple_with_task_group() -> None:
     async def consume() -> list[int]:
         async with asyncio.TaskGroup() as tg:
             return await _collect(
-                util.decouple(_from_list([1, 2, 3]), task_group=tg)
+                util.decouple(_from_list([1, 2, 3]), task_group=tg, buffer=0)
             )
 
     assert await consume() == [1, 2, 3]
@@ -391,7 +391,7 @@ async def test_decouple_forwards_exception_to_consumer() -> None:
 
     items: list[int] = []
     with pytest.raises(ValueError, match="boom"):
-        async for x in util.decouple(failing(), task_group=None):
+        async for x in util.decouple(failing(), task_group=None, buffer=0):
             items.append(x)
     assert items == [1]
 
@@ -406,7 +406,7 @@ async def test_decouple_lockstep() -> None:
             advanced.append(i)
             yield i
 
-    it = util.decouple(src(), task_group=None)
+    it = util.decouple(src(), task_group=None, buffer=0)
     async with util.maybe_aclosing(it):
         for n in range(5):
             assert await anext(it) == n
@@ -566,7 +566,10 @@ async def test_decouple_contextvar_stable_across_yields() -> None:
         assert var.get() == "hello"
         yield "b"
 
-    assert await _collect(util.decouple(src(), task_group=None)) == ["a", "b"]
+    assert await _collect(util.decouple(src(), task_group=None, buffer=0)) == [
+        "a",
+        "b",
+    ]
 
 
 async def test_decouple_aclose_runs_iter_cleanup_in_worker_context() -> None:
@@ -591,7 +594,9 @@ async def test_decouple_aclose_runs_iter_cleanup_in_worker_context() -> None:
             var.reset(token)  # would raise on context mismatch
 
     n = 0
-    async with util.maybe_aclosing(util.decouple(src(), task_group=None)) as it:
+    async with util.maybe_aclosing(
+        util.decouple(src(), task_group=None, buffer=0)
+    ) as it:
         async for _ in it:
             n += 1
             if n == 3:

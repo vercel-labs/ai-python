@@ -19,10 +19,29 @@ async for event in ai.util.merge(stream, tool_runner.events()):
 
 ## decouple
 
-`decouple` separates producer and consumer timing for an async iterable.
+`decouple` runs an async iterable in its own task and hands its items to the
+consumer through a buffer. Use it to let a producer keep going while the
+consumer is slow. (`Agent.run` exposes this directly through its `buffer`
+argument.)
 
-Use it when a producer should continue running while another task consumes
-items at a different pace.
+```python
+async for item in ai.util.decouple(source, buffer=None):
+    ...
+```
+
+`buffer` is required and sets how many items the producer may run ahead of
+the consumer:
+
+- `None`: unbounded. The producer is never held back by the consumer.
+- `n`: the producer may run up to `n` items ahead.
+- `0`: lockstep. The iterable is only advanced when the consumer asks for an
+  item. This is how `merge` drives its sources.
+
+Every step of the iterable runs in the same worker task. Pass
+`task_group` to run the worker in an existing `asyncio.TaskGroup`.
+
+This makes the lockstep variant useful for when an async generator needs to
+be driven from multiple different tasks.
 
 ## Queues
 
