@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncGenerator, AsyncIterator, Sequence
 from typing import Any
 
@@ -76,6 +77,37 @@ async def test_generator_tool_streams_and_returns_result() -> None:
     assert part.result == "Answer for test"
     assert part.has_model_input
     assert part.get_model_input() == "Answer for test"
+
+
+@ai.tool(aggregator=ai.agents.LastAggregator)
+async def chatty_tool(query: str) -> AsyncGenerator[str]:
+    """Tool that streams several values back to back."""
+    for i in range(5):
+        yield f"progress-{i}"
+
+
+async def test_partials_precede_tool_result_with_slow_consumer() -> None:
+    """PartialToolCallResults are never overtaken by the tool's final
+    ToolCallResult, even when the consumer stalls between events and
+    the partials back up on the runtime queue."""
+    my_agent = ai.Agent(tools=[chatty_tool])
+    call = [
+        tool_call_msg(tc_id="tc-1", name="chatty_tool", args='{"query": "x"}')
+    ]
+    reply = [text_msg("Done!", id="msg-2")]
+    mock_llm([call, reply])
+
+    order: list[str] = []
+    async with my_agent.run(MOCK_MODEL, [ai.user_message("Go")]) as stream:
+        async for event in stream:
+            if isinstance(event, agent_events_.PartialToolCallResult):
+                order.append(f"partial:{event.value}")
+            elif isinstance(event, agent_events_.ToolCallResult):
+                order.append("result")
+            for _ in range(10):
+                await asyncio.sleep(0)
+
+    assert order == [f"partial:progress-{i}" for i in range(5)] + ["result"]
 
 
 # ---------------------------------------------------------------------------
