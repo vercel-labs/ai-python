@@ -1,4 +1,5 @@
 import abc
+import contextvars
 from collections.abc import AsyncGenerator, Callable, Sequence
 from typing import Annotated, Any, Literal
 
@@ -17,6 +18,13 @@ from . import usage as usage_
 _DUMMY_MESSAGE = messages.Message(id="<unset>", role="assistant", parts=[])
 
 
+# Pydantic doesn't let an Annotated serializer add to the serialization
+# context, so OmitEventMessages uses a ContextVar instead.
+_omit_event_messages: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "ai_omit_event_messages", default=False
+)
+
+
 class BaseEvent(pydantic.BaseModel):
     """Anything ``ai.stream`` or ``Agent.run`` yields.
 
@@ -32,6 +40,44 @@ class BaseEvent(pydantic.BaseModel):
     model_config = pydantic.ConfigDict(frozen=True)
 
 
+def _serialize_omitting_event_messages(
+    value: Any,
+    handler: pydantic.SerializerFunctionWrapHandler,
+) -> Any:
+    token = _omit_event_messages.set(True)
+    try:
+        return handler(value)
+    finally:
+        _omit_event_messages.reset(token)
+
+
+type OmitEventMessages[T] = Annotated[
+    T, pydantic.WrapSerializer(_serialize_omitting_event_messages)
+]
+
+
+def _validate_event_message(value: Any) -> Any:
+    if isinstance(value, dict) and set(value) == {"id"}:
+        return {**value, "role": "assistant", "parts": []}
+    return value
+
+
+def _serialize_event_message(
+    value: messages.Message,
+    handler: pydantic.SerializerFunctionWrapHandler,
+) -> Any:
+    if _omit_event_messages.get():
+        return {"id": value.id}
+    return handler(value)
+
+
+type _EventMessage = Annotated[
+    messages.Message,
+    pydantic.BeforeValidator(_validate_event_message),
+    pydantic.WrapSerializer(_serialize_event_message),
+]
+
+
 class ModelEvent(BaseEvent):
     """Streamed out of a model request (``ai.stream``).
 
@@ -42,7 +88,7 @@ class ModelEvent(BaseEvent):
     across the stream).
     """
 
-    message: messages.Message = _DUMMY_MESSAGE
+    message: _EventMessage = _DUMMY_MESSAGE
     usage: usage_.Usage | None = None
     provider_metadata: dict[str, Any] | None = None
 
