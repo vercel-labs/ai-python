@@ -193,6 +193,161 @@ Event = (
 )
 
 
+class _MessageHydrator:
+    def __init__(self, seed_message: messages.Message | None = None) -> None:
+        self.message = seed_message or messages.Message(
+            role="assistant", parts=[]
+        )
+        self._parts: dict[str, messages.Part] = {}
+        # A stream that exhausts without StreamEnd died mid-response.
+        self.ended = False
+        self.finish_reason: str | None = None
+        self.response_id: str | None = None
+        self.response_model: str | None = None
+
+    def feed(self, event: Event) -> Event:
+        updates: dict[str, Any] = {}
+
+        # Replay events carry no new state — the seeded message already
+        # has everything they would have produced.  A replayed turn is
+        # complete by construction, so it also counts as ended.
+        if event.replay:
+            self.ended = True
+            return event.model_copy(update={"message": self.message})
+
+        # grab usage from any event that carries one
+        if event.usage is not None:
+            self.message.usage = event.usage
+
+        match event:
+            case TextStart(block_id=bid, provider_metadata=pm):
+                tp = messages.TextPart(id=bid, text="", provider_metadata=pm)
+                self.message.parts.append(tp)
+                self._parts[bid] = tp
+            case TextDelta(block_id=bid, chunk=c, provider_metadata=pm):
+                existing_text = self._parts.get(bid)
+                if isinstance(existing_text, messages.TextPart):
+                    existing_text.text += c
+                    if pm is not None:
+                        existing_text.provider_metadata = pm
+            case TextEnd(block_id=bid, provider_metadata=pm):
+                existing_text = self._parts.get(bid)
+                if (
+                    isinstance(existing_text, messages.TextPart)
+                    and pm is not None
+                ):
+                    existing_text.provider_metadata = pm
+            case ReasoningStart(block_id=bid, provider_metadata=pm):
+                rp = messages.ReasoningPart(
+                    id=bid, text="", provider_metadata=pm
+                )
+                self.message.parts.append(rp)
+                self._parts[bid] = rp
+            case ReasoningDelta(block_id=bid, chunk=c, provider_metadata=pm):
+                existing_reasoning = self._parts.get(bid)
+                if isinstance(existing_reasoning, messages.ReasoningPart):
+                    existing_reasoning.text += c
+                    if pm is not None:
+                        existing_reasoning.provider_metadata = pm
+            case ReasoningEnd(block_id=bid, provider_metadata=pm):
+                existing_reasoning = self._parts.get(bid)
+                if (
+                    isinstance(existing_reasoning, messages.ReasoningPart)
+                    and pm is not None
+                ):
+                    existing_reasoning.provider_metadata = pm
+            case ToolStart(
+                tool_call_id=tcid, tool_name=name, provider_metadata=pm
+            ):
+                tcp = messages.ToolCallPart(
+                    id=tcid,
+                    tool_call_id=tcid,
+                    tool_name=name,
+                    tool_args="",
+                    provider_metadata=pm,
+                )
+                self.message.parts.append(tcp)
+                self._parts[tcid] = tcp
+            case ToolDelta(tool_call_id=tcid, chunk=c, provider_metadata=pm):
+                existing_tool = self._parts.get(tcid)
+                if isinstance(existing_tool, messages.ToolCallPart):
+                    existing_tool.tool_args += c
+                    if pm is not None:
+                        existing_tool.provider_metadata = pm
+
+            case ToolEnd(tool_call_id=tcid, provider_metadata=pm):
+                existing_tool = self._parts.get(tcid)
+                if isinstance(existing_tool, messages.ToolCallPart):
+                    updates["tool_call"] = existing_tool
+                    if pm is not None:
+                        existing_tool.provider_metadata = pm
+            case BuiltinToolStart(
+                tool_call_id=tcid,
+                tool_name=name,
+                provider_metadata=pm,
+            ):
+                btcp = messages.BuiltinToolCallPart(
+                    id=tcid,
+                    tool_call_id=tcid,
+                    tool_name=name,
+                    tool_args="",
+                    provider_metadata=pm,
+                )
+                self.message.parts.append(btcp)
+                self._parts[tcid] = btcp
+            case BuiltinToolDelta(
+                tool_call_id=tcid, chunk=c, provider_metadata=pm
+            ):
+                existing_btc = self._parts.get(tcid)
+                if isinstance(existing_btc, messages.BuiltinToolCallPart):
+                    existing_btc.tool_args += c
+                    if pm is not None:
+                        existing_btc.provider_metadata = pm
+            case BuiltinToolEnd(tool_call_id=tcid, provider_metadata=pm):
+                existing_btc = self._parts.get(tcid)
+                if isinstance(existing_btc, messages.BuiltinToolCallPart):
+                    updates["tool_call"] = existing_btc
+                    if pm is not None:
+                        existing_btc.provider_metadata = pm
+            case BuiltinToolResult(result=res, provider_metadata=pm):
+                if pm is not None:
+                    res = res.model_copy(update={"provider_metadata": pm})
+                self.message.parts.append(res)
+            case FileEvent(
+                block_id=bid,
+                media_type=mt,
+                data=d,
+                filename=fname,
+                provider_metadata=pm,
+            ):
+                fp = messages.FilePart(
+                    id=bid or messages.generate_id(),
+                    data=d,
+                    media_type=mt,
+                    filename=fname,
+                    provider_metadata=pm,
+                )
+                self.message.parts.append(fp)
+                self._parts[fp.id] = fp
+
+            case StreamEnd(
+                provider_metadata=pm,
+                finish_reason=finish,
+                response_id=rid,
+                response_model=rmodel,
+            ):
+                self.ended = True
+                self.finish_reason = finish
+                self.response_id = rid
+                self.response_model = rmodel
+                if pm is not None:
+                    self.message.provider_metadata = pm
+            case _:
+                pass
+
+        return event.model_copy(update={"message": self.message, **updates})
+
+
 async def _replay_message_events(
     msg: messages.Message,
 ) -> AsyncGenerator[Event]:
