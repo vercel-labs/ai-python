@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, cast
 
-import httpx
-
 from ... import errors as ai_errors
 from . import _sdk
 
@@ -131,8 +129,8 @@ def _http_context(
     response = getattr(exc, "response", None)
     return ai_errors.HTTPErrorContext(
         status_code=status_code,
-        request=request if isinstance(request, httpx.Request) else None,
-        response=response if isinstance(response, httpx.Response) else None,
+        request=request,
+        response=response,
     )
 
 

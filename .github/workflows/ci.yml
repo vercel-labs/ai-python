@@ -34,3 +34,40 @@ jobs:
       - run: uv run pytest
 
       - run: uv run examples/.test_scripts/check-examples.py
+
+  provider-sdk-compatibility:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - sdk-versions: minimum
+            openai: openai==2.34.0
+            anthropic: anthropic==0.83.0
+          - sdk-versions: latest
+            openai: openai>=2.34.0,<4.0.0
+            anthropic: anthropic>=0.83.0,<2.0.0
+    name: Provider SDKs (${{ matrix.sdk-versions }})
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: astral-sh/setup-uv@v5
+
+      - run: uv sync
+
+      - name: Install ${{ matrix.sdk-versions }} provider SDKs
+        run: >-
+          uv pip install --upgrade
+          '${{ matrix.openai }}'
+          '${{ matrix.anthropic }}'
+
+      - run: uv run --no-sync mypy src tests
+      - run: uv run --no-sync ty check
+      - run: >-
+          uv run --no-sync pytest
+          tests/providers/openai
+          tests/providers/anthropic

@@ -6,10 +6,10 @@ of provider-executed tool parts.
 
 from __future__ import annotations
 
+import importlib
 from typing import Any, cast
 
 import anthropic
-import httpx
 import pytest
 
 import ai
@@ -17,6 +17,10 @@ from ai.providers.anthropic import protocol
 from ai.types import messages
 
 from .conftest import FakeAnthropicClient
+
+httpx = importlib.import_module(
+    "httpx2" if int(anthropic.__version__.partition(".")[0]) >= 1 else "httpx"
+)
 
 
 class _RaisingMessages:

@@ -7,14 +7,19 @@ provider-specific 200 path so we know URL routing is wired up.
 
 from __future__ import annotations
 
+import importlib
 import json
 from typing import Any
 
-import httpx
+import anthropic
 import pytest
 
 import ai
 from ai.providers.anthropic import AnthropicCompatibleProvider
+
+httpx = importlib.import_module(
+    "httpx2" if int(anthropic.__version__.partition(".")[0]) >= 1 else "httpx"
+)
 
 
 def _client_with_mock(
@@ -22,7 +27,7 @@ def _client_with_mock(
     json_body: Any = None,
     base_url: str = "https://anthropic.test",
 ) -> ai.Model:
-    def _handler(request: httpx.Request) -> httpx.Response:
+    def _handler(request: Any) -> Any:
         body = json.dumps(json_body or {}).encode()
         return httpx.Response(status_code, content=body)
 
@@ -54,7 +59,7 @@ async def test_model_not_found_raises_model_not_found() -> None:
 async def test_custom_anthropic_version_header() -> None:
     captured_headers: dict[str, str] = {}
 
-    def _handler(request: httpx.Request) -> httpx.Response:
+    def _handler(request: Any) -> Any:
         captured_headers.update(dict(request.headers))
         body = json.dumps({"id": "custom-model", "type": "model"}).encode()
         return httpx.Response(200, content=body)

@@ -6,10 +6,10 @@ formatting, and explicit guards against unsupported built-in tool surfaces.
 
 from __future__ import annotations
 
+import importlib
 from types import SimpleNamespace
 from typing import Any, cast
 
-import httpx
 import openai
 import pydantic
 import pytest
@@ -19,6 +19,10 @@ from ai.providers.openai import params as openai_params
 from ai.providers.openai import protocol
 from ai.providers.openai import tools as openai_tools
 from ai.types import events, messages, tools
+
+httpx = importlib.import_module(
+    "httpx2" if int(openai.__version__.partition(".")[0]) >= 3 else "httpx"
+)
 
 
 class _Answer(pydantic.BaseModel):

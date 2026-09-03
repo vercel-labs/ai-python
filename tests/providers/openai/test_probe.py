@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+import importlib
 import json
 from typing import Any
 
-import httpx
+import openai
 import pytest
 
 import ai
+
+httpx = importlib.import_module(
+    "httpx2" if int(openai.__version__.partition(".")[0]) >= 3 else "httpx"
+)
 
 
 def _client_with_mock(
@@ -14,7 +19,7 @@ def _client_with_mock(
     json_body: Any = None,
     base_url: str = "https://openai.test/v1",
 ) -> ai.Model:
-    def _handler(request: httpx.Request) -> httpx.Response:
+    def _handler(request: Any) -> Any:
         body = json.dumps(json_body or {}).encode()
         return httpx.Response(status_code, content=body)
 

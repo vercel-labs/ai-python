@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import importlib
+from typing import Any
 
 import anthropic
-import httpx
 import pytest
 
 import ai
@@ -12,12 +12,16 @@ from ai.providers.anthropic import (
     AnthropicMessagesProtocol,
 )
 
+httpx = importlib.import_module(
+    "httpx2" if int(anthropic.__version__.partition(".")[0]) >= 1 else "httpx"
+)
+
 
 async def test_list_models_gets_provider_headers_and_sorts_ids() -> None:
     captured_urls: list[str] = []
     captured_headers: dict[str, str] = {}
 
-    def _handler(request: httpx.Request) -> httpx.Response:
+    def _handler(request: Any) -> Any:
         captured_urls.append(str(request.url))
         captured_headers.update(dict(request.headers))
         return httpx.Response(
@@ -51,7 +55,7 @@ async def test_list_models_gets_provider_headers_and_sorts_ids() -> None:
 
 
 async def test_list_models_maps_sdk_errors_to_provider_hierarchy() -> None:
-    def _handler(request: httpx.Request) -> httpx.Response:
+    def _handler(request: Any) -> Any:
         return httpx.Response(
             529,
             json={
@@ -86,7 +90,7 @@ async def test_list_models_maps_sdk_errors_to_provider_hierarchy() -> None:
 
 
 async def test_list_models_404_stays_generic_not_found() -> None:
-    def _handler(request: httpx.Request) -> httpx.Response:
+    def _handler(request: Any) -> Any:
         return httpx.Response(404, json={"error": {"message": "missing"}})
 
     provider = ai.get_provider(
