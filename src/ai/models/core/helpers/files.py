@@ -6,7 +6,7 @@ Pure media utilities (detection, encoding, inference) live in
 
 from urllib.parse import urlparse
 
-import httpx
+import httpx2 as httpx
 
 DEFAULT_MAX_BYTES = 100 * 1024 * 1024  # 100 MiB (matches TS SDK)
 _ALLOWED_SCHEMES = frozenset({"http", "https"})
