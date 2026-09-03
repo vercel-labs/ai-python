@@ -115,29 +115,16 @@ class Stream(Generic[StreamOutputT]):
         the concatenated text content unchanged.
         """
         self._gen = gen
-        self._message: types.messages.Message = (
-            seed_message or types.messages.Message(role="assistant", parts=[])
-        )
-        self._parts: dict[str, types.messages.Part] = {}
+        self._hydrator = types.events._MessageHydrator(seed_message)
         # ``output_type`` is typed against the public ``StreamOutputT`` type
         # param for ergonomics; internally we know it's a Pydantic model
         # subclass (or None for the text-default case).
         self._output_type = cast("type[pydantic.BaseModel] | None", output_type)
-        # Whether the provider signalled completion (``StreamEnd``).  A
-        # stream that exhausts without it died mid-response (transport
-        # drop): the message is partial — possibly reasoning-only or a
-        # tool call with truncated args — so exhaustion must raise
-        # rather than look like a normal end of turn.
-        self._ended = False
         # The telemetry span bracketing this stream, attached by
         # ``stream()``.  None for directly constructed streams
         # (``Stream(gen)``, ``Stream.replay_message``).
         self._span: telemetry.Span[telemetry.AiStreamSpanData] | None = None
         self._first_output_seen = False
-        # Response identity off the provider's StreamEnd, for telemetry.
-        self._finish_reason: str | None = None
-        self._response_id: str | None = None
-        self._response_model: str | None = None
 
     @classmethod
     def replay_message(
@@ -208,7 +195,7 @@ class Stream(Generic[StreamOutputT]):
         try:
             event = await self._gen.__anext__()
         except StopAsyncIteration:
-            if not self._ended:
+            if not self._hydrator.ended:
                 raise errors.ProviderIncompleteResponseError(
                     "provider stream ended without a finish event; "
                     "the response is incomplete",
@@ -217,7 +204,7 @@ class Stream(Generic[StreamOutputT]):
                     is_retryable=True,
                 ) from None
             raise
-        updates = self._aggregate_event(event)
+        event = self._hydrator.feed(event)
         # Milestones on the live span: replayed work gets no synthetic
         # timings (span.replay covers the replay branch of ``stream()``,
         # event.replay covers individual synthetic events).
@@ -242,7 +229,7 @@ class Stream(Generic[StreamOutputT]):
                     telemetry.FIRST_TOKEN, event_type=type(event).__name__
                 )
                 await self._span.push()
-        return event.model_copy(update={"message": self._message, **updates})
+        return event
 
     @property
     def experimental_span(
@@ -262,19 +249,19 @@ class Stream(Generic[StreamOutputT]):
 
     @property
     def message(self) -> types.messages.Message:
-        return self._message
+        return self._hydrator.message
 
     @property
     def usage(self) -> types.usage.Usage | None:
-        return self._message.usage
+        return self.message.usage
 
     @property
     def text(self) -> str:
-        return self._message.text
+        return self.message.text
 
     @property
     def tool_calls(self) -> list[types.messages.ToolCallPart]:
-        return self._message.tool_calls
+        return self.message.tool_calls
 
     @property
     def output(self) -> StreamOutputT:
@@ -284,165 +271,7 @@ class Stream(Generic[StreamOutputT]):
         model subclass was passed, validates the streamed JSON against
         it and returns the parsed instance.
         """
-        return cast(
-            "StreamOutputT", self._message.get_output(self._output_type)
-        )
-
-    def _aggregate_event(self, event: types.events.Event) -> dict[str, Any]:
-        updates: dict[str, Any] = {}
-
-        # Replay events carry no new state — the seeded message already
-        # has everything they would have produced.  A replayed turn is
-        # complete by construction, so it also counts as ended.
-        if event.replay:
-            self._ended = True
-            return updates
-
-        # grab usage from any event that carries one
-        if event.usage is not None:
-            self._message.usage = event.usage
-
-        match event:
-            case types.events.TextStart(block_id=bid, provider_metadata=pm):
-                tp = types.messages.TextPart(
-                    id=bid, text="", provider_metadata=pm
-                )
-                self._message.parts.append(tp)
-                self._parts[bid] = tp
-            case types.events.TextDelta(
-                block_id=bid, chunk=c, provider_metadata=pm
-            ):
-                existing_text = self._parts.get(bid)
-                if isinstance(existing_text, types.messages.TextPart):
-                    existing_text.text += c
-                    if pm is not None:
-                        existing_text.provider_metadata = pm
-            case types.events.TextEnd(block_id=bid, provider_metadata=pm):
-                existing_text = self._parts.get(bid)
-                if (
-                    isinstance(existing_text, types.messages.TextPart)
-                    and pm is not None
-                ):
-                    existing_text.provider_metadata = pm
-            case types.events.ReasoningStart(
-                block_id=bid, provider_metadata=pm
-            ):
-                rp = types.messages.ReasoningPart(
-                    id=bid, text="", provider_metadata=pm
-                )
-                self._message.parts.append(rp)
-                self._parts[bid] = rp
-            case types.events.ReasoningDelta(
-                block_id=bid, chunk=c, provider_metadata=pm
-            ):
-                existing_reasoning = self._parts.get(bid)
-                if isinstance(existing_reasoning, types.messages.ReasoningPart):
-                    existing_reasoning.text += c
-                    if pm is not None:
-                        existing_reasoning.provider_metadata = pm
-            case types.events.ReasoningEnd(block_id=bid, provider_metadata=pm):
-                existing_reasoning = self._parts.get(bid)
-                if (
-                    isinstance(existing_reasoning, types.messages.ReasoningPart)
-                    and pm is not None
-                ):
-                    existing_reasoning.provider_metadata = pm
-            case types.events.ToolStart(
-                tool_call_id=tcid, tool_name=name, provider_metadata=pm
-            ):
-                tcp = types.messages.ToolCallPart(
-                    id=tcid,
-                    tool_call_id=tcid,
-                    tool_name=name,
-                    tool_args="",
-                    provider_metadata=pm,
-                )
-                self._message.parts.append(tcp)
-                self._parts[tcid] = tcp
-            case types.events.ToolDelta(
-                tool_call_id=tcid, chunk=c, provider_metadata=pm
-            ):
-                existing_tool = self._parts.get(tcid)
-                if isinstance(existing_tool, types.messages.ToolCallPart):
-                    existing_tool.tool_args += c
-                    if pm is not None:
-                        existing_tool.provider_metadata = pm
-
-            case types.events.ToolEnd(tool_call_id=tcid, provider_metadata=pm):
-                existing_tool = self._parts.get(tcid)
-                if isinstance(existing_tool, types.messages.ToolCallPart):
-                    updates["tool_call"] = existing_tool
-                    if pm is not None:
-                        existing_tool.provider_metadata = pm
-            case types.events.BuiltinToolStart(
-                tool_call_id=tcid,
-                tool_name=name,
-                provider_metadata=pm,
-            ):
-                btcp = types.messages.BuiltinToolCallPart(
-                    id=tcid,
-                    tool_call_id=tcid,
-                    tool_name=name,
-                    tool_args="",
-                    provider_metadata=pm,
-                )
-                self._message.parts.append(btcp)
-                self._parts[tcid] = btcp
-            case types.events.BuiltinToolDelta(
-                tool_call_id=tcid, chunk=c, provider_metadata=pm
-            ):
-                existing_btc = self._parts.get(tcid)
-                if isinstance(existing_btc, types.messages.BuiltinToolCallPart):
-                    existing_btc.tool_args += c
-                    if pm is not None:
-                        existing_btc.provider_metadata = pm
-            case types.events.BuiltinToolEnd(
-                tool_call_id=tcid, provider_metadata=pm
-            ):
-                existing_btc = self._parts.get(tcid)
-                if isinstance(existing_btc, types.messages.BuiltinToolCallPart):
-                    updates["tool_call"] = existing_btc
-                    if pm is not None:
-                        existing_btc.provider_metadata = pm
-            case types.events.BuiltinToolResult(
-                result=res, provider_metadata=pm
-            ):
-                if pm is not None:
-                    res = res.model_copy(update={"provider_metadata": pm})
-                self._message.parts.append(res)
-            case types.events.FileEvent(
-                block_id=bid,
-                media_type=mt,
-                data=d,
-                filename=fname,
-                provider_metadata=pm,
-            ):
-                fp = types.messages.FilePart(
-                    id=bid or types.messages.generate_id(),
-                    data=d,
-                    media_type=mt,
-                    filename=fname,
-                    provider_metadata=pm,
-                )
-                self._message.parts.append(fp)
-                self._parts[fp.id] = fp
-
-            case types.events.StreamEnd(
-                provider_metadata=pm,
-                finish_reason=finish,
-                response_id=rid,
-                response_model=rmodel,
-            ):
-                self._ended = True
-                self._finish_reason = finish
-                self._response_id = rid
-                self._response_model = rmodel
-                if pm is not None:
-                    self._message.provider_metadata = pm
-            case _:
-                pass
-
-        return updates
+        return cast("StreamOutputT", self.message.get_output(self._output_type))
 
 
 async def _replay_tool_calls(
@@ -594,7 +423,7 @@ async def _stream(
         # The replayed turn is a complete persisted message; don't
         # demand a finish event from the synthetic replay generator
         # (it yields nothing when the turn has no tool calls).
-        s._ended = True
+        s._hydrator.ended = True
         replay = True
     else:
         request = _StreamRequest(
@@ -620,9 +449,9 @@ async def _stream(
             # Record whatever got built, even a partial message.
             sp.data.message = s.message
             sp.data.usage = s.usage
-            sp.data.finish_reason = s._finish_reason
-            sp.data.response_id = s._response_id
-            sp.data.response_model = s._response_model
+            sp.data.finish_reason = s._hydrator.finish_reason
+            sp.data.response_id = s._hydrator.response_id
+            sp.data.response_model = s._hydrator.response_model
             await s.aclose()
 
 
@@ -719,9 +548,9 @@ async def experimental_generate(
         finally:
             sp.data.message = s.message
             sp.data.usage = s.usage
-            sp.data.finish_reason = s._finish_reason
-            sp.data.response_id = s._response_id
-            sp.data.response_model = s._response_model
+            sp.data.finish_reason = s._hydrator.finish_reason
+            sp.data.response_id = s._hydrator.response_id
+            sp.data.response_model = s._hydrator.response_model
             await s.aclose()
         return s.message
 
