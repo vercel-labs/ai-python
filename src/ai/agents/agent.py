@@ -1338,6 +1338,15 @@ class Agent:
     extend the class-level set per instance.
     """
 
+    LOOP_BUFFER: ClassVar[int | None] = None
+    """How many events ``loop`` may run ahead of the consumer of ``run``.
+
+    ``None`` (the default) is unbounded: the loop keeps going while the
+    consumer is between reads. ``0`` runs the loop in lockstep, so it is
+    only advanced when the consumer asks for an event; loops that
+    sequence side effects against consumer code depend on this.
+    """
+
     def __init__(
         self,
         *,
@@ -1531,7 +1540,9 @@ class Agent:
                     mw_token = middleware_.activate(parent + _middleware)
                 try:
                     chain = middleware_._build_agent_run_chain(_real)
-                    async with contextlib.aclosing(chain(context)) as events:
+                    async with contextlib.aclosing(
+                        util.decouple(chain(context), buffer=self.LOOP_BUFFER)
+                    ) as events:
                         async for event in events:
                             # a blocked run can only resume via a hook
                             # resolution or cancellation, so a non-pending
