@@ -29,7 +29,7 @@ def _fake_mcp_tool(
     return mcp.types.Tool(
         name=name,
         description=description,
-        inputSchema={
+        input_schema={
             "type": "object",
             "properties": {"text": {"type": "string"}},
             "required": ["text"],
@@ -73,7 +73,7 @@ def test_mcp_tool_to_native_schema_preserved() -> None:
         mcp_tool, "test:key", _noop_transport_factory, None
     )
 
-    assert _spec(native).params == mcp_tool.inputSchema
+    assert _spec(native).params == mcp_tool.input_schema
     assert _spec(native).description == "Echo input"
 
 
