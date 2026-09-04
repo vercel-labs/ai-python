@@ -58,11 +58,11 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "anthropic", marker = "extra == 'anthropic'", specifier = ">=0.83.0" },
+    { name = "anthropic", marker = "extra == 'anthropic'", specifier = ">=0.83.0,<2.0.0" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.18.0" },
     { name = "modelsdotdev", specifier = "==0.*" },
-    { name = "openai", marker = "extra == 'openai'", specifier = ">=2.14.0" },
+    { name = "openai", marker = "extra == 'openai'", specifier = ">=2.34.0,<4.0.0" },
     { name = "opentelemetry-exporter-otlp-proto-http", marker = "extra == 'otel'", specifier = ">=1.30" },
     { name = "opentelemetry-sdk", marker = "extra == 'otel'", specifier = ">=1.30" },
     { name = "pydantic", specifier = ">=2.13" },

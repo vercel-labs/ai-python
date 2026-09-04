@@ -61,11 +61,11 @@ model = ai.Model(id="local-model", provider=provider)
 You can pass an upstream client to the provider:
 
 ```python
-import httpx
+import openai
 import ai
 
 
-client = httpx.AsyncClient(timeout=30)
+client = openai.DefaultAsyncHttpxClient(timeout=30)
 provider = ai.get_provider(
     "openai",
     base_url="http://localhost:1234/v1",
@@ -73,6 +73,18 @@ provider = ai.get_provider(
     client=client,
 )
 model = ai.Model(id="local-model", provider=provider)
+```
+
+Anthropic exposes the equivalent client:
+
+```python
+import anthropic
+import ai
+
+
+client = anthropic.DefaultAsyncHttpxClient(timeout=30)
+provider = ai.get_provider("anthropic", client=client)
+model = ai.Model(id="claude-sonnet-4-6", provider=provider)
 ```
 
 Close explicit providers when your app shuts down:

@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, ClassVar, Literal
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, cast
 
-import httpx
 import pydantic
 
 from ... import errors as ai_errors
@@ -26,10 +25,12 @@ if TYPE_CHECKING:
     from ...types import messages as messages_
     from ...types import tools as tools_
 
-    OpenAIClient = httpx.AsyncClient | openai.AsyncOpenAI
+    OpenAIClient = openai.DefaultAsyncHttpxClient | openai.AsyncOpenAI
+    OpenAIHTTPClient = openai.DefaultAsyncHttpxClient
     OpenAISDKClient = openai.AsyncOpenAI
 else:
     OpenAIClient = Any
+    OpenAIHTTPClient = Any
     OpenAISDKClient = Any
 
 _BASE_URL = "https://api.openai.com/v1"
@@ -48,7 +49,7 @@ class OpenAICompatibleProvider(base.Provider[OpenAISDKClient]):
 
     provider_class_id: Literal["openai-compatible"] = "openai-compatible"
 
-    _http_client: httpx.AsyncClient | None = pydantic.PrivateAttr(default=None)
+    _http_client: OpenAIHTTPClient | None = pydantic.PrivateAttr(default=None)
     _close_client_on_aclose: bool = pydantic.PrivateAttr(default=False)
     _has_user_sdk_client: bool = pydantic.PrivateAttr(default=False)
 
@@ -56,36 +57,24 @@ class OpenAICompatibleProvider(base.Provider[OpenAISDKClient]):
         self._close_client_on_aclose = True
 
     def _set_runtime_client(self, client: OpenAIClient | None) -> None:
-        openai_sdk = None
-        if client is not None and not isinstance(client, httpx.AsyncClient):
-            openai_sdk = _sdk.import_sdk(provider=self.name)
-
+        openai_sdk = (
+            _sdk.import_sdk(provider=self.name) if client is not None else None
+        )
         if openai_sdk is not None and isinstance(
             client, openai_sdk.AsyncOpenAI
         ):
-            sdk_client = client
-            http_client = None
             self._has_user_sdk_client = True
             self._close_client_on_aclose = False
-        elif isinstance(client, httpx.AsyncClient) or client is None:
-            sdk_client = None
-            http_client = client
+            self._set_client(client)
+        else:
+            self._http_client = cast("OpenAIHTTPClient | None", client)
             self._has_user_sdk_client = False
             self._close_client_on_aclose = client is None
-        else:
-            raise TypeError(
-                "OpenAI providers require an httpx.AsyncClient or "
-                "openai.AsyncOpenAI"
-            )
-
-        self._http_client = http_client
-        if sdk_client is not None:
-            self._set_client(sdk_client)
 
     def _make_sdk_client(
         self,
         *,
-        http_client: httpx.AsyncClient | None = None,
+        http_client: OpenAIHTTPClient | None = None,
     ) -> OpenAISDKClient:
         openai_sdk = _sdk.import_sdk(provider=self.name)
         return openai_sdk.AsyncOpenAI(

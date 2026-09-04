@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, ClassVar, Literal
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, cast
 
-import httpx
 import pydantic
 
 from ... import errors as ai_errors
@@ -26,10 +25,14 @@ if TYPE_CHECKING:
     from ...types import messages as messages_
     from ...types import tools as tools_
 
-    AnthropicClient = httpx.AsyncClient | anthropic.AsyncAnthropic
+    AnthropicClient = (
+        anthropic.DefaultAsyncHttpxClient | anthropic.AsyncAnthropic
+    )
+    AnthropicHTTPClient = anthropic.DefaultAsyncHttpxClient
     AnthropicSDKClient = anthropic.AsyncAnthropic
 else:
     AnthropicClient = Any
+    AnthropicHTTPClient = Any
     AnthropicSDKClient = Any
 
 _BASE_URL = "https://api.anthropic.com"
@@ -46,7 +49,9 @@ class AnthropicCompatibleProvider(base.Provider[AnthropicSDKClient]):
     provider_class_id: Literal["anthropic-compatible"] = "anthropic-compatible"
     anthropic_version: str = _ANTHROPIC_VERSION
 
-    _http_client: httpx.AsyncClient | None = pydantic.PrivateAttr(default=None)
+    _http_client: AnthropicHTTPClient | None = pydantic.PrivateAttr(
+        default=None
+    )
     _close_client_on_aclose: bool = pydantic.PrivateAttr(default=False)
     _has_user_sdk_client: bool = pydantic.PrivateAttr(default=False)
 
@@ -54,36 +59,24 @@ class AnthropicCompatibleProvider(base.Provider[AnthropicSDKClient]):
         self._close_client_on_aclose = True
 
     def _set_runtime_client(self, client: AnthropicClient | None) -> None:
-        anthropic_sdk = None
-        if client is not None and not isinstance(client, httpx.AsyncClient):
-            anthropic_sdk = _sdk.import_sdk(provider=self.name)
-
+        anthropic_sdk = (
+            _sdk.import_sdk(provider=self.name) if client is not None else None
+        )
         if anthropic_sdk is not None and isinstance(
             client, anthropic_sdk.AsyncAnthropic
         ):
-            sdk_client = client
-            http_client = None
             self._has_user_sdk_client = True
             self._close_client_on_aclose = False
-        elif isinstance(client, httpx.AsyncClient) or client is None:
-            sdk_client = None
-            http_client = client
+            self._set_client(client)
+        else:
+            self._http_client = cast("AnthropicHTTPClient | None", client)
             self._has_user_sdk_client = False
             self._close_client_on_aclose = client is None
-        else:
-            raise TypeError(
-                "Anthropic providers require an httpx.AsyncClient or "
-                "anthropic.AsyncAnthropic"
-            )
-
-        self._http_client = http_client
-        if sdk_client is not None:
-            self._set_client(sdk_client)
 
     def _make_sdk_client(
         self,
         *,
-        http_client: httpx.AsyncClient | None = None,
+        http_client: AnthropicHTTPClient | None = None,
     ) -> AnthropicSDKClient:
         anthropic_sdk = _sdk.import_sdk(provider=self.name)
         return anthropic_sdk.AsyncAnthropic(
