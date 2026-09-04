@@ -23,7 +23,7 @@ import base64
 import json
 from typing import Any
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 import ai

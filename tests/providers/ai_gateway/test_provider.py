@@ -5,7 +5,7 @@ from collections.abc import Callable
 from types import ModuleType
 from typing import cast
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 import ai

@@ -6,7 +6,7 @@ import dataclasses
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    import httpx
+    import httpx2 as httpx
 
 
 @dataclasses.dataclass(frozen=True)
