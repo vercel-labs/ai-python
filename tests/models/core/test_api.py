@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator, Sequence
+from collections.abc import AsyncGenerator, Callable, Sequence
 from typing import Any, Literal, cast
 
 import pydantic
@@ -788,3 +788,153 @@ async def test_replayed_turn_gets_replay_span(recorder: Recorder) -> None:
     assert isinstance(call.data, ai.experimental_telemetry.AiStreamSpanData)
     assert call.data.message is not None
     assert call.data.message.text == "prior turn"
+
+
+# -- Streaming partial output ----------------------------------------------
+
+
+class _Answer(pydantic.BaseModel):
+    a: str
+    b: int = 0
+
+
+class _PinsOutput(pydantic.BaseModel):
+    a: int
+    b: int = 0
+    c: str = ""
+
+
+async def _scripted_deltas(chunks: list[str]) -> AsyncGenerator[events_.Event]:
+    yield events_.StreamStart()
+    yield events_.TextStart(block_id="t1")
+    for chunk in chunks:
+        yield events_.TextDelta(block_id="t1", chunk=chunk)
+    yield events_.TextEnd(block_id="t1")
+    yield events_.StreamEnd()
+
+
+def _scripted_impl(
+    chunks: list[str],
+) -> Callable[
+    [models.Model, list[messages_.Message]], AsyncGenerator[events_.Event]
+]:
+    """Provider stream seam replaying hand-built text deltas."""
+
+    async def impl(
+        model: models.Model,
+        messages: list[messages_.Message],
+        **kwargs: Any,
+    ) -> AsyncGenerator[events_.Event]:
+        async for event in _scripted_deltas(chunks):
+            yield event
+
+    return impl
+
+
+async def test_stream_emits_partial_output_snapshots() -> None:
+    MOCK_PROVIDER._stream_impl = _scripted_impl(['{"a": "hel', 'lo"}'])
+
+    seen: list[dict[str, Any]] = []
+    order: list[str] = []
+    async with models.stream(
+        MOCK_MODEL, [ai.user_message("go")], output_type=_Answer
+    ) as stream:
+        async for event in stream:
+            if isinstance(event, events_.PartialOutput):
+                seen.append(event.value)
+                order.append("partial")
+            elif isinstance(event, events_.TextDelta):
+                order.append("delta")
+
+            assert stream.partial_output is None or isinstance(
+                stream.partial_output, dict
+            )
+
+    # One snapshot per parse-changing delta: truncated string stays
+    # stable under stream_stable, then the completed object.
+    assert seen == [{"a": "hel"}, {"a": "hello"}]
+    assert order == ["delta", "partial", "delta", "partial"]
+    assert stream.output == _Answer(a="hello")
+
+
+async def test_stream_partial_output_property_tracks_latest() -> None:
+    MOCK_PROVIDER._stream_impl = _scripted_impl(['{"a": "x', '"}'])
+
+    latest: dict[str, Any] | None = None
+    async with models.stream(
+        MOCK_MODEL, [ai.user_message("go")], output_type=_Answer
+    ) as stream:
+        assert stream.partial_output is None
+        async for _ in stream:
+            if stream.partial_output is not None:
+                latest = stream.partial_output
+
+    assert latest == {"a": "x"}
+
+
+async def test_stream_without_output_type_never_emits_partials() -> None:
+    MOCK_PROVIDER._stream_impl = _scripted_impl(["plain text"])
+
+    partials: list[events_.PartialOutput] = []
+    async with models.stream(MOCK_MODEL, [ai.user_message("go")]) as stream:
+        async for event in stream:
+            if isinstance(event, events_.PartialOutput):
+                partials.append(event)
+            elif isinstance(event, events_.TextDelta):
+                assert stream.partial_output is None
+
+    assert partials == []
+
+
+async def test_stream_partial_output_pins_json_repair_behaviors() -> None:
+    # Pins observed json_repair stream_stable behaviors so a minor bump
+    # cannot silently change what consumers see mid-stream.
+    MOCK_PROVIDER._stream_impl = _scripted_impl(
+        [
+            '{"a": 1, "b"',
+            ': 2, "c": "trunc',
+            'ated"}',
+        ]
+    )
+
+    snapshots: list[dict[str, Any]] = []
+    async with models.stream(
+        MOCK_MODEL,
+        [ai.user_message("go")],
+        output_type=_PinsOutput,
+    ) as stream:
+        async for event in stream:
+            if isinstance(event, events_.PartialOutput):
+                snapshots.append(event.value)
+
+    assert snapshots == [
+        {"a": 1},  # dangling key without a value is dropped
+        {"a": 1, "b": 2, "c": "trunc"},  # truncated string kept verbatim
+        {"a": 1, "b": 2, "c": "truncated"},
+    ]
+    assert stream.output == _PinsOutput(a=1, b=2, c="truncated")
+
+
+async def test_agent_stream_forwards_partial_output() -> None:
+    # Two text parts -> two deltas (emit_events_for_messages emits one
+    # delta per part).
+    answer = ai.messages.Message(
+        id="msg-1",
+        role="assistant",
+        parts=[
+            ai.messages.TextPart(text='{"a": "hel'),
+            ai.messages.TextPart(text='lo"}'),
+        ],
+    )
+    mock_llm([[answer]])
+
+    my_agent = ai.Agent()
+    partials: list[dict[str, Any]] = []
+    async with my_agent.run(
+        MOCK_MODEL, [ai.user_message("go")], output_type=_Answer
+    ) as stream:
+        async for event in stream:
+            if isinstance(event, events_.PartialOutput):
+                partials.append(event.value)
+
+    assert partials == [{"a": "hel"}, {"a": "hello"}]
