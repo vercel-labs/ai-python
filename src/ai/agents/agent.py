@@ -1338,6 +1338,15 @@ class Agent:
     extend the class-level set per instance.
     """
 
+    LOOP_BUFFER: ClassVar[int | None] = None
+    """How many events ``loop`` may run ahead of the consumer of ``run``.
+
+    ``None`` (the default) is unbounded: the loop keeps going while the
+    consumer is between reads. ``0`` runs the loop in lockstep, so it is
+    only advanced when the consumer asks for an event; loops that
+    sequence side effects against consumer code depend on this.
+    """
+
     def __init__(
         self,
         *,
@@ -1392,7 +1401,6 @@ class Agent:
         messages: list[types.messages.Message],
         *,
         params: models.InferenceRequestParams | None = None,
-        buffer: int | None = None,
         hook_registry: hooks_.HookRegistry | None = None,
         _middleware: list[middleware_._Middleware] | None = None,
     ) -> AbstractAsyncContextManager[AgentStream[str]]: ...
@@ -1404,7 +1412,6 @@ class Agent:
         *,
         output_type: type[T],
         params: models.InferenceRequestParams | None = None,
-        buffer: int | None = None,
         hook_registry: hooks_.HookRegistry | None = None,
         _middleware: list[middleware_._Middleware] | None = None,
     ) -> AbstractAsyncContextManager[AgentStream[T]]: ...
@@ -1415,7 +1422,6 @@ class Agent:
         *,
         output_type: type[pydantic.BaseModel] | None = None,
         params: models.InferenceRequestParams | None = None,
-        buffer: int | None = None,
         hook_registry: hooks_.HookRegistry | None = None,
         _middleware: list[middleware_._Middleware] | None = None,
     ) -> AbstractAsyncContextManager[AgentStream[Any]]:
@@ -1435,11 +1441,6 @@ class Agent:
             output_type: Optional Pydantic model the model's output must
                 conform to.  When set, ``stream.output`` validates the
                 final assistant message's text against it.
-            buffer: How many events the loop may run ahead of the
-                consumer.  ``None`` (the default) is unbounded: the loop
-                keeps going while the consumer is between reads.  ``0``
-                runs the loop in lockstep, so it is only advanced when
-                the consumer asks for an event.
             hook_registry: The :class:`~ai.agents.hooks.HookRegistry`
                 for this run's hooks.  Defaults to the current registry
                 (so a nested run joins the enclosing run's hooks), or a
@@ -1456,7 +1457,6 @@ class Agent:
             messages,
             output_type=output_type,
             params=params,
-            buffer=buffer,
             hook_registry=hook_registry,
             _middleware=_middleware,
         )
@@ -1469,7 +1469,6 @@ class Agent:
         *,
         output_type: type[pydantic.BaseModel] | None,
         params: models.InferenceRequestParams | None,
-        buffer: int | None,
         hook_registry: hooks_.HookRegistry | None,
         _middleware: list[middleware_._Middleware] | None,
     ) -> AsyncIterator[AgentStream[Any]]:
@@ -1542,7 +1541,7 @@ class Agent:
                 try:
                     chain = middleware_._build_agent_run_chain(_real)
                     async with contextlib.aclosing(
-                        util.decouple(chain(context), buffer=buffer)
+                        util.decouple(chain(context), buffer=self.LOOP_BUFFER)
                     ) as events:
                         async for event in events:
                             # a blocked run can only resume via a hook

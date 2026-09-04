@@ -23,7 +23,6 @@ async with agent.run(
     messages,
     output_type=None,
     params=None,
-    buffer=None,
 ) as stream:
     async for event in stream:
         ...
@@ -35,9 +34,6 @@ Arguments:
 - `messages`: initial list of `ai.messages.Message`.
 - `output_type`: optional Pydantic model for final JSON output.
 - `params`: optional `ai.InferenceRequestParams`.
-- `buffer`: how many events the loop may run ahead of the consumer. `None`
-  (the default) is unbounded, so the loop keeps going while the consumer is
-  between reads. `0` runs the loop in lockstep with the consumer.
 
 ## AgentStream
 
@@ -67,6 +63,17 @@ class CustomAgent(ai.Agent):
     async def loop(self, context: ai.Context):
         while context.keep_running():
             ...
+```
+
+`LOOP_BUFFER` is a class variable that sets how many events `loop` may run
+ahead of the consumer of `run`. `None` (the default) is unbounded, so the loop
+keeps going while the consumer is between reads. `0` runs the loop in lockstep
+with the consumer, which loops that sequence side effects against consumer
+code depend on.
+
+```python
+class DurableAgent(ai.Agent):
+    LOOP_BUFFER = 0
 ```
 
 When persisting a run (for durability or serverless execution), save and

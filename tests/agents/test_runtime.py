@@ -104,12 +104,15 @@ async def test_agent_run_buffers_by_default() -> None:
         ] == [str(i) for i in range(1, 10)]
 
 
-async def test_agent_run_buffer_zero_is_lockstep() -> None:
-    """With buffer=0 the loop is only advanced when the consumer asks."""
-    agent = _CountingAgent()
-    async with agent.run(
-        MOCK_MODEL, [ai.user_message("go")], buffer=0
-    ) as stream:
+class _LockstepAgent(_CountingAgent):
+    LOOP_BUFFER = 0
+
+
+async def test_agent_run_loop_buffer_zero_is_lockstep() -> None:
+    """With LOOP_BUFFER = 0 the loop is only advanced when the consumer
+    asks."""
+    agent = _LockstepAgent()
+    async with agent.run(MOCK_MODEL, [ai.user_message("go")]) as stream:
         it = aiter(stream)
         for n in range(5):
             ev = await anext(it)

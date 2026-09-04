@@ -21,8 +21,7 @@ async for event in ai.util.merge(stream, tool_runner.events()):
 
 `decouple` runs an async iterable in its own task and hands its items to the
 consumer through a buffer. Use it to let a producer keep going while the
-consumer is slow. (`Agent.run` exposes this directly through its `buffer`
-argument.)
+consumer is slow. (`Agent.LOOP_BUFFER` exposes this for the agent loop.)
 
 ```python
 async for item in ai.util.decouple(source, buffer=None):
