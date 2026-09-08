@@ -51,8 +51,9 @@ def _get_vercel_oidc_token() -> str:
         )
     except ai_errors.InstallationError as exc:
         raise ai_errors.InstallationError(
-            "AI Gateway OIDC authentication requires the optional `vercel` "
-            'package. Install it with `pip install "ai[vercel]"` or '
+            "AI Gateway OIDC authentication requires the optional "
+            "`vercel-oidc` package. Install it with `pip install "
+            '"ai[vercel]"` or '
             '`uv add "ai[vercel]"`, or set `AI_GATEWAY_API_KEY` to use '
             "API key authentication."
         ) from exc
