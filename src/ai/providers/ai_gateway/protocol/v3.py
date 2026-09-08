@@ -13,7 +13,7 @@ import json
 import logging
 from typing import TYPE_CHECKING, Any, Literal
 
-import httpx
+import httpx2 as httpx
 
 from .... import models, ops, types
 from ... import base, history_utils

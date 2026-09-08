@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Mapping, Sequence
     from types import ModuleType
 
-    import httpx
+    import httpx2 as httpx
     import modelsdotdev
 
     from ...models.core import model as model_

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-import httpx
+import httpx2 as httpx
 
 import ai
 from ai.types import messages

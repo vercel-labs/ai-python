@@ -15,7 +15,7 @@ import json
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
-import httpx
+import httpx2 as httpx
 import pydantic
 import pytest
 

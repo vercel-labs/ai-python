@@ -6,7 +6,7 @@ import json
 from collections.abc import Callable, Mapping
 from typing import Any
 
-import httpx
+import httpx2 as httpx
 import pydantic
 import pydantic.alias_generators
 

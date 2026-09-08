@@ -254,14 +254,15 @@ async def get_http_tools(
         )
 
     """
-    import httpx as _httpx  # noqa: PLC0415
+    # N.B: httpx, since mcp 1.x depends on it.
+    import httpx  # noqa: PLC0415
 
     mcp_http = _import_mcp_module("mcp.client.streamable_http")
 
     connection_key = f"http:{url}"
 
     def transport_factory() -> contextlib.AbstractAsyncContextManager[Any]:
-        http_client = _httpx.AsyncClient(headers=headers) if headers else None
+        http_client = httpx.AsyncClient(headers=headers) if headers else None
         return cast(
             "contextlib.AbstractAsyncContextManager[Any]",
             mcp_http.streamable_http_client(url=url, http_client=http_client),

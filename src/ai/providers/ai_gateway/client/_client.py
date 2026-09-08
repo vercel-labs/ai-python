@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import urlparse
 
-import httpx
+import httpx2 as httpx
 
 from . import errors
 
