@@ -239,20 +239,73 @@ Event = (
 )
 
 
-class _MessageHydrator:
+class MessageHydrator:
+    """Reconstruct messages from a sequential agent event stream."""
+
     def __init__(self, seed_message: messages.Message | None = None) -> None:
+        self._seed_message = seed_message
         self.message = seed_message or messages.Message(
             role="assistant", parts=[]
         )
-        self._parts: dict[str, messages.Part] = {}
+        self.messages = [self.message]
+        self.messages_by_id = {self.message.id: self.message}
+        self._parts_by_message_id: dict[str, dict[str, messages.Part]] = {
+            self.message.id: {}
+        }
+        self._message_selected = seed_message is not None
+        self._seed_checked = False
         # A stream that exhausts without StreamEnd died mid-response.
         self.ended = False
         self.finish_reason: str | None = None
         self.response_id: str | None = None
         self.response_model: str | None = None
 
-    def feed(self, event: Event) -> Event:
+    def feed[T: BaseEvent](self, event: T) -> T:
+        # ToolCallResult and HookEvent always carry full messages, so we just
+        # use them.
+        if isinstance(event, ToolCallResult | HookEvent):
+            self.message = event.message
+            existing = self.messages_by_id.get(event.message.id)
+            if existing is None:
+                self.messages.append(event.message)
+            elif existing is not event.message:
+                self.messages[self.messages.index(existing)] = event.message
+            self.messages_by_id[event.message.id] = event.message
+            return event
+        if not isinstance(event, ModelEvent):
+            return event
+
         updates: dict[str, Any] = {}
+        message_id = event.message.id
+        if message_id != "<unset>":
+            if self._seed_message is not None and not self._seed_checked:
+                self._seed_checked = True
+                if message_id != self.message.id:
+                    raise ValueError(
+                        "seed message id does not match event message id: "
+                        f"{self.message.id!r} != {message_id!r}"
+                    )
+            if message_id != self.message.id:
+                self.ended = False
+                if not self._message_selected:
+                    old_id = self.message.id
+                    del self.messages_by_id[old_id]
+                    self.message.id = message_id
+                    self.messages_by_id[message_id] = self.message
+                    self._parts_by_message_id[message_id] = (
+                        self._parts_by_message_id.pop(old_id)
+                    )
+                    self._message_selected = True
+                else:
+                    self.message = self.messages_by_id.get(
+                        message_id
+                    ) or messages.Message(
+                        id=message_id, role="assistant", parts=[]
+                    )
+                    if message_id not in self.messages_by_id:
+                        self.messages.append(self.message)
+                        self.messages_by_id[message_id] = self.message
+        self._parts = self._parts_by_message_id.setdefault(self.message.id, {})
 
         # Replay events carry no new state — the seeded message already
         # has everything they would have produced.  A replayed turn is

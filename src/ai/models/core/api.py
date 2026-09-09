@@ -115,7 +115,7 @@ class Stream(Generic[StreamOutputT]):
         the concatenated text content unchanged.
         """
         self._gen = gen
-        self._hydrator = types.events._MessageHydrator(seed_message)
+        self._hydrator = types.events.MessageHydrator(seed_message)
         # ``output_type`` is typed against the public ``StreamOutputT`` type
         # param for ergonomics; internally we know it's a Pydantic model
         # subclass (or None for the text-default case).
