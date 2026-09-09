@@ -2,8 +2,78 @@
 
 from __future__ import annotations
 
+import pydantic
+
 from ai import models
 from ai.types import events, messages
+
+
+def test_omitted_message_only_serializes_id() -> None:
+    adapter: pydantic.TypeAdapter[events.AgentEvent] = pydantic.TypeAdapter(
+        events.OmitEventMessages[events.AgentEvent]
+    )
+    message = messages.Message(
+        id="message-1",
+        role="assistant",
+        parts=[messages.TextPart(text="hello")],
+    )
+    event = events.TextDelta(message=message, chunk="hello")
+
+    result = adapter.dump_python(event)
+
+    assert result["message"] == {"id": "message-1"}
+
+
+def test_omit_event_messages_annotation_omits_message() -> None:
+    adapter: pydantic.TypeAdapter[events.AgentEvent] = pydantic.TypeAdapter(
+        events.OmitEventMessages[events.AgentEvent]
+    )
+    event = events.TextDelta(chunk="hello")
+
+    assert adapter.dump_python(event)["message"] == {"id": "<unset>"}
+    assert b'"message":{"id":"<unset>"}' in adapter.dump_json(event)
+
+
+def test_non_model_events_keep_message() -> None:
+    adapter: pydantic.TypeAdapter[events.AgentEvent] = pydantic.TypeAdapter(
+        events.OmitEventMessages[events.AgentEvent]
+    )
+    tool_message = messages.Message(id="tool-message", role="tool", parts=[])
+    hook_message = messages.Message(
+        id="hook-message", role="internal", parts=[]
+    )
+    source: list[events.AgentEvent] = [
+        events.ToolCallResult(message=tool_message, results=[]),
+        events.HookEvent(
+            message=hook_message,
+            hook=messages.HookPart(
+                hook_id="hook", hook_type="test", status="pending"
+            ),
+        ),
+    ]
+
+    dumped = [adapter.dump_python(event) for event in source]
+
+    assert [item["message"]["id"] for item in dumped] == [
+        "tool-message",
+        "hook-message",
+    ]
+
+
+def test_omitted_model_event_validates_with_dummy_message() -> None:
+    compact: pydantic.TypeAdapter[events.AgentEvent] = pydantic.TypeAdapter(
+        events.OmitEventMessages[events.AgentEvent]
+    )
+    regular: pydantic.TypeAdapter[events.AgentEvent] = pydantic.TypeAdapter(
+        events.AgentEvent
+    )
+
+    event = events.TextDelta(chunk="hello")
+    restored = regular.validate_python(compact.dump_python(event))
+
+    assert isinstance(restored, events.TextDelta)
+    assert restored.message.id == event.message.id
+    assert restored.message.parts == []
 
 
 class TestReplayMessageEvents:
