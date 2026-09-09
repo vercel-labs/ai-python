@@ -142,7 +142,7 @@ def _make_tool_fn(
                 f"MCP tool call timed out after 30 seconds: {tool_name}"
             ) from e
 
-        if result.isError:
+        if result.is_error:
             error_text = " ".join(
                 part.text
                 for part in result.content
@@ -152,8 +152,8 @@ def _make_tool_fn(
                 f"MCP tool error: {error_text or 'Unknown error'}"
             )
 
-        if result.structuredContent is not None:
-            return result.structuredContent
+        if result.structured_content is not None:
+            return result.structured_content
 
         for part in result.content:
             if isinstance(part, text_content):
@@ -254,8 +254,7 @@ async def get_http_tools(
         )
 
     """
-    # N.B: httpx, since mcp 1.x depends on it.
-    import httpx  # noqa: PLC0415
+    import httpx2 as httpx  # noqa: PLC0415
 
     mcp_http = _import_mcp_module("mcp.client.streamable_http")
 
@@ -304,7 +303,7 @@ def _mcp_tool_to_native(
         name=name,
         spec=types.tools.ToolSpec(
             description=mcp_tool.description or "",
-            params=mcp_tool.inputSchema,
+            params=mcp_tool.input_schema,
         ),
     )
 
