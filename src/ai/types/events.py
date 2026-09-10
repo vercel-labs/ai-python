@@ -247,11 +247,11 @@ class MessageHydrator:
         self.message = seed_message or messages.Message(
             role="assistant", parts=[]
         )
-        self.messages = [self.message]
-        self.messages_by_id = {self.message.id: self.message}
-        self._parts_by_message_id: dict[str, dict[str, messages.Part]] = {
-            self.message.id: {}
-        }
+        # messages/messages_by_id stay empty until events are
+        # actually fed in
+        self.messages: list[messages.Message] = []
+        self.messages_by_id: dict[str, messages.Message] = {}
+        self._parts_by_message_id: dict[str, dict[str, messages.Part]] = {}
         self._message_selected = seed_message is not None
         self._seed_checked = False
         # A stream that exhausts without StreamEnd died mid-response.
@@ -288,13 +288,7 @@ class MessageHydrator:
             if message_id != self.message.id:
                 self.ended = False
                 if not self._message_selected:
-                    old_id = self.message.id
-                    del self.messages_by_id[old_id]
                     self.message.id = message_id
-                    self.messages_by_id[message_id] = self.message
-                    self._parts_by_message_id[message_id] = (
-                        self._parts_by_message_id.pop(old_id)
-                    )
                     self._message_selected = True
                 else:
                     self.message = self.messages_by_id.get(
@@ -302,9 +296,9 @@ class MessageHydrator:
                     ) or messages.Message(
                         id=message_id, role="assistant", parts=[]
                     )
-                    if message_id not in self.messages_by_id:
-                        self.messages.append(self.message)
-                        self.messages_by_id[message_id] = self.message
+        if self.message.id not in self.messages_by_id:
+            self.messages.append(self.message)
+            self.messages_by_id[self.message.id] = self.message
         self._parts = self._parts_by_message_id.setdefault(self.message.id, {})
 
         # Replay events carry no new state — the seeded message already
