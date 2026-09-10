@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import re
 
 import modelsdotdev
@@ -12,15 +13,30 @@ _PROVIDER_ID_ALIASES = {"ai-gateway": "vercel", "gateway": "vercel"}
 
 
 def parse_model_id(model_id: str) -> modelsdotdev.ModelRef:
-    return modelsdotdev.parse_model_id(_canonical_model_id(model_id))
+    return _parse_model_id(_canonical_model_id(model_id))
+
+
+@functools.cache
+def _parse_model_id(model_id: str) -> modelsdotdev.ModelRef:
+    return modelsdotdev.parse_model_id(model_id)
 
 
 def get_provider_by_id(provider_id: str) -> modelsdotdev.Provider | None:
-    return modelsdotdev.get_provider_by_id(_canonical_provider_id(provider_id))
+    return _get_provider_by_id(_canonical_provider_id(provider_id))
+
+
+@functools.cache
+def _get_provider_by_id(provider_id: str) -> modelsdotdev.Provider | None:
+    return modelsdotdev.get_provider_by_id(provider_id)
 
 
 def get_model_by_id(model_id: str) -> modelsdotdev.Model | None:
-    return modelsdotdev.get_model_by_id(_canonical_model_id(model_id))
+    return _get_model_by_id(_canonical_model_id(model_id))
+
+
+@functools.cache
+def _get_model_by_id(model_id: str) -> modelsdotdev.Model | None:
+    return modelsdotdev.get_model_by_id(model_id)
 
 
 def _canonical_provider_id(provider_id: str) -> str:
