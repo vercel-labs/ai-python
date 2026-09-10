@@ -25,6 +25,35 @@ async def contact_mothership(query: str) -> str:
 The tool name comes from the function name. The model receives the function
 parameters as a JSON schema and the docstring as the tool description.
 
+## Describe parameters
+
+The model chooses tools and fills their arguments based on the parameter
+schema. Give each parameter a description with `Annotated` and pydantic's
+`Field`, or with a Google-style `Args:` section in the docstring:
+
+```python
+from typing import Annotated
+
+import ai
+from pydantic import Field
+
+
+@ai.tool
+async def get_weather(
+    city: Annotated[str, Field(description="City name")],
+    days: Annotated[int, Field(ge=1, le=7, description="Forecast length")],
+) -> str:
+    """Get the weather forecast.
+
+    Args:
+        city: City to forecast for.
+    """
+    return "sunny"
+```
+
+Descriptions from `Field` win when both are present. Parameters without any
+description stay undocumented in the schema.
+
 Function tools will only be automatically executed by the SDK when used
 in the context of the agent. Provider-side tools will always get executed
 by the provider, even when passed to `ai.stream`.
