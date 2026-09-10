@@ -105,6 +105,31 @@ async def test_message_hydrator_round_trips_replayed_message() -> None:
     }
 
 
+def test_message_hydrator_messages_empty_until_fed() -> None:
+    hydrator = events.MessageHydrator()
+
+    assert hydrator.messages == []
+    assert hydrator.messages_by_id == {}
+
+    hydrator.feed(events.TextStart(block_id="text"))
+
+    assert hydrator.messages == [hydrator.message]
+    assert hydrator.messages_by_id == {hydrator.message.id: hydrator.message}
+
+
+def test_message_hydrator_seeded_messages_wait_for_events() -> None:
+    seed = messages.Message(id="seed", role="assistant", parts=[])
+    hydrator = events.MessageHydrator(seed)
+
+    assert hydrator.messages == []
+    assert hydrator.messages_by_id == {}
+
+    hydrator.feed(events.StreamStart(message=seed))
+
+    assert hydrator.messages == [seed]
+    assert hydrator.messages_by_id == {"seed": seed}
+
+
 def test_message_hydrator_reconstructs_omitted_messages() -> None:
     compact: pydantic.TypeAdapter[events.Event] = pydantic.TypeAdapter(
         events.OmitEventMessages[events.Event]
