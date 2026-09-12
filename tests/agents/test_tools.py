@@ -146,6 +146,30 @@ async def test_tool_call_returns_tool_message() -> None:
     assert not result.results[0].has_model_input
 
 
+async def test_current_tool_call() -> None:
+    seen: list[ai.ToolCall] = []
+
+    @ai.tool
+    async def inspect_call() -> str:
+        """Inspect the current tool call."""
+        seen.append(ai.Agent.current_tool_call())
+        return "done"
+
+    part = ai.messages.ToolCallPart(
+        tool_call_id="tc-current",
+        tool_name="inspect_call",
+        tool_args="{}",
+    )
+    tc = ai.agents.BoundToolCall(part=part, tool=inspect_call)
+
+    with pytest.raises(LookupError):
+        ai.Agent.current_tool_call()
+    await tc()
+    assert seen == [tc]
+    with pytest.raises(LookupError):
+        ai.Agent.current_tool_call()
+
+
 async def test_cancelled_tool_call_returns_error_result() -> None:
     started = asyncio.Event()
 
