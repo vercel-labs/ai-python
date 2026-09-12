@@ -636,44 +636,7 @@ def tool[**P, T, R](
         return wrap(fn)
 
 
-class ToolCallCallable(Protocol):
-    """Anything ``ToolRunner.schedule`` can accept.
-
-    Satisfied by :class:`ToolCall` and by any zero-arg callable returning
-    a coroutine that resolves to a :class:`~ai.agents.events.ToolCallResult`
-    — e.g. an inline closure that gates the tool behind an approval hook.
-    """
-
-    def __call__(self) -> Coroutine[Any, Any, events_.ToolCallResult]: ...
-
-
-class ToolCall(ToolCallCallable, Protocol):
-    """Something with all the key information for a tool call."""
-
-    @classmethod
-    def current(cls) -> ToolCall | None:
-        """Return the tool call executing in the current context, if any."""
-        return _current_tool_call.get()
-
-    @property
-    def id(self) -> str: ...
-
-    @property
-    def name(self) -> str: ...
-
-    @property
-    def fn(self) -> Callable[..., Awaitable[Any]]: ...
-
-    @property
-    def kwargs(self) -> dict[str, Any]: ...
-
-
-_current_tool_call: contextvars.ContextVar[ToolCall | None] = (
-    contextvars.ContextVar("current_tool_call", default=None)
-)
-
-
-class BoundToolCall(ToolCall):
+class BoundToolCall:
     """Callable that binds a :class:`ToolCallPart` to its :class:`AgentTool`.
 
     Calling it executes the tool and returns a ``role="tool"`` message.
@@ -834,7 +797,7 @@ class BoundToolCall(ToolCall):
             return res
 
 
-class GatedToolCall(ToolCall):
+class GatedToolCall:
     """ToolCall-shaped wrapper that awaits an approval hook before executing.
 
     ``ToolRunner.schedule`` only consumes the ``__call__`` shape of
@@ -892,6 +855,38 @@ class GatedToolCall(ToolCall):
             result=f"Rejected: {approval.reason}",
             is_error=True,
         )
+
+
+class ToolCallCallable(Protocol):
+    """Anything ``ToolRunner.schedule`` can accept.
+
+    Satisfied by :class:`ToolCall` and by any zero-arg callable returning
+    a coroutine that resolves to a :class:`~ai.agents.events.ToolCallResult`
+    — e.g. an inline closure that gates the tool behind an approval hook.
+    """
+
+    def __call__(self) -> Coroutine[Any, Any, events_.ToolCallResult]: ...
+
+
+class ToolCall(ToolCallCallable, Protocol):
+    """Something with all the key information for a tool call."""
+
+    @property
+    def id(self) -> str: ...
+
+    @property
+    def name(self) -> str: ...
+
+    @property
+    def fn(self) -> Callable[..., Awaitable[Any]]: ...
+
+    @property
+    def kwargs(self) -> dict[str, Any]: ...
+
+
+_current_tool_call: contextvars.ContextVar[ToolCall] = contextvars.ContextVar(
+    "current_tool_call"
+)
 
 
 class _RestartableToolStream:
@@ -1343,6 +1338,11 @@ async def _aggregate_from[T, S, R](
     return agg
 
 
+_current_agent: contextvars.ContextVar[Agent] = contextvars.ContextVar(
+    "current_agent"
+)
+
+
 class Agent:
     """Bag of configuration: model + tools + loop."""
 
@@ -1379,6 +1379,28 @@ class Agent:
                 self._tools.append(t)
             else:
                 self._provider_tools.append(t)
+
+    @classmethod
+    def current_agent(cls) -> Self:
+        """Return the agent whose stream is executing in this context.
+
+        Calling this outside an agent stream raises :class:`LookupError`.
+        """
+        agent = _current_agent.get()
+        if not isinstance(agent, cls):
+            raise LookupError(
+                f"current agent is {type(agent).__name__}, not {cls.__name__}"
+            )
+        return agent
+
+    @classmethod
+    def current_tool_call(cls) -> ToolCall:
+        """Return the tool call executing in this context.
+
+        This is available from code called during tool execution. Calling it
+        outside a tool call raises :class:`LookupError`.
+        """
+        return _current_tool_call.get()
 
     @property
     def tools(self) -> list[AgentTool]:
@@ -1554,6 +1576,7 @@ class Agent:
                 )
             ) as sp:
                 initial_count = len(context.messages)
+                agent_token = _current_agent.set(self)
                 mw_token: middleware_.Token | None = None
                 if _middleware is not None:
                     parent = middleware_.get()
@@ -1578,6 +1601,7 @@ class Agent:
                 finally:
                     if mw_token is not None:
                         middleware_.deactivate(mw_token)
+                    _current_agent.reset(agent_token)
                     # Record whatever got produced, even on error or
                     # early close.
                     sp.data.final_message = next(

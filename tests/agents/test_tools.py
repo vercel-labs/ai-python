@@ -147,12 +147,12 @@ async def test_tool_call_returns_tool_message() -> None:
 
 
 async def test_current_tool_call() -> None:
-    seen: list[ai.ToolCall | None] = []
+    seen: list[ai.ToolCall] = []
 
     @ai.tool
     async def inspect_call() -> str:
         """Inspect the current tool call."""
-        seen.append(ai.ToolCall.current())
+        seen.append(ai.Agent.current_tool_call())
         return "done"
 
     part = ai.messages.ToolCallPart(
@@ -162,10 +162,12 @@ async def test_current_tool_call() -> None:
     )
     tc = ai.agents.BoundToolCall(part=part, tool=inspect_call)
 
-    assert ai.ToolCall.current() is None
+    with pytest.raises(LookupError):
+        ai.Agent.current_tool_call()
     await tc()
     assert seen == [tc]
-    assert ai.ToolCall.current() is None
+    with pytest.raises(LookupError):
+        ai.Agent.current_tool_call()
 
 
 async def test_cancelled_tool_call_returns_error_result() -> None:
