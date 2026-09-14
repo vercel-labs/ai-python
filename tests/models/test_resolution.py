@@ -4,13 +4,33 @@ import pydantic
 import pytest
 
 import ai
-from ai import ConfigurationError, models
+from ai import ConfigurationError, _modelsdev, models
 from ai.providers.ai_gateway import GatewayV4Protocol
 from ai.providers.anthropic import AnthropicMessagesProtocol
 from ai.providers.openai import (
     OpenAIChatCompletionsProtocol,
     OpenAIResponsesProtocol,
 )
+
+
+def test_modelsdev_lookups_are_cached_after_alias_canonicalization(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+    provider = _modelsdev.get_provider_by_id("vercel")
+    assert provider is not None
+    _modelsdev._get_provider_by_id.cache_clear()
+
+    def get_provider_by_id(provider_id: str) -> Any:
+        calls.append(provider_id)
+        return provider
+
+    monkeypatch.setattr("modelsdotdev.get_provider_by_id", get_provider_by_id)
+
+    assert _modelsdev.get_provider_by_id("gateway") is provider
+    assert _modelsdev.get_provider_by_id("ai-gateway") is provider
+    assert _modelsdev.get_provider_by_id("vercel") is provider
+    assert calls == ["vercel"]
 
 
 def test_get_resolves_provider_qualified_model_id() -> None:
