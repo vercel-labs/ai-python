@@ -640,8 +640,9 @@ class RunStateTracker:
       :class:`StreamEnd` (scheduled) and :class:`ToolCallResult`
       (settled), matched by ``tool_call_id``.
 
-    The run is blocked when at least one hook is deferred, no stream is
-    producing, and every in-flight tool call is accounted for by a
+    The run is blocked when at least one hook is deferred, a model stream
+    has ended, no stream is producing, and every in-flight tool call is
+    accounted for by a
     deferred hook's ``tool_call_id``.  Consequently the signal is only
     as good as the stream: loops must yield their ``StreamEnd`` (with
     the assistant message) for tool calls to be counted, and custom
@@ -654,6 +655,7 @@ class RunStateTracker:
         self._deferred: dict[str, messages.HookPart[Any]] = {}
         self._in_flight: set[str] = set()
         self._streaming = 0
+        self._stream_ended = False
         self._blocked = False
 
     @property
@@ -668,11 +670,13 @@ class RunStateTracker:
         match event:
             case StreamStart():
                 self._streaming += 1
+                self._stream_ended = False
             case StreamEnd():
                 # Loops may emit a bare StreamEnd without a StreamStart
                 # (e.g. when the model was streamed out-of-band), so
                 # clamp at zero.
                 self._streaming = max(0, self._streaming - 1)
+                self._stream_ended = True
                 self._in_flight.update(
                     tc.tool_call_id for tc in event.message.tool_calls
                 )
@@ -694,7 +698,8 @@ class RunStateTracker:
             if h.tool_call_id is not None
         }
         now = (
-            bool(self._deferred)
+            self._stream_ended
+            and bool(self._deferred)
             and not self._streaming
             and self._in_flight <= attributed
         )

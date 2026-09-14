@@ -333,6 +333,23 @@ def _hook_event(hook: messages_.HookPart[Any]) -> events_.HookEvent:
     )
 
 
+def test_tracker_does_not_block_before_first_stream_end() -> None:
+    tracker = events_.RunStateTracker()
+    hook: messages_.HookPart[Any] = messages_.HookPart(
+        hook_id="h1",
+        hook_type="ToolApproval",
+        status="pending",
+        tool_call_id="tc-1",
+    )
+
+    assert tracker.feed(_hook_event(hook)) is None
+    assert not tracker.blocked
+
+    transition = tracker.feed(events_.StreamEnd())
+    assert isinstance(transition, events_.RunBlocked)
+    assert tracker.blocked
+
+
 def test_tracker_fold_sequence() -> None:
     """RunStateTracker is a pure fold usable over any event stream."""
     tracker = events_.RunStateTracker()
