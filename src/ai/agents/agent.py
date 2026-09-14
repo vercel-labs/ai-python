@@ -7,6 +7,7 @@ import contextlib
 import dataclasses
 import inspect
 import json
+import re
 import typing
 from collections.abc import (
     AsyncGenerator,
@@ -452,6 +453,79 @@ def _aggregate_from_return_type(fn: Callable[..., Any]) -> Aggregate | None:
     return matches[0] if matches else None
 
 
+_DOCSTRING_SECTION_RE = re.compile(r"^(Returns|Raises|Yields|Examples?):")
+_DOCSTRING_PARAM_RE = re.compile(
+    r"^(\*{0,2}[A-Za-z_]\w*)(?:\s*\([^)]*\))?\s*:\s*(.*)$"
+)
+
+
+def _param_descriptions_from_docstring(
+    fn: Callable[..., Any],
+) -> dict[str, str]:
+    """Extract parameter descriptions from a Google-style ``Args:`` section.
+
+    Returns a mapping of parameter name to description. Names that are not
+    parameters of ``fn`` are kept; callers decide what to do with them.
+    """
+    doc = inspect.getdoc(fn)
+    if doc is None:
+        return {}
+
+    lines = doc.splitlines()
+    start = next(
+        (
+            i
+            for i, line in enumerate(lines)
+            if line.strip() in ("Args:", "Parameters:")
+        ),
+        None,
+    )
+    if start is None:
+        return {}
+
+    descriptions: dict[str, str] = {}
+    current_name: str | None = None
+    parts: list[str] = []
+
+    def flush() -> None:
+        nonlocal current_name
+        if current_name is not None and parts:
+            descriptions[current_name] = " ".join(parts)
+        current_name = None
+        parts.clear()
+
+    base_indent: int | None = None
+    for raw in lines[start + 1 :]:
+        stripped = raw.strip()
+        if _DOCSTRING_SECTION_RE.match(stripped):
+            flush()
+            break
+        if not stripped:
+            flush()
+            continue
+
+        indent = len(raw) - len(raw.lstrip())
+        if base_indent is None:
+            base_indent = indent
+
+        match = (
+            _DOCSTRING_PARAM_RE.match(stripped)
+            if indent == base_indent
+            else None
+        )
+        if match:
+            flush()
+            current_name = match.group(1).lstrip("*")
+            first = match.group(2).strip()
+            if first:
+                parts.append(first)
+        elif current_name is not None:
+            parts.append(stripped)
+    flush()
+
+    return descriptions
+
+
 Tool = types.tools.Tool
 
 
@@ -579,7 +653,11 @@ def tool[**P, T, R](
 
     def wrap(fn: Any) -> AgentTool:
         sig = inspect.signature(fn)
-        hints = get_type_hints(fn) if hasattr(fn, "__annotations__") else {}
+        hints = (
+            get_type_hints(fn, include_extras=True)
+            if hasattr(fn, "__annotations__")
+            else {}
+        )
 
         fields: dict[str, Any] = {}
         for param_name, param in sig.parameters.items():
@@ -590,6 +668,15 @@ def tool[**P, T, R](
                 fields[param_name] = (param_type, param.default)
 
         validator = pydantic.create_model(f"{fn.__name__}_Args", **fields)
+
+        schema = validator.model_json_schema()
+        docstring_descriptions = _param_descriptions_from_docstring(fn)
+        for param_name, prop in schema.get("properties", {}).items():
+            if (
+                not prop.get("description")
+                and param_name in docstring_descriptions
+            ):
+                prop["description"] = docstring_descriptions[param_name]
 
         annotated_return_type = _return_type_from_callable(fn)
         annotated_aggregate = _aggregate_from_return_type(fn)
@@ -612,7 +699,7 @@ def tool[**P, T, R](
             name=fn.__name__,
             spec=types.tools.ToolSpec(
                 description=inspect.getdoc(fn) or "",
-                params=validator.model_json_schema(),
+                params=schema,
             ),
             require_approval=require_approval,
         )
