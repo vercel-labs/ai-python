@@ -15,6 +15,39 @@ agent.tools
 
 `agent.tools` returns a copy of registered executable tools.
 
+## Current execution context
+
+Use the class methods below when code called by an agent needs information
+about its active run or tool call:
+
+```python
+class MyAgent(ai.Agent):
+    pass
+
+
+@ai.tool
+async def inspect_context() -> str:
+    agent = MyAgent.current_agent()
+    tool_call = MyAgent.current_tool_call()
+    return f"{type(agent).__name__}: {tool_call.id}"
+```
+
+### current_agent
+
+`Agent.current_agent()` returns the agent whose stream is executing in the
+current context. Calling it outside an agent stream raises `LookupError`.
+Its return type is `Self`, so calling `MyAgent.current_agent()` returns
+`MyAgent` to type checkers.
+
+### current_tool_call
+
+`Agent.current_tool_call()` returns the `ToolCall` executing in the current
+context. It is available to the tool and code called by the tool. Calling it
+outside tool execution raises `LookupError`.
+
+Both methods use task-local context, so concurrent agent runs and tool calls do
+not share their current values.
+
 ## run
 
 ```python
