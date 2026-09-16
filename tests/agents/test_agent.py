@@ -48,9 +48,10 @@ async def test_current_agent() -> None:
     @ai.tool
     async def inspect_agent() -> str:
         """Inspect the current agent."""
-        seen.append(MyAgent.current_agent())
+        seen.append(ai.current_agent(type=MyAgent))
+        assert ai.current_agent() is seen[-1]
         with pytest.raises(LookupError, match="current agent is MyAgent"):
-            OtherAgent.current_agent()
+            ai.current_agent(type=OtherAgent)
         return "done"
 
     my_agent = MyAgent(tools=[inspect_agent])
@@ -62,13 +63,13 @@ async def test_current_agent() -> None:
     )
 
     with pytest.raises(LookupError):
-        MyAgent.current_agent()
+        ai.current_agent(type=MyAgent)
     async with my_agent.run(MOCK_MODEL, [ai.user_message("go")]) as stream:
         async for _ in stream:
             pass
     assert seen == [my_agent]
     with pytest.raises(LookupError):
-        MyAgent.current_agent()
+        ai.current_agent(type=MyAgent)
 
 
 async def test_agent_run_span_tree(recorder: Recorder) -> None:

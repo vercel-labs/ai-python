@@ -1380,28 +1380,6 @@ class Agent:
             else:
                 self._provider_tools.append(t)
 
-    @classmethod
-    def current_agent(cls) -> Self:
-        """Return the agent whose stream is executing in this context.
-
-        Calling this outside an agent stream raises :class:`LookupError`.
-        """
-        agent = _current_agent.get()
-        if not isinstance(agent, cls):
-            raise LookupError(
-                f"current agent is {type(agent).__name__}, not {cls.__name__}"
-            )
-        return agent
-
-    @classmethod
-    def current_tool_call(cls) -> ToolCall:
-        """Return the tool call executing in this context.
-
-        This is available from code called during tool execution. Calling it
-        outside a tool call raises :class:`LookupError`.
-        """
-        return _current_tool_call.get()
-
     @property
     def tools(self) -> list[AgentTool]:
         """The agent's registered tools (read-only copy)."""
@@ -1629,3 +1607,34 @@ class Agent:
             ) as astream,
         ):
             yield astream
+
+
+@overload
+def current_agent() -> Agent: ...
+
+
+@overload
+def current_agent[T: Agent](*, type: type[T]) -> T: ...
+
+
+def current_agent(*, type: type[Agent] = Agent) -> Agent:
+    """Return the agent whose stream is executing in this context.
+
+    Pass ``type=`` to validate and narrow the returned agent type. Calling
+    this outside an agent stream raises :class:`LookupError`.
+    """
+    agent = _current_agent.get()
+    if not isinstance(agent, type):
+        raise LookupError(
+            f"current agent is {agent.__class__.__name__}, not {type.__name__}"
+        )
+    return agent
+
+
+def current_tool_call() -> ToolCall:
+    """Return the tool call executing in this context.
+
+    This is available from code called during tool execution. Calling it
+    outside a tool call raises :class:`LookupError`.
+    """
+    return _current_tool_call.get()

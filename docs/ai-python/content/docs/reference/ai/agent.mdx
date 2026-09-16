@@ -17,8 +17,8 @@ agent.tools
 
 ## Current execution context
 
-Use the class methods below when code called by an agent needs information
-about its active run or tool call:
+Use these functions when code called by an agent needs information about its
+active run or tool call:
 
 ```python
 class MyAgent(ai.Agent):
@@ -27,21 +27,21 @@ class MyAgent(ai.Agent):
 
 @ai.tool
 async def inspect_context() -> str:
-    agent = MyAgent.current_agent()
-    tool_call = MyAgent.current_tool_call()
+    agent = ai.current_agent(type=MyAgent)
+    tool_call = ai.current_tool_call()
     return f"{type(agent).__name__}: {tool_call.id}"
 ```
 
 ### current_agent
 
-`Agent.current_agent()` returns the agent whose stream is executing in the
-current context. Calling it outside an agent stream raises `LookupError`.
-Its return type is `Self`, so calling `MyAgent.current_agent()` returns
+`ai.current_agent()` returns the agent whose stream is executing in the current
+context. Calling it outside an agent stream raises `LookupError`. Pass an
+optional `type=MyAgent` argument to validate the agent at runtime and return
 `MyAgent` to type checkers.
 
 ### current_tool_call
 
-`Agent.current_tool_call()` returns the `ToolCall` executing in the current
+`ai.current_tool_call()` returns the `ToolCall` executing in the current
 context. It is available to the tool and code called by the tool. Calling it
 outside tool execution raises `LookupError`.
 
