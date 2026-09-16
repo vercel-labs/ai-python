@@ -77,7 +77,6 @@ class _StreamState:
     """Single-pass state across one ``to_stream()`` call."""
 
     def __init__(self) -> None:
-        self.ui_message_id: str | None = None
         self.emitted_start: bool = False
         self.in_step: bool = False
         self.step_ended: bool = False
@@ -91,10 +90,6 @@ class _StreamState:
 
         self.open_text_ids: set[str] = set()
         self.open_reasoning_ids: set[str] = set()
-        self.completed_text_ids: set[str] = set()
-        self.completed_reasoning_ids: set[str] = set()
-        self.text_delta_ids: set[str] = set()
-        self.reasoning_delta_ids: set[str] = set()
         self.source_messages: dict[str, messages_.Message] = {}
 
         # Per-tool-call aggregators for streaming generator tools.  Each
@@ -125,13 +120,11 @@ class _StreamState:
 
     def _close_open_blocks(self) -> list[ui_events.UIMessageStreamEvent]:
         events: list[ui_events.UIMessageStreamEvent] = []
-        for rid in list(self.open_reasoning_ids):
+        for rid in self.open_reasoning_ids:
             events.append(ui_events.UIReasoningEndEvent(id=rid))
-            self.completed_reasoning_ids.add(rid)
         self.open_reasoning_ids.clear()
-        for tid in list(self.open_text_ids):
+        for tid in self.open_text_ids:
             events.append(ui_events.UITextEndEvent(id=tid))
-            self.completed_text_ids.add(tid)
         self.open_text_ids.clear()
         return events
 
@@ -143,14 +136,8 @@ class _StreamState:
         events: list[ui_events.UIMessageStreamEvent] = []
 
         if not self.emitted_start:
-            self.ui_message_id = message_id
-            events.append(ui_events.UIStartEvent(message_id=self.ui_message_id))
+            events.append(ui_events.UIStartEvent(message_id=message_id))
             self.emitted_start = True
-            self.started_tool_inputs.clear()
-            self.tool_names.clear()
-            self.input_available_emitted.clear()
-            self.emitted_tool_results.clear()
-            self.emitted_approval_requests.clear()
 
         if not self.in_step:
             events.append(ui_events.UIStartStepEvent())
@@ -210,7 +197,6 @@ class _StreamState:
                             provider_metadata=event.provider_metadata,
                         )
                     )
-                self.text_delta_ids.add(pid)
                 out.append(
                     ui_events.UITextDeltaEvent(
                         id=pid,
@@ -222,7 +208,6 @@ class _StreamState:
             case events_.TextEnd(block_id=pid):
                 if pid in self.open_text_ids:
                     self.open_text_ids.discard(pid)
-                    self.completed_text_ids.add(pid)
                     out.append(
                         ui_events.UITextEndEvent(
                             id=pid,
@@ -248,7 +233,6 @@ class _StreamState:
                             provider_metadata=event.provider_metadata,
                         )
                     )
-                self.reasoning_delta_ids.add(pid)
                 out.append(
                     ui_events.UIReasoningDeltaEvent(
                         id=pid,
@@ -260,7 +244,6 @@ class _StreamState:
             case events_.ReasoningEnd(block_id=pid):
                 if pid in self.open_reasoning_ids:
                     self.open_reasoning_ids.discard(pid)
-                    self.completed_reasoning_ids.add(pid)
                     out.append(
                         ui_events.UIReasoningEndEvent(
                             id=pid,
