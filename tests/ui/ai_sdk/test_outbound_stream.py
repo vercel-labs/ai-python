@@ -699,6 +699,75 @@ async def test_stream_start_after_stream_end_reopens_step() -> None:
     ]
 
 
+def test_serialize_reset_step_event() -> None:
+    payload = json.loads(serialize_event(ui_events.UIResetStepEvent()))
+    assert payload == {"type": "reset-step"}
+
+
+async def test_retry_resets_step_and_reemits_retried_parts() -> None:
+    """Retry emits reset-step; the retried stream continues the same step."""
+    tool_call = messages_.ToolCallPart(
+        tool_call_id="tc1", tool_name="search", tool_args="{}"
+    )
+    out = await _collect(
+        [
+            events_.TextStart(block_id="t1"),
+            events_.TextDelta(block_id="t1", chunk="hi"),
+            events_.TextEnd(block_id="t1"),
+            events_.StreamEnd(),
+            events_.StreamStart(),
+            events_.ToolStart(tool_call_id="tc1", tool_name="search"),
+            events_.ToolDelta(tool_call_id="tc1", chunk='{"partial'),
+            events_.Retry(),
+            events_.StreamStart(),
+            events_.ToolStart(tool_call_id="tc1", tool_name="search"),
+            events_.ToolDelta(tool_call_id="tc1", chunk="{}"),
+            events_.ToolEnd(tool_call_id="tc1", tool_call=tool_call),
+            events_.StreamEnd(),
+        ]
+    )
+
+    types = [type(event).__name__ for event in out]
+    assert types == [
+        "UIStartEvent",
+        "UIStartStepEvent",
+        "UITextStartEvent",
+        "UITextDeltaEvent",
+        "UITextEndEvent",
+        "UIFinishStepEvent",
+        "UIStartStepEvent",
+        "UIToolInputStartEvent",
+        "UIToolInputDeltaEvent",
+        "UIResetStepEvent",
+        "UIToolInputStartEvent",
+        "UIToolInputDeltaEvent",
+        "UIFinishStepEvent",
+        "UIFinishEvent",
+    ]
+
+
+async def test_retry_before_any_output_is_dropped() -> None:
+    out = await _collect(
+        [
+            events_.Retry(),
+            events_.StreamStart(),
+            events_.TextStart(block_id="t1"),
+            events_.TextDelta(block_id="t1", chunk="hi"),
+        ]
+    )
+
+    types = [type(event).__name__ for event in out]
+    assert types == [
+        "UIStartEvent",
+        "UIStartStepEvent",
+        "UITextStartEvent",
+        "UITextDeltaEvent",
+        "UITextEndEvent",
+        "UIFinishStepEvent",
+        "UIFinishEvent",
+    ]
+
+
 # NOTE: agent-change boundary detection used to be driven by
 # Message.source_label.  That field has been removed; agent-change
 # routing in the AI SDK adapter now needs to come from

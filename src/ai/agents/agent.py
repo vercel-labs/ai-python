@@ -231,8 +231,19 @@ class MessageAggregator(
     def __init__(self) -> None:
         self._messages: list[types.messages.Message] = []
         self._index_by_id: dict[str, int] = {}
+        self._streaming_index: int | None = None
 
     def feed(self, item: events_.AgentEvent) -> None:
+        if isinstance(item, events_.Retry):
+            # Drop the in-progress model response and everything after
+            # it (its tool results); the retried stream re-adds them,
+            # possibly under a new id.
+            if self._streaming_index is not None:
+                for m in self._messages[self._streaming_index :]:
+                    del self._index_by_id[m.id]
+                del self._messages[self._streaming_index :]
+                self._streaming_index = None
+            return
         if isinstance(item, events_.PartialToolCallResult | events_.RunBlocked):
             return
         msg = item.message
@@ -245,10 +256,13 @@ class MessageAggregator(
         # by checking the tail.
         index = self._index_by_id.get(msg.id)
         if index is None:
-            self._index_by_id[msg.id] = len(self._messages)
+            index = len(self._messages)
+            self._index_by_id[msg.id] = index
             self._messages.append(msg)
         else:
             self._messages[index] = msg
+        if isinstance(item, events_.ModelEvent):
+            self._streaming_index = index
 
     def snapshot(self) -> MessageBundle:
         return MessageBundle(messages=tuple(self._messages))

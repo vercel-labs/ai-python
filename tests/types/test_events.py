@@ -297,6 +297,98 @@ def test_omitted_model_event_validates_with_dummy_message() -> None:
     assert restored.message.parts == []
 
 
+def test_retry_round_trips_through_agent_event_union() -> None:
+    adapter: pydantic.TypeAdapter[events.AgentEvent] = pydantic.TypeAdapter(
+        events.AgentEvent
+    )
+
+    restored = adapter.validate_python({"kind": "retry"})
+
+    assert isinstance(restored, events.Retry)
+    assert adapter.dump_python(events.Retry(), mode="json") == {"kind": "retry"}
+
+
+def test_message_hydrator_retry_discards_response_and_tool_results() -> None:
+    hydrator = events.MessageHydrator()
+    done = messages.Message(id="assistant-1", role="assistant", parts=[])
+    retried = messages.Message(id="assistant-2", role="assistant", parts=[])
+    tool_call = messages.ToolCallPart(
+        tool_call_id="tc1", tool_name="search", tool_args='{"q":"full"}'
+    )
+    tool_message = messages.Message(
+        id="tool-1",
+        role="tool",
+        parts=[
+            messages.ToolResultPart(
+                tool_call_id="tc1", tool_name="search", result="stale"
+            )
+        ],
+    )
+
+    for event in (
+        events.StreamStart(message=done),
+        events.TextStart(message=done, block_id="t1"),
+        events.TextDelta(message=done, block_id="t1", chunk="done"),
+        events.StreamEnd(message=done, finish_reason="stop"),
+        events.StreamStart(message=retried),
+        events.ToolStart(
+            message=retried, tool_call_id="tc1", tool_name="search"
+        ),
+        events.ToolDelta(
+            message=retried, tool_call_id="tc1", chunk='{"q":"par'
+        ),
+        events.StreamEnd(message=retried, finish_reason="tool_call"),
+        events.ToolCallResult(message=tool_message, results=[]),
+    ):
+        hydrator.feed(event)
+    assert [m.id for m in hydrator.messages] == [
+        "assistant-1",
+        "assistant-2",
+        "tool-1",
+    ]
+    assert hydrator.ended
+
+    retry = hydrator.feed(events.Retry())
+
+    assert isinstance(retry, events.Retry)
+    assert [m.id for m in hydrator.messages] == ["assistant-1"]
+    assert list(hydrator.messages_by_id) == ["assistant-1"]
+    assert hydrator.message.parts == []
+    assert not hydrator.ended
+    assert hydrator.finish_reason is None
+
+    # The retried attempt reuses the message and tool call ids: neither
+    # may pick up state from the discarded attempt.
+    for event in (
+        events.StreamStart(message=retried),
+        events.ToolStart(
+            message=retried, tool_call_id="tc1", tool_name="search"
+        ),
+        events.ToolDelta(
+            message=retried, tool_call_id="tc1", chunk='{"q":"full"}'
+        ),
+    ):
+        hydrator.feed(event)
+    end = hydrator.feed(
+        events.ToolEnd(message=retried, tool_call_id="tc1", tool_call=tool_call)
+    )
+    hydrator.feed(events.StreamEnd(message=retried, finish_reason="tool_call"))
+
+    assert hydrator.ended
+    assert end.tool_call.tool_args == '{"q":"full"}'
+    assert [m.id for m in hydrator.messages] == ["assistant-1", "assistant-2"]
+    assert hydrator.message is hydrator.messages_by_id["assistant-2"]
+    assert hydrator.message.tool_calls[0].tool_args == '{"q":"full"}'
+
+
+def test_message_hydrator_retry_before_any_stream_is_noop() -> None:
+    hydrator = events.MessageHydrator()
+    retry = hydrator.feed(events.Retry())
+
+    assert isinstance(retry, events.Retry)
+    assert hydrator.messages == []
+
+
 class TestReplayMessageEvents:
     async def test_reasoning_signature_survives_replay(self) -> None:
         """A signed reasoning part replayed through the Stream aggregator
