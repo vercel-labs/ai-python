@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import dataclasses
+from collections.abc import MutableSet
 from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
@@ -14,6 +15,8 @@ if TYPE_CHECKING:
         AsyncIterator,
         Collection,
         Generator,
+        Iterable,
+        Iterator,
     )
     from types import TracebackType
 
@@ -128,6 +131,28 @@ class MultiWaiter[T]:
         return False
 
 
+class OrderedSet[T](MutableSet[T]):
+    """An insertion-ordered set."""
+
+    def __init__(self, iterable: Iterable[T] = ()) -> None:
+        self._items: dict[T, None] = dict.fromkeys(iterable)
+
+    def add(self, value: T) -> None:
+        self._items[value] = None
+
+    def discard(self, value: T) -> None:
+        self._items.pop(value, None)
+
+    def __contains__(self, item: object) -> bool:
+        return item in self._items
+
+    def __iter__(self) -> Iterator[T]:
+        return iter(self._items)
+
+    def __len__(self) -> int:
+        return len(self._items)
+
+
 class TaskGroupGenExit(GeneratorExit, BaseExceptionGroup[BaseException]):
     """A ``BaseExceptionGroup`` that is *also* a ``GeneratorExit``.
 
@@ -140,7 +165,7 @@ class TaskGroupGenExit(GeneratorExit, BaseExceptionGroup[BaseException]):
 
 
 class TaskGroup(asyncio.TaskGroup):
-    """asyncio.TaskGroup that directly propagates GeneratorExit.
+    """TaskGroup that propagates GeneratorExit and has deterministic teardown.
 
     If the context body raises a GeneratorExit, we don't want to leave
     it wrapped in a plain ExceptionGroup, because that does the wrong
@@ -153,7 +178,15 @@ class TaskGroup(asyncio.TaskGroup):
     If there are multiple exceptions, keep them packaged in the plain
     group so as to not lose anything (a TaskGroupGenExit would be
     swallowed by aclose(), silently dropping the other exceptions).
+
+    On exceptional exit, tasks are cancelled in the order they were
+    created.
     """
+
+    def __init__(self) -> None:
+        super().__init__()
+        # Bang in an ordered set so we tear down in order.
+        self._tasks = OrderedSet()  # type: ignore  # noqa: PGH003
 
     async def __aexit__(
         self,
@@ -253,8 +286,9 @@ async def decouple[T](
                 sem.release()
     finally:
         # cancel is a no-op if a task is already done or cancelled
-        task.cancel()
-        with contextlib.suppress(Exception, asyncio.CancelledError):
+        if not task.cancelling():
+            task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
             await task
 
 
@@ -289,11 +323,18 @@ async def merge[T](
     if priority and restart:
         raise ValueError("cannot specify priority=True and restart=True")
 
-    async with TaskGroup() as tg:
+    async with (
+        contextlib.AsyncExitStack() as stack,
+        TaskGroup() as tg,
+    ):
         raw_aiters = [aiter(iter) for iter in aiterables]
-        aiters = [
-            decouple(iter, task_group=tg, buffer=0) for iter in raw_aiters
-        ]
+        aiters = [decouple(iter, buffer=0) for iter in raw_aiters]
+
+        @stack.push_async_callback
+        async def _close_iters() -> None:
+            for iter in aiters:
+                await iter.aclose()
+
         # We consider anything that doesn't __aiter__ to itself to be
         # potentially restartable.
         restartable = [
@@ -351,6 +392,6 @@ async def merge[T](
                 ):
                     if ok and otask is None and idx not in fired:
                         niter = aiters[idx] = decouple(
-                            aiterables[idx], buffer=0, task_group=tg
+                            aiterables[idx], buffer=0
                         )
                         tasks[idx] = tg.create_task(anext(niter, _EMPTY))

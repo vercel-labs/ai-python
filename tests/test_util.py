@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import contextvars
 from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator
 from typing import Any, cast
@@ -306,6 +307,32 @@ async def test_taskgroup_no_exception() -> None:
     assert ran
 
 
+async def test_taskgroup_cancellation_order_is_fifo() -> None:
+    async def run_once() -> None:
+        cancelled: list[int] = []
+        started = [asyncio.Event() for _ in range(3)]
+
+        async def work(i: int) -> None:
+            started[i].set()
+            try:
+                await asyncio.Future()
+            finally:
+                cancelled.append(i)
+
+        with pytest.raises(ExceptionGroup):
+            async with util.TaskGroup() as tg:
+                for i in range(3):
+                    tg.create_task(work(i))
+                for event in started:
+                    await event.wait()
+                raise RuntimeError("stop")
+
+        assert cancelled == [0, 1, 2]
+
+    for _ in range(20):
+        await run_once()
+
+
 # -- maybe_aclosing --------------------------------------------------------
 
 
@@ -606,6 +633,111 @@ async def test_decouple_aclose_runs_iter_cleanup_in_worker_context() -> None:
 
 
 # -- merge: TaskGroup-inside-asyncgen wrapping ----------------------------
+
+
+async def test_merge_cancellation_order_on_close_is_deterministic() -> None:
+    async def run_once() -> list[int]:
+        started = 0
+        all_started = asyncio.Event()
+        cancelled: list[int] = []
+
+        async def source(i: int) -> AsyncIterator[int]:
+            nonlocal started
+
+            started += 1
+            if started == 3:
+                all_started.set()
+
+            try:
+                await all_started.wait()
+                if i == 0:
+                    yield i
+                await asyncio.Future()
+            finally:
+                cancelled.append(i)
+
+        merged = util.merge(*(source(i) for i in range(3)))
+        assert await anext(merged) == 0
+        await merged.aclose()
+        return cancelled
+
+    expected = await run_once()
+    for _ in range(19):
+        assert await run_once() == expected
+
+
+async def test_merge_inner_task_is_not_double_cancelled_close() -> None:
+    async def run_once() -> None:
+        cancellation_counts: list[int] = []
+
+        async def source() -> AsyncIterator[int]:
+            try:
+                yield 1
+                await asyncio.Future()
+            finally:
+                task = asyncio.current_task()
+                assert task is not None
+                cancellation_counts.append(task.cancelling())
+
+        merged = util.merge(source())
+        assert await anext(merged) == 1
+        await merged.aclose()
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        assert cancellation_counts == [1]
+
+    for _ in range(20):
+        await run_once()
+
+
+async def test_merge_inner_task_is_not_double_cancelled_cancel() -> None:
+    async def run_once(i: int) -> None:
+        made_it = False
+        outputs: list[int] = []
+        ev = asyncio.Event()
+
+        do_yield = i % 3 == 0
+        do_uncancel = i % 2 == 0
+
+        async def source() -> AsyncGenerator[int]:
+            nonlocal made_it
+
+            try:
+                if do_yield:
+                    yield 1
+                ev.set()
+                await asyncio.Future()
+            finally:
+                task = asyncio.current_task()
+                assert task is not None
+                # This uncancel is frankly wrong (uncancel is supposed
+                # to be called by the caller of cancel), but it
+                # imitates some code in temporal that we were
+                # interacting poorly with.
+                if do_uncancel:
+                    task.uncancel()
+                await asyncio.sleep(0)
+                made_it = True
+
+        async def inner() -> None:
+            async with contextlib.aclosing(source()) as src:
+                async for x in util.merge(src):
+                    outputs.append(x)
+
+        task = asyncio.create_task(inner())
+        await ev.wait()
+
+        assert outputs == ([1] if do_yield else [])
+
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+        assert made_it
+
+    for i in range(20):
+        await run_once(i)
 
 
 async def test_merge_aclose_returns_cleanly_after_break() -> None:
