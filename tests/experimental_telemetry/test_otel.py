@@ -653,6 +653,25 @@ def test_generate_image_span_operation_name() -> None:
     assert "gen_ai.embeddings.dimension.count" not in attrs
 
 
+def test_evaluate_span_operation_name() -> None:
+    data = ai.experimental_telemetry.EvaluateSpanData(
+        question_count=3,
+        model="typesafe-ai/jev",
+        provider="ai-gateway",
+        usage=usage_.Usage(input_tokens=9),
+    )
+    sp = ai.experimental_telemetry.Span(
+        name="ops", data=data, id="span-1", trace_id="trace-1"
+    )
+    assert otel._semconv_name(sp) == "evaluate typesafe-ai/jev"
+    assert otel._semconv_kind(sp) == SpanKind.CLIENT
+    attrs = otel._attributes(sp, capture_content=False)
+    assert attrs["gen_ai.operation.name"] == "evaluate"
+    assert attrs["gen_ai.provider.name"] == "ai-gateway"
+    assert attrs["gen_ai.request.model"] == "typesafe-ai/jev"
+    assert attrs["gen_ai.usage.input_tokens"] == 9
+
+
 def test_rerank_span_operation_name() -> None:
     data = ai.experimental_telemetry.RerankSpanData(
         input_count=1,

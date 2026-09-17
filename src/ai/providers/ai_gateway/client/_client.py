@@ -31,6 +31,7 @@ ModelType = Literal[
     "embedding",
     "transcription",
     "reranking",
+    "evaluation",
 ]
 
 
@@ -39,7 +40,7 @@ class GatewayClient:
 
     This intentionally implements only the calls used by the current provider:
     config/credits reads, language streaming, image/video/speech
-    generation, embeddings, transcription, and reranking.
+    generation, embeddings, transcription, reranking, and evaluation.
     """
 
     def __init__(
@@ -121,6 +122,9 @@ class GatewayClient:
             headers["ai-model-id"] = model.id
         elif model_type == "reranking":
             headers["ai-reranking-model-specification-version"] = spec_version
+            headers["ai-model-id"] = model.id
+        elif model_type == "evaluation":
+            headers["ai-evaluation-model-specification-version"] = spec_version
             headers["ai-model-id"] = model.id
         else:
             headers["ai-speech-model-specification-version"] = spec_version

@@ -27,6 +27,7 @@ if TYPE_CHECKING:
     from ..ops import (
         audio,
         embeddings,
+        evaluation,
         images,
         items,
         reranking,
@@ -176,6 +177,21 @@ class ProviderProtocol(pydantic.BaseModel, Generic[ClientT]):
         """
         raise NotImplementedError(
             f"protocol {type(self).__name__!r} does not support generate()"
+        )
+
+    async def evaluate(
+        self,
+        client: ClientT,
+        model: model_.Model,
+        state: evaluation.EvaluationInput,
+        questions: Mapping[str, evaluation.EvaluationQuestion],
+        *,
+        params: evaluation.EvaluationParams,
+        provider: str,
+    ) -> items.Item[evaluation.Evaluation]:
+        """Evaluate typed questions against shared state using *client*."""
+        raise NotImplementedError(
+            f"protocol {type(self).__name__!r} does not support evaluate()"
         )
 
     async def generate_image(
@@ -505,6 +521,25 @@ class Provider(pydantic.BaseModel, Generic[ClientT]):
             messages,
             tools=tools,
             output_type=output_type,
+            params=params,
+            provider=self.name,
+        )
+
+    async def evaluate(
+        self,
+        model: model_.Model,
+        state: evaluation.EvaluationInput,
+        questions: Mapping[str, evaluation.EvaluationQuestion],
+        *,
+        params: evaluation.EvaluationParams,
+    ) -> items.Item[evaluation.Evaluation]:
+        """Evaluate typed questions against shared state with this provider."""
+        selected_protocol = model.protocol or self.protocol
+        return await selected_protocol.evaluate(
+            self.client,
+            model,
+            state,
+            questions,
             params=params,
             provider=self.name,
         )
