@@ -374,6 +374,25 @@ class _StreamState:
 
         return out
 
+    # -- phase: retry --------------------------------------------------------
+
+    def on_retry(self) -> list[ui_events.UIMessageStreamEvent]:
+        """Handle a ``Retry`` -- drop the current step on the client."""
+        if not self.in_step:
+            return []
+        # The client discards every part since start-step, so forget
+        # the ids we have seen: the retried attempt may reuse them.
+        self.step_ended = False
+        self.started_tool_inputs.clear()
+        self.tool_names.clear()
+        self.input_available_emitted.clear()
+        self.emitted_tool_results.clear()
+        self.emitted_approval_requests.clear()
+        self.open_text_ids.clear()
+        self.open_reasoning_ids.clear()
+        self.partial_aggregators.clear()
+        return [ui_events.UIResetStepEvent()]
+
     # -- phase: tool results ------------------------------------------------
 
     def on_tool_result(
@@ -635,6 +654,9 @@ async def to_stream(
                 # No AI SDK UI equivalent; hook parts already carry the
                 # deferred-approval state the UI renders.
                 pass
+            case events_.Retry():
+                for ui_event in state.on_retry():
+                    yield ui_event
             case _:
                 for ui_event in state.on_event(event):
                     yield ui_event

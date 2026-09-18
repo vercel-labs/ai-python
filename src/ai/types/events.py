@@ -252,6 +252,7 @@ class MessageHydrator:
         self.messages: list[messages.Message] = []
         self.messages_by_id: dict[str, messages.Message] = {}
         self._parts_by_message_id: dict[str, dict[str, messages.Part]] = {}
+        self._streaming_index: int | None = None
         self._message_selected = seed_message is not None
         self._seed_checked = False
         # A stream that exhausts without StreamEnd died mid-response.
@@ -271,6 +272,26 @@ class MessageHydrator:
             elif existing is not event.message:
                 self.messages[self.messages.index(existing)] = event.message
             self.messages_by_id[event.message.id] = event.message
+            return event
+        if isinstance(event, Retry):
+            # Drop the in-progress model response and everything after
+            # it (tool results, hook messages); the retried stream
+            # rebuilds them, under the same or a new id.
+            if self._streaming_index is None:
+                return event
+            stale = self.messages[self._streaming_index :]
+            for msg in stale:
+                del self.messages_by_id[msg.id]
+                self._parts_by_message_id.pop(msg.id, None)
+            del self.messages[self._streaming_index :]
+            self._streaming_index = None
+            self.message = messages.Message(
+                id=stale[0].id, role="assistant", parts=[]
+            )
+            self.ended = False
+            self.finish_reason = None
+            self.response_id = None
+            self.response_model = None
             return event
         if not isinstance(event, ModelEvent):
             return event
@@ -299,6 +320,12 @@ class MessageHydrator:
         if self.message.id not in self.messages_by_id:
             self.messages.append(self.message)
             self.messages_by_id[self.message.id] = self.message
+            self._streaming_index = len(self.messages) - 1
+        elif (
+            self._streaming_index is None
+            or self.messages[self._streaming_index] is not self.message
+        ):
+            self._streaming_index = self.messages.index(self.message)
         self._parts = self._parts_by_message_id.setdefault(self.message.id, {})
 
         # Replay events carry no new state — the seeded message already
@@ -616,8 +643,29 @@ class RunBlocked(BaseEvent):
     kind: Literal["run_blocked"] = "run_blocked"
 
 
+class Retry(BaseEvent):
+    """The in-progress model response is discarded and will be re-streamed.
+
+    Everything since the most recent ``StreamStart`` -- the in-progress
+    assistant message and any tool results for it -- is invalidated; a
+    fresh ``StreamStart`` follows.
+
+    Nothing in the library emits this yet.  It is for custom loops that
+    retry a model call after it already produced events (e.g. a durable
+    step that failed mid-stream); ``MessageHydrator``, ``RunStateTracker``
+    and the AI SDK UI adapter all handle it.
+    """
+
+    kind: Literal["retry"] = "retry"
+
+
 AgentEvent = Annotated[
-    Event | ToolCallResult | HookEvent | PartialToolCallResult | RunBlocked,
+    Event
+    | ToolCallResult
+    | HookEvent
+    | PartialToolCallResult
+    | RunBlocked
+    | Retry,
     pydantic.Field(discriminator="kind"),
 ]
 
@@ -654,6 +702,7 @@ class RunStateTracker:
     def __init__(self) -> None:
         self._deferred: dict[str, messages.HookPart[Any]] = {}
         self._in_flight: set[str] = set()
+        self._last_scheduled: set[str] = set()
         self._streaming = 0
         self._stream_ended = False
         self._blocked = False
@@ -671,15 +720,25 @@ class RunStateTracker:
             case StreamStart():
                 self._streaming += 1
                 self._stream_ended = False
+                self._last_scheduled = set()
             case StreamEnd():
                 # Loops may emit a bare StreamEnd without a StreamStart
                 # (e.g. when the model was streamed out-of-band), so
                 # clamp at zero.
                 self._streaming = max(0, self._streaming - 1)
                 self._stream_ended = True
-                self._in_flight.update(
+                self._last_scheduled = {
                     tc.tool_call_id for tc in event.message.tool_calls
-                )
+                }
+                self._in_flight |= self._last_scheduled
+            case Retry():
+                # Undo the discarded response's StreamStart and any tool
+                # calls its StreamEnd scheduled (none once a new stream
+                # has started).
+                self._streaming = max(0, self._streaming - 1)
+                self._stream_ended = False
+                self._in_flight -= self._last_scheduled
+                self._last_scheduled = set()
             case ToolCallResult():
                 self._in_flight.difference_update(
                     r.tool_call_id for r in event.results

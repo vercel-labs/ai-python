@@ -325,6 +325,15 @@ class UIFinishStepEvent:
 
 
 @dataclasses.dataclass
+class UIResetStepEvent:
+    """Removes all message parts received since the current step started."""
+
+    type: Literal["reset-step"] = dataclasses.field(
+        default="reset-step", init=False
+    )
+
+
+@dataclasses.dataclass
 class UIFinishEvent:
     """Indicates the completion of a message."""
 
@@ -384,6 +393,7 @@ UIMessageStreamEvent = (
     | UIToolApprovalResponseEvent
     | UIStartStepEvent
     | UIFinishStepEvent
+    | UIResetStepEvent
     | UIFinishEvent
     | UIAbortEvent
     | UIMessageMetadataEvent

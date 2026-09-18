@@ -67,11 +67,16 @@ Agents can emit event values that are not raw provider stream events.
   `yield_from`.
 - `HookEvent`: Carries an internal hook message and `HookPart`.
 - `RunBlocked`: Emitted when the run is blocked on deferred hooks.
+- `Retry`: Discards everything since the most recent `StreamStart`: the
+  in-progress assistant message and any tool results for it. The
+  library does not emit this yet; it is for custom loops that retry a model
+  call after it already produced events.
 
 Agent event union:
 
 - `AgentEvent`: everything an agent run can yield: `Event` plus
-  `ToolCallResult`, `HookEvent`, `PartialToolCallResult`, and `RunBlocked`.
+  `ToolCallResult`, `HookEvent`, `PartialToolCallResult`, `RunBlocked`,
+  and `Retry`.
   The union is annotated with a Pydantic discriminator on the `kind` field,
   so use it as a field or `TypeAdapter` type when deserializing events and
   Pydantic picks the right event class from `kind`.

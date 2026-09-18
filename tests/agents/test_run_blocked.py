@@ -383,6 +383,61 @@ def test_tracker_fold_sequence() -> None:
     assert not tracker.blocked
 
 
+def test_tracker_retry_mid_stream() -> None:
+    """A Retry undoes the dead stream's StreamStart without blocking."""
+    tracker = events_.RunStateTracker()
+    hook: messages_.HookPart[Any] = messages_.HookPart(
+        hook_id="h1",
+        hook_type="ToolApproval",
+        status="pending",
+        tool_call_id="tc-1",
+    )
+
+    assert tracker.feed(events_.StreamStart()) is None
+    assert tracker.feed(_hook_event(hook)) is None
+    assert tracker.feed(events_.Retry()) is None
+    assert not tracker.blocked
+
+    # Retried stream: the count is back in balance, so its StreamEnd
+    # can block the run.
+    assert tracker.feed(events_.StreamStart()) is None
+    transition = tracker.feed(
+        events_.StreamEnd(message=_multi_call_msg(("tc-1", "gated")))
+    )
+    assert isinstance(transition, events_.RunBlocked)
+    assert tracker.blocked
+
+
+def test_tracker_retry_after_stream_end_forgets_scheduled_calls() -> None:
+    """Retrying a completed response drops the tool calls it scheduled."""
+    tracker = events_.RunStateTracker()
+    hook: messages_.HookPart[Any] = messages_.HookPart(
+        hook_id="h1",
+        hook_type="ToolApproval",
+        status="pending",
+        tool_call_id="tc-1",
+    )
+
+    assert tracker.feed(events_.StreamStart()) is None
+    assert (
+        tracker.feed(
+            events_.StreamEnd(
+                message=_multi_call_msg(("tc-1", "gated"), ("tc-2", "slow"))
+            )
+        )
+        is None
+    )
+    assert tracker.feed(events_.Retry()) is None
+
+    # tc-2 from the discarded response must not keep the run "busy".
+    assert tracker.feed(events_.StreamStart()) is None
+    assert tracker.feed(_hook_event(hook)) is None
+    transition = tracker.feed(
+        events_.StreamEnd(message=_multi_call_msg(("tc-1", "gated")))
+    )
+    assert isinstance(transition, events_.RunBlocked)
+
+
 def test_message_aggregator_tolerates_block_events() -> None:
     agg = ai.agents.MessageAggregator()
     agg.feed(events_.RunBlocked())
