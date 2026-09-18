@@ -23,6 +23,11 @@ async def _gen(
         yield event
 
 
+async def _broken_gen() -> AsyncGenerator[agent_events_.AgentEvent]:
+    yield events_.TextStart(block_id="t1")
+    raise RuntimeError("sensitive provider detail")
+
+
 async def _collect(
     stream_events: list[agent_events_.AgentEvent],
 ) -> list[ui_events.UIMessageStreamEvent]:
@@ -100,6 +105,32 @@ async def test_to_sse_emits_data_prefixed_lines() -> None:
     first = json.loads(lines[0].removeprefix("data: ").rstrip())
     assert first["type"] == "start"
     assert lines[-1] == "data: [DONE]\n\n"
+
+
+async def test_to_sse_converts_stream_errors_to_safe_error_events() -> None:
+    lines = [line async for line in to_sse(_broken_gen())]
+
+    error = json.loads(lines[-2].removeprefix("data: ").rstrip())
+    assert error == {"type": "error", "errorText": "An error occurred."}
+    assert lines[-1] == "data: [DONE]\n\n"
+
+
+async def test_to_sse_supports_custom_error_messages() -> None:
+    errors: list[Exception] = []
+
+    def on_error(error: Exception) -> str:
+        errors.append(error)
+        return "The model is temporarily unavailable."
+
+    lines = [line async for line in to_sse(_broken_gen(), on_error=on_error)]
+
+    error = json.loads(lines[-2].removeprefix("data: ").rstrip())
+    assert error == {
+        "type": "error",
+        "errorText": "The model is temporarily unavailable.",
+    }
+    assert len(errors) == 1
+    assert str(errors[0]) == "sensitive provider detail"
 
 
 async def test_stream_start_uses_runtime_message_id() -> None:
