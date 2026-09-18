@@ -800,7 +800,7 @@ async def test_loop_closing_checker_recovers_after_cancel() -> None:
 # -- merge: TaskGroup-inside-asyncgen wrapping ----------------------------
 
 
-async def test_merge_cancellation_order_on_close_is_deterministic() -> None:
+async def test_merge_cancellation_order_on_close_is_fifo() -> None:
     async def run_once() -> list[int]:
         started = 0
         all_started = asyncio.Event()
@@ -826,9 +826,8 @@ async def test_merge_cancellation_order_on_close_is_deterministic() -> None:
         await merged.aclose()
         return cancelled
 
-    expected = await run_once()
-    for _ in range(19):
-        assert await run_once() == expected
+    for _ in range(20):
+        assert await run_once() == [0, 1, 2]
 
 
 async def test_merge_inner_task_is_not_double_cancelled_close() -> None:

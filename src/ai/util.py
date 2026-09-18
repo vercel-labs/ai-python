@@ -47,15 +47,17 @@ class AsyncIterableQueue[T](asyncio.Queue[_Stop | T]):
     def __init__(self, maxsize: int = 0) -> None:
         super().__init__(maxsize)
 
-    async def __aiter__(self) -> AsyncIterator[T]:
-        while True:
-            el = await self.get()
-            if isinstance(el, _Stop):
-                if el.exception:
-                    raise el.exception
-                else:
-                    return
-            yield el
+    def __aiter__(self) -> AsyncIterator[T]:
+        return self
+
+    async def __anext__(self) -> T:
+        el = await self.get()
+        if isinstance(el, _Stop):
+            if el.exception:
+                raise el.exception
+            else:
+                raise StopAsyncIteration
+        return el
 
     async def athrow(self, e: BaseException) -> None:
         await self.put(_Stop(exception=e))
@@ -272,121 +274,146 @@ def run_right_now[T](fut: asyncio.Future[T], val: T) -> None:
         asyncio._enter_task(loop, cur)
 
 
-async def decouple[T](
-    iter: AsyncIterable[T],
-    *,
-    buffer: int | None,
-) -> AsyncGenerator[T]:
+class decouple[T]:  # noqa: N801
     """Drive ``iter`` from a single worker task and yield its items.
 
     Ensures every ``__anext__`` on ``iter`` runs in the same task context,
-    which makes it safe to call ``anext`` on the result of ``decouple`` from
+    which makes it safe to call ``anext`` on a ``decouple`` from
     different tasks. (Async generators may depend on both context vars
     and the current task identity, so in general should be run on one task.)
+
+    decouple takes ownership of the iterable, and will call aclose() on it if
+    aclose() exists.
+
+    anext() on a decouple is cancellation-safe (similar to Queue.get):
+    cancelling it will not lose elements.
 
     ``buffer`` is how many elements the worker may run ahead of the
     consumer. With buffer=0 the underlying iterable is run in
     lockstep with the consumer.
 
-    We try pretty hard to make sure that ``iter`` gets aclose()d in
-    the same task that it was run it.
+    If iter does *not* have an aclose method, then the underlying
+    iterator ``iter`` will be usable after the decouple is closed. If
+    the buffer size was zero, then no elements will be lost unless an
+    anext was cancelled, in which case one might be.
 
-    On asyncio shutdown, tasks all get canceled before async
-    generators are closed, so we should be OK.
     """
-    queue: AsyncIterableQueue[T] = AsyncIterableQueue()
-    sem = None if buffer is None else asyncio.Semaphore(buffer)
-    fut: asyncio.Future[None] | None = None
 
-    done = False
-    is_loop_closing = get_loop_closing_checker()
+    def __init__(
+        self,
+        iter: AsyncIterable[T],
+        *,
+        buffer: int | None,
+    ) -> None:
+        self._queue: AsyncIterableQueue[T] = AsyncIterableQueue()
+        self._worker_sem = None if buffer is None else asyncio.Semaphore(buffer)
 
-    async def worker() -> None:
-        nonlocal fut
+        # How many anexts have been cancelled - avoid signalling the sem
+        # when they are.
+        self._cancelled_nexts = 0
+
+        self._buffer = buffer
+        self._cur_fut: asyncio.Future[None] | None = None
+
+        self._done = False
+        self._is_loop_closing = get_loop_closing_checker()
+
+        self._task = asyncio.create_task(
+            self._worker(iter), name=f"decouple for {iter}"
+        )
+
+    async def _acquire(self) -> None:
+        if self._worker_sem is None:
+            return
+        try:
+            # For the running in lock-step case, we go to sleep on a
+            # future that we can run with run_right_now(), which
+            # allows us to run it without hitting the scheduler.
+            #
+            # If we manage to produce a value without blocking, then
+            # by the time we block again (back on this future), we'll
+            # have already populated the queue and the consumer will
+            # be able to read it without ever blocking either, so we
+            # shave two trips through the scheduler.
+            if self._buffer == 0 and self._worker_sem.locked():
+                self._cur_fut = asyncio.Future()
+                try:
+                    await self._cur_fut
+                finally:
+                    self._cur_fut = None
+            await self._worker_sem.acquire()
+        except asyncio.CancelledError as e:
+            # Three reasons we might have been cancelled:
+            # 1. aclose()
+            # 2. Approximately *all* tasks being cancelled
+            # 3. Something internal to the generator body
+            #    (probably a TaskGroup)
+            #
+            # In case 3, we wait again on the sem (to
+            # preserve lockstep behavior), then we
+            # re-assert the cancellation so it gets
+            # delivered back into the generator body
+            # if it blocks.
+            if self._done or self._is_loop_closing():
+                raise
+            await self._worker_sem.acquire()
+            # Recancel the task, so that it gets
+            # delivered, but then also *uncancel* it,
+            # so the count doesn't go up.
+            self._task.cancel(str(e))
+            self._task.uncancel()
+
+    def _put(self, x: _Stop | T) -> None:
+        self._queue.put_nowait(x)
+
+    async def _worker(self, iter: AsyncIterable[T]) -> None:
         async with maybe_aclosing(iter):
             try:
-                # N.B: There's a potential case, if iter is *not* a
-                # generator (and so we aren't closing it), and this
-                # task gets cancelled before it can write it, then
-                # maybe an element gets lost?
-                #
-                # TODO: I'm not sure if this case can ever matter, but
-                # think about it more.
-
-                # We don't need to wait before ther *first* iteration
-                # because we don't get spawned until the first anext()
-                # anyway.
+                await self._acquire()
                 async for x in iter:
-                    queue.put_nowait(x)
-                    if sem is not None:
-                        try:
-                            # For the running in lock-step case, we go
-                            # to sleep on a future that we can run
-                            # with run_right_now(), which allows us to
-                            # run it without hitting the scheduler.
-                            #
-                            # If we manage to produce a value without
-                            # blocking, then by the time we block
-                            # again (back on this future), we'll have
-                            # already populated the queue and the
-                            # consumer will be able to read it without
-                            # ever blocking either, so we shave two
-                            # trips through the scheduler.
-                            if buffer == 0 and sem.locked():
-                                fut = asyncio.Future()
-                                try:
-                                    await fut
-                                finally:
-                                    fut = None
-                            await sem.acquire()
-                        except asyncio.CancelledError as e:
-                            # Three reasons we might have been cancelled:
-                            # 1. Enclosing decouple()'s finally block
-                            # 2. Approximately *all* tasks being cancelled
-                            # 3. Something internal to the generator body
-                            #    (probably a TaskGroup)
-                            #
-                            # In case 3, we wait again on the sem (to
-                            # preserve lockstep behavior), then we
-                            # re-assert the cancellation so it gets
-                            # delivered back into the generator body
-                            # if it blocks.
-                            if done or is_loop_closing():
-                                raise
-                            await sem.acquire()
-                            # Recancel the task, so that it gets
-                            # delivered, but then also *uncancel* it,
-                            # so the count doesn't go up.
-                            task.cancel(str(e))
-                            task.uncancel()
-                    if done:
+                    self._put(x)
+                    await self._acquire()
+                    if self._done:
                         break
             except (Exception, asyncio.CancelledError, BaseExceptionGroup) as e:
-                queue.put_nowait(_Stop(exception=e))
+                self._put(_Stop(exception=e))
                 return
             else:
-                queue.put_nowait(_STOP)
+                self._put(_STOP)
 
-    task = asyncio.create_task(worker(), name=f"decouple for {iter}")
+    async def __anext__(self) -> T:
+        try:
+            if self._cancelled_nexts:
+                self._cancelled_nexts -= 1
+            elif self._worker_sem is not None:
+                self._worker_sem.release()
+                if self._cur_fut:
+                    run_right_now(self._cur_fut, None)
+            return await anext(self._queue)
+        except asyncio.CancelledError:
+            self._cancelled_nexts += 1
+            raise
 
-    try:
-        async for el in queue:
-            yield el
-            if sem is not None:
-                sem.release()
-                if fut:
-                    run_right_now(fut, None)
-    finally:
-        done = True
-        if fut and not fut.done():
-            fut.set_result(None)
-        if sem is not None:
-            sem.release()
+    def __aiter__(self) -> AsyncIterator[T]:
+        return self
+
+    async def aclose(self) -> None:
+        self._done = True
+        if self._cur_fut and not self._cur_fut.done():
+            self._cur_fut.set_result(None)
+        if self._worker_sem is not None:
+            self._worker_sem.release()
         # cancel is a no-op if a task is already done or cancelled
-        if not task.cancelling():
-            task.cancel()
+        if not self._task.cancelling():
+            self._task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
-            await task
+            await self._task
+
+    async def asend(self, value: Any, /) -> T:
+        raise RuntimeError("decouple does not support asend()")
+
+    async def athrow(self, *args: Any) -> T:
+        raise RuntimeError("decouple does not support athrow()")
 
 
 class AsyncContextManagerGenerator[YieldT, SendT](
