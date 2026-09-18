@@ -295,9 +295,26 @@ result = await ai.ops.experimental_evaluate(
 print(result.value.department.choice)
 ```
 
-The result is an `Item[Answers]`, so usage, warnings, framework metadata, and
-provider metadata remain available on the item. This operation specifically
-supports [Jev](https://vercel.com/ai-gateway/models/jev).
+When question IDs are dynamic, pass a mapping and omit `output_type`. The item
+value is then a validated answer mapping:
+
+```python
+result = await ai.ops.experimental_evaluate(
+    ai.get_model("typesafe-ai/jev"),
+    state,
+    {
+        question_id: ai.ops.BooleanQuestion(instructions=instructions)
+        for question_id, instructions in dynamic_questions.items()
+    },
+)
+
+for question_id, answer in result.value.items():
+    print(question_id, answer)
+```
+
+Both forms return an `Item`, so usage, warnings, framework metadata, and
+provider metadata remain available. This operation specifically supports
+[Jev](https://vercel.com/ai-gateway/models/jev).
 
 ## Read operation metadata
 

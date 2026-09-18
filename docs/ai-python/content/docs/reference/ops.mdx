@@ -256,13 +256,31 @@ Arguments:
 
 - `model`: Evaluation model.
 - `state`: Shared JSON-compatible string, object, or array.
-- `questions`: A nonempty Pydantic model whose fields contain
+- `questions`: A nonempty Pydantic model or mapping whose fields contain
   `ChoiceQuestion`, `ScoreQuestion`, or `BooleanQuestion` values.
-- `output_type`: A Pydantic model class with the same fields as `questions`.
-  Each field must use the answer type corresponding to its question.
+- `output_type`: Required with a Pydantic question model. It must be a Pydantic
+  model class with the same fields and corresponding answer types. Omit it with
+  mapped questions.
 - `params`: Optional `EvaluationParams`.
 
-Returns `Item[Answers]`. The item value is an instance of `output_type`.
+Pydantic questions return `Item[Answers]`, whose value is an instance of
+`output_type`. Mapped questions return
+`Item[dict[str, ChoiceAnswer | ScoreAnswer | BooleanAnswer]]`:
+
+```python
+result = await ai.ops.experimental_evaluate(
+    model,
+    state,
+    {
+        question_id: ai.ops.BooleanQuestion(instructions=instructions)
+        for question_id, instructions in dynamic_questions.items()
+    },
+)
+
+for question_id, answer in result.value.items():
+    print(question_id, answer)
+```
+
 Provider-declared rounding is available under `result.metadata["rounding"]`.
 
 Question and answer types:

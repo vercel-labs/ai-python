@@ -146,6 +146,43 @@ async def test_evaluate_dispatch_and_span(recorder: conftest.Recorder) -> None:
     assert span.data.usage == ai.types.usage.Usage(input_tokens=12)
 
 
+async def test_evaluate_dynamic_questions() -> None:
+    model = models.Model(
+        id="mock-evaluation-model", provider=EvaluationProvider()
+    )
+    dynamic_questions = {
+        "department": questions().department,
+        "severity": questions().severity,
+        "refund": questions().refund,
+    }
+
+    result = await ops.experimental_evaluate(
+        model,
+        {"message": "refund me"},
+        dynamic_questions,
+        params=ops.EvaluationParams(
+            provider_options={"gateway": {"zeroDataRetention": True}}
+        ),
+    )
+
+    assert_type(
+        result,
+        ops.Item[
+            dict[
+                str,
+                ops.ChoiceAnswer | ops.ScoreAnswer | ops.BooleanAnswer,
+            ]
+        ],
+    )
+    assert isinstance(result.value["department"], ops.ChoiceAnswer)
+    assert result.value["department"].choice == "billing"
+    assert isinstance(result.value["severity"], ops.ScoreAnswer)
+    assert result.value["severity"].score == 1.5
+    assert isinstance(result.value["refund"], ops.BooleanAnswer)
+    assert result.value["refund"].probability == 0.98
+    assert result.metadata == {"rounding": {"probabilityDecimals": 2}}
+
+
 async def test_evaluate_raises_not_implemented() -> None:
     provider = ai.get_provider("openai", api_key="[redacted]")
     model = ai.Model(id="evaluation-test", provider=provider)
@@ -207,17 +244,19 @@ async def test_evaluate_validates_state(state: Any) -> None:
         )
 
 
-async def test_evaluate_requires_question_model() -> None:
+async def test_evaluate_requires_question_values() -> None:
     model = models.Model(
         id="mock-evaluation-model", provider=EvaluationProvider()
     )
 
-    with pytest.raises(TypeError, match="Pydantic model"):
+    with pytest.raises(TypeError, match="must contain a question"):
         await ops.experimental_evaluate(
             model,
             "state",
-            cast("pydantic.BaseModel", {"answer": "invalid"}),
-            output_type=Answers,
+            cast(
+                "Mapping[str, EvaluationQuestion]",
+                {"answer": "invalid"},
+            ),
         )
 
 
@@ -238,6 +277,28 @@ async def test_evaluate_requires_questions() -> None:
             "state",
             EmptyQuestions(),
             output_type=EmptyAnswers,
+        )
+
+    empty: dict[str, EvaluationQuestion] = {}
+    with pytest.raises(ValueError, match="questions must not be empty"):
+        await ops.experimental_evaluate(model, "state", empty)
+
+
+async def test_evaluate_rejects_mixed_modes() -> None:
+    model = models.Model(
+        id="mock-evaluation-model", provider=EvaluationProvider()
+    )
+    evaluate = cast("Any", ops.experimental_evaluate)
+
+    with pytest.raises(TypeError, match="required for Pydantic"):
+        await evaluate(model, "state", questions())
+
+    with pytest.raises(TypeError, match="cannot be used with mapped"):
+        await evaluate(
+            model,
+            "state",
+            {"refund": questions().refund},
+            output_type=Answers,
         )
 
 
@@ -316,6 +377,14 @@ async def test_evaluate_validates_provider_output() -> None:
             questions(),
             output_type=Answers,
         )
+
+    dynamic_questions: dict[str, EvaluationQuestion] = {
+        "department": questions().department,
+        "severity": questions().severity,
+        "refund": questions().refund,
+    }
+    with pytest.raises(pydantic.ValidationError):
+        await ops.experimental_evaluate(model, "state", dynamic_questions)
 
 
 async def test_evaluate_requires_matching_answer_fields() -> None:

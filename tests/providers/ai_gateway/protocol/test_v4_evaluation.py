@@ -29,14 +29,6 @@ class Answers(pydantic.BaseModel):
     refund: ops.BooleanAnswer
 
 
-class ChoiceQuestions(pydantic.BaseModel):
-    answer: ops.ChoiceQuestion
-
-
-class ChoiceAnswers(pydantic.BaseModel):
-    answer: ops.ChoiceAnswer
-
-
 class BooleanQuestions(pydantic.BaseModel):
     answer: ops.BooleanQuestion
 
@@ -217,15 +209,16 @@ async def test_evaluate_maps_all_warning_types() -> None:
     result = await ops.experimental_evaluate(
         mock_model(httpx.MockTransport(handler), model_id=_MODEL_ID),
         "state",
-        ChoiceQuestions(
-            answer=ops.ChoiceQuestion(
+        {
+            "answer": ops.ChoiceQuestion(
                 instructions="Choose",
                 criteria={"yes": None, "no": None},
             )
-        ),
-        output_type=ChoiceAnswers,
+        },
     )
 
+    assert isinstance(result.value["answer"], ops.ChoiceAnswer)
+    assert result.value["answer"].choice == "yes"
     assert result.warnings == [
         ops.Warning(kind="unsupported", feature="providerOptions.test"),
         ops.Warning(kind="compatibility", feature="state", details="converted"),
