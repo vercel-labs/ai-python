@@ -1,8 +1,8 @@
 ---
 title: Non-LLM models
-description: Generate media or embeddings, transcribe audio, and rerank documents.
+description: Generate media and embeddings, transcribe audio, rerank documents, and evaluate state.
 type: guide
-summary: Use dedicated models for images, video, speech, embeddings, transcription, and reranking.
+summary: Use dedicated models for images, video, speech, embeddings, transcription, reranking, and evaluation.
 ---
 
 Use `ai.ops` for model calls that do not produce a language-model message.
@@ -252,6 +252,34 @@ for ranked in result.value:
 
 Each result contains the document's original index and relevance score. Results
 are ordered from the highest score to the lowest.
+
+## Evaluate state
+
+Use `experimental_evaluate` to ask choice, score, and boolean questions about one shared state:
+
+```python
+result = await ai.ops.experimental_evaluate(
+    ai.get_model("typesafe-ai/jev"),
+    {"message": "Please refund the duplicate charge."},
+    {
+        "department": ai.ops.ChoiceQuestion(
+            instructions="Which team should handle this?",
+            criteria={"billing": "Charges and refunds", "support": "Other"},
+        ),
+        "severity": ai.ops.ScoreQuestion(
+            instructions="How severe is this?",
+            criteria=["Cosmetic", "Has workaround", "Blocking"],
+        ),
+        "requests_refund": ai.ops.BooleanQuestion(
+            instructions="Is the customer requesting a refund?",
+        ),
+    },
+)
+
+print(result.value.answers)
+```
+
+This is specifically to support [Jev](https://vercel.com/ai-gateway/models/jev).
 
 ## Read operation metadata
 

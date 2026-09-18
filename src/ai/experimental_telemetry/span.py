@@ -267,6 +267,18 @@ class AiGenerateSpanData(pydantic.BaseModel):
     response_model: str | None = None
 
 
+class EvaluateSpanData(pydantic.BaseModel):
+    """One typed evaluation operation."""
+
+    kind: Literal["evaluate"] = "evaluate"
+    model: str
+    provider: str | None = None
+    question_count: int
+    usage: usage_.Usage | None = None
+    answer_count: int | None = None
+    warnings: list[dict[str, Any]] | None = None
+
+
 class EmbedSpanData(pydantic.BaseModel):
     """One embedding operation."""
 
@@ -430,6 +442,7 @@ _FrameworkData = Annotated[
     | LoopTurnSpanData
     | AiStreamSpanData
     | AiGenerateSpanData
+    | EvaluateSpanData
     | EmbedSpanData
     | GenerateAudioSpanData
     | GenerateImageSpanData

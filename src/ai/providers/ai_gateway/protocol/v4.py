@@ -21,7 +21,7 @@ from .. import errors
 from . import _shared
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Sequence
+    from collections.abc import AsyncGenerator, Mapping, Sequence
 
     import pydantic
 
@@ -528,6 +528,64 @@ async def stream(
 
 
 # ---------------------------------------------------------------------------
+# Evaluation
+# ---------------------------------------------------------------------------
+
+
+async def evaluate(
+    gateway: gateway_client.GatewayClient,
+    model: models.Model,
+    state: ops.evaluation.EvaluationInput,
+    questions: Mapping[str, ops.evaluation.EvaluationQuestion],
+    *,
+    params: ops.evaluation.EvaluationParams,
+) -> ops.items.Item[ops.evaluation.Evaluation]:
+    """Hit ``/evaluation-model`` and return typed evaluation answers."""
+    wire_questions: dict[str, dict[str, Any]] = {}
+    for question_id, question in questions.items():
+        wire_question = question.model_dump(mode="json", by_alias=True)
+        if (
+            isinstance(question, ops.evaluation.BooleanQuestion)
+            and question.criteria is None
+        ):
+            wire_question.pop("criteria")
+        wire_questions[question_id] = wire_question
+
+    body: dict[str, Any] = {"state": state, "questions": wire_questions}
+    if params.provider_options:
+        body["providerOptions"] = dict(params.provider_options)
+
+    try:
+        response = await gateway.post(
+            "evaluation-model",
+            body,
+            model=model,
+            model_type="evaluation",
+            spec_version=SPEC_VERSION,
+        )
+    except gateway_client.errors.GatewayError as exc:
+        raise errors.map_error(exc) from exc
+
+    data = response.json()
+    usage_data = data.get("usage")
+    usage = (
+        None
+        if not usage_data
+        else types.usage.Usage(
+            input_tokens=usage_data.get("inputTokens") or 0,
+            output_tokens=usage_data.get("outputTokens") or 0,
+            raw=usage_data,
+        )
+    )
+    return ops.items.Item(
+        value=ops.evaluation.Evaluation.model_validate(data),
+        usage=usage,
+        warnings=_shared.parse_warnings(data.get("warnings")),
+        provider_metadata=data.get("providerMetadata"),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Embeddings
 # ---------------------------------------------------------------------------
 
@@ -716,6 +774,25 @@ class GatewayV4Protocol(base.ProviderProtocol[gateway_client.GatewayClient]):
             messages,
             tools=tools,
             output_type=output_type,
+            params=params,
+        )
+
+    async def evaluate(
+        self,
+        client: gateway_client.GatewayClient,
+        model: models.Model,
+        state: ops.evaluation.EvaluationInput,
+        questions: Mapping[str, ops.evaluation.EvaluationQuestion],
+        *,
+        params: ops.evaluation.EvaluationParams,
+        provider: str,
+    ) -> ops.items.Item[ops.evaluation.Evaluation]:
+        _ = provider
+        return await evaluate(
+            client,
+            model,
+            state,
+            questions,
             params=params,
         )
 

@@ -43,6 +43,8 @@ def _label(sp: telemetry.Span) -> str:
                 else ""
             )
             return f"generate {d.model}{tokens}"
+        case telemetry.EvaluateSpanData() as d:
+            return f"evaluate {d.model}"
         case telemetry.EmbedSpanData() as d:
             tokens = (
                 f"  in:{d.usage.input_tokens} out:{d.usage.output_tokens} tok"

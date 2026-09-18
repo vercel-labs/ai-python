@@ -1,6 +1,6 @@
 ---
 name: ai
-description: AI SDK for Python (the `ai` package). Use when writing Python that calls LLMs or dedicated image, video, speech, embedding, transcription, or reranking models; builds agents; tests model interactions; or implements tool calling, subagents, approvals, durable execution, telemetry, AI SDK UI backends, and custom providers.
+description: AI SDK for Python (the `ai` package). Use for Python model calls (LLMs, image, video, speech, embedding, transcription, reranking, or evaluation), agents, model interaction tests, tool calling, subagents, approvals, durable execution, telemetry, AI SDK UI backends, and custom providers.
 metadata:
   sdk-version: "0.5.0"
 ---
@@ -71,7 +71,7 @@ read the listed local notes before writing code.
 | Provider clients, options, discovery | `basics/providers.md` | — |
 | Structured output, complex streams | `basics/streaming.md` | — |
 | Buffered language-model calls | `basics/streaming.md` | — |
-| Images, video, speech, embeddings, transcription, reranking | `basics/model-operations.md` | — |
+| Images, video, speech, embeddings, transcription, reranking, evaluation | `basics/model-operations.md` | — |
 | Events and serialization | `basics/messages-and-events.md` | — |
 | Advanced tools, streaming, aggregation | `basics/tools.md` | [streaming-tools.md](references/streaming-tools.md) |
 | Advanced agent behavior | `basics/agents.md` | — |

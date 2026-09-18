@@ -2,7 +2,7 @@
 title: "ai.ops"
 description: Reference for dedicated model operations.
 type: reference
-summary: Reference for image, video, speech, embedding, transcription, and reranking APIs.
+summary: Reference for image, video, speech, embedding, transcription, reranking, and evaluation APIs.
 ---
 
 `ai.ops` contains model operations that return standalone values instead of
@@ -237,3 +237,50 @@ provider.
 
 - `index`: Position of the document in the original input list.
 - `score`: Relevance score for the query.
+
+## experimental_evaluate
+
+```python
+await ai.ops.experimental_evaluate(
+    model,
+    state,
+    questions,
+    *,
+    params=None,
+)
+```
+
+Arguments:
+
+- `model`: Evaluation model.
+- `state`: Shared JSON-compatible string, object, or array.
+- `questions`: Nonempty mapping of question IDs to `ChoiceQuestion`,
+  `ScoreQuestion`, or `BooleanQuestion` values.
+- `params`: Optional `EvaluationParams`.
+
+Returns `Item[Evaluation]`.
+
+`Evaluation` fields:
+
+- `answers`: Every question ID mapped to its typed answer.
+- `rounding`: Optional provider-declared `probability_decimals` and
+  `score_decimals`. Each is an integer from `0` to `15`, or `None`.
+
+Question and answer types:
+
+- `ChoiceQuestion`: Selects one key from a nonempty `criteria` mapping.
+  `ChoiceAnswer` contains the selected `choice` and an optional complete
+  `probabilities` distribution.
+- `ScoreQuestion`: Scores at least two ordered `criteria` levels, starting at
+  index `0`. `ScoreAnswer` contains a fractional `score` and an optional complete
+  `probabilities` distribution keyed by string indices. With a distribution,
+  `score` is its probability-weighted mean.
+- `BooleanQuestion`: Estimates whether its instructions are true. Its optional
+  `criteria` mapping can describe `"true"` and `"false"`. `BooleanAnswer.probability`
+  is the estimated probability of true, not confidence in either outcome.
+
+Instructions accept strings, JSON objects, or JSON arrays. Criteria descriptions
+accept the same values or `None`. Nested keys are model input and have no
+SDK-defined meaning.
+
+`EvaluationParams` contains `provider_options`, keyed by provider name.
