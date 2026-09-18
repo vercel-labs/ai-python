@@ -6,6 +6,7 @@ import json
 from typing import Any
 
 import httpx2 as httpx
+import pydantic
 import pytest
 
 import ai
@@ -16,21 +17,49 @@ from ..conftest import mock_model
 _MODEL_ID = "typesafe-ai/jev"
 
 
-def questions() -> dict[str, ops.EvaluationQuestion]:
-    return {
-        "department": ops.ChoiceQuestion(
+class Questions(pydantic.BaseModel):
+    department: ops.ChoiceQuestion
+    severity: ops.ScoreQuestion
+    refund: ops.BooleanQuestion
+
+
+class Answers(pydantic.BaseModel):
+    department: ops.ChoiceAnswer
+    severity: ops.ScoreAnswer
+    refund: ops.BooleanAnswer
+
+
+class ChoiceQuestions(pydantic.BaseModel):
+    answer: ops.ChoiceQuestion
+
+
+class ChoiceAnswers(pydantic.BaseModel):
+    answer: ops.ChoiceAnswer
+
+
+class BooleanQuestions(pydantic.BaseModel):
+    answer: ops.BooleanQuestion
+
+
+class BooleanAnswers(pydantic.BaseModel):
+    answer: ops.BooleanAnswer
+
+
+def questions() -> Questions:
+    return Questions(
+        department=ops.ChoiceQuestion(
             instructions="Which team should handle this?",
             criteria={"billing": "Charges", "support": "Other requests"},
         ),
-        "severity": ops.ScoreQuestion(
+        severity=ops.ScoreQuestion(
             instructions="How severe is this?",
             criteria=["Cosmetic", "Workaround exists", "Blocking"],
         ),
-        "refund": ops.BooleanQuestion(
+        refund=ops.BooleanQuestion(
             instructions="Is a refund requested?",
             criteria={"true": "A refund is requested", "false": None},
         ),
-    }
+    )
 
 
 async def test_evaluate_request_and_response() -> None:
@@ -82,6 +111,7 @@ async def test_evaluate_request_and_response() -> None:
         ),
         {"message": "Please refund the duplicate charge."},
         questions(),
+        output_type=Answers,
         params=ops.EvaluationParams(
             provider_options={
                 "gateway": {
@@ -131,20 +161,20 @@ async def test_evaluate_request_and_response() -> None:
         },
     }
 
-    department = result.value.answers["department"]
-    assert isinstance(department, ops.ChoiceAnswer)
-    assert department.choice == "billing"
-    assert department.probabilities == {"billing": 0.8, "support": 0.2}
-    severity = result.value.answers["severity"]
-    assert isinstance(severity, ops.ScoreAnswer)
-    assert severity.score == 1.5
-    refund = result.value.answers["refund"]
-    assert isinstance(refund, ops.BooleanAnswer)
-    assert refund.probability == 0.98
-    assert result.value.rounding == ops.EvaluationRounding(
-        probability_decimals=2,
-        score_decimals=2,
-    )
+    assert isinstance(result.value, Answers)
+    assert result.value.department.choice == "billing"
+    assert result.value.department.probabilities == {
+        "billing": 0.8,
+        "support": 0.2,
+    }
+    assert result.value.severity.score == 1.5
+    assert result.value.refund.probability == 0.98
+    assert result.metadata == {
+        "rounding": {
+            "probabilityDecimals": 2,
+            "scoreDecimals": 2,
+        }
+    }
     assert result.usage == ai.types.usage.Usage(
         input_tokens=42,
         output_tokens=0,
@@ -187,12 +217,13 @@ async def test_evaluate_maps_all_warning_types() -> None:
     result = await ops.experimental_evaluate(
         mock_model(httpx.MockTransport(handler), model_id=_MODEL_ID),
         "state",
-        {
-            "answer": ops.ChoiceQuestion(
+        ChoiceQuestions(
+            answer=ops.ChoiceQuestion(
                 instructions="Choose",
                 criteria={"yes": None, "no": None},
             )
-        },
+        ),
+        output_type=ChoiceAnswers,
     )
 
     assert result.warnings == [
@@ -219,5 +250,8 @@ async def test_evaluate_maps_authentication_error() -> None:
         await ops.experimental_evaluate(
             mock_model(httpx.MockTransport(handler), model_id=_MODEL_ID),
             "state",
-            {"answer": ops.BooleanQuestion(instructions="Is this true?")},
+            BooleanQuestions(
+                answer=ops.BooleanQuestion(instructions="Is this true?")
+            ),
+            output_type=BooleanAnswers,
         )

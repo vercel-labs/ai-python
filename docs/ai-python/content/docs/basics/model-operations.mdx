@@ -255,31 +255,49 @@ are ordered from the highest score to the lowest.
 
 ## Evaluate state
 
-Use `experimental_evaluate` to ask choice, score, and boolean questions about one shared state:
+Use `experimental_evaluate` to ask choice, score, and boolean questions about one shared state. Define matching Pydantic models for the questions and answers:
 
 ```python
+import pydantic
+
+
+class Questions(pydantic.BaseModel):
+    department: ai.ops.ChoiceQuestion
+    severity: ai.ops.ScoreQuestion
+    requests_refund: ai.ops.BooleanQuestion
+
+
+class Answers(pydantic.BaseModel):
+    department: ai.ops.ChoiceAnswer
+    severity: ai.ops.ScoreAnswer
+    requests_refund: ai.ops.BooleanAnswer
+
+
 result = await ai.ops.experimental_evaluate(
     ai.get_model("typesafe-ai/jev"),
     {"message": "Please refund the duplicate charge."},
-    {
-        "department": ai.ops.ChoiceQuestion(
+    Questions(
+        department=ai.ops.ChoiceQuestion(
             instructions="Which team should handle this?",
             criteria={"billing": "Charges and refunds", "support": "Other"},
         ),
-        "severity": ai.ops.ScoreQuestion(
+        severity=ai.ops.ScoreQuestion(
             instructions="How severe is this?",
             criteria=["Cosmetic", "Has workaround", "Blocking"],
         ),
-        "requests_refund": ai.ops.BooleanQuestion(
+        requests_refund=ai.ops.BooleanQuestion(
             instructions="Is the customer requesting a refund?",
         ),
-    },
+    ),
+    output_type=Answers,
 )
 
-print(result.value.answers)
+print(result.value.department.choice)
 ```
 
-This is specifically to support [Jev](https://vercel.com/ai-gateway/models/jev).
+The result is an `Item[Answers]`, so usage, warnings, framework metadata, and
+provider metadata remain available on the item. This operation specifically
+supports [Jev](https://vercel.com/ai-gateway/models/jev).
 
 ## Read operation metadata
 
@@ -289,10 +307,12 @@ Every operation returns `ai.ops.Item`:
 result.value
 result.usage
 result.warnings
+result.metadata
 result.provider_metadata
 ```
 
 `value` contains the operation output. `usage` is `None` when the provider does
 not report token usage. `warnings` lists provider warnings, such as an ignored
-parameter; it is empty when there are none. Provider-specific response data is
-available on `provider_metadata`.
+parameter; it is empty when there are none. Framework-normalized operation data
+is available on `metadata`, while provider-specific response data is available
+on `provider_metadata`.
