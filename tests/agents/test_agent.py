@@ -36,6 +36,42 @@ def _by_name(
     return spans
 
 
+async def test_current_agent() -> None:
+    class MyAgent(ai.Agent):
+        pass
+
+    seen: list[MyAgent] = []
+
+    class OtherAgent(ai.Agent):
+        pass
+
+    @ai.tool
+    async def inspect_agent() -> str:
+        """Inspect the current agent."""
+        seen.append(ai.current_agent(type=MyAgent))
+        assert ai.current_agent() is seen[-1]
+        with pytest.raises(LookupError, match="current agent is MyAgent"):
+            ai.current_agent(type=OtherAgent)
+        return "done"
+
+    my_agent = MyAgent(tools=[inspect_agent])
+    mock_llm(
+        [
+            [tool_call_msg(name="inspect_agent")],
+            [text_msg("done", id="msg-2")],
+        ]
+    )
+
+    with pytest.raises(LookupError):
+        ai.current_agent(type=MyAgent)
+    async with my_agent.run(MOCK_MODEL, [ai.user_message("go")]) as stream:
+        async for _ in stream:
+            pass
+    assert seen == [my_agent]
+    with pytest.raises(LookupError):
+        ai.current_agent(type=MyAgent)
+
+
 async def test_agent_run_span_tree(recorder: Recorder) -> None:
     @ai.tool
     async def lookup(x: int) -> str:

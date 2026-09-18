@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import contextvars
 import dataclasses
 import inspect
 import json
@@ -687,6 +688,15 @@ class BoundToolCall:
 
     async def __call__(self, **overrides: Any) -> events_.ToolCallResult:
         """Execute the tool and return a :class:`ToolCallResult`."""
+        token = _current_tool_call.set(self)
+        try:
+            return await self._execute(overrides)
+        finally:
+            _current_tool_call.reset(token)
+
+    async def _execute(
+        self, overrides: dict[str, Any]
+    ) -> events_.ToolCallResult:
         spec = self._tool.tool.spec
         data = telemetry.ToolExecutionSpanData(
             tool_name=self._part.tool_name,
@@ -886,6 +896,11 @@ class ToolCall(ToolCallCallable, Protocol):
 
     @property
     def kwargs(self) -> dict[str, Any]: ...
+
+
+_current_tool_call: contextvars.ContextVar[ToolCall] = contextvars.ContextVar(
+    "current_tool_call"
+)
 
 
 class _RestartableToolStream:
@@ -1337,6 +1352,11 @@ async def _aggregate_from[T, S, R](
     return agg
 
 
+_current_agent: contextvars.ContextVar[Agent] = contextvars.ContextVar(
+    "current_agent"
+)
+
+
 class Agent:
     """Bag of configuration: model + tools + loop."""
 
@@ -1548,6 +1568,7 @@ class Agent:
                 )
             ) as sp:
                 initial_count = len(context.messages)
+                agent_token = _current_agent.set(self)
                 mw_token: middleware_.Token | None = None
                 if _middleware is not None:
                     parent = middleware_.get()
@@ -1572,6 +1593,7 @@ class Agent:
                 finally:
                     if mw_token is not None:
                         middleware_.deactivate(mw_token)
+                    _current_agent.reset(agent_token)
                     # Record whatever got produced, even on error or
                     # early close.
                     sp.data.final_message = next(
@@ -1599,3 +1621,34 @@ class Agent:
             ) as astream,
         ):
             yield astream
+
+
+@overload
+def current_agent() -> Agent: ...
+
+
+@overload
+def current_agent[T: Agent](*, type: type[T]) -> T: ...
+
+
+def current_agent(*, type: type[Agent] = Agent) -> Agent:
+    """Return the agent whose stream is executing in this context.
+
+    Pass ``type=`` to validate and narrow the returned agent type. Calling
+    this outside an agent stream raises :class:`LookupError`.
+    """
+    agent = _current_agent.get()
+    if not isinstance(agent, type):
+        raise LookupError(
+            f"current agent is {agent.__class__.__name__}, not {type.__name__}"
+        )
+    return agent
+
+
+def current_tool_call() -> ToolCall:
+    """Return the tool call executing in this context.
+
+    This is available from code called during tool execution. Calling it
+    outside a tool call raises :class:`LookupError`.
+    """
+    return _current_tool_call.get()
