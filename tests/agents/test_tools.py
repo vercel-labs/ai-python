@@ -99,6 +99,33 @@ async def test_tool_call_with_json_args() -> None:
 # -- ToolCall binds a ToolCallPart to a Tool and returns tool messages ----
 
 
+async def test_tool_runner_cancellation_order_is_fifo() -> None:
+    async def run_once() -> None:
+        cancelled: list[int] = []
+        started = [asyncio.Event() for _ in range(3)]
+
+        async def wait_forever(i: int) -> events_.ToolCallResult:
+            started[i].set()
+            try:
+                await asyncio.Future()
+            finally:
+                cancelled.append(i)
+            raise AssertionError("unreachable")
+
+        with pytest.raises(ExceptionGroup):
+            async with ai.ToolRunner() as runner:
+                for i in range(3):
+                    runner.schedule(lambda i=i: wait_forever(i))
+                for event in started:
+                    await event.wait()
+                raise RuntimeError("stop")
+
+        assert cancelled == [0, 1, 2]
+
+    for _ in range(20):
+        await run_once()
+
+
 async def test_tool_runner_discard_cancels_and_omits_task() -> None:
     """Discarded speculative calls do not produce tool events or messages."""
     started = asyncio.Event()
