@@ -255,10 +255,10 @@ are ordered from the highest score to the lowest.
 
 ## Evaluate state
 
-Use `evaluate` to ask choice, score, and boolean questions about one shared state:
+Use `experimental_evaluate` to ask choice, score, and boolean questions about one shared state:
 
 ```python
-result = await ai.ops.evaluate(
+result = await ai.ops.experimental_evaluate(
     ai.get_model("typesafe-ai/jev"),
     {"message": "Please refund the duplicate charge."},
     {

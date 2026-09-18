@@ -104,7 +104,7 @@ async def test_evaluate_dispatch_and_span(recorder: conftest.Recorder) -> None:
         id="mock-evaluation-model", provider=EvaluationProvider()
     )
 
-    result = await ops.evaluate(
+    result = await ops.experimental_evaluate(
         model,
         {"message": "refund me"},
         questions(),
@@ -132,7 +132,7 @@ async def test_evaluate_raises_not_implemented() -> None:
     model = ai.Model(id="evaluation-test", provider=provider)
 
     with pytest.raises(NotImplementedError, match="evaluate"):
-        await ops.evaluate(
+        await ops.experimental_evaluate(
             model,
             "state",
             {"answer": ops.BooleanQuestion(instructions="Is this valid?")},
@@ -171,7 +171,7 @@ async def test_evaluate_validates_state(state: Any) -> None:
     )
 
     with pytest.raises(pydantic.ValidationError):
-        await ops.evaluate(
+        await ops.experimental_evaluate(
             model,
             cast("ops.EvaluationInput", state),
             questions(),
@@ -184,7 +184,7 @@ async def test_evaluate_requires_questions() -> None:
     )
 
     with pytest.raises(ValueError, match="questions must not be empty"):
-        await ops.evaluate(model, "state", {})
+        await ops.experimental_evaluate(model, "state", {})
 
 
 async def test_evaluate_requires_question_models() -> None:
@@ -193,7 +193,7 @@ async def test_evaluate_requires_question_models() -> None:
     )
 
     with pytest.raises(pydantic.ValidationError):
-        await ops.evaluate(
+        await ops.experimental_evaluate(
             model,
             "state",
             cast(
@@ -210,7 +210,7 @@ async def test_evaluate_trusts_provider_output() -> None:
         provider=StaticEvaluationProvider(evaluation=evaluation),
     )
 
-    result = await ops.evaluate(
+    result = await ops.experimental_evaluate(
         model,
         "state",
         {"answer": ops.BooleanQuestion(instructions="Is this valid?")},
@@ -227,7 +227,7 @@ async def test_evaluate_rejects_cyclic_state() -> None:
     )
 
     with pytest.raises(pydantic.ValidationError):
-        await ops.evaluate(
+        await ops.experimental_evaluate(
             model,
             cast("ops.EvaluationInput", state),
             questions(),

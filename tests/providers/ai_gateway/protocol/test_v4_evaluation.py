@@ -74,7 +74,7 @@ async def test_evaluate_request_and_response() -> None:
             },
         )
 
-    result = await ops.evaluate(
+    result = await ops.experimental_evaluate(
         mock_model(
             httpx.MockTransport(handler),
             api_key="sk-test",
@@ -184,7 +184,7 @@ async def test_evaluate_maps_all_warning_types() -> None:
             },
         )
 
-    result = await ops.evaluate(
+    result = await ops.experimental_evaluate(
         mock_model(httpx.MockTransport(handler), model_id=_MODEL_ID),
         "state",
         {
@@ -216,7 +216,7 @@ async def test_evaluate_maps_authentication_error() -> None:
         )
 
     with pytest.raises(ai.ProviderAuthenticationError):
-        await ops.evaluate(
+        await ops.experimental_evaluate(
             mock_model(httpx.MockTransport(handler), model_id=_MODEL_ID),
             "state",
             {"answer": ops.BooleanQuestion(instructions="Is this true?")},

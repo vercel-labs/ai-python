@@ -16,7 +16,7 @@ from .evaluation import (
     EvaluationRounding,
     ScoreAnswer,
     ScoreQuestion,
-    evaluate,
+    experimental_evaluate,
 )
 from .images import ImageParams, ImagePrompt, generate_image
 from .items import Item, Warning
@@ -59,7 +59,7 @@ __all__ = [
     "VideoPrompt",
     "Warning",
     "embed",
-    "evaluate",
+    "experimental_evaluate",
     "generate_audio",
     "generate_image",
     "generate_video",

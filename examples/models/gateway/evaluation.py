@@ -22,7 +22,7 @@ async def main() -> None:
 
     # Ask a single boolean question about plain text. Boolean answers are
     # probabilities rather than only true or false.
-    result = await ai.ops.evaluate(
+    result = await ai.ops.experimental_evaluate(
         model,
         "Please refund the duplicate charge on my account.",
         {
@@ -64,7 +64,7 @@ async def main() -> None:
         "service_status": "operational",
     }
 
-    result = await ai.ops.evaluate(
+    result = await ai.ops.experimental_evaluate(
         model,
         ticket,
         {

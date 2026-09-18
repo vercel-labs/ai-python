@@ -5,7 +5,7 @@
     import ai
 
     model = ai.get_model("typesafe-ai/jev")
-    result = await ai.ops.evaluate(
+    result = await ai.ops.experimental_evaluate(
         model,
         {"message": "Please refund the duplicate charge."},
         {
@@ -92,7 +92,10 @@ class BooleanQuestion(pydantic.BaseModel):
     model_config = _QUESTION_CONFIG
 
 
-type EvaluationQuestion = ChoiceQuestion | ScoreQuestion | BooleanQuestion
+EvaluationQuestion = Annotated[
+    ChoiceQuestion | ScoreQuestion | BooleanQuestion,
+    pydantic.Field(discriminator="type"),
+]
 
 
 Probability = Annotated[
@@ -197,7 +200,7 @@ _QUESTIONS_ADAPTER: pydantic.TypeAdapter[_EvaluationQuestions] = (
 )
 
 
-async def evaluate(
+async def experimental_evaluate(
     model: model_.Model,
     state: EvaluationInput,
     questions: Mapping[str, EvaluationQuestion],
@@ -210,6 +213,8 @@ async def evaluate(
     objects, or JSON arrays. Choice questions select a declared option, score
     questions return a fractional position on an ordered rubric, and boolean
     questions return the model-estimated probability of true.
+
+    Experimental: not part of the stable API, may change or be removed.
     """
     state = _INPUT_ADAPTER.validate_python(state)
     questions = _QUESTIONS_ADAPTER.validate_python(questions)
