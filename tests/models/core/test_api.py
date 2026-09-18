@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from collections.abc import AsyncGenerator, Sequence
 from typing import Any, Literal, cast
 
