@@ -132,8 +132,9 @@ class CustomAgent(ai.Agent):
             async with (
                 ai.stream(context=context) as s,
                 ai.ToolRunner() as tr,
+                ai.util.merge(s, tr.events()) as events,
             ):
-                async for event in ai.util.merge(s, tr.events()):
+                async for event in events:
                     yield event
                     if isinstance(event, ai.events.ToolEnd):
                         tr.schedule(context.resolve(event.tool_call))

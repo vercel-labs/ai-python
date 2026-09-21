@@ -36,8 +36,9 @@ class CustomAgent(ai.Agent):
             async with (
                 ai.stream(context=context) as stream,
                 ai.ToolRunner() as tr,
+                ai.util.merge(stream, tr.events()) as events,
             ):
-                async for event in ai.util.merge(stream, tr.events()):
+                async for event in events:
                     yield event
 
                     if isinstance(event, ai.events.ToolEnd):

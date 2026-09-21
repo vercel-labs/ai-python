@@ -1414,8 +1414,9 @@ class Agent:
                 telemetry.span(telemetry.LoopTurnSpanData()),
                 models.stream(context=context) as stream,
                 ToolRunner() as tr,
+                util.merge(stream, tr.events()) as events,
             ):
-                async for event in util.merge(stream, tr.events()):
+                async for event in events:
                     yield event
 
                     if isinstance(event, types.events.ToolEnd):
