@@ -15,6 +15,27 @@ agent.tools
 
 `agent.tools` returns a copy of registered executable tools.
 
+## resolve
+
+`Agent.resolve` converts model tool-call parts into executable `ToolCall`
+objects. Use it when implementing a custom `Agent.loop`:
+
+```python
+class CustomAgent(ai.Agent):
+    async def loop(self, context: ai.Context):
+        while context.keep_running():
+            async with ai.stream(context=context) as stream:
+                async for event in stream:
+                    yield event
+                    if isinstance(event, ai.events.ToolEnd):
+                        tool_call = self.resolve(event.tool_call)
+                        await tool_call()
+```
+
+Resolution performs tool-name lookup and argument validation, and applies
+approval gates and cached replay results. Pass a sequence of tool-call parts
+to resolve to get a list of executable calls.
+
 ## Current execution context
 
 Use these functions when code called by an agent needs information about its
@@ -89,7 +110,7 @@ stream.output
 ## loop
 
 Override `Agent.loop(context)` to customize control flow. The default loop uses
-`ai.stream`, `ToolRunner`, `Context.resolve`, and `Context.add`.
+`ai.stream`, `ToolRunner`, `Agent.resolve`, and `Context.add`.
 
 ```python
 class CustomAgent(ai.Agent):

@@ -17,7 +17,7 @@ messages = [ai.messages.Message.model_validate(item) for item in data]
 - Do not ask the model to make the tool call again; replay reuses completed
   sibling results and feeds deferred hooks the pre-registered resolution.
 - Use normal `agent.run(...)`; serverless resume usually does not need a
-  custom loop. If you do write one, use `context.resolve(...)`, `ToolRunner`,
+  custom loop. If you do write one, use `self.resolve(...)`, `ToolRunner`,
   and `context.add(...)` so approvals and replay keep working.
 - For custom hooks, pre-register with
   `ai.resolve_hook(hook_id, data, payload=PayloadType)` to validate the data.

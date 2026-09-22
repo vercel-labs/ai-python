@@ -45,7 +45,7 @@ class CustomAgent(ai.Agent):
                         print(
                             f"Launching tool {call.tool_name}({call.tool_args})"
                         )
-                        tool = context.resolve(call)
+                        tool = self.resolve(call)
                         tr.schedule(tool)
 
                 context.add(stream.message)

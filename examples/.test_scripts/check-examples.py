@@ -72,10 +72,13 @@ def run_checker(
     cmd = ["uv", "run", "--frozen", "--group", "dev"]
     if use_current_ai:
         cmd.extend(["--with-editable", str(REPO)])
+    checker_args = [*checker]
+    if use_current_ai and checker[0] == "ty":
+        checker_args.extend(["--extra-search-path", str(REPO / "src")])
     cmd.extend(
         [
             *with_args,
-            *checker,
+            *checker_args,
             *targets,
         ]
     )
