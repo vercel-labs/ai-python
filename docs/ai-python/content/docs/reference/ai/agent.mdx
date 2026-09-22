@@ -17,7 +17,7 @@ agent.tools
 
 ## resolve
 
-`Agent.resolve` converts model tool-call parts into executable `ToolCall`
+`Agent.resolve` converts model tool-call parts into executable `BoundToolCall`
 objects. Use it when implementing a custom `Agent.loop`:
 
 ```python
@@ -34,7 +34,7 @@ class CustomAgent(ai.Agent):
 
 Resolution performs tool-name lookup and argument validation, and applies
 approval gates and cached replay results. Pass a sequence of tool-call parts
-to resolve to get a list of executable calls.
+to resolve to get a list of executable `BoundToolCall` objects.
 
 ## Current execution context
 

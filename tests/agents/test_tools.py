@@ -173,6 +173,167 @@ async def test_tool_call_returns_tool_message() -> None:
     assert not result.results[0].has_model_input
 
 
+def test_tool_call_fn_is_always_agent_tool_fn() -> None:
+    @ai.tool
+    async def double(x: int) -> int:
+        """Double a number."""
+        return x * 2
+
+    part = ai.messages.ToolCallPart(
+        tool_call_id="tc-fn",
+        tool_name="double",
+        tool_args='{"x": 5}',
+    )
+    tc = ai.agents.BoundToolCall(part=part, tool=double)
+
+    assert tc.fn is double.fn
+
+
+async def test_tool_call_wrap_composes_functions() -> None:
+    @ai.tool
+    async def double(x: int) -> int:
+        """Double a number."""
+        return x * 2
+
+    part = ai.messages.ToolCallPart(
+        tool_call_id="tc-wrap",
+        tool_name="double",
+        tool_args='{"x": 5}',
+    )
+    tc = ai.agents.BoundToolCall(part=part, tool=double)
+    inner_calls: list[ai.agents.BoundToolCall] = []
+
+    def add_one(
+        call: ai.agents.BoundToolCall,
+        inner: Callable[..., Any],
+    ) -> Callable[..., Any]:
+        async def wrapped(**kwargs: Any) -> events_.ToolCallResult:
+            inner_calls.append(call)
+            result = await inner(**kwargs)
+            value = result.results[0].result
+            assert isinstance(value, int)
+            return ai.tool_result(
+                tool_call_id=call.id,
+                tool_name=call.name,
+                result=value + 1,
+            )
+
+        return wrapped
+
+    once_wrapped = tc.wrap(add_one)
+    wrapped = once_wrapped.wrap(add_one)
+    result = await wrapped()
+
+    assert wrapped.fn is double.fn
+    assert inner_calls == [once_wrapped, tc]
+    assert result.results[0].result == 12
+
+
+async def test_tool_call_wrapper_must_return_tool_call_result() -> None:
+    @ai.tool
+    async def double(x: int) -> int:
+        """Double a number."""
+        return x * 2
+
+    part = ai.messages.ToolCallPart(
+        tool_call_id="tc-wrap-error",
+        tool_name="double",
+        tool_args='{"x": 5}',
+    )
+
+    def invalid_wrapper(
+        _call: ai.agents.BoundToolCall,
+        _inner: Callable[..., Any],
+    ) -> Callable[..., Any]:
+        async def wrapped(**_kwargs: Any) -> int:
+            return 10
+
+        return wrapped
+
+    tc = ai.agents.BoundToolCall(part=part, tool=double).wrap(invalid_wrapper)
+    result = await tc()
+
+    assert result.results[0].is_error
+    assert "wrapper must return a ToolCallResult" in str(
+        result.results[0].result
+    )
+
+
+def test_tool_resolver_wraps_approval_tools() -> None:
+    @ai.tool(require_approval=True)
+    async def double(x: int) -> int:
+        """Double a number."""
+        return x * 2
+
+    part = ai.messages.ToolCallPart(
+        tool_call_id="tc-approval",
+        tool_name="double",
+        tool_args='{"x": 5}',
+    )
+
+    resolved = ai.ToolResolver([double]).resolve(part)
+
+    assert isinstance(resolved, ai.agents.GatedToolCall)
+    assert isinstance(resolved, ai.agents.BoundToolCall)
+    assert resolved.fn is double.fn
+
+
+def test_gated_tool_call_compatibility_constructor() -> None:
+    @ai.tool
+    async def double(x: int) -> int:
+        """Double a number."""
+        return x * 2
+
+    part = ai.messages.ToolCallPart(
+        tool_call_id="tc-gated",
+        tool_name="double",
+        tool_args='{"x": 5}',
+    )
+    tc = ai.agents.BoundToolCall(part=part, tool=double)
+
+    gated = ai.agents.GatedToolCall(tc)
+
+    assert isinstance(gated, ai.agents.BoundToolCall)
+    assert gated.id == tc.id
+    assert gated.name == tc.name
+    assert gated.kwargs == tc.kwargs
+    assert gated.fn is tc.fn
+
+
+async def test_tool_call_handles_deferred_hook_from_wrapper() -> None:
+    @ai.tool
+    async def double(x: int) -> int:
+        """Double a number."""
+        return x * 2
+
+    part = ai.messages.ToolCallPart(
+        tool_call_id="tc-deferred",
+        tool_name="double",
+        tool_args='{"x": 5}',
+    )
+    hook = ai.messages.HookPart[dict[str, bool]](
+        hook_id="confirm",
+        hook_type="Confirmation",
+        status="pending",
+        tool_call_id=part.tool_call_id,
+    )
+
+    def defer(
+        _call: ai.agents.BoundToolCall,
+        _inner: Callable[..., Any],
+    ) -> Callable[..., Any]:
+        async def wrapped(**_kwargs: Any) -> events_.ToolCallResult:
+            raise ai.HookDeferredException(hook)
+
+        return wrapped
+
+    tc = ai.agents.BoundToolCall(part=part, tool=double).wrap(defer)
+    result = await tc()
+
+    assert result.results[0].is_hook_deferred
+    assert result.results[0].tool_call_id == part.tool_call_id
+
+
 async def test_current_tool_call() -> None:
     seen: list[ai.ToolCall] = []
 
