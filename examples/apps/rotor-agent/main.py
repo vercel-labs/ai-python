@@ -1,20 +1,82 @@
 # durable_agent.py
 import asyncio
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from dataclasses import field
+from typing import Any
 
+import pydantic
 from rotor import (
     ChildDone,
     ChildFailed,
     DurableProcess,
     Start,
     on,
-    record,
     stream,
 )
-from rotor.patterns import Fanout, task
+from rotor.patterns import task
 from rotor.testing import LocalRuntime
 
 import ai
+
+###########
+
+
+class Value(pydantic.BaseModel):
+    result: ai.events.ToolCallResult | None = None
+    error_message: str | None = None
+
+
+def wrap_tool_call(
+    tc: ai.agents.BoundToolCall,
+    inner: Callable[..., Awaitable[ai.events.ToolCallResult]],
+) -> Callable[..., Awaitable[ai.events.ToolCallResult]]:
+    async def deferred(**kwargs: Any) -> ai.events.ToolCallResult:
+        # We don't call the actual tool callable at all, we just wait
+        # on a hook.  The loop processing the hook needs to figure out
+        # how to actually launch the tool somehow.
+        value = await ai.hook(
+            f"eval_{tc.id}",
+            payload=Value,
+            metadata={"part": tc._part.model_dump(mode="json")},
+            tool_call_id=tc.id,
+        )
+        if isinstance(value.result, ai.events.ToolCallResult):
+            return value.result
+        else:
+            raise RuntimeError(value.error_message)
+
+    return deferred
+
+
+class UltraServerlessAgent(ai.Agent):
+    async def loop(
+        self, context: ai.Context
+    ) -> AsyncGenerator[ai.events.AgentEvent]:
+        """All this does is it interposes wrap_tool_call in front of tools."""
+        while context.keep_running():
+            async with (
+                ai.experimental_telemetry.span(
+                    ai.experimental_telemetry.LoopTurnSpanData()
+                ),
+                ai.stream(context=context) as stream,
+                ai.ToolRunner() as tr,
+            ):
+                async for event in ai.util.merge(stream, tr.events()):
+                    yield event
+
+                    if isinstance(event, ai.events.ToolEnd):
+                        tool = self.resolve(event.tool_call)
+                        tr.schedule(tool.wrap(wrap_tool_call))
+
+                context.add(stream.message)
+                # This adds the tool message to the history, which
+                # also has the effect of causing another turn through
+                # the loop.
+                context.add(tr.get_tool_message())
+
+
+###########
+
 
 model = ai.get_model("openai/gpt-5.6-luna")
 
@@ -24,7 +86,7 @@ async def read_weather(city: str) -> str:
         "lisbon": "24 C and sunny",
         "london": "16 C and raining",
     }
-    return readings.get(city.lower(), "No reading is available")
+    return readings[city.lower()]
 
 
 @ai.tool
@@ -58,19 +120,6 @@ async def run_tool(call: dict) -> dict:
 
 class AgentState:
     messages: list[dict] = field(default_factory=list)
-    tools: Fanout = field(default_factory=Fanout)
-    results: list[dict] = field(default_factory=list)
-    turns: int = 0
-
-
-def error_result(call_data: dict, reason: object) -> dict:
-    call = ai.messages.ToolCallPart.model_validate(call_data)
-    return ai.tool_result(
-        tool_call_id=call.tool_call_id,
-        tool_name=call.tool_name,
-        result=str(reason),
-        is_error=True,
-    ).model_dump(mode="json")
 
 
 class WeatherAgent(DurableProcess[AgentState]):
@@ -87,54 +136,47 @@ class WeatherAgent(DurableProcess[AgentState]):
         await self._generate()
 
     async def _generate(self):
-        if self.state.turns >= 8:
-            self.stop(output="Stopped after 8 model turns")
-
-        if self.state.results:
-            messages = [
-                ai.events.ToolCallResult.model_validate(result).message
-                for result in self.state.results
-            ]
-            self.state.messages.append(
-                ai.tool_message(*messages).model_dump(mode="json")
-            )
-            self.state.results.clear()
+        if len(self.state.messages) >= 15:
+            self.stop(output="Stopped after 15 messages")
 
         history = [
             ai.messages.Message.model_validate(message)
             for message in self.state.messages
         ]
-        async with ai.stream(
-            model, history, tools=[t.tool for t in TOOLS]
-        ) as response:
+
+        agent = UltraServerlessAgent(tools=TOOLS)
+        async with agent.run(model, history) as response:
             async for event in response:
+                if (
+                    isinstance(event, ai.events.HookEvent)
+                    and event.hook.status == "pending"
+                ):
+                    # Got a hook. Spawn a task to run it and defer it.
+                    call = event.hook.metadata["part"]
+                    self.spawn(
+                        run_tool, input={"call": call}, key=event.hook.hook_id
+                    )
+
+                    ai.defer_hook(event.hook)
+
                 await stream(event.model_dump(mode="json"))
-        reply = response.message
 
-        self.state.messages.append(reply.model_dump(mode="json"))
-        self.state.turns += 1
-        record("model_turn", {"turn": self.state.turns})
-        if not reply.tool_calls:
-            self.stop(output=reply.text)
-
-        for call in reply.tool_calls:
-            call_data = call.model_dump(mode="json")
-            key = self.state.tools.expect(data=call_data)
-            self.spawn(run_tool, input={"call": call_data}, key=key)
+        self.state.messages = [
+            message.model_dump(mode="json") for message in response.messages
+        ]
+        if response.messages[-1].role == "assistant":
+            self.stop(output=response.messages[-1].text)
 
     @on(run_tool.Done)
     @on(run_tool.Failed)
     async def tool_done(self, msg: ChildDone | ChildFailed):
-        call = self.state.tools.settle(key=msg.key)
-        if call is None:
-            return
         result = (
-            msg.output
+            Value(result=ai.events.ToolCallResult.model_validate(msg.output))
             if isinstance(msg, ChildDone)
-            else error_result(call, msg.reason)
+            else Value(error_message=msg.reason)
         )
-        self.state.results.append(result)
-        if self.state.tools.settled:
+        async with ai.agents.hooks.use_hook_registry(ai.HookRegistry()):
+            ai.resolve_hook(msg.key, result)
             await self._generate()
 
 
