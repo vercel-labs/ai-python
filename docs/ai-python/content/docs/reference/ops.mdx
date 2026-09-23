@@ -19,6 +19,7 @@ Fields:
   it.
 - `warnings`: `Warning` values reported during the operation. Empty when there
   are none.
+- `metadata`: Framework-normalized operation data, or `None`.
 - `provider_metadata`: Provider-specific response data, or `None`.
 
 ## Warning
@@ -246,6 +247,7 @@ await ai.ops.experimental_evaluate(
     state,
     questions,
     *,
+    output_type=Answers,
     params=None,
 )
 ```
@@ -254,17 +256,32 @@ Arguments:
 
 - `model`: Evaluation model.
 - `state`: Shared JSON-compatible string, object, or array.
-- `questions`: Nonempty mapping of question IDs to `ChoiceQuestion`,
-  `ScoreQuestion`, or `BooleanQuestion` values.
+- `questions`: A nonempty Pydantic model or mapping whose fields contain
+  `ChoiceQuestion`, `ScoreQuestion`, or `BooleanQuestion` values.
+- `output_type`: Required with a Pydantic question model. It must be a Pydantic
+  model class with the same fields and corresponding answer types. Omit it with
+  mapped questions.
 - `params`: Optional `EvaluationParams`.
 
-Returns `Item[Evaluation]`.
+Pydantic questions return `Item[Answers]`, whose value is an instance of
+`output_type`. Mapped questions return
+`Item[dict[str, ChoiceAnswer | ScoreAnswer | BooleanAnswer]]`:
 
-`Evaluation` fields:
+```python
+result = await ai.ops.experimental_evaluate(
+    model,
+    state,
+    {
+        question_id: ai.ops.BooleanQuestion(instructions=instructions)
+        for question_id, instructions in dynamic_questions.items()
+    },
+)
 
-- `answers`: Every question ID mapped to its typed answer.
-- `rounding`: Optional provider-declared `probability_decimals` and
-  `score_decimals`. Each is an integer from `0` to `15`, or `None`.
+for question_id, answer in result.value.items():
+    print(question_id, answer)
+```
+
+Provider-declared rounding is available under `result.metadata["rounding"]`.
 
 Question and answer types:
 
