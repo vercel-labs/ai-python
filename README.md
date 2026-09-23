@@ -136,7 +136,7 @@ class CustomAgent(ai.Agent):
                 async for event in ai.util.merge(s, tr.events()):
                     yield event
                     if isinstance(event, ai.events.ToolEnd):
-                        tr.schedule(context.resolve(event.tool_call))
+                        tr.schedule(self.resolve(event.tool_call))
 
                 context.add(s.message)
                 context.add(tr.get_tool_message())

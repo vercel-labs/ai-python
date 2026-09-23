@@ -86,7 +86,7 @@ const DEFAULT_AGENT_LOOP_CODE = `class CustomAgent(ai.Agent):
                     if isinstance(event, ai.events.ToolEnd):
                         # Schedule the tool call
                         tr.schedule(
-                            context.resolve(event.tool_call)
+                            self.resolve(event.tool_call)
                         )
 
                 context.add(stream.message)

@@ -171,7 +171,7 @@ def _aggregator_cls(
 
 def _populate_model_inputs(
     messages: Sequence[types.messages.Message],
-    tools_by_name: dict[str, AgentTool],
+    tool_resolver: ToolResolver,
 ) -> None:
     """Set ``model_input`` on tool results that arrived without one.
 
@@ -185,7 +185,7 @@ def _populate_model_inputs(
         for part in msg.tool_results:
             if part.has_model_input or part.is_error or part.is_hook_deferred:
                 continue
-            tool = tools_by_name.get(part.tool_name)
+            tool = tool_resolver.get(part.tool_name)
             if tool is None:
                 continue
             convert = tool.to_model_input
@@ -494,6 +494,42 @@ class AgentTool:
         self,
     ) -> Callable[[], events_.Aggregator[Any, Any, Any]] | None:
         return self.aggregator
+
+
+class ToolResolver:
+    """Resolve tool-call parts against a set of agent tools."""
+
+    def __init__(self, tools: Sequence[AgentTool]) -> None:
+        self._tools_by_name = {tool.name: tool for tool in tools}
+
+    def get(self, name: str) -> AgentTool | None:
+        return self._tools_by_name.get(name)
+
+    @overload
+    def resolve(self, tool_part: types.messages.ToolCallPart) -> ToolCall: ...
+    @overload
+    def resolve(
+        self, tool_part: Sequence[types.messages.ToolCallPart]
+    ) -> list[ToolCall]: ...
+
+    def resolve(
+        self,
+        tool_part: types.messages.ToolCallPart
+        | Sequence[types.messages.ToolCallPart],
+    ) -> ToolCall | list[ToolCall]:
+        """Resolve ToolCallPart(s) into callable ToolCall object(s)."""
+        if isinstance(tool_part, types.messages.ToolCallPart):
+            tool = self._tools_by_name.get(tool_part.tool_name)
+            if tool is None:
+                raise KeyError(
+                    "No agent executor registered for tool "
+                    f"{tool_part.tool_name!r}"
+                )
+            tc = BoundToolCall(part=tool_part, tool=tool)
+            if tool.require_approval:
+                return GatedToolCall(tc)
+            return tc
+        return [self.resolve(tp) for tp in tool_part]
 
 
 def _validate_kwargs(
@@ -995,14 +1031,11 @@ class Context(pydantic.BaseModel):
         default=None, exclude=True, repr=False
     )
 
-    _agent_tools_by_name: dict[str, AgentTool] = pydantic.PrivateAttr(
-        default_factory=dict
+    _tool_resolver: ToolResolver = pydantic.PrivateAttr(
+        default_factory=lambda: ToolResolver([])
     )
 
     model_config = pydantic.ConfigDict(arbitrary_types_allowed=True)
-
-    def model_post_init(self, __context: Any) -> None:
-        self._agent_tools_by_name = {}
 
     def keep_running(self) -> bool:
         """Call at top of an agent loop to see whether to keep running."""
@@ -1032,19 +1065,11 @@ class Context(pydantic.BaseModel):
         tool_part: types.messages.ToolCallPart
         | Sequence[types.messages.ToolCallPart],
     ) -> ToolCall | list[ToolCall]:
-        """Resolve ToolCallPart(s) into callable ToolCall object(s)."""
-        if isinstance(tool_part, types.messages.ToolCallPart):
-            tool = self._agent_tools_by_name.get(tool_part.tool_name)
-            if tool is None:
-                raise KeyError(
-                    "No agent executor registered for tool "
-                    f"{tool_part.tool_name!r}"
-                )
-            tc = BoundToolCall(part=tool_part, tool=tool)
-            if tool.require_approval:
-                return GatedToolCall(tc)
-            return tc
-        return [self.resolve(tp) for tp in tool_part]
+        """Resolve ToolCallPart(s) into callable ToolCall object(s).
+
+        Deprecated: use :meth:`Agent.resolve` instead.
+        """
+        return self._tool_resolver.resolve(tool_part)
 
     def add(
         self,
@@ -1393,11 +1418,27 @@ class Agent:
                 self._tools.append(t)
             else:
                 self._provider_tools.append(t)
+        self._tool_resolver = ToolResolver(self._tools)
 
     @property
     def tools(self) -> list[AgentTool]:
         """The agent's registered tools (read-only copy)."""
         return list(self._tools)
+
+    @overload
+    def resolve(self, tool_part: types.messages.ToolCallPart) -> ToolCall: ...
+    @overload
+    def resolve(
+        self, tool_part: Sequence[types.messages.ToolCallPart]
+    ) -> list[ToolCall]: ...
+
+    def resolve(
+        self,
+        tool_part: types.messages.ToolCallPart
+        | Sequence[types.messages.ToolCallPart],
+    ) -> ToolCall | list[ToolCall]:
+        """Resolve ToolCallPart(s) into callable ToolCall object(s)."""
+        return self._tool_resolver.resolve(tool_part)
 
     async def loop(
         self, context: Context
@@ -1419,7 +1460,7 @@ class Agent:
                     yield event
 
                     if isinstance(event, types.events.ToolEnd):
-                        tool = context.resolve(event.tool_call)
+                        tool = self.resolve(event.tool_call)
                         tr.schedule(tool)
 
                 context.add(stream.message)
@@ -1516,8 +1557,8 @@ class Agent:
             output_type=output_type,
             params=params,
         )
-        context._agent_tools_by_name = {t.name: t for t in self._tools}
-        _populate_model_inputs(context.messages, context._agent_tools_by_name)
+        context._tool_resolver = self._tool_resolver
+        _populate_model_inputs(context.messages, self._tool_resolver)
         _process_interrupted_hooks(context.messages)
 
         registry = hook_registry

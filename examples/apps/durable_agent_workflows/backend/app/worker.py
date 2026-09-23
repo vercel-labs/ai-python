@@ -107,7 +107,7 @@ class DurableAgent(ai.Agent):
 
             async with ai.ToolRunner() as runner:
                 for tool_call in assistant_message.tool_calls:
-                    runner.schedule(context.resolve(tool_call))
+                    runner.schedule(self.resolve(tool_call))
 
                 async for tool_event in runner.events():
                     yield tool_event

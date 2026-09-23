@@ -3,7 +3,7 @@
 Read `https://ai-python.dev/docs/basics/custom-loops.md` first. Additional
 invariants:
 
-- `context.resolve(event.tool_call)` handles argument validation, approval
+- `self.resolve(event.tool_call)` handles argument validation, approval
   gates, and cached replay results. Do not call `tool.fn` directly unless you
   also handle validation, approvals, and cached results yourself.
 - `ToolRunner.schedule(...)` also accepts a zero-arg async callable that
@@ -16,4 +16,4 @@ invariants:
 - Yield events from the loop; `Agent.run` hides replay events from callers.
 - Keep `ToolRunner` events flowing (e.g. via `ai.util.merge`); otherwise
   partial tool output never reaches the caller.
-- For hooks and approvals, let `context.resolve(...)` build the gated call.
+- For hooks and approvals, let `self.resolve(...)` build the gated call.

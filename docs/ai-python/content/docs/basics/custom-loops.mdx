@@ -47,9 +47,9 @@ class CustomAgent(ai.Agent):
                     yield event
 
                     if isinstance(event, ai.events.ToolEnd):
-                        # context.resolve looks up the Python function for the
+                        # self.resolve looks up the Python function for the
                         # tool name in the model's tool call
-                        tool_call = context.resolve(event.tool_call)
+                        tool_call = self.resolve(event.tool_call)
                         # schedule the tool for concurrent execution
                         # using the tool runner
                         tool_runner.schedule(tool_call)
