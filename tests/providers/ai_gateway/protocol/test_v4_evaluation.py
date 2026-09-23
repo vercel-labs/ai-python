@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from typing import Any
 
 import httpx2 as httpx
@@ -17,24 +18,29 @@ from ..conftest import mock_model
 _MODEL_ID = "typesafe-ai/jev"
 
 
-class Questions(pydantic.BaseModel):
-    department: ops.experimental.ChoiceQuestion
-    severity: ops.experimental.ScoreQuestion
-    refund: ops.experimental.BooleanQuestion
-
-
-class Answers(pydantic.BaseModel):
+class Answers(ops.experimental.BaseAnswerModel):
     department: ops.experimental.ChoiceAnswer
     severity: ops.experimental.ScoreAnswer
     refund: ops.experimental.BooleanAnswer
 
 
-class BooleanQuestions(pydantic.BaseModel):
+class Questions(ops.experimental.BaseQuestionModel[Answers]):
+    department: ops.experimental.ChoiceQuestion
+    severity: ops.experimental.ScoreQuestion
+    refund: ops.experimental.BooleanQuestion
+
+
+class BooleanAnswers(ops.experimental.BaseAnswerModel):
+    answer: ops.experimental.BooleanAnswer
+
+
+class BooleanQuestions(ops.experimental.BaseQuestionModel[BooleanAnswers]):
     answer: ops.experimental.BooleanQuestion
 
 
-class BooleanAnswers(pydantic.BaseModel):
-    answer: ops.experimental.BooleanAnswer
+class TicketState(pydantic.BaseModel):
+    message: str
+    submitted_at: datetime = pydantic.Field(alias="submittedAt")
 
 
 def questions() -> Questions:
@@ -101,9 +107,11 @@ async def test_evaluate_request_and_response() -> None:
             api_key="sk-test",
             model_id=_MODEL_ID,
         ),
-        {"message": "Please refund the duplicate charge."},
+        TicketState(
+            message="Please refund the duplicate charge.",
+            submittedAt=datetime.fromisoformat("2026-09-18T20:30:00+00:00"),
+        ),
         questions(),
-        output_type=Answers,
         params=ops.experimental.EvaluationParams(
             provider_options={
                 "gateway": {
@@ -120,7 +128,10 @@ async def test_evaluate_request_and_response() -> None:
     assert captured_headers["ai-evaluation-model-specification-version"] == "4"
     assert captured_headers["ai-model-id"] == _MODEL_ID
     assert captured_body == {
-        "state": {"message": "Please refund the duplicate charge."},
+        "state": {
+            "message": "Please refund the duplicate charge.",
+            "submittedAt": "2026-09-18T20:30:00Z",
+        },
         "questions": {
             "department": {
                 "type": "choice",
@@ -248,5 +259,4 @@ async def test_evaluate_maps_authentication_error() -> None:
                     instructions="Is this true?"
                 )
             ),
-            output_type=BooleanAnswers,
         )
