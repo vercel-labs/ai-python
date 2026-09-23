@@ -948,3 +948,71 @@ async def test_messages_to_responses_repairs_history() -> None:
     assert wire[0]["type"] == "function_call"
     assert wire[1]["type"] == "function_call_output"
     assert wire[1]["call_id"] == "tc-1"
+
+
+async def test_messages_to_responses_sanitizes_invalid_raw_item() -> None:
+    msgs = [
+        messages.Message(
+            role="assistant",
+            parts=[
+                messages.ToolCallPart(
+                    tool_call_id="call_bad",
+                    tool_name="bash",
+                    tool_args="{not json",
+                    provider_metadata={
+                        "openai": {
+                            "raw_item": {
+                                "type": "function_call",
+                                "call_id": "call_bad",
+                                "name": "bash",
+                                "arguments": "{not json",
+                            }
+                        }
+                    },
+                )
+            ],
+        ),
+    ]
+    wire = await protocol._messages_to_responses(
+        msgs, use_item_references=False
+    )
+    assert wire[0]["arguments"] == "{}"
+
+
+async def test_messages_to_responses_preserves_valid_raw_item() -> None:
+    raw_item = {
+        "id": "fc_1",
+        "type": "function_call",
+        "call_id": "call_1",
+        "name": "weather",
+        "arguments": '{"city":"SF"}',
+    }
+    msgs = [
+        messages.Message(
+            role="assistant",
+            parts=[
+                messages.ToolCallPart(
+                    tool_call_id="call_1",
+                    tool_name="weather",
+                    tool_args='{"city":"SF"}',
+                    provider_metadata={
+                        "openai": {"item_id": "fc_1", "raw_item": raw_item}
+                    },
+                )
+            ],
+        ),
+        messages.Message(
+            role="tool",
+            parts=[
+                messages.ToolResultPart(
+                    tool_call_id="call_1",
+                    tool_name="weather",
+                    result="sunny",
+                )
+            ],
+        ),
+    ]
+    wire = await protocol._messages_to_responses(
+        msgs, use_item_references=False
+    )
+    assert wire[0] == raw_item
