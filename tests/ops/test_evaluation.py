@@ -18,16 +18,16 @@ type EvaluationQuestion = (
 )
 
 
-class Questions(pydantic.BaseModel):
-    department: ops.ChoiceQuestion
-    severity: ops.ScoreQuestion
-    refund: ops.BooleanQuestion
-
-
-class Answers(pydantic.BaseModel):
+class Answers(ops.BaseAnswerModel):
     department: ops.ChoiceAnswer
     severity: ops.ScoreAnswer
     refund: ops.BooleanAnswer
+
+
+class Questions(ops.BaseQuestionModel[Answers]):
+    department: ops.ChoiceQuestion
+    severity: ops.ScoreQuestion
+    refund: ops.BooleanQuestion
 
 
 class EvaluationProvider(models.Provider):
@@ -122,11 +122,11 @@ async def test_evaluate_dispatch_and_span(recorder: conftest.Recorder) -> None:
         id="mock-evaluation-model", provider=EvaluationProvider()
     )
 
+    state: ops.EvaluationInput = {"message": "refund me"}
     result = await ops.experimental_evaluate(
         model,
-        {"message": "refund me"},
+        state,
         questions(),
-        output_type=Answers,
         params=ops.EvaluationParams(
             provider_options={"gateway": {"zeroDataRetention": True}}
         ),
@@ -147,6 +147,9 @@ async def test_evaluate_dispatch_and_span(recorder: conftest.Recorder) -> None:
 
 
 async def test_evaluate_dynamic_questions() -> None:
+    class State(pydantic.BaseModel):
+        message: str
+
     model = models.Model(
         id="mock-evaluation-model", provider=EvaluationProvider()
     )
@@ -158,7 +161,7 @@ async def test_evaluate_dynamic_questions() -> None:
 
     result = await ops.experimental_evaluate(
         model,
-        {"message": "refund me"},
+        State(message="refund me"),
         dynamic_questions,
         params=ops.EvaluationParams(
             provider_options={"gateway": {"zeroDataRetention": True}}
@@ -187,11 +190,11 @@ async def test_evaluate_raises_not_implemented() -> None:
     provider = ai.get_provider("openai", api_key="[redacted]")
     model = ai.Model(id="evaluation-test", provider=provider)
 
-    class BooleanQuestions(pydantic.BaseModel):
-        answer: ops.BooleanQuestion
-
-    class BooleanAnswers(pydantic.BaseModel):
+    class BooleanAnswers(ops.BaseAnswerModel):
         answer: ops.BooleanAnswer
+
+    class BooleanQuestions(ops.BaseQuestionModel[BooleanAnswers]):
+        answer: ops.BooleanQuestion
 
     with pytest.raises(NotImplementedError, match="evaluate"):
         await ops.experimental_evaluate(
@@ -200,7 +203,6 @@ async def test_evaluate_raises_not_implemented() -> None:
             BooleanQuestions(
                 answer=ops.BooleanQuestion(instructions="Is this valid?")
             ),
-            output_type=BooleanAnswers,
         )
 
 
@@ -240,7 +242,6 @@ async def test_evaluate_validates_state(state: Any) -> None:
             model,
             cast("ops.EvaluationInput", state),
             questions(),
-            output_type=Answers,
         )
 
 
@@ -261,10 +262,10 @@ async def test_evaluate_requires_question_values() -> None:
 
 
 async def test_evaluate_requires_questions() -> None:
-    class EmptyQuestions(pydantic.BaseModel):
+    class EmptyAnswers(ops.BaseAnswerModel):
         pass
 
-    class EmptyAnswers(pydantic.BaseModel):
+    class EmptyQuestions(ops.BaseQuestionModel[EmptyAnswers]):
         pass
 
     model = models.Model(
@@ -276,7 +277,6 @@ async def test_evaluate_requires_questions() -> None:
             model,
             "state",
             EmptyQuestions(),
-            output_type=EmptyAnswers,
         )
 
     empty: dict[str, EvaluationQuestion] = {}
@@ -284,30 +284,73 @@ async def test_evaluate_requires_questions() -> None:
         await ops.experimental_evaluate(model, "state", empty)
 
 
-async def test_evaluate_rejects_mixed_modes() -> None:
+async def test_evaluate_requires_base_question_model() -> None:
+    class PlainQuestions(pydantic.BaseModel):
+        refund: ops.BooleanQuestion
+
     model = models.Model(
         id="mock-evaluation-model", provider=EvaluationProvider()
     )
-    evaluate = cast("Any", ops.experimental_evaluate)
 
-    with pytest.raises(TypeError, match="required for Pydantic"):
-        await evaluate(model, "state", questions())
-
-    with pytest.raises(TypeError, match="cannot be used with mapped"):
-        await evaluate(
+    with pytest.raises(TypeError, match="BaseQuestionModel or mapping"):
+        await ops.experimental_evaluate(
             model,
             "state",
-            {"refund": questions().refund},
-            output_type=Answers,
+            cast("Any", PlainQuestions(refund=questions().refund)),
         )
 
 
-async def test_evaluate_requires_question_fields() -> None:
-    class InvalidQuestions(pydantic.BaseModel):
-        answer: str
+async def test_evaluate_requires_concrete_answer_type() -> None:
+    class UnparameterizedQuestions(ops.BaseQuestionModel[Any]):
+        refund: ops.BooleanQuestion
 
-    class BooleanAnswers(pydantic.BaseModel):
+    model = models.Model(
+        id="mock-evaluation-model", provider=EvaluationProvider()
+    )
+
+    with pytest.raises(TypeError, match="specialize BaseQuestionModel"):
+        await ops.experimental_evaluate(
+            model,
+            "state",
+            UnparameterizedQuestions(refund=questions().refund),
+        )
+
+
+async def test_evaluate_inherited_question_model() -> None:
+    class Intermediate(ops.BaseQuestionModel[Answers]):
+        pass
+
+    class InheritedQuestions(Intermediate):
+        department: ops.ChoiceQuestion
+        severity: ops.ScoreQuestion
+        refund: ops.BooleanQuestion
+
+    model = models.Model(
+        id="mock-evaluation-model",
+        provider=StaticEvaluationProvider(
+            answers={
+                "department": {"choice": "billing"},
+                "severity": {"score": 1.5},
+                "refund": {"probability": 0.98},
+            }
+        ),
+    )
+    result = await ops.experimental_evaluate(
+        model,
+        "state",
+        InheritedQuestions.model_validate(questions().model_dump()),
+    )
+    assert_type(result, ops.Item[Answers])
+    assert isinstance(result.value, Answers)
+    assert result.value.refund.probability == 0.98
+
+
+async def test_evaluate_requires_question_fields() -> None:
+    class BooleanAnswers(ops.BaseAnswerModel):
         answer: ops.BooleanAnswer
+
+    class InvalidQuestions(ops.BaseQuestionModel[BooleanAnswers]):
+        answer: str
 
     model = models.Model(
         id="mock-evaluation-model", provider=EvaluationProvider()
@@ -318,13 +361,17 @@ async def test_evaluate_requires_question_fields() -> None:
             model,
             "state",
             InvalidQuestions(answer="invalid"),
-            output_type=BooleanAnswers,
         )
 
 
 async def test_evaluate_requires_matching_output_fields() -> None:
-    class MissingAnswers(pydantic.BaseModel):
+    class MissingAnswers(ops.BaseAnswerModel):
         department: ops.ChoiceAnswer
+
+    class MismatchedQuestions(ops.BaseQuestionModel[MissingAnswers]):
+        department: ops.ChoiceQuestion
+        severity: ops.ScoreQuestion
+        refund: ops.BooleanQuestion
 
     model = models.Model(
         id="mock-evaluation-model", provider=EvaluationProvider()
@@ -334,16 +381,20 @@ async def test_evaluate_requires_matching_output_fields() -> None:
         await ops.experimental_evaluate(
             model,
             "state",
-            questions(),
-            output_type=MissingAnswers,
+            MismatchedQuestions.model_validate(questions().model_dump()),
         )
 
 
 async def test_evaluate_requires_matching_answer_types() -> None:
-    class WrongAnswers(pydantic.BaseModel):
+    class WrongAnswers(ops.BaseAnswerModel):
         department: ops.ChoiceAnswer
         severity: ops.BooleanAnswer
         refund: ops.BooleanAnswer
+
+    class MismatchedQuestions(ops.BaseQuestionModel[WrongAnswers]):
+        department: ops.ChoiceQuestion
+        severity: ops.ScoreQuestion
+        refund: ops.BooleanQuestion
 
     model = models.Model(
         id="mock-evaluation-model", provider=EvaluationProvider()
@@ -353,8 +404,7 @@ async def test_evaluate_requires_matching_answer_types() -> None:
         await ops.experimental_evaluate(
             model,
             "state",
-            questions(),
-            output_type=WrongAnswers,
+            MismatchedQuestions.model_validate(questions().model_dump()),
         )
 
 
@@ -375,7 +425,6 @@ async def test_evaluate_validates_provider_output() -> None:
             model,
             "state",
             questions(),
-            output_type=Answers,
         )
 
     dynamic_questions: dict[str, EvaluationQuestion] = {
@@ -398,7 +447,6 @@ async def test_evaluate_requires_matching_answer_fields() -> None:
             model,
             "state",
             questions(),
-            output_type=Answers,
         )
 
 
@@ -414,5 +462,4 @@ async def test_evaluate_rejects_cyclic_state() -> None:
             model,
             cast("ops.EvaluationInput", state),
             questions(),
-            output_type=Answers,
         )

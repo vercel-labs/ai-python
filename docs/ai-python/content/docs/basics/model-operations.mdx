@@ -255,27 +255,31 @@ are ordered from the highest score to the lowest.
 
 ## Evaluate state
 
-Use `experimental_evaluate` to ask choice, score, and boolean questions about one shared state. Define matching Pydantic models for the questions and answers:
+Use `experimental_evaluate` to ask choice, score, and boolean questions about one shared state. Define matching question and answer models; the question model's generic argument specifies its answer model:
 
 ```python
 import pydantic
 
 
-class Questions(pydantic.BaseModel):
-    department: ai.ops.ChoiceQuestion
-    severity: ai.ops.ScoreQuestion
-    requests_refund: ai.ops.BooleanQuestion
+class State(pydantic.BaseModel):
+    message: str
 
 
-class Answers(pydantic.BaseModel):
+class Answers(ai.ops.BaseAnswerModel):
     department: ai.ops.ChoiceAnswer
     severity: ai.ops.ScoreAnswer
     requests_refund: ai.ops.BooleanAnswer
 
 
+class Questions(ai.ops.BaseQuestionModel[Answers]):
+    department: ai.ops.ChoiceQuestion
+    severity: ai.ops.ScoreQuestion
+    requests_refund: ai.ops.BooleanQuestion
+
+
 result = await ai.ops.experimental_evaluate(
     ai.get_model("typesafe-ai/jev"),
-    {"message": "Please refund the duplicate charge."},
+    State(message="Please refund the duplicate charge."),
     Questions(
         department=ai.ops.ChoiceQuestion(
             instructions="Which team should handle this?",
@@ -289,14 +293,15 @@ result = await ai.ops.experimental_evaluate(
             instructions="Is the customer requesting a refund?",
         ),
     ),
-    output_type=Answers,
 )
 
 print(result.value.department.choice)
 ```
 
-When question IDs are dynamic, pass a mapping and omit `output_type`. The item
-value is then a validated answer mapping:
+Pydantic state is serialized to JSON before it is sent to the provider. Strings,
+JSON objects, and JSON arrays are also accepted. When question IDs are dynamic,
+pass a mapping instead of a `BaseQuestionModel`. The item value is then a
+validated answer mapping:
 
 ```python
 result = await ai.ops.experimental_evaluate(

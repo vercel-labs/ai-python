@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from typing import Any
 
 import httpx2 as httpx
@@ -17,24 +18,29 @@ from ..conftest import mock_model
 _MODEL_ID = "typesafe-ai/jev"
 
 
-class Questions(pydantic.BaseModel):
-    department: ops.ChoiceQuestion
-    severity: ops.ScoreQuestion
-    refund: ops.BooleanQuestion
-
-
-class Answers(pydantic.BaseModel):
+class Answers(ops.BaseAnswerModel):
     department: ops.ChoiceAnswer
     severity: ops.ScoreAnswer
     refund: ops.BooleanAnswer
 
 
-class BooleanQuestions(pydantic.BaseModel):
+class Questions(ops.BaseQuestionModel[Answers]):
+    department: ops.ChoiceQuestion
+    severity: ops.ScoreQuestion
+    refund: ops.BooleanQuestion
+
+
+class BooleanAnswers(ops.BaseAnswerModel):
+    answer: ops.BooleanAnswer
+
+
+class BooleanQuestions(ops.BaseQuestionModel[BooleanAnswers]):
     answer: ops.BooleanQuestion
 
 
-class BooleanAnswers(pydantic.BaseModel):
-    answer: ops.BooleanAnswer
+class TicketState(pydantic.BaseModel):
+    message: str
+    submitted_at: datetime = pydantic.Field(alias="submittedAt")
 
 
 def questions() -> Questions:
@@ -101,9 +107,11 @@ async def test_evaluate_request_and_response() -> None:
             api_key="sk-test",
             model_id=_MODEL_ID,
         ),
-        {"message": "Please refund the duplicate charge."},
+        TicketState(
+            message="Please refund the duplicate charge.",
+            submittedAt=datetime.fromisoformat("2026-09-18T20:30:00+00:00"),
+        ),
         questions(),
-        output_type=Answers,
         params=ops.EvaluationParams(
             provider_options={
                 "gateway": {
@@ -120,7 +128,10 @@ async def test_evaluate_request_and_response() -> None:
     assert captured_headers["ai-evaluation-model-specification-version"] == "4"
     assert captured_headers["ai-model-id"] == _MODEL_ID
     assert captured_body == {
-        "state": {"message": "Please refund the duplicate charge."},
+        "state": {
+            "message": "Please refund the duplicate charge.",
+            "submittedAt": "2026-09-18T20:30:00Z",
+        },
         "questions": {
             "department": {
                 "type": "choice",
@@ -246,5 +257,4 @@ async def test_evaluate_maps_authentication_error() -> None:
             BooleanQuestions(
                 answer=ops.BooleanQuestion(instructions="Is this true?")
             ),
-            output_type=BooleanAnswers,
         )
