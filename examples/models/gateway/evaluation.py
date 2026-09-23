@@ -16,24 +16,31 @@ import pydantic
 import ai
 
 
-class RefundQuestions(pydantic.BaseModel):
-    requests_refund: ai.ops.BooleanQuestion
-
-
-class RefundAnswers(pydantic.BaseModel):
+class RefundAnswers(ai.ops.BaseAnswerModel):
     requests_refund: ai.ops.BooleanAnswer
 
 
-class TicketQuestions(pydantic.BaseModel):
+class RefundQuestions(ai.ops.BaseQuestionModel[RefundAnswers]):
+    requests_refund: ai.ops.BooleanQuestion
+
+
+class TicketAnswers(ai.ops.BaseAnswerModel):
+    queue: ai.ops.ChoiceAnswer
+    urgency: ai.ops.ScoreAnswer
+    refund_warranted: ai.ops.BooleanAnswer
+
+
+class TicketQuestions(ai.ops.BaseQuestionModel[TicketAnswers]):
     queue: ai.ops.ChoiceQuestion
     urgency: ai.ops.ScoreQuestion
     refund_warranted: ai.ops.BooleanQuestion
 
 
-class TicketAnswers(pydantic.BaseModel):
-    queue: ai.ops.ChoiceAnswer
-    urgency: ai.ops.ScoreAnswer
-    refund_warranted: ai.ops.BooleanAnswer
+class TicketState(pydantic.BaseModel):
+    message: str
+    customer: dict[str, pydantic.JsonValue]
+    payments: list[dict[str, pydantic.JsonValue]]
+    service_status: str
 
 
 async def main() -> None:
@@ -52,7 +59,6 @@ async def main() -> None:
                 instructions="Is the customer asking for a refund?",
             )
         ),
-        output_type=RefundAnswers,
     )
 
     print(
@@ -62,16 +68,16 @@ async def main() -> None:
 
     # Ask several question types about the same structured state. This is useful
     # when related decisions should use exactly the same source information.
-    ticket: ai.ops.EvaluationInput = {
-        "message": (
+    ticket = TicketState(
+        message=(
             "I was charged $240 twice for the same renewal. The service works, "
             "but please refund the duplicate charge."
         ),
-        "customer": {
+        customer={
             "plan": "pro-annual",
             "account_age_days": 812,
         },
-        "payments": [
+        payments=[
             {
                 "id": "pay_01",
                 "amount_usd": 240,
@@ -85,8 +91,8 @@ async def main() -> None:
                 "renewal_id": "ren_42",
             },
         ],
-        "service_status": "operational",
-    }
+        service_status="operational",
+    )
 
     result = await ai.ops.experimental_evaluate(
         model,
@@ -118,7 +124,6 @@ async def main() -> None:
                 },
             ),
         ),
-        output_type=TicketAnswers,
         # Provider options are optional and apply only to this request.
         params=ai.ops.EvaluationParams(
             provider_options={

@@ -247,7 +247,6 @@ await ai.ops.experimental_evaluate(
     state,
     questions,
     *,
-    output_type=Answers,
     params=None,
 )
 ```
@@ -255,16 +254,32 @@ await ai.ops.experimental_evaluate(
 Arguments:
 
 - `model`: Evaluation model.
-- `state`: Shared JSON-compatible string, object, or array.
-- `questions`: A nonempty Pydantic model or mapping whose fields contain
-  `ChoiceQuestion`, `ScoreQuestion`, or `BooleanQuestion` values.
-- `output_type`: Required with a Pydantic question model. It must be a Pydantic
-  model class with the same fields and corresponding answer types. Omit it with
-  mapped questions.
+- `state`: Shared JSON-compatible string, object, or array, or a Pydantic model
+  (serialized in JSON mode with field aliases).
+- `questions`: A nonempty `BaseQuestionModel` subclass instance or mapping whose
+  fields contain `ChoiceQuestion`, `ScoreQuestion`, or `BooleanQuestion` values.
+  The typed model specializes `BaseQuestionModel[Answers]`, where `Answers`
+  subclasses `BaseAnswerModel` with matching field names and corresponding
+  answer types. Ordinary Pydantic models are not accepted for typed questions.
 - `params`: Optional `EvaluationParams`.
 
-Pydantic questions return `Item[Answers]`, whose value is an instance of
-`output_type`. Mapped questions return
+For typed questions, the return type is inferred from the declared answer
+model:
+
+```python
+class Answers(ai.ops.BaseAnswerModel):
+    approved: ai.ops.BooleanAnswer
+
+class Questions(ai.ops.BaseQuestionModel[Answers]):
+    approved: ai.ops.BooleanQuestion
+
+result = await ai.ops.experimental_evaluate(model, state, Questions(
+    approved=ai.ops.BooleanQuestion(instructions="Is it approved?"),
+))
+# result.value is an Answers instance
+```
+
+Mapped questions return
 `Item[dict[str, ChoiceAnswer | ScoreAnswer | BooleanAnswer]]`:
 
 ```python

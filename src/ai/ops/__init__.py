@@ -3,6 +3,8 @@
 from .audio import AudioParams, AudioPrompt, generate_audio
 from .embeddings import EmbedParams, embed
 from .evaluation import (
+    BaseAnswerModel,
+    BaseQuestionModel,
     BooleanAnswer,
     BooleanCriteria,
     BooleanQuestion,
@@ -28,6 +30,8 @@ from .videos import FrameImage, VideoParams, VideoPrompt, generate_video
 __all__ = [
     "AudioParams",
     "AudioPrompt",
+    "BaseAnswerModel",
+    "BaseQuestionModel",
     "BooleanAnswer",
     "BooleanCriteria",
     "BooleanQuestion",

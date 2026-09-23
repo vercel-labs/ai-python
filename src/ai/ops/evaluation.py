@@ -3,13 +3,12 @@
 ::
 
     import ai
-    import pydantic
 
-    class Questions(pydantic.BaseModel):
-        requests_refund: ai.ops.BooleanQuestion
-
-    class Answers(pydantic.BaseModel):
+    class Answers(ai.ops.BaseAnswerModel):
         requests_refund: ai.ops.BooleanAnswer
+
+    class Questions(ai.ops.BaseQuestionModel[Answers]):
+        requests_refund: ai.ops.BooleanQuestion
 
     result = await ai.ops.experimental_evaluate(
         ai.get_model("typesafe-ai/jev"),
@@ -19,7 +18,6 @@
                 instructions="Is the customer requesting a refund?",
             ),
         ),
-        output_type=Answers,
     )
     result.value.requests_refund
 """
@@ -134,6 +132,16 @@ class BooleanAnswer(pydantic.BaseModel):
     model_config = pydantic.ConfigDict(frozen=True)
 
 
+class BaseAnswerModel(pydantic.BaseModel):
+    """Base class for a statically typed set of evaluation answers."""
+
+
+class BaseQuestionModel[AnswerT: BaseAnswerModel](pydantic.BaseModel):
+    """Base class for questions paired with an answer model."""
+
+    model_config = pydantic.ConfigDict(extra="forbid")
+
+
 @dataclasses.dataclass(frozen=True, kw_only=True)
 class EvaluationParams:
     """Parameters for evaluation."""
@@ -160,12 +168,11 @@ _INPUT_ADAPTER: pydantic.TypeAdapter[EvaluationInput] = pydantic.TypeAdapter(
 
 
 @overload
-async def experimental_evaluate[AnswerT: pydantic.BaseModel](
+async def experimental_evaluate[AnswerT: BaseAnswerModel](
     model: model_.Model,
-    state: EvaluationInput,
-    questions: pydantic.BaseModel,
+    state: EvaluationInput | pydantic.BaseModel,
+    questions: BaseQuestionModel[AnswerT],
     *,
-    output_type: type[AnswerT],
     params: EvaluationParams | None = None,
 ) -> items.Item[AnswerT]: ...
 
@@ -173,59 +180,66 @@ async def experimental_evaluate[AnswerT: pydantic.BaseModel](
 @overload
 async def experimental_evaluate(
     model: model_.Model,
-    state: EvaluationInput,
+    state: EvaluationInput | pydantic.BaseModel,
     questions: Mapping[str, pydantic.BaseModel],
     *,
-    output_type: None = None,
     params: EvaluationParams | None = None,
 ) -> items.Item[dict[str, _Answer]]: ...
 
 
 async def experimental_evaluate(
     model: model_.Model,
-    state: EvaluationInput,
-    questions: pydantic.BaseModel | Mapping[str, pydantic.BaseModel],
+    state: EvaluationInput | pydantic.BaseModel,
+    questions: BaseQuestionModel[Any] | Mapping[str, pydantic.BaseModel],
     *,
-    output_type: type[pydantic.BaseModel] | None = None,
     params: EvaluationParams | None = None,
 ) -> items.Item[Any]:
     """Evaluate questions against one shared state.
 
-    Pass matching Pydantic question and output models for a statically typed
-    value, or pass a question mapping to receive an answer mapping. Each choice,
-    score, or boolean question is validated against its corresponding answer.
+    Pass a BaseQuestionModel parameterized with its BaseAnswerModel for a
+    statically typed value, or pass a question mapping to receive an answer
+    mapping. Each question is validated against its corresponding answer.
 
     Experimental: not part of the stable API, may change or be removed.
     """
-    # Validate the shared state before dispatching it to a provider.
+    # Normalize Pydantic state to JSON data before validating and dispatching.
+    if isinstance(state, pydantic.BaseModel):
+        state = state.model_dump(mode="json", by_alias=True)
     state = _INPUT_ADAPTER.validate_python(state)
 
     # Select one input mode and expose its question values for normalization.
     values: Iterable[tuple[str, Any]]
-    if isinstance(questions, pydantic.BaseModel):
-        if output_type is None:
-            raise TypeError("output_type is required for Pydantic questions")
-        if not isinstance(output_type, type) or not issubclass(
-            output_type, pydantic.BaseModel
+    answer_model: type[BaseAnswerModel] | None = None
+    if isinstance(questions, BaseQuestionModel):
+        # Pydantic stores concrete generic arguments on the specialized base,
+        # not on a question subclass. Walk the MRO for indirect subclasses.
+        for base in type(questions).__mro__:
+            if issubclass(base, BaseQuestionModel):
+                args = getattr(base, "__pydantic_generic_metadata__", {}).get(
+                    "args", ()
+                )
+                if args:
+                    answer_model = args[0]
+                    break
+        if not isinstance(answer_model, type) or not issubclass(
+            answer_model, BaseAnswerModel
         ):
-            raise TypeError("output_type must be a Pydantic model class")
+            raise TypeError(
+                "questions must specialize BaseQuestionModel[BaseAnswerModel]"
+            )
 
         question_fields = type(questions).model_fields
         if not question_fields:
             raise ValueError("questions must not be empty")
-        if questions.model_extra:
-            raise TypeError("questions must not contain extra fields")
 
         # Typed question and answer models must describe the same field names.
-        answer_fields = output_type.model_fields
+        answer_fields = answer_model.model_fields
         if answer_fields.keys() != question_fields.keys():
-            raise TypeError("output_type fields must match question fields")
+            raise TypeError("answer_model fields must match question fields")
         values = ((name, getattr(questions, name)) for name in question_fields)
     else:
-        if output_type is not None:
-            raise TypeError("output_type cannot be used with mapped questions")
         if not isinstance(questions, Mapping):
-            raise TypeError("questions must be a Pydantic model or mapping")
+            raise TypeError("questions must be a BaseQuestionModel or mapping")
         if not questions:
             raise ValueError("questions must not be empty")
         answer_fields = None
@@ -271,10 +285,10 @@ async def experimental_evaluate(
         if raw_item.value.keys() != normalized.keys():
             raise ValueError("answer fields must match question fields")
 
-        if output_type is not None:
+        if answer_model is not None:
             # Typed mode validates the complete response into the user's model.
-            value: pydantic.BaseModel | dict[str, _Answer] = (
-                output_type.model_validate(raw_item.value)
+            value: BaseAnswerModel | dict[str, _Answer] = (
+                answer_model.model_validate(raw_item.value)
             )
         else:
             # Dynamic mode validates each value using its question's answer
