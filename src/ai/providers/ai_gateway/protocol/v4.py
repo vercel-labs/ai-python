@@ -535,22 +535,22 @@ async def stream(
 async def evaluate(
     gateway: gateway_client.GatewayClient,
     model: models.Model,
-    state: ops.evaluation.EvaluationInput,
+    state: ops.experimental.EvaluationInput,
     questions: Mapping[
         str,
-        ops.evaluation.ChoiceQuestion
-        | ops.evaluation.ScoreQuestion
-        | ops.evaluation.BooleanQuestion,
+        ops.experimental.ChoiceQuestion
+        | ops.experimental.ScoreQuestion
+        | ops.experimental.BooleanQuestion,
     ],
     *,
-    params: ops.evaluation.EvaluationParams,
+    params: ops.experimental.EvaluationParams,
 ) -> ops.items.Item[dict[str, Any]]:
     """Hit ``/evaluation-model`` and return raw evaluation answers."""
     wire_questions: dict[str, dict[str, Any]] = {}
     for question_id, question in questions.items():
         wire_question = question.model_dump(mode="json", by_alias=True)
         if (
-            isinstance(question, ops.evaluation.BooleanQuestion)
+            isinstance(question, ops.experimental.BooleanQuestion)
             and question.criteria is None
         ):
             wire_question.pop("criteria")
@@ -791,15 +791,15 @@ class GatewayV4Protocol(base.ProviderProtocol[gateway_client.GatewayClient]):
         self,
         client: gateway_client.GatewayClient,
         model: models.Model,
-        state: ops.evaluation.EvaluationInput,
+        state: ops.experimental.EvaluationInput,
         questions: Mapping[
             str,
-            ops.evaluation.ChoiceQuestion
-            | ops.evaluation.ScoreQuestion
-            | ops.evaluation.BooleanQuestion,
+            ops.experimental.ChoiceQuestion
+            | ops.experimental.ScoreQuestion
+            | ops.experimental.BooleanQuestion,
         ],
         *,
-        params: ops.evaluation.EvaluationParams,
+        params: ops.experimental.EvaluationParams,
         provider: str,
     ) -> ops.items.Item[dict[str, Any]]:
         _ = provider
