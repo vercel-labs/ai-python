@@ -37,13 +37,13 @@ class CustomAgent(ai.Agent):
                 # ai.ToolRunner is responsible for concurrent tool scheduling and
                 # streaming, as well as graceful handling of hook interruptions
                 ai.ToolRunner() as tool_runner,
-
-            ):
                 # ai.util.merge interleaves two streams together, so the agent
                 # can fire off tools as they arrive in the stream rather than
                 # waiting for the model to stop streaming; and also start streaming
                 # the streaming tools.
-                async for event in ai.util.merge(stream, tool_runner.events()):
+                ai.util.merge(stream, tool_runner.events()) as events,
+            ):
+                async for event in events:
                     yield event
 
                     if isinstance(event, ai.events.ToolEnd):

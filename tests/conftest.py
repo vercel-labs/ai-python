@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncGenerator, AsyncIterable, Iterator, Sequence
 from typing import Any, Literal, cast
 
@@ -301,3 +302,26 @@ def recorder() -> Iterator[Recorder]:
     ai.experimental_telemetry.register(r)
     yield r
     ai.experimental_telemetry.unregister(r)
+
+
+BLOCKING_TASKS: dict[
+    asyncio.AbstractEventLoop, tuple[asyncio.Event, asyncio.Task[None]]
+] = {}
+
+
+async def wait_all_tasks_blocked() -> None:
+    loop = cast(Any, asyncio.get_running_loop())
+
+    async def worker() -> None:
+        try:
+            while loop._ready:
+                await asyncio.sleep(0)
+            BLOCKING_TASKS[loop][0].set()
+        finally:
+            BLOCKING_TASKS.pop(loop, None)
+
+    if loop not in BLOCKING_TASKS:
+        ev = asyncio.Event()
+        BLOCKING_TASKS[loop] = (ev, asyncio.create_task(worker()))
+
+    await BLOCKING_TASKS[loop][0].wait()
