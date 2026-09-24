@@ -255,37 +255,37 @@ are ordered from the highest score to the lowest.
 
 ## Evaluate state
 
-Use `experimental_evaluate` to ask choice, score, and boolean questions about one shared state. Define matching Pydantic models for the questions and answers:
+Use `ai.ops.experimental.evaluate` to ask choice, score, and boolean questions about one shared state. Define matching Pydantic models for the questions and answers:
 
 ```python
 import pydantic
 
 
 class Questions(pydantic.BaseModel):
-    department: ai.ops.ChoiceQuestion
-    severity: ai.ops.ScoreQuestion
-    requests_refund: ai.ops.BooleanQuestion
+    department: ai.ops.experimental.ChoiceQuestion
+    severity: ai.ops.experimental.ScoreQuestion
+    requests_refund: ai.ops.experimental.BooleanQuestion
 
 
 class Answers(pydantic.BaseModel):
-    department: ai.ops.ChoiceAnswer
-    severity: ai.ops.ScoreAnswer
-    requests_refund: ai.ops.BooleanAnswer
+    department: ai.ops.experimental.ChoiceAnswer
+    severity: ai.ops.experimental.ScoreAnswer
+    requests_refund: ai.ops.experimental.BooleanAnswer
 
 
-result = await ai.ops.experimental_evaluate(
+result = await ai.ops.experimental.evaluate(
     ai.get_model("typesafe-ai/jev"),
     {"message": "Please refund the duplicate charge."},
     Questions(
-        department=ai.ops.ChoiceQuestion(
+        department=ai.ops.experimental.ChoiceQuestion(
             instructions="Which team should handle this?",
             criteria={"billing": "Charges and refunds", "support": "Other"},
         ),
-        severity=ai.ops.ScoreQuestion(
+        severity=ai.ops.experimental.ScoreQuestion(
             instructions="How severe is this?",
             criteria=["Cosmetic", "Has workaround", "Blocking"],
         ),
-        requests_refund=ai.ops.BooleanQuestion(
+        requests_refund=ai.ops.experimental.BooleanQuestion(
             instructions="Is the customer requesting a refund?",
         ),
     ),
@@ -299,11 +299,11 @@ When question IDs are dynamic, pass a mapping and omit `output_type`. The item
 value is then a validated answer mapping:
 
 ```python
-result = await ai.ops.experimental_evaluate(
+result = await ai.ops.experimental.evaluate(
     ai.get_model("typesafe-ai/jev"),
     state,
     {
-        question_id: ai.ops.BooleanQuestion(instructions=instructions)
+        question_id: ai.ops.experimental.BooleanQuestion(instructions=instructions)
         for question_id, instructions in dynamic_questions.items()
     },
 )

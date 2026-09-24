@@ -6,16 +6,16 @@
     import pydantic
 
     class Questions(pydantic.BaseModel):
-        requests_refund: ai.ops.BooleanQuestion
+        requests_refund: ai.ops.experimental.BooleanQuestion
 
     class Answers(pydantic.BaseModel):
-        requests_refund: ai.ops.BooleanAnswer
+        requests_refund: ai.ops.experimental.BooleanAnswer
 
-    result = await ai.ops.experimental_evaluate(
+    result = await ai.ops.experimental.evaluate(
         ai.get_model("typesafe-ai/jev"),
         {"message": "Please refund the duplicate charge."},
         Questions(
-            requests_refund=ai.ops.BooleanQuestion(
+            requests_refund=ai.ops.experimental.BooleanQuestion(
                 instructions="Is the customer requesting a refund?",
             ),
         ),
@@ -32,11 +32,11 @@ from typing import TYPE_CHECKING, Annotated, Any, Literal, TypedDict, overload
 
 import pydantic
 
-from .. import experimental_telemetry as telemetry
-from . import items
+from ... import experimental_telemetry as telemetry
+from .. import items
 
 if TYPE_CHECKING:
-    from ..models.core import model as model_
+    from ...models.core import model as model_
 
 
 type EvaluationInput = (
@@ -160,7 +160,7 @@ _INPUT_ADAPTER: pydantic.TypeAdapter[EvaluationInput] = pydantic.TypeAdapter(
 
 
 @overload
-async def experimental_evaluate[AnswerT: pydantic.BaseModel](
+async def evaluate[AnswerT: pydantic.BaseModel](
     model: model_.Model,
     state: EvaluationInput,
     questions: pydantic.BaseModel,
@@ -171,7 +171,7 @@ async def experimental_evaluate[AnswerT: pydantic.BaseModel](
 
 
 @overload
-async def experimental_evaluate(
+async def evaluate(
     model: model_.Model,
     state: EvaluationInput,
     questions: Mapping[str, pydantic.BaseModel],
@@ -181,7 +181,7 @@ async def experimental_evaluate(
 ) -> items.Item[dict[str, _Answer]]: ...
 
 
-async def experimental_evaluate(
+async def evaluate(
     model: model_.Model,
     state: EvaluationInput,
     questions: pydantic.BaseModel | Mapping[str, pydantic.BaseModel],

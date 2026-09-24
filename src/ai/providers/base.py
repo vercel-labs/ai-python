@@ -27,13 +27,13 @@ if TYPE_CHECKING:
     from ..ops import (
         audio,
         embeddings,
-        evaluation,
         images,
         items,
         reranking,
         transcriptions,
         videos,
     )
+    from ..ops.experimental import evaluation
     from ..types import events
     from ..types import messages as messages_
     from ..types import tools as tools_
