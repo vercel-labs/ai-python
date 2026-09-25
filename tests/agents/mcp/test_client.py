@@ -5,12 +5,14 @@ from __future__ import annotations
 import contextlib
 import dataclasses
 import importlib
+from types import SimpleNamespace
 from typing import Any
 
 import mcp.types
 import pytest
 
 import ai
+from ai.agents.mcp import client as mcp_client
 from ai.agents.mcp.client import _mcp_tool_to_native
 
 from ...conftest import (
@@ -93,6 +95,38 @@ async def test_get_http_tools_raises_installation_error_without_mcp(
         await ai.mcp.get_http_tools("https://mcp.example.com/mcp")
 
     assert "ai[mcp]" in str(exc_info.value)
+
+
+async def test_get_stdio_tools_initializes_pool_for_discovery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Stdio discovery works before Agent.run() and releases its pool."""
+    mcp_tool = _fake_mcp_tool(name="stdio_echo")
+    pools: list[dict[str, Any]] = []
+
+    class FakeClient:
+        async def list_tools(self) -> SimpleNamespace:
+            return SimpleNamespace(tools=[mcp_tool])
+
+    fake_client = FakeClient()
+
+    async def fake_get_or_create_connection(
+        key: str, transport_factory: Any
+    ) -> FakeClient:
+        pool = mcp_client._pool.get()
+        assert pool is not None
+        pools.append(pool)
+        return fake_client
+
+    monkeypatch.setattr(
+        mcp_client, "_get_or_create_connection", fake_get_or_create_connection
+    )
+
+    tools = await ai.mcp.get_stdio_tools("local-mcp", tool_prefix="local")
+
+    assert [tool.name for tool in tools] == ["local_stdio_echo"]
+    assert len(pools) == 1
+    assert mcp_client._pool.get() is None
 
 
 # -- End-to-end: MCP tool executes through Agent default loop ---------------
