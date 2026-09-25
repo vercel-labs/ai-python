@@ -12,6 +12,31 @@ async for chunk in ai.ui.ai_sdk.to_sse(agent_stream):
     yield chunk
 ```
 
+If the agent stream raises, `to_sse` sends a safe `error` event and closes the
+stream with `[DONE]`. Pass `on_error` to log the exception or return a more
+specific client-facing message:
+
+```python
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+def error_text(error: Exception) -> str:
+    logger.exception("Agent stream failed", exc_info=error)
+    return "The model is temporarily unavailable."
+
+
+async for chunk in ai.ui.ai_sdk.to_sse(
+    agent_stream,
+    on_error=error_text,
+):
+    yield chunk
+```
+
+Without `on_error`, the client receives `An error occurred.` so server-side
+details are not exposed.
+
 ```python
 async for part in ai.ui.ai_sdk.to_stream(agent_stream):
     yield part
