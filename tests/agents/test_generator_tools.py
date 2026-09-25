@@ -79,6 +79,51 @@ async def test_generator_tool_streams_and_returns_result() -> None:
     assert part.get_model_input() == "Answer for test"
 
 
+async def test_approval_gated_generator_tool() -> None:
+    @ai.tool(
+        aggregator=ai.agents.ConcatAggregator,
+        require_approval=True,
+    )
+    async def spell(word: str) -> AsyncGenerator[str]:
+        """Spell a word after approval."""
+        for char in word:
+            yield char
+
+    my_agent = ai.Agent(tools=[spell])
+    mock_llm(
+        [
+            [tool_call_msg(name="spell", args='{"word": "abc"}')],
+            [text_msg("Done!", id="msg-2")],
+        ]
+    )
+
+    all_events: list[agent_events_.AgentEvent] = []
+    async with my_agent.run(MOCK_MODEL, [ai.user_message("Go")]) as stream:
+        async for event in stream:
+            all_events.append(event)
+            if (
+                isinstance(event, agent_events_.HookEvent)
+                and event.hook.status == "pending"
+            ):
+                ai.resolve_hook(
+                    event.hook.hook_id,
+                    ai.tools.ToolApproval(granted=True, reason="ok"),
+                )
+
+    partials = [
+        event.value
+        for event in all_events
+        if isinstance(event, agent_events_.PartialToolCallResult)
+    ]
+    assert partials == ["a", "b", "c"]
+    results = [
+        event
+        for event in all_events
+        if isinstance(event, agent_events_.ToolCallResult)
+    ]
+    assert results[0].results[0].result == "abc"
+
+
 @ai.tool(aggregator=ai.agents.LastAggregator)
 async def chatty_tool(query: str) -> AsyncGenerator[str]:
     """Tool that streams several values back to back."""

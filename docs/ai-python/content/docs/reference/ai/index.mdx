@@ -273,12 +273,12 @@ Useful methods:
 
 - `keep_running()`: Return `True` while the last message still needs work.
 - `resolve(tool_call)`: Convert model tool call parts into executable
-  `ToolCall` objects.
+  `BoundToolCall` objects.
 - `add(message)`: Append messages to history.
 
 ### ToolCall
 
-`ToolCall` is the executable runtime object produced by `Agent.resolve`.
+`BoundToolCall` is the executable runtime object produced by `Agent.resolve`.
 `Context.resolve` remains available for backward compatibility.
 
 ```python
