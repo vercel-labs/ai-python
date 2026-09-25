@@ -216,8 +216,11 @@ async def get_stdio_tools(
             ),
         )
 
-    client = await _get_or_create_connection(connection_key, transport_factory)
-    result = await client.list_tools()
+    async with ensure_connection_pool():
+        client = await _get_or_create_connection(
+            connection_key, transport_factory
+        )
+        result = await client.list_tools()
 
     return [
         _mcp_tool_to_native(
