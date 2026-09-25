@@ -1,0 +1,15 @@
+[project]
+name = "rotor-agent"
+version = "0.1.0"
+description = "Rotor agent example using the AI SDK for Python"
+requires-python = ">=3.12"
+dependencies = [
+    "ai",
+    "rotorcore",
+]
+
+[tool.uv.sources]
+ai = { path = "../../..", editable = true }
+
+[tool.uv]
+exclude-newer = "2 days"
