@@ -169,7 +169,9 @@ class BaseQuestionModel[AnswerT: pydantic.BaseModel](pydantic.BaseModel):
         ):
             raise TypeError(
                 "questions must specialize BaseQuestionModel "
-                "with a Pydantic model"
+                "with a Pydantic model, e.g. "
+                "class Questions(ai.ops.experimental."
+                "BaseQuestionModel[Answers]): ..."
             )
         cls.__answers_type__ = answers_type
 
