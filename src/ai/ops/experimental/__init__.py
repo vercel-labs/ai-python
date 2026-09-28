@@ -1,26 +1,26 @@
 """Experimental model operations."""
 
 from .evaluation import (
-    BooleanAnswer,
-    BooleanCriteria,
-    BooleanQuestion,
     ChoiceAnswer,
     ChoiceQuestion,
     EvaluationInput,
     EvaluationParams,
+    NoulAnswer,
+    NoulCriteria,
+    NoulQuestion,
     ScoreAnswer,
     ScoreQuestion,
     evaluate,
 )
 
 __all__ = [
-    "BooleanAnswer",
-    "BooleanCriteria",
-    "BooleanQuestion",
     "ChoiceAnswer",
     "ChoiceQuestion",
     "EvaluationInput",
     "EvaluationParams",
+    "NoulAnswer",
+    "NoulCriteria",
+    "NoulQuestion",
     "ScoreAnswer",
     "ScoreQuestion",
     "evaluate",

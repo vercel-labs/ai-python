@@ -540,7 +540,7 @@ async def evaluate(
         str,
         ops.experimental.ChoiceQuestion
         | ops.experimental.ScoreQuestion
-        | ops.experimental.BooleanQuestion,
+        | ops.experimental.NoulQuestion,
     ],
     *,
     params: ops.experimental.EvaluationParams,
@@ -549,11 +549,11 @@ async def evaluate(
     wire_questions: dict[str, dict[str, Any]] = {}
     for question_id, question in questions.items():
         wire_question = question.model_dump(mode="json", by_alias=True)
-        if (
-            isinstance(question, ops.experimental.BooleanQuestion)
-            and question.criteria is None
-        ):
-            wire_question.pop("criteria")
+        if isinstance(question, ops.experimental.NoulQuestion):
+            # AI Gateway v4 calls the Noul primitive "Boolean".
+            wire_question["type"] = "boolean"
+            if question.criteria is None:
+                wire_question.pop("criteria")
         wire_questions[question_id] = wire_question
 
     body: dict[str, Any] = {"state": state, "questions": wire_questions}
@@ -575,6 +575,26 @@ async def evaluate(
     answers = data.get("answers")
     if not isinstance(answers, dict):
         raise ValueError("evaluation response must contain answers")
+    provider_metadata = data.get("providerMetadata")
+    confidence: dict[str, Any] = {}
+    if provider_metadata:
+        typesafe_metadata = provider_metadata.get("typesafe")
+        if typesafe_metadata and (
+            conf_data := typesafe_metadata.get("confidence")
+        ):
+            confidence = conf_data
+    for question_id, answer in answers.items():
+        if not isinstance(answer, dict):
+            continue
+        if answer.get("type") == "boolean":
+            answer["type"] = "noul"
+            if "probability" in answer:
+                answer["noul"] = answer.pop("probability")
+        if (
+            answer.get("type") in ("choice", "score")
+            and question_id in confidence
+        ):
+            answer["confidence"] = confidence[question_id]
     usage_data = data.get("usage")
     usage = (
         None
@@ -591,7 +611,7 @@ async def evaluate(
         usage=usage,
         warnings=_shared.parse_warnings(data.get("warnings")),
         metadata=None if rounding is None else {"rounding": rounding},
-        provider_metadata=data.get("providerMetadata"),
+        provider_metadata=provider_metadata,
     )
 
 
@@ -796,7 +816,7 @@ class GatewayV4Protocol(base.ProviderProtocol[gateway_client.GatewayClient]):
             str,
             ops.experimental.ChoiceQuestion
             | ops.experimental.ScoreQuestion
-            | ops.experimental.BooleanQuestion,
+            | ops.experimental.NoulQuestion,
         ],
         *,
         params: ops.experimental.EvaluationParams,

@@ -6,16 +6,16 @@
     import pydantic
 
     class Questions(pydantic.BaseModel):
-        requests_refund: ai.ops.experimental.BooleanQuestion
+        requests_refund: ai.ops.experimental.NoulQuestion
 
     class Answers(pydantic.BaseModel):
-        requests_refund: ai.ops.experimental.BooleanAnswer
+        requests_refund: ai.ops.experimental.NoulAnswer
 
     result = await ai.ops.experimental.evaluate(
         ai.get_model("typesafe-ai/jev"),
         {"message": "Please refund the duplicate charge."},
         Questions(
-            requests_refund=ai.ops.experimental.BooleanQuestion(
+            requests_refund=ai.ops.experimental.NoulQuestion(
                 instructions="Is the customer requesting a refund?",
             ),
         ),
@@ -44,8 +44,8 @@ type EvaluationInput = (
 )
 
 
-class BooleanCriteria(TypedDict, total=False):
-    """Optional descriptions of when a boolean answer is true or false."""
+class NoulCriteria(TypedDict, total=False):
+    """Optional descriptions of when a Noul answer is true or false."""
 
     true: EvaluationInput | None
     false: EvaluationInput | None
@@ -85,12 +85,12 @@ class ScoreQuestion(pydantic.BaseModel):
     model_config = _QUESTION_CONFIG
 
 
-class BooleanQuestion(pydantic.BaseModel):
+class NoulQuestion(pydantic.BaseModel):
     """Estimate the probability that a statement about state is true."""
 
     instructions: EvaluationInput
-    criteria: BooleanCriteria | None = None
-    type: Literal["boolean"] = "boolean"
+    criteria: NoulCriteria | None = None
+    type: Literal["noul"] = "noul"
 
     model_config = _QUESTION_CONFIG
 
@@ -111,6 +111,7 @@ class ChoiceAnswer(pydantic.BaseModel):
     type: Literal["choice"] = "choice"
     choice: str
     probabilities: dict[str, Probability] | None = None
+    confidence: Probability | None = None
 
     model_config = pydantic.ConfigDict(frozen=True)
 
@@ -121,15 +122,16 @@ class ScoreAnswer(pydantic.BaseModel):
     type: Literal["score"] = "score"
     score: ScoreValue
     probabilities: dict[str, Probability] | None = None
+    confidence: Probability | None = None
 
     model_config = pydantic.ConfigDict(frozen=True)
 
 
-class BooleanAnswer(pydantic.BaseModel):
+class NoulAnswer(pydantic.BaseModel):
     """Model-estimated probability that the answer is true."""
 
-    type: Literal["boolean"] = "boolean"
-    probability: Probability
+    type: Literal["noul"] = "noul"
+    noul: Probability
 
     model_config = pydantic.ConfigDict(frozen=True)
 
@@ -144,14 +146,14 @@ class EvaluationParams:
     """Provider-specific options, keyed by provider name."""
 
 
-type _Question = ChoiceQuestion | ScoreQuestion | BooleanQuestion
-type _Answer = ChoiceAnswer | ScoreAnswer | BooleanAnswer
+type _Question = ChoiceQuestion | ScoreQuestion | NoulQuestion
+type _Answer = ChoiceAnswer | ScoreAnswer | NoulAnswer
 
-_QUESTION_TYPES = (ChoiceQuestion, ScoreQuestion, BooleanQuestion)
+_QUESTION_TYPES = (ChoiceQuestion, ScoreQuestion, NoulQuestion)
 _ANSWER_TYPES: dict[type[_Question], type[pydantic.BaseModel]] = {
     ChoiceQuestion: ChoiceAnswer,
     ScoreQuestion: ScoreAnswer,
-    BooleanQuestion: BooleanAnswer,
+    NoulQuestion: NoulAnswer,
 }
 _INPUT_ADAPTER: pydantic.TypeAdapter[EvaluationInput] = pydantic.TypeAdapter(
     EvaluationInput,
@@ -193,7 +195,7 @@ async def evaluate(
 
     Pass matching Pydantic question and output models for a statically typed
     value, or pass a question mapping to receive an answer mapping. Each choice,
-    score, or boolean question is validated against its corresponding answer.
+    score, or Noul question is validated against its corresponding answer.
 
     Experimental: not part of the stable API, may change or be removed.
     """
@@ -287,7 +289,7 @@ async def evaluate(
                 elif isinstance(question, ScoreQuestion):
                     answers[name] = ScoreAnswer.model_validate(raw_answer)
                 else:
-                    answers[name] = BooleanAnswer.model_validate(raw_answer)
+                    answers[name] = NoulAnswer.model_validate(raw_answer)
             value = answers
 
         # Rewrap the validated value without dropping operation metadata.
