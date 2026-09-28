@@ -38,6 +38,8 @@ class Item[T](pydantic.BaseModel):
     value: T
     usage: types.usage.Usage | None = None
     warnings: list[Warning] = []
+    metadata: dict[str, Any] | None = None
+    """Framework-normalized metadata specific to this operation."""
     provider_metadata: dict[str, Any] | None = None
 
     model_config = pydantic.ConfigDict(frozen=True)

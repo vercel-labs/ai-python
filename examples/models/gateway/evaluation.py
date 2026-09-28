@@ -11,7 +11,29 @@ structured state in one request.
 
 import asyncio
 
+import pydantic
+
 import ai
+
+
+class RefundQuestions(pydantic.BaseModel):
+    requests_refund: ai.ops.BooleanQuestion
+
+
+class RefundAnswers(pydantic.BaseModel):
+    requests_refund: ai.ops.BooleanAnswer
+
+
+class TicketQuestions(pydantic.BaseModel):
+    queue: ai.ops.ChoiceQuestion
+    urgency: ai.ops.ScoreQuestion
+    refund_warranted: ai.ops.BooleanQuestion
+
+
+class TicketAnswers(pydantic.BaseModel):
+    queue: ai.ops.ChoiceAnswer
+    urgency: ai.ops.ScoreAnswer
+    refund_warranted: ai.ops.BooleanAnswer
 
 
 async def main() -> None:
@@ -22,19 +44,21 @@ async def main() -> None:
 
     # Ask a single boolean question about plain text. Boolean answers are
     # probabilities rather than only true or false.
-    result = await ai.ops.experimental_evaluate(
+    refund_result = await ai.ops.experimental_evaluate(
         model,
         "Please refund the duplicate charge on my account.",
-        {
-            "requests_refund": ai.ops.BooleanQuestion(
+        RefundQuestions(
+            requests_refund=ai.ops.BooleanQuestion(
                 instructions="Is the customer asking for a refund?",
             )
-        },
+        ),
+        output_type=RefundAnswers,
     )
 
-    refund_request = result.value.answers["requests_refund"]
-    if isinstance(refund_request, ai.ops.BooleanAnswer):
-        print("refund requested:", f"{refund_request.probability:.0%}")
+    print(
+        "refund requested:",
+        f"{refund_result.value.requests_refund.probability:.0%}",
+    )
 
     # Ask several question types about the same structured state. This is useful
     # when related decisions should use exactly the same source information.
@@ -67,8 +91,8 @@ async def main() -> None:
     result = await ai.ops.experimental_evaluate(
         model,
         ticket,
-        {
-            "queue": ai.ops.ChoiceQuestion(
+        TicketQuestions(
+            queue=ai.ops.ChoiceQuestion(
                 instructions="Which support queue should handle this ticket?",
                 criteria={
                     "billing": "Charges, duplicate payments, and refunds",
@@ -77,7 +101,7 @@ async def main() -> None:
                     "other": None,
                 },
             ),
-            "urgency": ai.ops.ScoreQuestion(
+            urgency=ai.ops.ScoreQuestion(
                 instructions="How urgent is the customer's primary problem?",
                 criteria=[
                     "Low: no active customer impact",
@@ -86,14 +110,15 @@ async def main() -> None:
                     "Critical: security incident, outage, or ongoing loss",
                 ],
             ),
-            "refund_warranted": ai.ops.BooleanQuestion(
+            refund_warranted=ai.ops.BooleanQuestion(
                 instructions="Does the evidence warrant a refund?",
                 criteria={
                     "true": "A duplicate settlement or billing error is shown",
                     "false": "The charge is valid or evidence is insufficient",
                 },
             ),
-        },
+        ),
+        output_type=TicketAnswers,
         # Provider options are optional and apply only to this request.
         params=ai.ops.EvaluationParams(
             provider_options={
@@ -105,27 +130,22 @@ async def main() -> None:
         ),
     )
 
-    answers = result.value.answers
+    answers = result.value
+    print("\nqueue:", answers.queue.choice)
+    print("queue probabilities:", answers.queue.probabilities)
 
-    queue = answers["queue"]
-    if isinstance(queue, ai.ops.ChoiceAnswer):
-        print("\nqueue:", queue.choice)
-        print("queue probabilities:", queue.probabilities)
+    print("\nurgency score:", answers.urgency.score)
+    print("urgency probabilities:", answers.urgency.probabilities)
 
-    urgency = answers["urgency"]
-    if isinstance(urgency, ai.ops.ScoreAnswer):
-        print("\nurgency score:", urgency.score)
-        print("urgency probabilities:", urgency.probabilities)
+    print(
+        "\nrefund warranted:",
+        f"{answers.refund_warranted.probability:.0%}",
+    )
 
-    refund = answers["refund_warranted"]
-    if isinstance(refund, ai.ops.BooleanAnswer):
-        print("\nrefund warranted:", f"{refund.probability:.0%}")
-
-    # Every operation also exposes usage, warnings, provider metadata, and any
-    # rounding information declared by the evaluation provider.
+    # Every operation also exposes framework and provider metadata.
     print("\nusage:", result.usage)
     print("warnings:", result.warnings)
-    print("rounding:", result.value.rounding)
+    print("metadata:", result.metadata)
     print("provider metadata:", result.provider_metadata)
 
 

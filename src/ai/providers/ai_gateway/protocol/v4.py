@@ -536,11 +536,16 @@ async def evaluate(
     gateway: gateway_client.GatewayClient,
     model: models.Model,
     state: ops.evaluation.EvaluationInput,
-    questions: Mapping[str, ops.evaluation.EvaluationQuestion],
+    questions: Mapping[
+        str,
+        ops.evaluation.ChoiceQuestion
+        | ops.evaluation.ScoreQuestion
+        | ops.evaluation.BooleanQuestion,
+    ],
     *,
     params: ops.evaluation.EvaluationParams,
-) -> ops.items.Item[ops.evaluation.Evaluation]:
-    """Hit ``/evaluation-model`` and return typed evaluation answers."""
+) -> ops.items.Item[dict[str, Any]]:
+    """Hit ``/evaluation-model`` and return raw evaluation answers."""
     wire_questions: dict[str, dict[str, Any]] = {}
     for question_id, question in questions.items():
         wire_question = question.model_dump(mode="json", by_alias=True)
@@ -567,6 +572,9 @@ async def evaluate(
         raise errors.map_error(exc) from exc
 
     data = response.json()
+    answers = data.get("answers")
+    if not isinstance(answers, dict):
+        raise ValueError("evaluation response must contain answers")
     usage_data = data.get("usage")
     usage = (
         None
@@ -577,10 +585,12 @@ async def evaluate(
             raw=usage_data,
         )
     )
+    rounding = data.get("rounding")
     return ops.items.Item(
-        value=ops.evaluation.Evaluation.model_validate(data),
+        value=answers,
         usage=usage,
         warnings=_shared.parse_warnings(data.get("warnings")),
+        metadata=None if rounding is None else {"rounding": rounding},
         provider_metadata=data.get("providerMetadata"),
     )
 
@@ -782,11 +792,16 @@ class GatewayV4Protocol(base.ProviderProtocol[gateway_client.GatewayClient]):
         client: gateway_client.GatewayClient,
         model: models.Model,
         state: ops.evaluation.EvaluationInput,
-        questions: Mapping[str, ops.evaluation.EvaluationQuestion],
+        questions: Mapping[
+            str,
+            ops.evaluation.ChoiceQuestion
+            | ops.evaluation.ScoreQuestion
+            | ops.evaluation.BooleanQuestion,
+        ],
         *,
         params: ops.evaluation.EvaluationParams,
         provider: str,
-    ) -> ops.items.Item[ops.evaluation.Evaluation]:
+    ) -> ops.items.Item[dict[str, Any]]:
         _ = provider
         return await evaluate(
             client,

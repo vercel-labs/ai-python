@@ -3,37 +3,40 @@
 ::
 
     import ai
+    import pydantic
 
-    model = ai.get_model("typesafe-ai/jev")
+    class Questions(pydantic.BaseModel):
+        requests_refund: ai.ops.BooleanQuestion
+
+    class Answers(pydantic.BaseModel):
+        requests_refund: ai.ops.BooleanAnswer
+
     result = await ai.ops.experimental_evaluate(
-        model,
+        ai.get_model("typesafe-ai/jev"),
         {"message": "Please refund the duplicate charge."},
-        {
-            "department": ai.ops.ChoiceQuestion(
-                instructions="Which team should handle this?",
-                criteria={"billing": "Charges and refunds", "other": None},
-            ),
-            "requests_refund": ai.ops.BooleanQuestion(
+        Questions(
+            requests_refund=ai.ops.BooleanQuestion(
                 instructions="Is the customer requesting a refund?",
             ),
-        },
+        ),
+        output_type=Answers,
     )
-    result.value.answers["department"]
+    result.value.requests_refund
 """
 
 from __future__ import annotations
 
 import dataclasses
-from collections.abc import Mapping
-from typing import TYPE_CHECKING, Annotated, Any, Literal, TypedDict
+from collections.abc import Iterable, Mapping
+from typing import TYPE_CHECKING, Annotated, Any, Literal, TypedDict, overload
 
 import pydantic
 
 from .. import experimental_telemetry as telemetry
+from . import items
 
 if TYPE_CHECKING:
     from ..models.core import model as model_
-    from . import items
 
 
 type EvaluationInput = (
@@ -92,12 +95,6 @@ class BooleanQuestion(pydantic.BaseModel):
     model_config = _QUESTION_CONFIG
 
 
-EvaluationQuestion = Annotated[
-    ChoiceQuestion | ScoreQuestion | BooleanQuestion,
-    pydantic.Field(discriminator="type"),
-]
-
-
 Probability = Annotated[
     pydantic.StrictFloat,
     pydantic.Field(ge=0, le=1, allow_inf_nan=False),
@@ -105,10 +102,6 @@ Probability = Annotated[
 ScoreValue = Annotated[
     pydantic.StrictFloat,
     pydantic.Field(allow_inf_nan=False),
-]
-RoundingPrecision = Annotated[
-    pydantic.StrictInt,
-    pydantic.Field(ge=0, le=15),
 ]
 
 
@@ -141,36 +134,6 @@ class BooleanAnswer(pydantic.BaseModel):
     model_config = pydantic.ConfigDict(frozen=True)
 
 
-EvaluationAnswer = Annotated[
-    ChoiceAnswer | ScoreAnswer | BooleanAnswer,
-    pydantic.Field(discriminator="type"),
-]
-
-
-class EvaluationRounding(pydantic.BaseModel):
-    """Decimal precision applied by a provider to evaluation values."""
-
-    probability_decimals: RoundingPrecision | None = pydantic.Field(
-        default=None,
-        validation_alias="probabilityDecimals",
-    )
-    score_decimals: RoundingPrecision | None = pydantic.Field(
-        default=None,
-        validation_alias="scoreDecimals",
-    )
-
-    model_config = pydantic.ConfigDict(frozen=True, populate_by_name=True)
-
-
-class Evaluation(pydantic.BaseModel):
-    """Answers returned for one shared state."""
-
-    answers: dict[str, EvaluationAnswer]
-    rounding: EvaluationRounding | None = None
-
-    model_config = pydantic.ConfigDict(frozen=True)
-
-
 @dataclasses.dataclass(frozen=True, kw_only=True)
 class EvaluationParams:
     """Parameters for evaluation."""
@@ -181,60 +144,164 @@ class EvaluationParams:
     """Provider-specific options, keyed by provider name."""
 
 
-type _EvaluationQuestionInstance = (
-    pydantic.InstanceOf[ChoiceQuestion]
-    | pydantic.InstanceOf[ScoreQuestion]
-    | pydantic.InstanceOf[BooleanQuestion]
-)
-type _EvaluationQuestions = Mapping[str, _EvaluationQuestionInstance]
+type _Question = ChoiceQuestion | ScoreQuestion | BooleanQuestion
+type _Answer = ChoiceAnswer | ScoreAnswer | BooleanAnswer
 
+_QUESTION_TYPES = (ChoiceQuestion, ScoreQuestion, BooleanQuestion)
+_ANSWER_TYPES: dict[type[_Question], type[pydantic.BaseModel]] = {
+    ChoiceQuestion: ChoiceAnswer,
+    ScoreQuestion: ScoreAnswer,
+    BooleanQuestion: BooleanAnswer,
+}
 _INPUT_ADAPTER: pydantic.TypeAdapter[EvaluationInput] = pydantic.TypeAdapter(
     EvaluationInput,
     config=pydantic.ConfigDict(allow_inf_nan=False, strict=True),
 )
-_QUESTIONS_ADAPTER: pydantic.TypeAdapter[_EvaluationQuestions] = (
-    pydantic.TypeAdapter(
-        _EvaluationQuestions,
-        config=pydantic.ConfigDict(strict=True),
-    )
-)
+
+
+@overload
+async def experimental_evaluate[AnswerT: pydantic.BaseModel](
+    model: model_.Model,
+    state: EvaluationInput,
+    questions: pydantic.BaseModel,
+    *,
+    output_type: type[AnswerT],
+    params: EvaluationParams | None = None,
+) -> items.Item[AnswerT]: ...
+
+
+@overload
+async def experimental_evaluate(
+    model: model_.Model,
+    state: EvaluationInput,
+    questions: Mapping[str, pydantic.BaseModel],
+    *,
+    output_type: None = None,
+    params: EvaluationParams | None = None,
+) -> items.Item[dict[str, _Answer]]: ...
 
 
 async def experimental_evaluate(
     model: model_.Model,
     state: EvaluationInput,
-    questions: Mapping[str, EvaluationQuestion],
+    questions: pydantic.BaseModel | Mapping[str, pydantic.BaseModel],
     *,
+    output_type: type[pydantic.BaseModel] | None = None,
     params: EvaluationParams | None = None,
-) -> items.Item[Evaluation]:
-    """Evaluate typed questions against one shared state.
+) -> items.Item[Any]:
+    """Evaluate questions against one shared state.
 
-    The state, instructions, and criteria descriptions can be strings, JSON
-    objects, or JSON arrays. Choice questions select a declared option, score
-    questions return a fractional position on an ordered rubric, and boolean
-    questions return the model-estimated probability of true.
+    Pass matching Pydantic question and output models for a statically typed
+    value, or pass a question mapping to receive an answer mapping. Each choice,
+    score, or boolean question is validated against its corresponding answer.
 
     Experimental: not part of the stable API, may change or be removed.
     """
+    # Validate the shared state before dispatching it to a provider.
     state = _INPUT_ADAPTER.validate_python(state)
-    questions = _QUESTIONS_ADAPTER.validate_python(questions)
-    if not questions:
-        raise ValueError("questions must not be empty")
+
+    # Select one input mode and expose its question values for normalization.
+    values: Iterable[tuple[str, Any]]
+    if isinstance(questions, pydantic.BaseModel):
+        if output_type is None:
+            raise TypeError("output_type is required for Pydantic questions")
+        if not isinstance(output_type, type) or not issubclass(
+            output_type, pydantic.BaseModel
+        ):
+            raise TypeError("output_type must be a Pydantic model class")
+
+        question_fields = type(questions).model_fields
+        if not question_fields:
+            raise ValueError("questions must not be empty")
+        if questions.model_extra:
+            raise TypeError("questions must not contain extra fields")
+
+        # Typed question and answer models must describe the same field names.
+        answer_fields = output_type.model_fields
+        if answer_fields.keys() != question_fields.keys():
+            raise TypeError("output_type fields must match question fields")
+        values = ((name, getattr(questions, name)) for name in question_fields)
+    else:
+        if output_type is not None:
+            raise TypeError("output_type cannot be used with mapped questions")
+        if not isinstance(questions, Mapping):
+            raise TypeError("questions must be a Pydantic model or mapping")
+        if not questions:
+            raise ValueError("questions must not be empty")
+        answer_fields = None
+        values = questions.items()
+
+    # Normalize either public input form to the mapping expected by providers.
+    normalized: dict[str, _Question] = {}
+    for name, question in values:
+        if not isinstance(name, str):
+            raise TypeError("question IDs must be strings")
+        if not isinstance(question, _QUESTION_TYPES):
+            raise TypeError(f"question field {name!r} must contain a question")
+
+        # In typed mode, verify each question has its corresponding answer type.
+        if answer_fields is not None:
+            expected = _ANSWER_TYPES[type(question)]
+            actual = answer_fields[name].annotation
+            if actual is not expected:
+                raise TypeError(
+                    f"output field {name!r} must be annotated as "
+                    f"{expected.__name__}"
+                )
+        normalized[name] = question
+
+    # Start telemetry after local validation, immediately around provider work.
     params = params or EvaluationParams()
     data = telemetry.EvaluateSpanData(
         model=model.id,
         provider=model.provider.name,
-        question_count=len(questions),
+        question_count=len(normalized),
     )
     async with telemetry.span(data) as sp:
-        item = await model.provider.evaluate(
+        # Providers operate on one normalized question mapping and return raw
+        # answer data.
+        raw_item = await model.provider.evaluate(
             model,
             state,
-            questions,
+            normalized,
             params=params,
         )
+
+        # Every requested question must have exactly one returned answer.
+        if raw_item.value.keys() != normalized.keys():
+            raise ValueError("answer fields must match question fields")
+
+        if output_type is not None:
+            # Typed mode validates the complete response into the user's model.
+            value: pydantic.BaseModel | dict[str, _Answer] = (
+                output_type.model_validate(raw_item.value)
+            )
+        else:
+            # Dynamic mode validates each value using its question's answer
+            # type.
+            answers: dict[str, _Answer] = {}
+            for name, question in normalized.items():
+                raw_answer = raw_item.value[name]
+                if isinstance(question, ChoiceQuestion):
+                    answers[name] = ChoiceAnswer.model_validate(raw_answer)
+                elif isinstance(question, ScoreQuestion):
+                    answers[name] = ScoreAnswer.model_validate(raw_answer)
+                else:
+                    answers[name] = BooleanAnswer.model_validate(raw_answer)
+            value = answers
+
+        # Rewrap the validated value without dropping operation metadata.
+        item: items.Item[Any] = items.Item(
+            value=value,
+            usage=raw_item.usage,
+            warnings=raw_item.warnings,
+            metadata=raw_item.metadata,
+            provider_metadata=raw_item.provider_metadata,
+        )
+
+        # Record normalized response details on the operation span.
         sp.data.usage = item.usage
-        sp.data.answer_count = len(item.value.answers)
+        sp.data.answer_count = len(normalized)
         if item.warnings:
             sp.data.warnings = [
                 warning.model_dump() for warning in item.warnings
