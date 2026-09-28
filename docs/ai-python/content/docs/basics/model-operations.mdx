@@ -265,7 +265,7 @@ class State(pydantic.BaseModel):
     message: str
 
 
-class Answers(ai.ops.experimental.BaseAnswerModel):
+class Answers(pydantic.BaseModel):
     department: ai.ops.experimental.ChoiceAnswer
     severity: ai.ops.experimental.ScoreAnswer
     requests_refund: ai.ops.experimental.BooleanAnswer

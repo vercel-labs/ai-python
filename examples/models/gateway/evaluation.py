@@ -16,7 +16,7 @@ import pydantic
 import ai
 
 
-class RefundAnswers(ai.ops.experimental.BaseAnswerModel):
+class RefundAnswers(pydantic.BaseModel):
     requests_refund: ai.ops.experimental.BooleanAnswer
 
 
@@ -24,7 +24,7 @@ class RefundQuestions(ai.ops.experimental.BaseQuestionModel[RefundAnswers]):
     requests_refund: ai.ops.experimental.BooleanQuestion
 
 
-class TicketAnswers(ai.ops.experimental.BaseAnswerModel):
+class TicketAnswers(pydantic.BaseModel):
     queue: ai.ops.experimental.ChoiceAnswer
     urgency: ai.ops.experimental.ScoreAnswer
     refund_warranted: ai.ops.experimental.BooleanAnswer

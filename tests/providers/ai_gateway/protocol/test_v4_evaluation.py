@@ -18,7 +18,7 @@ from ..conftest import mock_model
 _MODEL_ID = "typesafe-ai/jev"
 
 
-class Answers(ops.experimental.BaseAnswerModel):
+class Answers(pydantic.BaseModel):
     department: ops.experimental.ChoiceAnswer
     severity: ops.experimental.ScoreAnswer
     refund: ops.experimental.BooleanAnswer
@@ -30,7 +30,7 @@ class Questions(ops.experimental.BaseQuestionModel[Answers]):
     refund: ops.experimental.BooleanQuestion
 
 
-class BooleanAnswers(ops.experimental.BaseAnswerModel):
+class BooleanAnswers(pydantic.BaseModel):
     answer: ops.experimental.BooleanAnswer
 
 

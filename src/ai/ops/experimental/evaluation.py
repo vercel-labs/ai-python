@@ -2,9 +2,11 @@
 
 ::
 
+    import pydantic
+
     import ai
 
-    class Answers(ai.ops.experimental.BaseAnswerModel):
+    class Answers(pydantic.BaseModel):
         requests_refund: ai.ops.experimental.BooleanAnswer
 
     class Questions(ai.ops.experimental.BaseQuestionModel[Answers]):
@@ -26,7 +28,16 @@ from __future__ import annotations
 
 import dataclasses
 from collections.abc import Iterable, Mapping
-from typing import TYPE_CHECKING, Annotated, Any, Literal, TypedDict, overload
+from typing import (
+    TYPE_CHECKING,
+    Annotated,
+    Any,
+    ClassVar,
+    Literal,
+    TypedDict,
+    cast,
+    overload,
+)
 
 import pydantic
 
@@ -132,14 +143,87 @@ class BooleanAnswer(pydantic.BaseModel):
     model_config = pydantic.ConfigDict(frozen=True)
 
 
-class BaseAnswerModel(pydantic.BaseModel):
-    """Base class for a statically typed set of evaluation answers."""
+class BaseQuestionModel[AnswerT: pydantic.BaseModel](pydantic.BaseModel):
+    """Base class for questions paired with an answer model.
 
+    Fields must use ChoiceQuestion, ScoreQuestion, or BooleanQuestion, with
+    matching names and corresponding answer types in the answer model.
+    """
 
-class BaseQuestionModel[AnswerT: BaseAnswerModel](pydantic.BaseModel):
-    """Base class for questions paired with an answer model."""
+    __answers_type__: ClassVar[type[pydantic.BaseModel]]
 
     model_config = pydantic.ConfigDict(extra="forbid")
+
+    @classmethod
+    def __pydantic_on_complete__(cls) -> None:  # noqa: PLW3201
+        super().__pydantic_on_complete__()
+        # Generic templates do not yet have a concrete answer model.
+        if cls.__pydantic_generic_metadata__["parameters"]:
+            return
+        args = cls.__pydantic_generic_metadata__["args"]
+        answers_type = (
+            args[0] if args else getattr(cls, "__answers_type__", None)
+        )
+        if not isinstance(answers_type, type) or not issubclass(
+            answers_type, pydantic.BaseModel
+        ):
+            raise TypeError(
+                "questions must specialize BaseQuestionModel "
+                "with a Pydantic model"
+            )
+        cls.__answers_type__ = answers_type
+
+        # Pydantic creates BaseQuestionModel[Answers] before its subclass
+        # defines the question fields. The answer model may be incomplete too.
+        if cls.__pydantic_generic_metadata__["origin"] is BaseQuestionModel:
+            return
+        answers_type.model_rebuild()
+        answer_fields = answers_type.model_fields
+        for name, field in answer_fields.items():
+            if not isinstance(field.annotation, type) or not issubclass(
+                field.annotation, tuple(_ANSWER_TYPES.values())
+            ):
+                raise TypeError(
+                    f"answer field {name!r} must be annotated as "
+                    "ChoiceAnswer, ScoreAnswer, or BooleanAnswer"
+                )
+
+        question_fields = cls.model_fields
+        for name, field in question_fields.items():
+            if field.annotation not in _QUESTION_TYPES:
+                raise TypeError(
+                    f"question field {name!r} must be annotated as "
+                    "ChoiceQuestion, ScoreQuestion, or BooleanQuestion"
+                )
+        if answer_fields.keys() != question_fields.keys():
+            differences = []
+            if missing_answers := question_fields.keys() - answer_fields.keys():
+                differences.append(
+                    f"missing from answer model {answers_type.__name__}: "
+                    + ", ".join(repr(name) for name in sorted(missing_answers))
+                )
+            if (
+                missing_questions := answer_fields.keys()
+                - question_fields.keys()
+            ):
+                differences.append(
+                    f"missing from question model {cls.__name__}: "
+                    + ", ".join(
+                        repr(name) for name in sorted(missing_questions)
+                    )
+                )
+            raise TypeError(
+                "answer model fields must match question fields; "
+                + "; ".join(differences)
+            )
+        for name, field in question_fields.items():
+            expected = _ANSWER_TYPES[cast("type[_Question]", field.annotation)]
+            actual = answer_fields[name].annotation
+            if not isinstance(actual, type) or not issubclass(actual, expected):
+                raise TypeError(
+                    f"answer field {name!r} must be annotated as "
+                    f"{expected.__name__}"
+                )
 
 
 @dataclasses.dataclass(frozen=True, kw_only=True)
@@ -168,7 +252,7 @@ _INPUT_ADAPTER: pydantic.TypeAdapter[EvaluationInput] = pydantic.TypeAdapter(
 
 
 @overload
-async def evaluate[AnswerT: BaseAnswerModel](
+async def evaluate[AnswerT: pydantic.BaseModel](
     model: model_.Model,
     state: EvaluationInput | pydantic.BaseModel,
     questions: BaseQuestionModel[AnswerT],
@@ -196,7 +280,7 @@ async def evaluate(
 ) -> items.Item[Any]:
     """Evaluate questions against one shared state.
 
-    Pass a BaseQuestionModel parameterized with its BaseAnswerModel for a
+    Pass a BaseQuestionModel parameterized with its Pydantic answer model for a
     statically typed value, or pass a question mapping to receive an answer
     mapping. Each question is validated against its corresponding answer.
 
@@ -209,40 +293,20 @@ async def evaluate(
 
     # Select one input mode and expose its question values for normalization.
     values: Iterable[tuple[str, Any]]
-    answer_model: type[BaseAnswerModel] | None = None
+    answer_model: type[pydantic.BaseModel] | None = None
     if isinstance(questions, BaseQuestionModel):
-        # Pydantic stores concrete generic arguments on the specialized base,
-        # not on a question subclass. Walk the MRO for indirect subclasses.
-        for base in type(questions).__mro__:
-            if issubclass(base, BaseQuestionModel):
-                args = getattr(base, "__pydantic_generic_metadata__", {}).get(
-                    "args", ()
-                )
-                if args:
-                    answer_model = args[0]
-                    break
-        if not isinstance(answer_model, type) or not issubclass(
-            answer_model, BaseAnswerModel
-        ):
-            raise TypeError(
-                "questions must specialize BaseQuestionModel[BaseAnswerModel]"
-            )
+        answer_model = questions.__answers_type__
 
         question_fields = type(questions).model_fields
         if not question_fields:
             raise ValueError("questions must not be empty")
 
-        # Typed question and answer models must describe the same field names.
-        answer_fields = answer_model.model_fields
-        if answer_fields.keys() != question_fields.keys():
-            raise TypeError("answer_model fields must match question fields")
         values = ((name, getattr(questions, name)) for name in question_fields)
     else:
         if not isinstance(questions, Mapping):
             raise TypeError("questions must be a BaseQuestionModel or mapping")
         if not questions:
             raise ValueError("questions must not be empty")
-        answer_fields = None
         values = questions.items()
 
     # Normalize either public input form to the mapping expected by providers.
@@ -253,15 +317,6 @@ async def evaluate(
         if not isinstance(question, _QUESTION_TYPES):
             raise TypeError(f"question field {name!r} must contain a question")
 
-        # In typed mode, verify each question has its corresponding answer type.
-        if answer_fields is not None:
-            expected = _ANSWER_TYPES[type(question)]
-            actual = answer_fields[name].annotation
-            if actual is not expected:
-                raise TypeError(
-                    f"output field {name!r} must be annotated as "
-                    f"{expected.__name__}"
-                )
         normalized[name] = question
 
     # Start telemetry after local validation, immediately around provider work.
@@ -287,7 +342,7 @@ async def evaluate(
 
         if answer_model is not None:
             # Typed mode validates the complete response into the user's model.
-            value: BaseAnswerModel | dict[str, _Answer] = (
+            value: pydantic.BaseModel | dict[str, _Answer] = (
                 answer_model.model_validate(raw_item.value)
             )
         else:

@@ -20,7 +20,7 @@ type EvaluationQuestion = (
 )
 
 
-class Answers(ops.experimental.BaseAnswerModel):
+class Answers(pydantic.BaseModel):
     department: ops.experimental.ChoiceAnswer
     severity: ops.experimental.ScoreAnswer
     refund: ops.experimental.BooleanAnswer
@@ -194,7 +194,7 @@ async def test_evaluate_raises_not_implemented() -> None:
     provider = ai.get_provider("openai", api_key="[redacted]")
     model = ai.Model(id="evaluation-test", provider=provider)
 
-    class BooleanAnswers(ops.experimental.BaseAnswerModel):
+    class BooleanAnswers(pydantic.BaseModel):
         answer: ops.experimental.BooleanAnswer
 
     class BooleanQuestions(ops.experimental.BaseQuestionModel[BooleanAnswers]):
@@ -272,7 +272,7 @@ async def test_evaluate_requires_question_values() -> None:
 
 
 async def test_evaluate_requires_questions() -> None:
-    class EmptyAnswers(ops.experimental.BaseAnswerModel):
+    class EmptyAnswers(pydantic.BaseModel):
         pass
 
     class EmptyQuestions(ops.experimental.BaseQuestionModel[EmptyAnswers]):
@@ -310,30 +310,88 @@ async def test_evaluate_requires_base_question_model() -> None:
         )
 
 
-async def test_evaluate_requires_concrete_answer_type() -> None:
-    class UnparameterizedQuestions(ops.experimental.BaseQuestionModel[Any]):
-        refund: ops.experimental.BooleanQuestion
+def test_question_model_stores_answer_type() -> None:
+    assert Questions.__answers_type__ is Answers
+    assert questions().__answers_type__ is Answers
+    assert "__answers_type__" not in Questions.model_fields
 
-    model = models.Model(
-        id="mock-evaluation-model", provider=EvaluationProvider()
-    )
 
+def test_question_model_requires_concrete_answer_type() -> None:
     with pytest.raises(TypeError, match="specialize BaseQuestionModel"):
-        await ops.experimental.evaluate(
-            model,
-            "state",
-            UnparameterizedQuestions(refund=questions().refund),
-        )
+
+        class UnparameterizedQuestions(ops.experimental.BaseQuestionModel[Any]):
+            refund: ops.experimental.BooleanQuestion
+
+
+@pytest.mark.parametrize("explicit_rebuild", [True, False])
+@pytest.mark.parametrize(
+    ("question_type", "answer_type", "error"),
+    [
+        (
+            ops.experimental.BooleanQuestion,
+            ops.experimental.BooleanAnswer,
+            None,
+        ),
+        (str, ops.experimental.BooleanAnswer, "question field 'refund'"),
+        (ops.experimental.BooleanQuestion, str, "answer field 'refund'"),
+        (
+            ops.experimental.BooleanQuestion,
+            ops.experimental.ScoreAnswer,
+            "must be annotated as BooleanAnswer",
+        ),
+    ],
+)
+def test_question_model_resolves_forward_references(
+    monkeypatch: pytest.MonkeyPatch,
+    explicit_rebuild: bool,
+    question_type: type[Any],
+    answer_type: type[Any],
+    error: str | None,
+) -> None:
+    answers_type = pydantic.create_model(
+        "DeferredAnswers", refund=("DeferredAnswer", ...)
+    )
+    question_base = ops.experimental.BaseQuestionModel.__class_getitem__(
+        answers_type
+    )
+    assert isinstance(question_base, type)
+    questions_type = pydantic.create_model(
+        "DeferredQuestions",
+        __base__=question_base,
+        refund=("DeferredQuestion", ...),
+    )
+    assert not answers_type.__pydantic_complete__
+    assert not questions_type.__pydantic_complete__
+
+    monkeypatch.setitem(globals(), "DeferredAnswer", answer_type)
+    monkeypatch.setitem(globals(), "DeferredQuestion", question_type)
+    if error is not None:
+        with pytest.raises(TypeError, match=error):
+            if explicit_rebuild:
+                questions_type.model_rebuild()
+            else:
+                questions_type.model_validate({"refund": questions().refund})
+        return
+
+    if explicit_rebuild:
+        questions_type.model_rebuild()
+    instance = questions_type.model_validate({"refund": questions().refund})
+    assert isinstance(instance, ops.experimental.BaseQuestionModel)
+    assert instance.__answers_type__ is answers_type
+    assert answers_type.__pydantic_complete__
+    assert questions_type.__pydantic_complete__
+    assert answers_type.model_fields["refund"].annotation is answer_type
+    assert questions_type.model_fields["refund"].annotation is question_type
 
 
 async def test_evaluate_inherited_question_model() -> None:
-    class Intermediate(ops.experimental.BaseQuestionModel[Answers]):
+    class Intermediate(Questions):
         pass
 
     class InheritedQuestions(Intermediate):
-        department: ops.experimental.ChoiceQuestion
-        severity: ops.experimental.ScoreQuestion
-        refund: ops.experimental.BooleanQuestion
+        pass
+
+    assert InheritedQuestions.__answers_type__ is Answers
 
     model = models.Model(
         id="mock-evaluation-model",
@@ -355,69 +413,153 @@ async def test_evaluate_inherited_question_model() -> None:
     assert result.value.refund.probability == 0.98
 
 
-async def test_evaluate_requires_question_fields() -> None:
-    class BooleanAnswers(ops.experimental.BaseAnswerModel):
+@pytest.mark.parametrize(
+    "annotation",
+    [
+        str,
+        Any,
+        ops.experimental.BooleanAnswer,
+        list[ops.experimental.BooleanQuestion],
+        ops.experimental.BooleanQuestion | None,
+    ],
+)
+def test_question_model_requires_question_fields(annotation: Any) -> None:
+    class BooleanAnswers(pydantic.BaseModel):
         answer: ops.experimental.BooleanAnswer
 
-    class InvalidQuestions(ops.experimental.BaseQuestionModel[BooleanAnswers]):
-        answer: str
-
-    model = models.Model(
-        id="mock-evaluation-model", provider=EvaluationProvider()
-    )
-
-    with pytest.raises(TypeError, match="must contain a question"):
-        await ops.experimental.evaluate(
-            model,
-            "state",
-            InvalidQuestions(answer="invalid"),
+    with pytest.raises(TypeError, match="question field 'answer'"):
+        pydantic.create_model(
+            "InvalidQuestions",
+            __base__=ops.experimental.BaseQuestionModel[BooleanAnswers],
+            answer=(annotation, ...),
         )
 
 
-async def test_evaluate_requires_matching_output_fields() -> None:
-    class MissingAnswers(ops.experimental.BaseAnswerModel):
-        department: ops.experimental.ChoiceAnswer
+@pytest.mark.parametrize(
+    "annotation",
+    [
+        str,
+        Any,
+        ops.experimental.BooleanQuestion,
+        list[ops.experimental.BooleanAnswer],
+        ops.experimental.BooleanAnswer | None,
+    ],
+)
+def test_question_model_requires_answer_fields(annotation: Any) -> None:
+    invalid_answers = pydantic.create_model(
+        "InvalidAnswers", answer=(annotation, ...)
+    )
+    question_base = ops.experimental.BaseQuestionModel.__class_getitem__(
+        invalid_answers
+    )
+    assert isinstance(question_base, type)
+    with pytest.raises(TypeError, match="answer field 'answer'"):
+        pydantic.create_model(
+            "InvalidQuestions",
+            __base__=question_base,
+            answer=(ops.experimental.BooleanQuestion, ...),
+        )
 
-    class MismatchedQuestions(
-        ops.experimental.BaseQuestionModel[MissingAnswers]
+
+async def test_evaluate_accepts_answer_subclasses() -> None:
+    class ExplainedAnswer(ops.experimental.BooleanAnswer):
+        reason: str
+
+    class ExplainedAnswers(pydantic.BaseModel):
+        refund: ExplainedAnswer
+
+    class ExplainedQuestions(
+        ops.experimental.BaseQuestionModel[ExplainedAnswers]
     ):
-        department: ops.experimental.ChoiceQuestion
-        severity: ops.experimental.ScoreQuestion
         refund: ops.experimental.BooleanQuestion
 
     model = models.Model(
-        id="mock-evaluation-model", provider=EvaluationProvider()
+        id="mock-evaluation-model",
+        provider=StaticEvaluationProvider(
+            answers={"refund": {"probability": 0.98, "reason": "Duplicate"}}
+        ),
+    )
+    result = await ops.experimental.evaluate(
+        model,
+        "state",
+        ExplainedQuestions(refund=questions().refund),
+    )
+    assert isinstance(result.value.refund, ExplainedAnswer)
+    assert result.value.refund.reason == "Duplicate"
+
+
+@pytest.mark.parametrize(
+    ("answer_names", "question_names", "details"),
+    [
+        (
+            ["shared"],
+            ["shared", "severity", "refund"],
+            "missing from answer model TestAnswers: 'refund', 'severity'",
+        ),
+        (
+            ["shared", "severity", "refund"],
+            ["shared"],
+            "missing from question model TestQuestions: 'refund', 'severity'",
+        ),
+        (
+            ["shared", "refund"],
+            ["shared", "severity"],
+            "missing from answer model TestAnswers: 'severity'; "
+            "missing from question model TestQuestions: 'refund'",
+        ),
+    ],
+)
+def test_question_model_requires_matching_fields(
+    answer_names: list[str], question_names: list[str], details: str
+) -> None:
+    answer_fields: dict[str, Any] = dict.fromkeys(
+        answer_names, (ops.experimental.BooleanAnswer, ...)
+    )
+    question_fields: dict[str, Any] = dict.fromkeys(
+        question_names, (ops.experimental.BooleanQuestion, ...)
+    )
+    answers_type = pydantic.create_model("TestAnswers", **answer_fields)
+    question_base = ops.experimental.BaseQuestionModel.__class_getitem__(
+        answers_type
+    )
+    assert isinstance(question_base, type)
+    with pytest.raises(TypeError) as exc:
+        pydantic.create_model(
+            "TestQuestions",
+            __base__=question_base,
+            **question_fields,
+        )
+    assert str(exc.value) == (
+        "answer model fields must match question fields; " + details
     )
 
-    with pytest.raises(TypeError, match="fields must match"):
-        await ops.experimental.evaluate(
-            model,
-            "state",
-            MismatchedQuestions.model_validate(questions().model_dump()),
-        )
 
-
-async def test_evaluate_requires_matching_answer_types() -> None:
-    class WrongAnswers(ops.experimental.BaseAnswerModel):
+def test_question_model_requires_matching_answer_types() -> None:
+    class WrongAnswers(pydantic.BaseModel):
         department: ops.experimental.ChoiceAnswer
         severity: ops.experimental.BooleanAnswer
         refund: ops.experimental.BooleanAnswer
 
-    class MismatchedQuestions(ops.experimental.BaseQuestionModel[WrongAnswers]):
-        department: ops.experimental.ChoiceQuestion
-        severity: ops.experimental.ScoreQuestion
-        refund: ops.experimental.BooleanQuestion
-
-    model = models.Model(
-        id="mock-evaluation-model", provider=EvaluationProvider()
-    )
-
     with pytest.raises(TypeError, match="ScoreAnswer"):
-        await ops.experimental.evaluate(
-            model,
-            "state",
-            MismatchedQuestions.model_validate(questions().model_dump()),
-        )
+
+        class MismatchedQuestions(
+            ops.experimental.BaseQuestionModel[WrongAnswers]
+        ):
+            department: ops.experimental.ChoiceQuestion
+            severity: ops.experimental.ScoreQuestion
+            refund: ops.experimental.BooleanQuestion
+
+
+def test_question_model_validates_inherited_fields() -> None:
+    with pytest.raises(TypeError, match="fields must match"):
+
+        class ExtraQuestions(Questions):
+            extra: ops.experimental.BooleanQuestion
+
+    with pytest.raises(TypeError, match="ChoiceAnswer"):
+
+        class ChangedQuestions(Questions):
+            severity: ops.experimental.ChoiceQuestion  # type: ignore[assignment]
 
 
 async def test_evaluate_validates_provider_output() -> None:
