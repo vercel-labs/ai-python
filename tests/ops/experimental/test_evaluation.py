@@ -16,20 +16,20 @@ from ... import conftest
 type EvaluationQuestion = (
     ops.experimental.ChoiceQuestion
     | ops.experimental.ScoreQuestion
-    | ops.experimental.BooleanQuestion
+    | ops.experimental.NoulQuestion
 )
 
 
 class Questions(pydantic.BaseModel):
     department: ops.experimental.ChoiceQuestion
     severity: ops.experimental.ScoreQuestion
-    refund: ops.experimental.BooleanQuestion
+    refund: ops.experimental.NoulQuestion
 
 
 class Answers(pydantic.BaseModel):
     department: ops.experimental.ChoiceAnswer
     severity: ops.experimental.ScoreAnswer
-    refund: ops.experimental.BooleanAnswer
+    refund: ops.experimental.NoulAnswer
 
 
 class EvaluationProvider(models.Provider):
@@ -68,7 +68,7 @@ class EvaluationProvider(models.Provider):
                     "score": 1.5,
                     "probabilities": {"0": 0.0, "1": 0.5, "2": 0.5},
                 },
-                "refund": {"type": "boolean", "probability": 0.98},
+                "refund": {"type": "noul", "noul": 0.98},
             },
             usage=ai.types.usage.Usage(input_tokens=12),
             metadata={"rounding": {"probabilityDecimals": 2}},
@@ -112,7 +112,7 @@ def questions() -> Questions:
             instructions={"task": "Rate severity"},
             criteria=["Cosmetic", "Workaround exists", "Blocking"],
         ),
-        refund=ops.experimental.BooleanQuestion(
+        refund=ops.experimental.NoulQuestion(
             instructions="Is the customer requesting a refund?",
             criteria={"true": "Refund requested", "false": None},
         ),
@@ -137,7 +137,7 @@ async def test_evaluate_dispatch_and_span(recorder: conftest.Recorder) -> None:
     assert_type(result, ops.Item[Answers])
     assert isinstance(result.value, Answers)
     assert result.value.department.choice == "billing"
-    assert result.value.refund.probability == 0.98
+    assert result.value.refund.noul == 0.98
     assert result.metadata == {"rounding": {"probabilityDecimals": 2}}
     assert result.provider_metadata == {"test": {"request_id": "req_1"}}
 
@@ -174,7 +174,7 @@ async def test_evaluate_dynamic_questions() -> None:
                 str,
                 ops.experimental.ChoiceAnswer
                 | ops.experimental.ScoreAnswer
-                | ops.experimental.BooleanAnswer,
+                | ops.experimental.NoulAnswer,
             ]
         ],
     )
@@ -182,8 +182,8 @@ async def test_evaluate_dynamic_questions() -> None:
     assert result.value["department"].choice == "billing"
     assert isinstance(result.value["severity"], ops.experimental.ScoreAnswer)
     assert result.value["severity"].score == 1.5
-    assert isinstance(result.value["refund"], ops.experimental.BooleanAnswer)
-    assert result.value["refund"].probability == 0.98
+    assert isinstance(result.value["refund"], ops.experimental.NoulAnswer)
+    assert result.value["refund"].noul == 0.98
     assert result.metadata == {"rounding": {"probabilityDecimals": 2}}
 
 
@@ -191,22 +191,22 @@ async def test_evaluate_raises_not_implemented() -> None:
     provider = ai.get_provider("openai", api_key="[redacted]")
     model = ai.Model(id="evaluation-test", provider=provider)
 
-    class BooleanQuestions(pydantic.BaseModel):
-        answer: ops.experimental.BooleanQuestion
+    class NoulQuestions(pydantic.BaseModel):
+        answer: ops.experimental.NoulQuestion
 
-    class BooleanAnswers(pydantic.BaseModel):
-        answer: ops.experimental.BooleanAnswer
+    class NoulAnswers(pydantic.BaseModel):
+        answer: ops.experimental.NoulAnswer
 
     with pytest.raises(NotImplementedError, match="evaluate"):
         await ops.experimental.evaluate(
             model,
             "state",
-            BooleanQuestions(
-                answer=ops.experimental.BooleanQuestion(
+            NoulQuestions(
+                answer=ops.experimental.NoulQuestion(
                     instructions="Is this valid?"
                 )
             ),
-            output_type=BooleanAnswers,
+            output_type=NoulAnswers,
         )
 
 
@@ -222,19 +222,17 @@ def test_score_question_requires_two_levels() -> None:
         )
 
 
-def test_boolean_question_rejects_unknown_criteria() -> None:
+def test_noul_question_rejects_unknown_criteria() -> None:
     with pytest.raises(pydantic.ValidationError):
-        ops.experimental.BooleanQuestion(
+        ops.experimental.NoulQuestion(
             instructions="Decide",
-            criteria=cast(
-                "ops.experimental.BooleanCriteria", {"maybe": "Maybe"}
-            ),
+            criteria=cast("ops.experimental.NoulCriteria", {"maybe": "Maybe"}),
         )
 
 
 def test_question_rejects_non_json_instructions() -> None:
     with pytest.raises(pydantic.ValidationError):
-        ops.experimental.BooleanQuestion(
+        ops.experimental.NoulQuestion(
             instructions=cast("ops.experimental.EvaluationInput", object()),
         )
 
@@ -316,8 +314,8 @@ async def test_evaluate_requires_question_fields() -> None:
     class InvalidQuestions(pydantic.BaseModel):
         answer: str
 
-    class BooleanAnswers(pydantic.BaseModel):
-        answer: ops.experimental.BooleanAnswer
+    class NoulAnswers(pydantic.BaseModel):
+        answer: ops.experimental.NoulAnswer
 
     model = models.Model(
         id="mock-evaluation-model", provider=EvaluationProvider()
@@ -328,7 +326,7 @@ async def test_evaluate_requires_question_fields() -> None:
             model,
             "state",
             InvalidQuestions(answer="invalid"),
-            output_type=BooleanAnswers,
+            output_type=NoulAnswers,
         )
 
 
@@ -352,8 +350,8 @@ async def test_evaluate_requires_matching_output_fields() -> None:
 async def test_evaluate_requires_matching_answer_types() -> None:
     class WrongAnswers(pydantic.BaseModel):
         department: ops.experimental.ChoiceAnswer
-        severity: ops.experimental.BooleanAnswer
-        refund: ops.experimental.BooleanAnswer
+        severity: ops.experimental.NoulAnswer
+        refund: ops.experimental.NoulAnswer
 
     model = models.Model(
         id="mock-evaluation-model", provider=EvaluationProvider()
@@ -375,7 +373,7 @@ async def test_evaluate_validates_provider_output() -> None:
             answers={
                 "department": {"type": "choice", "choice": "billing"},
                 "severity": {"type": "score", "score": 1.5},
-                "refund": {"type": "boolean", "probability": 2.0},
+                "refund": {"type": "noul", "noul": 2.0},
             }
         ),
     )

@@ -260,7 +260,7 @@ Arguments:
 - `model`: Evaluation model.
 - `state`: Shared JSON-compatible string, object, or array.
 - `questions`: A nonempty Pydantic model or mapping whose fields contain
-  `ChoiceQuestion`, `ScoreQuestion`, or `BooleanQuestion` values.
+  `ChoiceQuestion`, `ScoreQuestion`, or `NoulQuestion` values.
 - `output_type`: Required with a Pydantic question model. It must be a Pydantic
   model class with the same fields and corresponding answer types. Omit it with
   mapped questions.
@@ -268,14 +268,14 @@ Arguments:
 
 Pydantic questions return `Item[Answers]`, whose value is an instance of
 `output_type`. Mapped questions return
-`Item[dict[str, ChoiceAnswer | ScoreAnswer | BooleanAnswer]]`:
+`Item[dict[str, ChoiceAnswer | ScoreAnswer | NoulAnswer]]`:
 
 ```python
 result = await ai.ops.experimental.evaluate(
     model,
     state,
     {
-        question_id: ai.ops.experimental.BooleanQuestion(instructions=instructions)
+        question_id: ai.ops.experimental.NoulQuestion(instructions=instructions)
         for question_id, instructions in dynamic_questions.items()
     },
 )
@@ -295,9 +295,14 @@ Question and answer types:
   index `0`. `ScoreAnswer` contains a fractional `score` and an optional complete
   `probabilities` distribution keyed by string indices. With a distribution,
   `score` is its probability-weighted mean.
-- `BooleanQuestion`: Estimates whether its instructions are true. Its optional
-  `criteria` mapping can describe `"true"` and `"false"`. `BooleanAnswer.probability`
+- `NoulQuestion`: Estimates whether its instructions are true. Its optional
+  `criteria` mapping can describe `"true"` and `"false"`. `NoulAnswer.noul`
   is the estimated probability of true, not confidence in either outcome.
+
+`ChoiceAnswer.confidence` and `ScoreAnswer.confidence` expose a value from 0 to 1
+when the provider supplies it, or `None` otherwise. For TypeSafe through AI Gateway,
+these values come from `provider_metadata["typesafe"]["confidence"]`, which is also
+preserved on the result. Noul answers have no separate confidence field.
 
 Instructions accept strings, JSON objects, or JSON arrays. Criteria descriptions
 accept the same values or `None`. Nested keys are model input and have no

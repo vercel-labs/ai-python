@@ -188,7 +188,7 @@ class ProviderProtocol(pydantic.BaseModel, Generic[ClientT]):
             str,
             evaluation.ChoiceQuestion
             | evaluation.ScoreQuestion
-            | evaluation.BooleanQuestion,
+            | evaluation.NoulQuestion,
         ],
         *,
         params: evaluation.EvaluationParams,
@@ -538,7 +538,7 @@ class Provider(pydantic.BaseModel, Generic[ClientT]):
             str,
             evaluation.ChoiceQuestion
             | evaluation.ScoreQuestion
-            | evaluation.BooleanQuestion,
+            | evaluation.NoulQuestion,
         ],
         *,
         params: evaluation.EvaluationParams,

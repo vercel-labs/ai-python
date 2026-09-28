@@ -20,21 +20,21 @@ _MODEL_ID = "typesafe-ai/jev"
 class Questions(pydantic.BaseModel):
     department: ops.experimental.ChoiceQuestion
     severity: ops.experimental.ScoreQuestion
-    refund: ops.experimental.BooleanQuestion
+    refund: ops.experimental.NoulQuestion
 
 
 class Answers(pydantic.BaseModel):
     department: ops.experimental.ChoiceAnswer
     severity: ops.experimental.ScoreAnswer
-    refund: ops.experimental.BooleanAnswer
+    refund: ops.experimental.NoulAnswer
 
 
-class BooleanQuestions(pydantic.BaseModel):
-    answer: ops.experimental.BooleanQuestion
+class NoulQuestions(pydantic.BaseModel):
+    answer: ops.experimental.NoulQuestion
 
 
-class BooleanAnswers(pydantic.BaseModel):
-    answer: ops.experimental.BooleanAnswer
+class NoulAnswers(pydantic.BaseModel):
+    answer: ops.experimental.NoulAnswer
 
 
 def questions() -> Questions:
@@ -47,7 +47,7 @@ def questions() -> Questions:
             instructions="How severe is this?",
             criteria=["Cosmetic", "Workaround exists", "Blocking"],
         ),
-        refund=ops.experimental.BooleanQuestion(
+        refund=ops.experimental.NoulQuestion(
             instructions="Is a refund requested?",
             criteria={"true": "A refund is requested", "false": None},
         ),
@@ -160,7 +160,9 @@ async def test_evaluate_request_and_response() -> None:
         "support": 0.2,
     }
     assert result.value.severity.score == 1.5
-    assert result.value.refund.probability == 0.98
+    assert result.value.department.confidence == 0.91
+    assert result.value.severity.confidence == 0.87
+    assert result.value.refund.noul == 0.98
     assert result.metadata == {
         "rounding": {
             "probabilityDecimals": 2,
@@ -178,6 +180,89 @@ async def test_evaluate_request_and_response() -> None:
     assert result.provider_metadata == {
         "typesafe": {"confidence": {"department": 0.91, "severity": 0.87}}
     }
+
+
+@pytest.mark.parametrize(
+    "provider_metadata",
+    [
+        None,
+        {},
+        {"typesafe": {}},
+        {"typesafe": {"confidence": {"department": 0.0}}},
+        {"typesafe": {"confidence": {"department": 1.0, "severity": 0.5}}},
+    ],
+)
+async def test_evaluate_dynamic_confidence_and_noul(
+    provider_metadata: dict[str, Any] | None,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        assert body["questions"]["refund"] == {
+            "type": "boolean",
+            "instructions": "Refund requested?",
+        }
+        return httpx.Response(
+            200,
+            json={
+                "answers": {
+                    "department": {"type": "choice", "choice": "billing"},
+                    "severity": {"type": "score", "score": 1.5},
+                    "refund": {"type": "boolean", "probability": 0.98},
+                },
+                "providerMetadata": provider_metadata,
+            },
+        )
+
+    question_values = questions()
+    result = await ops.experimental.evaluate(
+        mock_model(httpx.MockTransport(handler), model_id=_MODEL_ID),
+        "state",
+        {
+            "department": question_values.department,
+            "severity": question_values.severity,
+            "refund": ops.experimental.NoulQuestion(
+                instructions="Refund requested?"
+            ),
+        },
+    )
+    confidence = (
+        (provider_metadata or {}).get("typesafe", {}).get("confidence", {})
+    )
+    department = result.value["department"]
+    severity = result.value["severity"]
+    refund = result.value["refund"]
+    assert isinstance(department, ops.experimental.ChoiceAnswer)
+    assert isinstance(severity, ops.experimental.ScoreAnswer)
+    assert isinstance(refund, ops.experimental.NoulAnswer)
+    assert department.confidence == confidence.get("department")
+    assert severity.confidence == confidence.get("severity")
+    assert refund.model_dump() == {"type": "noul", "noul": 0.98}
+    assert result.provider_metadata == provider_metadata
+
+
+@pytest.mark.parametrize("confidence", [-0.1, 1.1, "0.5", True])
+async def test_evaluate_rejects_invalid_confidence(confidence: Any) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "answers": {"answer": {"type": "choice", "choice": "yes"}},
+                "providerMetadata": {
+                    "typesafe": {"confidence": {"answer": confidence}}
+                },
+            },
+        )
+
+    with pytest.raises(pydantic.ValidationError, match="confidence"):
+        await ops.experimental.evaluate(
+            mock_model(httpx.MockTransport(handler), model_id=_MODEL_ID),
+            "state",
+            {
+                "answer": ops.experimental.ChoiceQuestion(
+                    instructions="Choose", criteria={"yes": None, "no": None}
+                )
+            },
+        )
 
 
 async def test_evaluate_maps_all_warning_types() -> None:
@@ -243,10 +328,10 @@ async def test_evaluate_maps_authentication_error() -> None:
         await ops.experimental.evaluate(
             mock_model(httpx.MockTransport(handler), model_id=_MODEL_ID),
             "state",
-            BooleanQuestions(
-                answer=ops.experimental.BooleanQuestion(
+            NoulQuestions(
+                answer=ops.experimental.NoulQuestion(
                     instructions="Is this true?"
                 )
             ),
-            output_type=BooleanAnswers,
+            output_type=NoulAnswers,
         )

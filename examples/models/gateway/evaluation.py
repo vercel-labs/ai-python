@@ -5,7 +5,7 @@ Set ``AI_GATEWAY_API_KEY`` and run:
     uv run python examples/models/gateway/evaluation.py
 
 The two calls below are independent examples. The first asks one question about
-plain text. The second asks choice, score, and boolean questions about shared
+plain text. The second asks choice, score, and Noul questions about shared
 structured state in one request.
 """
 
@@ -17,23 +17,23 @@ import ai
 
 
 class RefundQuestions(pydantic.BaseModel):
-    requests_refund: ai.ops.experimental.BooleanQuestion
+    requests_refund: ai.ops.experimental.NoulQuestion
 
 
 class RefundAnswers(pydantic.BaseModel):
-    requests_refund: ai.ops.experimental.BooleanAnswer
+    requests_refund: ai.ops.experimental.NoulAnswer
 
 
 class TicketQuestions(pydantic.BaseModel):
     queue: ai.ops.experimental.ChoiceQuestion
     urgency: ai.ops.experimental.ScoreQuestion
-    refund_warranted: ai.ops.experimental.BooleanQuestion
+    refund_warranted: ai.ops.experimental.NoulQuestion
 
 
 class TicketAnswers(pydantic.BaseModel):
     queue: ai.ops.experimental.ChoiceAnswer
     urgency: ai.ops.experimental.ScoreAnswer
-    refund_warranted: ai.ops.experimental.BooleanAnswer
+    refund_warranted: ai.ops.experimental.NoulAnswer
 
 
 async def main() -> None:
@@ -42,13 +42,13 @@ async def main() -> None:
         print("Set AI_GATEWAY_API_KEY to run this example.")
         return
 
-    # Ask a single boolean question about plain text. Boolean answers are
+    # Ask a single Noul question about plain text. Noul answers are
     # probabilities rather than only true or false.
     refund_result = await ai.ops.experimental.evaluate(
         model,
         "Please refund the duplicate charge on my account.",
         RefundQuestions(
-            requests_refund=ai.ops.experimental.BooleanQuestion(
+            requests_refund=ai.ops.experimental.NoulQuestion(
                 instructions="Is the customer asking for a refund?",
             )
         ),
@@ -57,7 +57,7 @@ async def main() -> None:
 
     print(
         "refund requested:",
-        f"{refund_result.value.requests_refund.probability:.0%}",
+        f"{refund_result.value.requests_refund.noul:.0%}",
     )
 
     # Ask several question types about the same structured state. This is useful
@@ -110,7 +110,7 @@ async def main() -> None:
                     "Critical: security incident, outage, or ongoing loss",
                 ],
             ),
-            refund_warranted=ai.ops.experimental.BooleanQuestion(
+            refund_warranted=ai.ops.experimental.NoulQuestion(
                 instructions="Does the evidence warrant a refund?",
                 criteria={
                     "true": "A duplicate settlement or billing error is shown",
@@ -133,13 +133,15 @@ async def main() -> None:
     answers = result.value
     print("\nqueue:", answers.queue.choice)
     print("queue probabilities:", answers.queue.probabilities)
+    print("queue confidence:", answers.queue.confidence)
 
     print("\nurgency score:", answers.urgency.score)
     print("urgency probabilities:", answers.urgency.probabilities)
+    print("urgency confidence:", answers.urgency.confidence)
 
     print(
         "\nrefund warranted:",
-        f"{answers.refund_warranted.probability:.0%}",
+        f"{answers.refund_warranted.noul:.0%}",
     )
 
     # Every operation also exposes framework and provider metadata.
