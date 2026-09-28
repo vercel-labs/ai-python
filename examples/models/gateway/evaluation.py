@@ -17,23 +17,23 @@ import ai
 
 
 class RefundQuestions(pydantic.BaseModel):
-    requests_refund: ai.ops.BooleanQuestion
+    requests_refund: ai.ops.experimental.BooleanQuestion
 
 
 class RefundAnswers(pydantic.BaseModel):
-    requests_refund: ai.ops.BooleanAnswer
+    requests_refund: ai.ops.experimental.BooleanAnswer
 
 
 class TicketQuestions(pydantic.BaseModel):
-    queue: ai.ops.ChoiceQuestion
-    urgency: ai.ops.ScoreQuestion
-    refund_warranted: ai.ops.BooleanQuestion
+    queue: ai.ops.experimental.ChoiceQuestion
+    urgency: ai.ops.experimental.ScoreQuestion
+    refund_warranted: ai.ops.experimental.BooleanQuestion
 
 
 class TicketAnswers(pydantic.BaseModel):
-    queue: ai.ops.ChoiceAnswer
-    urgency: ai.ops.ScoreAnswer
-    refund_warranted: ai.ops.BooleanAnswer
+    queue: ai.ops.experimental.ChoiceAnswer
+    urgency: ai.ops.experimental.ScoreAnswer
+    refund_warranted: ai.ops.experimental.BooleanAnswer
 
 
 async def main() -> None:
@@ -44,11 +44,11 @@ async def main() -> None:
 
     # Ask a single boolean question about plain text. Boolean answers are
     # probabilities rather than only true or false.
-    refund_result = await ai.ops.experimental_evaluate(
+    refund_result = await ai.ops.experimental.evaluate(
         model,
         "Please refund the duplicate charge on my account.",
         RefundQuestions(
-            requests_refund=ai.ops.BooleanQuestion(
+            requests_refund=ai.ops.experimental.BooleanQuestion(
                 instructions="Is the customer asking for a refund?",
             )
         ),
@@ -62,7 +62,7 @@ async def main() -> None:
 
     # Ask several question types about the same structured state. This is useful
     # when related decisions should use exactly the same source information.
-    ticket: ai.ops.EvaluationInput = {
+    ticket: ai.ops.experimental.EvaluationInput = {
         "message": (
             "I was charged $240 twice for the same renewal. The service works, "
             "but please refund the duplicate charge."
@@ -88,11 +88,11 @@ async def main() -> None:
         "service_status": "operational",
     }
 
-    result = await ai.ops.experimental_evaluate(
+    result = await ai.ops.experimental.evaluate(
         model,
         ticket,
         TicketQuestions(
-            queue=ai.ops.ChoiceQuestion(
+            queue=ai.ops.experimental.ChoiceQuestion(
                 instructions="Which support queue should handle this ticket?",
                 criteria={
                     "billing": "Charges, duplicate payments, and refunds",
@@ -101,7 +101,7 @@ async def main() -> None:
                     "other": None,
                 },
             ),
-            urgency=ai.ops.ScoreQuestion(
+            urgency=ai.ops.experimental.ScoreQuestion(
                 instructions="How urgent is the customer's primary problem?",
                 criteria=[
                     "Low: no active customer impact",
@@ -110,7 +110,7 @@ async def main() -> None:
                     "Critical: security incident, outage, or ongoing loss",
                 ],
             ),
-            refund_warranted=ai.ops.BooleanQuestion(
+            refund_warranted=ai.ops.experimental.BooleanQuestion(
                 instructions="Does the evidence warrant a refund?",
                 criteria={
                     "true": "A duplicate settlement or billing error is shown",
@@ -120,7 +120,7 @@ async def main() -> None:
         ),
         output_type=TicketAnswers,
         # Provider options are optional and apply only to this request.
-        params=ai.ops.EvaluationParams(
+        params=ai.ops.experimental.EvaluationParams(
             provider_options={
                 "gateway": {
                     "zeroDataRetention": True,

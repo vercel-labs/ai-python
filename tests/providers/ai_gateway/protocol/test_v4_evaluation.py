@@ -18,36 +18,36 @@ _MODEL_ID = "typesafe-ai/jev"
 
 
 class Questions(pydantic.BaseModel):
-    department: ops.ChoiceQuestion
-    severity: ops.ScoreQuestion
-    refund: ops.BooleanQuestion
+    department: ops.experimental.ChoiceQuestion
+    severity: ops.experimental.ScoreQuestion
+    refund: ops.experimental.BooleanQuestion
 
 
 class Answers(pydantic.BaseModel):
-    department: ops.ChoiceAnswer
-    severity: ops.ScoreAnswer
-    refund: ops.BooleanAnswer
+    department: ops.experimental.ChoiceAnswer
+    severity: ops.experimental.ScoreAnswer
+    refund: ops.experimental.BooleanAnswer
 
 
 class BooleanQuestions(pydantic.BaseModel):
-    answer: ops.BooleanQuestion
+    answer: ops.experimental.BooleanQuestion
 
 
 class BooleanAnswers(pydantic.BaseModel):
-    answer: ops.BooleanAnswer
+    answer: ops.experimental.BooleanAnswer
 
 
 def questions() -> Questions:
     return Questions(
-        department=ops.ChoiceQuestion(
+        department=ops.experimental.ChoiceQuestion(
             instructions="Which team should handle this?",
             criteria={"billing": "Charges", "support": "Other requests"},
         ),
-        severity=ops.ScoreQuestion(
+        severity=ops.experimental.ScoreQuestion(
             instructions="How severe is this?",
             criteria=["Cosmetic", "Workaround exists", "Blocking"],
         ),
-        refund=ops.BooleanQuestion(
+        refund=ops.experimental.BooleanQuestion(
             instructions="Is a refund requested?",
             criteria={"true": "A refund is requested", "false": None},
         ),
@@ -95,7 +95,7 @@ async def test_evaluate_request_and_response() -> None:
             },
         )
 
-    result = await ops.experimental_evaluate(
+    result = await ops.experimental.evaluate(
         mock_model(
             httpx.MockTransport(handler),
             api_key="sk-test",
@@ -104,7 +104,7 @@ async def test_evaluate_request_and_response() -> None:
         {"message": "Please refund the duplicate charge."},
         questions(),
         output_type=Answers,
-        params=ops.EvaluationParams(
+        params=ops.experimental.EvaluationParams(
             provider_options={
                 "gateway": {
                     "zeroDataRetention": True,
@@ -206,18 +206,18 @@ async def test_evaluate_maps_all_warning_types() -> None:
             },
         )
 
-    result = await ops.experimental_evaluate(
+    result = await ops.experimental.evaluate(
         mock_model(httpx.MockTransport(handler), model_id=_MODEL_ID),
         "state",
         {
-            "answer": ops.ChoiceQuestion(
+            "answer": ops.experimental.ChoiceQuestion(
                 instructions="Choose",
                 criteria={"yes": None, "no": None},
             )
         },
     )
 
-    assert isinstance(result.value["answer"], ops.ChoiceAnswer)
+    assert isinstance(result.value["answer"], ops.experimental.ChoiceAnswer)
     assert result.value["answer"].choice == "yes"
     assert result.warnings == [
         ops.Warning(kind="unsupported", feature="providerOptions.test"),
@@ -240,11 +240,13 @@ async def test_evaluate_maps_authentication_error() -> None:
         )
 
     with pytest.raises(ai.ProviderAuthenticationError):
-        await ops.experimental_evaluate(
+        await ops.experimental.evaluate(
             mock_model(httpx.MockTransport(handler), model_id=_MODEL_ID),
             "state",
             BooleanQuestions(
-                answer=ops.BooleanQuestion(instructions="Is this true?")
+                answer=ops.experimental.BooleanQuestion(
+                    instructions="Is this true?"
+                )
             ),
             output_type=BooleanAnswers,
         )

@@ -239,10 +239,13 @@ provider.
 - `index`: Position of the document in the original input list.
 - `score`: Relevance score for the query.
 
-## experimental_evaluate
+## experimental.evaluate
+
+Evaluation questions, answers, `EvaluationInput`, and `EvaluationParams` live
+under `ai.ops.experimental`.
 
 ```python
-await ai.ops.experimental_evaluate(
+await ai.ops.experimental.evaluate(
     model,
     state,
     questions,
@@ -268,11 +271,11 @@ Pydantic questions return `Item[Answers]`, whose value is an instance of
 `Item[dict[str, ChoiceAnswer | ScoreAnswer | BooleanAnswer]]`:
 
 ```python
-result = await ai.ops.experimental_evaluate(
+result = await ai.ops.experimental.evaluate(
     model,
     state,
     {
-        question_id: ai.ops.BooleanQuestion(instructions=instructions)
+        question_id: ai.ops.experimental.BooleanQuestion(instructions=instructions)
         for question_id, instructions in dynamic_questions.items()
     },
 )
