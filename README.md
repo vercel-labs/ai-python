@@ -19,6 +19,8 @@ official SDK lazily. Vercel OIDC for AI Gateway also uses an optional extra:
 uv add "ai[openai]"      # OpenAI-compatible providers
 uv add "ai[anthropic]"   # Anthropic-compatible providers
 uv add "ai[vercel]"      # Vercel OIDC for AI Gateway
+uv add "ai[claude-code]" # Claude Code harness (experimental)
+uv add "ai[sandbox]"     # Vercel Sandbox workspaces (experimental)
 ```
 
 ```python
@@ -156,6 +158,24 @@ approval = await ai.hook(
 ai.resolve_hook("approve_send_email", {"granted": True, "reason": "approved"})
 ```
 
+## Harnesses (experimental)
+
+Harnesses drive coding-agent CLIs you already have, Claude Code and Codex,
+on this machine or in a Vercel Sandbox. A turn streams the same `ai.events`
+as an agent:
+
+```python
+from ai.harnesses import experimental as harnesses
+from ai.workspaces import experimental as workspaces
+
+async with harnesses.claude_code(workspace=workspaces.Local(".")) as agent:
+    result = await agent.run("What does this repo do?")
+```
+
+This API is experimental and may change or be removed. See
+[Harnesses](https://ai-python.dev/docs/basics/harnesses) and
+[Workspaces](https://ai-python.dev/docs/basics/workspaces).
+
 ## Examples
 
 Focused samples live in category directories under `examples/`.
@@ -164,6 +184,8 @@ Focused samples live in category directories under `examples/`.
 - `examples/media/` - image, video, speech, transcription, embeddings,
   reranking, and multimodal input/output
 - `examples/models/` - streaming, structured output, and provider examples
+- `examples/harnesses/` - driving Claude Code and Codex, locally and in a
+  sandbox (experimental)
 - `examples/apps/` - end-to-end demos
 
 End-to-end demos:
@@ -173,3 +195,7 @@ End-to-end demos:
 - `examples/apps/durable_agent_temporal/` - durable agent with Temporal
 - `examples/apps/durable_agent_workflows/` - durable agent with Workflows
 - `examples/apps/slack_agent/` - Slack agent
+- `examples/apps/afk/` - move a coding-agent conversation into a sandbox and
+  back (experimental harnesses)
+- `examples/apps/deepysec/` - security-scanning pipeline on harnesses
+  (experimental)

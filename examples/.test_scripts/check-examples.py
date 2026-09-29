@@ -51,6 +51,16 @@ EXAMPLES: list[tuple[str, Path, list[str]]] = [
         _EXAMPLES_DIR / "apps" / "slack_agent",
         ["."],
     ),
+    (
+        "afk",
+        _EXAMPLES_DIR / "apps" / "afk",
+        ["."],
+    ),
+    (
+        "deepysec",
+        _EXAMPLES_DIR / "apps" / "deepysec",
+        ["."],
+    ),
 ]
 
 

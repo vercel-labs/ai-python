@@ -1,12 +1,14 @@
 from . import (
     errors,
     experimental_telemetry,
+    harnesses,
     models,
     ops,
     providers,
     testing,
     ui,
     util,
+    workspaces,
 )
 from .agents import (
     Agent,
@@ -203,6 +205,7 @@ __all__ = [
     "get_hook_registry",
     "get_model",
     "get_provider",
+    "harnesses",
     "hook",
     "mcp",
     "message",
@@ -225,5 +228,6 @@ __all__ = [
     "ui",
     "user_message",
     "util",
+    "workspaces",
     "yield_from",
 ]

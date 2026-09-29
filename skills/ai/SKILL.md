@@ -1,6 +1,6 @@
 ---
 name: ai
-description: AI SDK for Python (the `ai` package). Use for Python model calls (LLMs, image, video, speech, embedding, transcription, reranking, or evaluation), agents, model interaction tests, tool calling, subagents, approvals, durable execution, telemetry, AI SDK UI backends, and custom providers.
+description: AI SDK for Python (the `ai` package). Use for Python model calls (LLMs, image, video, speech, embedding, transcription, reranking, or evaluation), agents, model interaction tests, tool calling, subagents, approvals, durable execution, telemetry, AI SDK UI backends, custom providers, driving coding-agent CLIs (Claude Code, Codex), and sandboxes.
 metadata:
   sdk-version: "0.5.0"
 ---
@@ -84,5 +84,7 @@ read the listed local notes before writing code.
 | Telemetry and tracing | `basics/telemetry.md` | — |
 | AI SDK UI backends | `basics/ai-sdk-ui.md` | [ui.md](references/ui.md) |
 | Custom providers | `basics/providers.md` | [custom-provider.md](references/custom-provider.md) |
+| Drive Claude Code / Codex CLIs | `basics/harnesses.md` | [harnesses.md](references/harnesses.md) |
+| Run agents in a sandbox | `basics/workspaces.md` | [harnesses.md](references/harnesses.md) |
 
 For exact APIs, use `reference.md` and the relevant `reference/*.md` page.
