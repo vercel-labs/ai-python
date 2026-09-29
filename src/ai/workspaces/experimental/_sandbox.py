@@ -212,7 +212,7 @@ class SandboxProcess(_base.Process):
     async def write(self, data: str) -> None:
         await self._ensure_conduit()
         assert self._conduit is not None
-        await self._conduit.send(data.encode())
+        await self._conduit.stream.send(data.encode())
 
     async def _ensure_conduit(self) -> None:
         """Attach the input conduit on first use.
@@ -254,8 +254,9 @@ class SandboxProcess(_base.Process):
         try:
             async with asyncio.timeout(CONDUIT_READY_TIMEOUT):
                 while CONDUIT_READY.encode() not in seen:
-                    chunk = await self._conduit.receive()
-                    if not chunk:
+                    try:
+                        chunk = await self._conduit.stream.receive()
+                    except Exception:  # the stream ended
                         break
                     seen += chunk
         except TimeoutError as exc:
@@ -941,8 +942,9 @@ class VercelSandbox(_base.Workspace):
         try:
             async with asyncio.timeout(CONDUIT_READY_TIMEOUT):
                 while marker.encode() not in seen:
-                    chunk = await conduit.receive()
-                    if not chunk:
+                    try:
+                        chunk = await conduit.stream.receive()
+                    except Exception:  # the stream ended
                         break
                     seen += chunk
         except TimeoutError as exc:
@@ -972,7 +974,7 @@ class VercelSandbox(_base.Workspace):
 
         async def send_bytes(data: bytes) -> None:
             try:
-                await conduit.send(data)
+                await conduit.stream.send(data)
             except Exception as exc:
                 # The platform closed the interactive session under us. Say
                 # so in the SDK's vocabulary rather than leaking anyio's.
@@ -987,7 +989,7 @@ class VercelSandbox(_base.Workspace):
                 data, leftover = leftover, b""
                 return data
             try:
-                return await conduit.receive()
+                return await conduit.stream.receive()
             except Exception:
                 return b""  # end of stream: the codec settles receive()/wait()
 

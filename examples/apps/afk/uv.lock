@@ -28,7 +28,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "ai", extras = ["claude-code", "sandbox"], editable = "../../../" },
-    { name = "vercel-sandbox", git = "https://github.com/vercel/vercel-py?subdirectory=src%2Fvercel-sandbox&rev=ec07c8602d533067d7a9e6c400560659e65c6c50" },
+    { name = "vercel-sandbox", git = "https://github.com/vercel/vercel-py?subdirectory=src%2Fvercel-sandbox&branch=main" },
 ]
 
 [package.metadata.requires-dev]
@@ -84,12 +84,13 @@ dev = [
     { name = "opentelemetry-sdk", specifier = ">=1.43.0" },
     { name = "pytest", specifier = ">=8.0" },
     { name = "pytest-asyncio", specifier = ">=0.24" },
+    { name = "pytest-timeout", specifier = ">=2.3" },
     { name = "python-dotenv", specifier = ">=1.2.1" },
     { name = "rich", specifier = ">=14.2.0" },
     { name = "ruff", specifier = "~=0.8.0" },
     { name = "ty", specifier = "~=0.0.37" },
     { name = "vercel-oidc", specifier = ">=0.8.0" },
-    { name = "vercel-sandbox", git = "https://github.com/vercel/vercel-py?subdirectory=src%2Fvercel-sandbox&rev=ec07c8602d533067d7a9e6c400560659e65c6c50" },
+    { name = "vercel-sandbox", git = "https://github.com/vercel/vercel-py?subdirectory=src%2Fvercel-sandbox&rev=main" },
 ]
 
 [[package]]
@@ -839,12 +840,16 @@ wheels = [
 [[package]]
 name = "vercel-headers"
 version = "0.7.2"
-source = { git = "https://github.com/vercel/vercel-py?subdirectory=src%2Fvercel-headers&rev=ec07c8602d533067d7a9e6c400560659e65c6c50#ec07c8602d533067d7a9e6c400560659e65c6c50" }
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/e4/0c/241e47d351413c108f0b411df087feeb15cf32f422000414ce24d3791537/vercel_headers-0.7.2.tar.gz", hash = "sha256:f5255da014032b357a3f18769bd19ff675b0ee3e4fc355c6bbd574dfc674222d", size = 6148, upload-time = "2026-09-08T17:09:14.589Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/cd/64/12d53f70253dfd00f1a394bc930b5d55bad84ac17c9fc77b5ca0525ccd18/vercel_headers-0.7.2-py3-none-any.whl", hash = "sha256:26dcb0016b5c553e638385e532cb8557f071e247b46f2575d5737e48718dc8c6", size = 3922, upload-time = "2026-09-08T17:09:13.585Z" },
+]
 
 [[package]]
 name = "vercel-internal-core"
 version = "0.2.0"
-source = { git = "https://github.com/vercel/vercel-py?subdirectory=src%2Fvercel-internal-core&rev=ec07c8602d533067d7a9e6c400560659e65c6c50#ec07c8602d533067d7a9e6c400560659e65c6c50" }
+source = { git = "https://github.com/vercel/vercel-py?subdirectory=src%2Fvercel-internal-core&branch=main#d11705834e2e98973fe2c9998338f12c78471aad" }
 dependencies = [
     { name = "anyio" },
     { name = "httpx2" },
@@ -853,7 +858,7 @@ dependencies = [
 [[package]]
 name = "vercel-oidc"
 version = "0.9.0"
-source = { git = "https://github.com/vercel/vercel-py?subdirectory=src%2Fvercel-oidc&rev=ec07c8602d533067d7a9e6c400560659e65c6c50#ec07c8602d533067d7a9e6c400560659e65c6c50" }
+source = { git = "https://github.com/vercel/vercel-py?subdirectory=src%2Fvercel-oidc&branch=main#d11705834e2e98973fe2c9998338f12c78471aad" }
 dependencies = [
     { name = "anyio" },
     { name = "httpx2" },
@@ -863,7 +868,7 @@ dependencies = [
 [[package]]
 name = "vercel-sandbox"
 version = "0.7.0"
-source = { git = "https://github.com/vercel/vercel-py?subdirectory=src%2Fvercel-sandbox&rev=ec07c8602d533067d7a9e6c400560659e65c6c50#ec07c8602d533067d7a9e6c400560659e65c6c50" }
+source = { git = "https://github.com/vercel/vercel-py?subdirectory=src%2Fvercel-sandbox&branch=main#d11705834e2e98973fe2c9998338f12c78471aad" }
 dependencies = [
     { name = "anyio" },
     { name = "httpx2", extra = ["ws"] },

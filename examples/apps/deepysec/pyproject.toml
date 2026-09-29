@@ -28,9 +28,9 @@ exclude-newer = "2 days"
 [tool.uv.sources]
 # ai.harnesses is not released yet, so the app runs on this checkout.
 ai = { path = "../../..", editable = true }
-# vercel/vercel-py#415 (interactive PTY) is unreleased; this is the commit
-# ai's dev group pins. Drop this once the `sandbox` extra has a real floor.
-vercel-sandbox = { git = "https://github.com/vercel/vercel-py", rev = "ec07c8602d533067d7a9e6c400560659e65c6c50", subdirectory = "src/vercel-sandbox" }
+# vercel/vercel-py#415 (interactive PTY) is merged to main but not released;
+# uv.lock pins the commit. Drop this once the `sandbox` extra has a real floor.
+vercel-sandbox = { git = "https://github.com/vercel/vercel-py", branch = "main", subdirectory = "src/vercel-sandbox" }
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

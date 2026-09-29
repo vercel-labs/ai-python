@@ -86,10 +86,10 @@ dev = [
     "vercel-oidc>=0.8.0",
     "opentelemetry-sdk>=1.43.0",
     "opentelemetry-exporter-otlp-proto-http>=1.43.0",
-    # vercel/vercel-py#415 (interactive PTY) is unreleased; this is the
-    # commit harness-sdk's live sandbox suite ran against. Moving it needs a
-    # `pytest -m sandbox` run.
-    "vercel-sandbox @ git+https://github.com/vercel/vercel-py@ec07c8602d533067d7a9e6c400560659e65c6c50#subdirectory=src/vercel-sandbox",
+    # vercel/vercel-py#415 (interactive PTY) is merged to main but not
+    # released yet. uv.lock pins the commit; re-locking picks up main, which
+    # needs a `pytest -m sandbox` run.
+    "vercel-sandbox @ git+https://github.com/vercel/vercel-py@main#subdirectory=src/vercel-sandbox",
     "pytest-timeout>=2.3",
 ]
 
