@@ -14,8 +14,10 @@ Frames, both directions: 1 byte type, 4 bytes big-endian length, payload.
 `ai.workspaces.experimental._pty` speaks the same protocol from the SDK side.
 
 Usage:
-    _pty_holder.py SOCKET [--transient] [--cols N] [--rows N] -- PROGRAM [ARGS]
+    _pty_holder.py SOCKET [--transient] [--daemon] [--cols N] [--rows N]
+        -- PROGRAM [ARGS]
     --transient  end the program when the client detaches (an unnamed pty)
+    --daemon     detach from the launcher once the socket and pid file exist
 """
 
 import contextlib
@@ -72,11 +74,14 @@ def main() -> int:
     args = sys.argv[1:]
     sock_path = args.pop(0)
     transient = False
+    daemon = False
     cols, rows = 80, 24
     while args and args[0] != "--":
         flag = args.pop(0)
         if flag == "--transient":
             transient = True
+        elif flag == "--daemon":
+            daemon = True
         elif flag == "--cols":
             cols = int(args.pop(0))
         elif flag == "--rows":
@@ -84,6 +89,21 @@ def main() -> int:
     if args and args[0] == "--":
         args.pop(0)
     program = args
+
+    launcher_pipe = -1
+    if daemon:
+        # Leave whoever launched us, but only once the socket and the pid
+        # file exist: the launcher waits on this pipe, so a caller that sees
+        # the launcher exit can connect and read the pid. Measured on Linux:
+        # an asyncio child is killed when its event loop closes, which ended
+        # every named pty when its creator exited.
+        read_end, launcher_pipe = os.pipe()
+        if os.fork():
+            os.close(launcher_pipe)
+            os.read(read_end, 1)  # b"" too if the holder died first
+            os._exit(0)
+        os.close(read_end)
+        os.setsid()
 
     # The socket before the program: a client that sees the socket can
     # connect before the program has written a byte, so nothing it prints
@@ -101,6 +121,8 @@ def main() -> int:
     set_size(master, cols, rows)
     with open(sock_path + ".pid", "w") as f:
         f.write(f"{pid}\n")
+    if launcher_pipe != -1:
+        os.close(launcher_pipe)  # the launcher may exit now
 
     scrollback = b""
     client = None

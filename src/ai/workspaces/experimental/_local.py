@@ -261,13 +261,14 @@ class Local(_base.Workspace):
             sock = Path(tempfile.mkdtemp(prefix="harness-pty-")) / "pty.sock"
             flags = ["--transient"]
         holder = str(files("ai.workspaces.experimental") / "_pty_holder.py")
-        await asyncio.create_subprocess_exec(
+        launcher = await asyncio.create_subprocess_exec(
             sys.executable,
             # -P: keep the script's own directory off sys.path, where this
             # package's tty.py would shadow the stdlib module pty imports.
             "-P",
             holder,
             str(sock),
+            "--daemon",
             *flags,
             "--cols",
             str(cols),
@@ -282,6 +283,9 @@ class Local(_base.Workspace):
             stderr=asyncio.subprocess.DEVNULL,
             start_new_session=True,  # its life is the program's, not ours
         )
+        # The launcher exits once the holder's socket and pid file exist, and
+        # leaves no child for the event loop to kill on exit.
+        await launcher.wait()
         for _ in range(100):
             if sock.exists():
                 break
@@ -316,11 +320,10 @@ class Local(_base.Workspace):
 
     async def _connect_pty(self, sock: Path, name: str | None) -> _pty.Pty:
         reader, writer = await asyncio.open_unix_connection(str(sock))
-        pid_text = await asyncio.to_thread(
-            lambda: Path(f"{sock}.pid").read_text()
-            if Path(f"{sock}.pid").exists()
-            else ""
-        )
+        try:
+            pid_text = await asyncio.to_thread(Path(f"{sock}.pid").read_text)
+        except FileNotFoundError:
+            pid_text = ""  # the program already ended and its holder left
         pid = int(pid_text) if pid_text.strip().isdigit() else None
 
         async def send_bytes(data: bytes) -> None:
