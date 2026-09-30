@@ -62,6 +62,7 @@ dev = [
     { name = "rich" },
     { name = "ruff" },
     { name = "ty" },
+    { name = "vercel-internal-core" },
     { name = "vercel-oidc" },
     { name = "vercel-sandbox" },
 ]
@@ -100,7 +101,9 @@ dev = [
     { name = "rich", specifier = ">=14.2.0" },
     { name = "ruff", specifier = "~=0.8.0" },
     { name = "ty", specifier = "~=0.0.37" },
+    { name = "vercel-internal-core", git = "https://github.com/vercel/vercel-py?subdirectory=src%2Fvercel-internal-core&rev=main" },
     { name = "vercel-oidc", specifier = ">=0.8.0" },
+    { name = "vercel-oidc", git = "https://github.com/vercel/vercel-py?subdirectory=src%2Fvercel-oidc&rev=main" },
     { name = "vercel-sandbox", git = "https://github.com/vercel/vercel-py?subdirectory=src%2Fvercel-sandbox&rev=main" },
 ]
 
@@ -1413,34 +1416,26 @@ wheels = [
 [[package]]
 name = "vercel-internal-core"
 version = "0.2.0"
-source = { registry = "https://pypi.org/simple" }
+source = { git = "https://github.com/vercel/vercel-py?subdirectory=src%2Fvercel-internal-core&rev=main#a337e549acb8f69872c5537d91f981e5e9edac5e" }
 dependencies = [
     { name = "anyio" },
     { name = "httpx2" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/3e/61/3c15abe726c63ab0a44f75dbe49bd6221b8b17b424c2810b3086b404b6fb/vercel_internal_core-0.2.0.tar.gz", hash = "sha256:84bf3ff08a066682c8f02cadcc93a3e7580c27a06627db9f8e8d640bbe2fb53b", size = 19629, upload-time = "2026-09-15T14:33:29.705Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/90/7e/6cff886cddefc90479c2c73ada0fdcae0e6ba6362af8d2183cb5a1929d7d/vercel_internal_core-0.2.0-py3-none-any.whl", hash = "sha256:63069093f3ecaf09feed51fb602dfb4dc5ed17ac01524965881f46406c0d83f5", size = 23866, upload-time = "2026-09-15T14:33:28.855Z" },
 ]
 
 [[package]]
 name = "vercel-oidc"
 version = "0.9.0"
-source = { registry = "https://pypi.org/simple" }
+source = { git = "https://github.com/vercel/vercel-py?subdirectory=src%2Fvercel-oidc&rev=main#a337e549acb8f69872c5537d91f981e5e9edac5e" }
 dependencies = [
     { name = "anyio" },
     { name = "httpx2" },
     { name = "vercel-headers" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/65/f2/6767fdc4c53311ee6121bf958c1bb2ea00b8e9e19bdc59e1ffe5b4372bf3/vercel_oidc-0.9.0.tar.gz", hash = "sha256:71d59da7b96b53fa0f7255ee7cb39ae739623c497b15f9ec3b354ea7086c1a9d", size = 16119, upload-time = "2026-09-15T14:33:37.43Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/67/45/9ca537a8a1d2d5bdd60b9f5cab361c819ca9e13cc45248d4a917c3b7f7ef/vercel_oidc-0.9.0-py3-none-any.whl", hash = "sha256:04c99314aeeeb6ec3abaaad1729cbbe4df6dfad051771469585da843e0fbd7ff", size = 16005, upload-time = "2026-09-15T14:33:36.541Z" },
-]
 
 [[package]]
 name = "vercel-sandbox"
 version = "0.7.0"
-source = { git = "https://github.com/vercel/vercel-py?subdirectory=src%2Fvercel-sandbox&rev=main#d11705834e2e98973fe2c9998338f12c78471aad" }
+source = { git = "https://github.com/vercel/vercel-py?subdirectory=src%2Fvercel-sandbox&rev=main#a337e549acb8f69872c5537d91f981e5e9edac5e" }
 dependencies = [
     { name = "anyio" },
     { name = "httpx2", extra = ["ws"] },

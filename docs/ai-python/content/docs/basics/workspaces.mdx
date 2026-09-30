@@ -60,7 +60,8 @@ async with workspaces.VercelSandbox(gateway=gateway) as sandbox:
 
 `VercelSandbox()` takes Vercel credentials from, in this order:
 
-- `token`, `team_id`, and `project_id` arguments.
+- `token`, `team_id`, and `project_id` arguments. A project (OIDC) token
+  alone is enough: it names its own team and project.
 - `VERCEL_TOKEN`, `VERCEL_TEAM_ID`, and `VERCEL_PROJECT_ID`, or
   `VERCEL_OIDC_TOKEN`, in the environment.
 - `.env.local` from `vercel link` and `vercel env pull`, found by searching

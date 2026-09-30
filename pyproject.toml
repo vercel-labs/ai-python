@@ -88,8 +88,11 @@ dev = [
     "opentelemetry-exporter-otlp-proto-http>=1.43.0",
     # vercel/vercel-py#415 (interactive PTY) is merged to main but not
     # released yet. uv.lock pins the commit; re-locking picks up main, which
-    # needs a `pytest -m sandbox` run.
+    # needs a `pytest -m sandbox` run. Its sibling packages come from the same
+    # main: vercel-sandbox on main needs unreleased vercel-internal-core.
     "vercel-sandbox @ git+https://github.com/vercel/vercel-py@main#subdirectory=src/vercel-sandbox",
+    "vercel-internal-core @ git+https://github.com/vercel/vercel-py@main#subdirectory=src/vercel-internal-core",
+    "vercel-oidc @ git+https://github.com/vercel/vercel-py@main#subdirectory=src/vercel-oidc",
     "pytest-timeout>=2.3",
 ]
 

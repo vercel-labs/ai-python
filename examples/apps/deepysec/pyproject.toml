@@ -5,8 +5,10 @@ description = "deepsec's scan funnel, rebuilt on ai.harnesses"
 requires-python = ">=3.12"
 dependencies = [
     "ai[claude-code,sandbox]",
-    # direct, so the git source below applies (see tool.uv.sources)
+    # direct, so the git sources below apply (see tool.uv.sources)
     "vercel-sandbox",
+    "vercel-internal-core",
+    "vercel-oidc",
 ]
 
 [dependency-groups]
@@ -29,8 +31,12 @@ exclude-newer = "2 days"
 # ai.harnesses is not released yet, so the app runs on this checkout.
 ai = { path = "../../..", editable = true }
 # vercel/vercel-py#415 (interactive PTY) is merged to main but not released;
-# uv.lock pins the commit. Drop this once the `sandbox` extra has a real floor.
+# uv.lock pins the commit. Drop these once the `sandbox` extra has a real
+# floor. The siblings come from the same main: vercel-sandbox there needs an
+# unreleased vercel-internal-core, and `uv tool install` does not read uv.lock.
 vercel-sandbox = { git = "https://github.com/vercel/vercel-py", branch = "main", subdirectory = "src/vercel-sandbox" }
+vercel-internal-core = { git = "https://github.com/vercel/vercel-py", branch = "main", subdirectory = "src/vercel-internal-core" }
+vercel-oidc = { git = "https://github.com/vercel/vercel-py", branch = "main", subdirectory = "src/vercel-oidc" }
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

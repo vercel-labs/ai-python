@@ -61,7 +61,7 @@ support, and raises `ai.errors.InstallationError` when it is missing.
 
 | Argument | Description | Default |
 |---|---|---|
-| `token`, `team_id`, `project_id` | Vercel credentials. | `None`: read from the environment or `.env.local` |
+| `token`, `team_id`, `project_id` | Vercel credentials. A project (OIDC) token alone is enough: it names its own team and project. | `None`: read from the environment or `.env.local` |
 | `workdir` | Working directory in the VM. | `"/vercel/sandbox"` |
 | `snapshot` | Snapshot id to start from. | `None` |
 | `env` | Environment for everything run in the VM. | `None` |

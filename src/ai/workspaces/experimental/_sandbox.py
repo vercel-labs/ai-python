@@ -512,6 +512,7 @@ class VercelSandbox(_base.Workspace):
         self._keep = keep if keep is not None else name is not None
         self._ports = list(ports or [])
         self._sandbox: vercel_sandbox.Sandbox | None = None
+        self._client: vercel_sandbox.SandboxClient | None = None
         self._children: list[SandboxProcess] = []
 
     @property
@@ -533,17 +534,49 @@ class VercelSandbox(_base.Workspace):
     async def open(self) -> None:
         if self._sandbox is not None:
             return
-        from vercel.sandbox import create_sandbox, get_sandbox  # noqa: PLC0415
+        try:
+            await self._open()
+        except BaseException:
+            await self._close_client()
+            raise
 
+    def _api(self) -> Any:
+        """Where sandbox calls go.
+
+        With explicit credentials, a client of their own: vercel-sandbox
+        0.7 takes credentials per client, not per call. Otherwise the
+        module, which resolves them from the environment.
+        """
+        from vercel import sandbox  # noqa: PLC0415
+
+        if not self._credentials:
+            return sandbox
+        if self._client is None:
+            credentials = _explicit_credentials(self._credentials)
+
+            async def factory() -> vercel_sandbox.SandboxCredentials:
+                return credentials
+
+            self._client = sandbox.SandboxClient.create(
+                options=sandbox.SandboxServiceOptions(
+                    credentials_factory=factory
+                )
+            )
+        return self._client
+
+    async def _close_client(self) -> None:
+        client, self._client = self._client, None
+        if client is not None:
+            with contextlib.suppress(Exception):
+                await client.aclose()
+
+    async def _open(self) -> None:
+        api = self._api()
         if self._name is not None:
             try:
-                # Same credentials create_sandbox gets: env-based auth works
-                # without them, but a caller who passed token=/team_id= must
-                # reach the same account on reconnect.
-                credentials: dict[str, Any] = dict(self._credentials)
-                self._sandbox = await get_sandbox(
-                    name=self._name, **credentials
-                )
+                # The same client create_sandbox gets: a caller who passed
+                # token=/team_id= must reach the same account on reconnect.
+                self._sandbox = await api.get_sandbox(name=self._name)
             except Exception as exc:
                 if _looks_like_auth_failure(exc):
                     raise errors_.NotAuthenticatedError(
@@ -585,7 +618,7 @@ class VercelSandbox(_base.Workspace):
                     "instead."
                 )
             return
-        options: dict[str, Any] = dict(self._credentials)
+        options: dict[str, Any] = {}
         if self.env:
             options["env"] = dict(self.env)
         if self._execution_time_limit is not None:
@@ -601,7 +634,7 @@ class VercelSandbox(_base.Workspace):
                 self.gateway, (*INSTALL_HOSTS, *self._allow_hosts)
             )
         try:
-            self._sandbox = await create_sandbox(**options)
+            self._sandbox = await api.create_sandbox(**options)
         except Exception as exc:
             if _looks_like_auth_failure(exc):
                 raise errors_.NotAuthenticatedError(
@@ -651,6 +684,7 @@ class VercelSandbox(_base.Workspace):
                     await child.detach()
             self._children.clear()
             self._forget_vm()
+            await self._close_client()
             return
         # Stopping the VM ends every process in it at once, so there is no
         # reason to climb the per-process ladder here: just let go of our
@@ -664,6 +698,7 @@ class VercelSandbox(_base.Workspace):
             async with asyncio.timeout(60):
                 await self._sandbox.stop()
         self._forget_vm()
+        await self._close_client()
 
     @property
     def name(self) -> str | None:
@@ -1216,6 +1251,64 @@ def _parse_env(path: Path) -> dict[str, str]:
     return values
 
 
+def _explicit_credentials(
+    given: Mapping[str, str],
+) -> vercel_sandbox.SandboxCredentials:
+    """Complete `token=`/`team_id=`/`project_id=` from the environment.
+
+    A project token (OIDC) also names its own project and team, so a token
+    alone is enough when it is one.
+    """
+    from vercel import sandbox  # noqa: PLC0415
+
+    token = (
+        given.get("token")
+        or os.environ.get("VERCEL_TOKEN")
+        or os.environ.get("VERCEL_OIDC_TOKEN")
+    )
+    claims = _jwt_claims(token) if token else {}
+    team = (
+        given.get("team_id")
+        or os.environ.get("VERCEL_TEAM_ID")
+        or claims.get("owner_id")
+    )
+    project = (
+        given.get("project_id")
+        or os.environ.get("VERCEL_PROJECT_ID")
+        or claims.get("project_id")
+    )
+    if not (token and team and project):
+        missing = [
+            name
+            for name, value in (
+                ("token", token),
+                ("team_id", team),
+                ("project_id", project),
+            )
+            if not value
+        ]
+        raise ai_errors.ConfigurationError(
+            "VercelSandbox needs a token, a team_id and a project_id; missing "
+            + ", ".join(missing)
+        )
+    return sandbox.SandboxCredentials(
+        token=token, team_id=str(team), project_id=str(project)
+    )
+
+
+def _jwt_claims(token: str) -> dict[str, Any]:
+    """Decode a JWT's claims without verifying them; {} for anything else."""
+    if token.count(".") != 2:
+        return {}
+    payload = token.split(".")[1]
+    payload += "=" * (-len(payload) % 4)
+    try:
+        claims = json.loads(base64.urlsafe_b64decode(payload))
+    except Exception:
+        return {}
+    return claims if isinstance(claims, dict) else {}
+
+
 def oidc_token_expiry(token: str | None) -> float | None:
     """Return the `exp` claim of a Vercel OIDC JWT, or None.
 
@@ -1224,15 +1317,7 @@ def oidc_token_expiry(token: str | None) -> float | None:
     Decoded, not verified: this is for telling a caller WHY the platform
     said 403, not for trusting the token.
     """
-    if not token or token.count(".") != 2:
-        return None
-    payload = token.split(".")[1]
-    payload += "=" * (-len(payload) % 4)
-    try:
-        claims = json.loads(base64.urlsafe_b64decode(payload))
-    except Exception:
-        return None
-    exp = claims.get("exp")
+    exp = _jwt_claims(token).get("exp") if token else None
     return float(exp) if isinstance(exp, int | float) else None
 
 
