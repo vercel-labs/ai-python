@@ -34,6 +34,7 @@ afk push <id> [--bg] · attach <id> · peek <id> · pull <id> [--files] · stop 
 | `afk peek <id>` | watch an unattended agent's transcript, read-only |
 | `afk pull <id> [--files]` | bring a conversation home and open it in the TUI here; `--files` also brings the files it changed there, after showing them and asking |
 | `afk stop <id>` | end its sandbox |
+| `afk setup` | choose the Vercel team afk's sandboxes use |
 
 **Ctrl-]** detaches from a sandbox TUI and leaves it running. A pulled
 conversation opens in an ordinary local TUI: quit it as you always do.
@@ -122,19 +123,50 @@ A remote conversation's status says what you can do with it:
 
 The SDK keeps no registry and never will: app state is the app's.
 
-## Running it
+## Install
+
+```bash
+uv tool install "git+https://github.com/vercel-labs/ai-python@harnesses-experimental#subdirectory=examples/apps/afk"
+```
+
+Or from a checkout: `uv tool install ./examples/apps/afk`. Then run `afk`
+in any directory where you use `claude` or `codex`. afk keeps its own files
+in `~/.afk/` and writes into your project only on `afk pull --files`.
+
+## Vercel, set up on first use
+
+The first time afk needs a sandbox, it sets itself up. It asks only when it
+has to:
+
+1. It signs in through the Vercel CLI. Not installed: afk says how to install
+   it (`npm i -g vercel`). Not logged in: afk runs `vercel login` for you.
+2. It picks a team. With one team there is no question. With several, it
+   lists them with your Vercel CLI's current team as the default: press
+   Enter to accept. `AFK_TEAM=<slug>` decides without asking.
+3. It creates a project named `afk-<random>` in that team for its sandboxes
+   and records the ids in `~/.afk/config.json`. The file holds no secrets.
+
+After that, every run mints a short-lived project token from your login, so
+there is nothing to pull or refresh. `afk setup` chooses a team again.
+
+The sandbox reaches a model through AI Gateway with that same token, so
+`AI_GATEWAY_API_KEY` is optional. The first push checks, once, that the
+team's AI Gateway will serve it; a team without a card on file is refused,
+and afk says so and offers another team. With `AI_GATEWAY_API_KEY` set, afk
+uses that key instead. Either way the key never enters the VM: the sandbox
+injects it at egress.
+
+Credentials already in the environment always win: `VERCEL_OIDC_TOKEN`, or
+`VERCEL_TOKEN` with `VERCEL_TEAM_ID` and `VERCEL_PROJECT_ID`. On this
+machine, the CLIs keep using your own login unless you set
+`AI_GATEWAY_API_KEY`.
+
+## Developing
 
 ```
 cd examples/apps/afk
 uv run afk                      # or: uv run python -m afk
 ```
-
-Credentials come from the environment. `AI_GATEWAY_API_KEY` is how the
-sandbox reaches a model (the key never enters the VM; the sandbox injects it
-at egress). Sandbox credentials are `VERCEL_OIDC_TOKEN`, or `VERCEL_TOKEN`
-with `VERCEL_TEAM_ID` and `VERCEL_PROJECT_ID`; `vercel env pull .env.local`
-writes them, and the OIDC token is short-lived — a 403 on push means pull
-again. Locally, without a gateway key, the harness uses your own login.
 
 Tests, in `examples/apps/afk`: `uv run pytest -m "not live"` runs the pure
 parts offline; `uv run pytest` also runs the live listing tests, which need a

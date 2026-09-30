@@ -16,6 +16,8 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "ai", extra = ["claude-code", "sandbox"] },
+    { name = "vercel-internal-core" },
+    { name = "vercel-oidc" },
     { name = "vercel-sandbox" },
 ]
 
@@ -28,6 +30,8 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "ai", extras = ["claude-code", "sandbox"], editable = "../../../" },
+    { name = "vercel-internal-core", git = "https://github.com/vercel/vercel-py?subdirectory=src%2Fvercel-internal-core&branch=main" },
+    { name = "vercel-oidc", git = "https://github.com/vercel/vercel-py?subdirectory=src%2Fvercel-oidc&branch=main" },
     { name = "vercel-sandbox", git = "https://github.com/vercel/vercel-py?subdirectory=src%2Fvercel-sandbox&branch=main" },
 ]
 
@@ -89,7 +93,9 @@ dev = [
     { name = "rich", specifier = ">=14.2.0" },
     { name = "ruff", specifier = "~=0.8.0" },
     { name = "ty", specifier = "~=0.0.37" },
+    { name = "vercel-internal-core", git = "https://github.com/vercel/vercel-py?subdirectory=src%2Fvercel-internal-core&rev=main" },
     { name = "vercel-oidc", specifier = ">=0.8.0" },
+    { name = "vercel-oidc", git = "https://github.com/vercel/vercel-py?subdirectory=src%2Fvercel-oidc&rev=main" },
     { name = "vercel-sandbox", git = "https://github.com/vercel/vercel-py?subdirectory=src%2Fvercel-sandbox&rev=main" },
 ]
 
@@ -849,7 +855,7 @@ wheels = [
 [[package]]
 name = "vercel-internal-core"
 version = "0.2.0"
-source = { git = "https://github.com/vercel/vercel-py?subdirectory=src%2Fvercel-internal-core&branch=main#d11705834e2e98973fe2c9998338f12c78471aad" }
+source = { git = "https://github.com/vercel/vercel-py?subdirectory=src%2Fvercel-internal-core&branch=main#a337e549acb8f69872c5537d91f981e5e9edac5e" }
 dependencies = [
     { name = "anyio" },
     { name = "httpx2" },
@@ -858,7 +864,7 @@ dependencies = [
 [[package]]
 name = "vercel-oidc"
 version = "0.9.0"
-source = { git = "https://github.com/vercel/vercel-py?subdirectory=src%2Fvercel-oidc&branch=main#d11705834e2e98973fe2c9998338f12c78471aad" }
+source = { git = "https://github.com/vercel/vercel-py?subdirectory=src%2Fvercel-oidc&branch=main#a337e549acb8f69872c5537d91f981e5e9edac5e" }
 dependencies = [
     { name = "anyio" },
     { name = "httpx2" },
@@ -868,7 +874,7 @@ dependencies = [
 [[package]]
 name = "vercel-sandbox"
 version = "0.7.0"
-source = { git = "https://github.com/vercel/vercel-py?subdirectory=src%2Fvercel-sandbox&branch=main#d11705834e2e98973fe2c9998338f12c78471aad" }
+source = { git = "https://github.com/vercel/vercel-py?subdirectory=src%2Fvercel-sandbox&branch=main#a337e549acb8f69872c5537d91f981e5e9edac5e" }
 dependencies = [
     { name = "anyio" },
     { name = "httpx2", extra = ["ws"] },

@@ -54,6 +54,7 @@ async def push(
     background: bool,
     hours: float,
     gateway: Gateway | None,
+    local_gateway: Gateway | None = None,
 ) -> st.Remote:
     """Copy the conversation, and this directory as it is now, into a
     sandbox of its own. Push copies: the local one stays; if you keep typing
@@ -65,14 +66,18 @@ async def push(
 
     `hours` is how long the sandbox may live. The
     platform's default is five MINUTES — measured: a pushed TUI was gone
-    before its owner came back — so afk always says how long."""
+    before its owner came back — so afk always says how long.
+
+    `gateway` is how the sandbox reaches a model; `local_gateway` is only
+    for this machine, where your own CLI login applies unless you set one.
+    """
     if gateway is None:
         raise HarnessError(
-            "afk push needs AI_GATEWAY_API_KEY: the sandbox reaches the model "
-            "through the gateway"
+            "afk push needs a way for the sandbox to reach a model: sign in "
+            "to Vercel, or set AI_GATEWAY_API_KEY"
         )
     # 1. The past, from the harness's own store here.
-    async with Local(cwd, gateway=gateway) as here:
+    async with Local(cwd, gateway=local_gateway) as here:
         async with HARNESSES[row.kind](workspace=here) as agent:
             history = await agent.history(row.session_id)
 
@@ -355,6 +360,7 @@ async def pull(
     gateway: Gateway | None,
     *,
     with_files: bool,
+    local_gateway: Gateway | None = None,
     ask: Callable[[str], str] = input,
 ) -> None:
     """Bring it home: the conversation's past, into a new one here, in the
@@ -369,7 +375,7 @@ async def pull(
             await _pull_files(
                 cwd, ws, st.load().baselines.get(row.sandbox), ask
             )
-    async with Local(cwd, gateway=gateway) as here:
+    async with Local(cwd, gateway=local_gateway) as here:
         agent = HARNESSES[row.kind](workspace=here)
         await agent.open()
         # An ordinary local TUI: no detach key, quit it as you always do.

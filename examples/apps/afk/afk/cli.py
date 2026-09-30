@@ -8,6 +8,7 @@
     afk pull <id> [--files]  bring it home, in the TUI; --files brings its
                              edits too
     afk stop <id>            end its sandbox
+    afk setup                choose the Vercel team afk's sandboxes use
 
 An id is whatever the list showed: a label you gave (`--as`), a word from a
 title, or a short id prefix. With none, the one conversation clearly in use
@@ -31,8 +32,8 @@ from ai.workspaces.experimental.errors import (
     WorkspaceGoneError,
 )
 
+from . import account, verbs
 from . import state as st
-from . import verbs
 from .resolve import AmbiguousError, NoMatchError, match, pick
 from .rows import KIND_SHORT, Row, local_rows, remote_rows, stored_rows
 
@@ -43,7 +44,28 @@ DIM, BOLD, RESET = "\x1b[2m", "\x1b[1m", "\x1b[0m"
 
 
 def gateway() -> Gateway | None:
+    """This machine's gateway: only when you set AI_GATEWAY_API_KEY.
+
+    Otherwise the CLIs here use your own login, as they do without afk.
+    """
     return vercel_ai_gateway() if os.environ.get("AI_GATEWAY_API_KEY") else None
+
+
+def sandbox_gateway(*, fresh: bool = False) -> Gateway | None:
+    """How a sandbox reaches a model, signing in to Vercel on first use.
+
+    AI_GATEWAY_API_KEY when set; otherwise the project token afk mints from
+    your `vercel login`, which AI Gateway accepts too.
+    """
+    own = gateway()
+    token = account.ensure(
+        interactive=account.interactive(),
+        fresh=fresh,
+        # Only a push fixes a sandbox's model credential, so only a push
+        # checks that the team's AI Gateway will serve afk's token.
+        for_gateway=fresh and own is None,
+    )
+    return own or (vercel_ai_gateway(api_key=token) if token else None)
 
 
 LIST_CAP = 15
@@ -55,13 +77,19 @@ five hours is its maximum on Pro.
 """
 
 
-async def listing(cwd: Path, gw: Gateway | None, *, everything: bool) -> None:
+async def listing(
+    cwd: Path,
+    gw: Gateway | None,
+    remote_gw: Gateway | None,
+    *,
+    everything: bool,
+) -> None:
     """The list, drawn as it arrives: this directory's conversations as soon
     as the local stores answer, the pushed ones once their sandboxes do —
     a slow sandbox never holds up what is already known."""
     state = st.load()
     away = (
-        asyncio.create_task(remote_rows(state, cwd, gw))
+        asyncio.create_task(remote_rows(state, cwd, remote_gw))
         if state.for_origin(str(cwd))
         else None
     )
@@ -175,12 +203,37 @@ async def main_async(argv: list[str]) -> int:
         help="also bring home the files it changed there; asks first",
     )
     sub.add_parser("stop").add_argument("id")
+    sub.add_parser("setup")
     args = parser.parse_args(argv)
 
     cwd = Path.cwd().resolve()
+    if args.verb == "setup":
+        try:
+            config = account.setup(
+                account.cli_token(interactive=account.interactive()),
+                interactive=account.interactive(),
+            )
+        except account.AccountError as exc:
+            print(f"afk: {exc}")
+            return 2
+        print(
+            f"afk: sandboxes now go to {config.project_name}"
+            + (f" in {config.team_slug}" if config.team_slug else "")
+        )
+        return 0
     try:
         gw = gateway()
-    except NotAuthenticatedError as exc:
+        # Vercel is needed only once a sandbox is: never for a directory
+        # with nothing pushed, so a first `afk` asks nothing.
+        needs_sandbox = args.verb is not None or bool(
+            st.load().for_origin(str(cwd))
+        )
+        remote_gw = (
+            sandbox_gateway(fresh=args.verb == "push")
+            if needs_sandbox
+            else None
+        )
+    except (NotAuthenticatedError, account.AccountError) as exc:
         print(f"afk: {exc}")
         return 2
     try:
@@ -188,7 +241,7 @@ async def main_async(argv: list[str]) -> int:
         # push needs this directory's conversations; the rest need afk's
         # own record of what it pushed, and then that one sandbox.
         if args.verb is None:
-            await listing(cwd, gw, everything=args.everything)
+            await listing(cwd, gw, remote_gw, everything=args.everything)
             return 0
         if args.verb == "push":
             rows, _, _ = await local_rows(cwd, gw)
@@ -204,8 +257,9 @@ async def main_async(argv: list[str]) -> int:
                 row,
                 label=args.label,
                 background=args.bg,
-                hours=args.hours,
-                gateway=gw,
+                hours=_hours(args.hours, gw, remote_gw),
+                gateway=remote_gw,
+                local_gateway=gw,
             )
             return 0
         row = choose(
@@ -215,13 +269,15 @@ async def main_async(argv: list[str]) -> int:
             return 1
         try:
             if args.verb == "attach":
-                await verbs.attach(row, gw)
+                await verbs.attach(row, remote_gw)
             elif args.verb == "peek":
-                await verbs.peek(row, gw)
+                await verbs.peek(row, remote_gw)
             elif args.verb == "pull":
-                await verbs.pull(cwd, row, gw, with_files=args.files)
+                await verbs.pull(
+                    cwd, row, remote_gw, with_files=args.files, local_gateway=gw
+                )
             elif args.verb == "stop":
-                await verbs.stop(row, gw)
+                await verbs.stop(row, remote_gw)
         except WorkspaceGoneError:
             # These verbs trust afk's record without asking every sandbox
             # first; when the record turns out stale, correct it here.
@@ -242,6 +298,26 @@ async def main_async(argv: list[str]) -> int:
     except HarnessError as exc:
         print(f"afk: {exc}")
         return 1
+
+
+def _hours(
+    hours: float, gw: Gateway | None, remote_gw: Gateway | None
+) -> float:
+    """Cap a push's lifetime at its model credential's, when that is afk's.
+
+    The sandbox injects its credential once, when it is created. A project
+    token lives about 12 hours; AI_GATEWAY_API_KEY does not expire.
+    """
+    if gw is not None or remote_gw is None:
+        return hours
+    left = (account.seconds_left(remote_gw.credential) - 600) / 3600
+    if hours <= left:
+        return hours
+    print(
+        f"afk: the sandbox lives up to {left:.1f}h: that is how long its "
+        "Vercel project token lasts (set AI_GATEWAY_API_KEY for longer)"
+    )
+    return left
 
 
 def _one_line_warning(
