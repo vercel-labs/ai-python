@@ -506,18 +506,20 @@ class ToolResolver:
         return self._tools_by_name.get(name)
 
     @overload
-    def resolve(self, tool_part: types.messages.ToolCallPart) -> ToolCall: ...
+    def resolve(
+        self, tool_part: types.messages.ToolCallPart
+    ) -> BoundToolCall: ...
     @overload
     def resolve(
         self, tool_part: Sequence[types.messages.ToolCallPart]
-    ) -> list[ToolCall]: ...
+    ) -> list[BoundToolCall]: ...
 
     def resolve(
         self,
         tool_part: types.messages.ToolCallPart
         | Sequence[types.messages.ToolCallPart],
-    ) -> ToolCall | list[ToolCall]:
-        """Resolve ToolCallPart(s) into callable ToolCall object(s)."""
+    ) -> BoundToolCall | list[BoundToolCall]:
+        """Resolve ToolCallPart(s) into callable BoundToolCall object(s)."""
         if isinstance(tool_part, types.messages.ToolCallPart):
             tool = self._tools_by_name.get(tool_part.tool_name)
             if tool is None:
@@ -686,6 +688,13 @@ def tool[**P, T, R](
         return wrap(fn)
 
 
+_bound_tool_context: contextvars.ContextVar[middleware_.ToolContext] = (
+    contextvars.ContextVar("bound_tool_context")
+)
+
+type _ToolCallFn = Callable[..., Awaitable[events_.ToolCallResult]]
+
+
 class BoundToolCall:
     """Callable that binds a :class:`ToolCallPart` to its :class:`AgentTool`.
 
@@ -699,6 +708,7 @@ class BoundToolCall:
     ) -> None:
         self._part = part
         self._tool = tool
+        self._wrapped_fn: _ToolCallFn | None = None
         self._kwargs: dict[str, Any] | None = None
 
     @property
@@ -710,8 +720,28 @@ class BoundToolCall:
         return self._part.tool_name
 
     @property
-    def fn(self) -> Callable[..., Awaitable[Any]]:
+    def fn(self) -> Callable[..., Any]:
         return self._tool.fn
+
+    def wrap(
+        self,
+        wrapper: Callable[
+            [BoundToolCall, _ToolCallFn],
+            _ToolCallFn,
+        ],
+    ) -> BoundToolCall:
+        """Return a tool call whose execution is wrapped by ``wrapper``."""
+
+        async def inner(**kwargs: Any) -> events_.ToolCallResult:
+            return await self._call(kwargs)
+
+        wrapped_fn = wrapper(self, inner)
+        wrapped = BoundToolCall(
+            part=self._part,
+            tool=self._tool,
+        )
+        wrapped._wrapped_fn = wrapped_fn
+        return wrapped
 
     @property
     def kwargs(self) -> dict[str, Any]:
@@ -729,6 +759,66 @@ class BoundToolCall:
             return await self._execute(overrides)
         finally:
             _current_tool_call.reset(token)
+
+    async def _call(self, kwargs: dict[str, Any]) -> events_.ToolCallResult:
+        if self._wrapped_fn is None:
+            return await self._inner(kwargs)
+        result = await self._wrapped_fn(**kwargs)
+        if not isinstance(result, events_.ToolCallResult):
+            raise TypeError(
+                "tool call wrapper must return a ToolCallResult, not "
+                f"{type(result).__name__}"
+            )
+        return result
+
+    async def _inner(self, kwargs: dict[str, Any]) -> events_.ToolCallResult:
+        tool = self._tool
+        call = _bound_tool_context.get()
+        model_input: Any = types.messages.MODEL_INPUT_UNSET
+        # The returned value decides how the tool runs, so a
+        # plain `def` returning a coroutine works too.
+        returned = self.fn(**kwargs)
+        awaited = inspect.isawaitable(returned)
+        if awaited:
+            returned = await returned
+        if isinstance(returned, AsyncIterable):
+            # Streaming tool (e.g. agent-as-a-tool): drain the async
+            # iterable, forward each yielded value to the runtime for
+            # real-time streaming, then capture both the aggregator
+            # snapshot (the rich shape that flows to the UI) and the
+            # model-facing value (what the LLM sees on its next turn).
+            if tool.aggregator is None:
+                raise TypeError(
+                    f"tool {tool.name!r} streams but declares no "
+                    f"aggregator; pass `aggregator=` or annotate its "
+                    f"return type with an Aggregate marker"
+                )
+            agg = await _aggregate_from(
+                returned,
+                tool_call_id=call.tool_call_id,
+                tool_name=call.tool_name,
+                aggregator=tool.aggregator,
+            )
+            result = agg.snapshot()
+            model_input = agg.get_model_input()
+        elif not awaited:
+            raise TypeError(
+                f"tool {tool.name!r} must return an awaitable or an "
+                f"async iterable, not {type(returned).__name__}; "
+                f"declare it with `async def`"
+            )
+        else:
+            result = returned
+        if tool.to_model_input is not None:
+            model_input = tool.to_model_input(result)
+        part = types.messages.ToolResultPart(
+            tool_call_id=call.tool_call_id,
+            tool_name=call.tool_name,
+            result=result,
+            result_kind=types.messages.ToolResultPart.kind_for(result),
+            model_input=model_input,
+        )
+        return tool_result(part)
 
     async def _execute(
         self, overrides: dict[str, Any]
@@ -780,57 +870,25 @@ class BoundToolCall:
         async def _real(
             call: middleware_.ToolContext,
         ) -> events_.ToolCallResult:
-            result: Any
-            model_input: Any = types.messages.MODEL_INPUT_UNSET
             try:
                 kwargs = _validate_kwargs(tool, call.kwargs)
-                # The returned value decides how the tool runs, so a
-                # plain `def` returning a coroutine works too.
-                returned = tool.fn(**kwargs)
-                if isinstance(returned, AsyncIterable):
-                    # Streaming tool (e.g. agent-as-a-tool): drain the async
-                    # iterable, forward each yielded value to the runtime for
-                    # real-time streaming, then capture both the aggregator
-                    # snapshot (the rich shape that flows to the UI) and the
-                    # model-facing value (what the LLM sees on its next turn).
-                    if tool.aggregator is None:
-                        raise TypeError(
-                            f"tool {tool.name!r} streams but declares no "
-                            f"aggregator; pass `aggregator=` or annotate its "
-                            f"return type with an Aggregate marker"
-                        )
-                    agg = await _aggregate_from(
-                        returned,
-                        tool_call_id=call.tool_call_id,
-                        tool_name=call.tool_name,
-                        aggregator=tool.aggregator,
-                    )
-                    result = agg.snapshot()
-                    model_input = agg.get_model_input()
-                elif inspect.isawaitable(returned):
-                    result = await returned
-                else:
-                    raise TypeError(
-                        f"tool {tool.name!r} must return an awaitable or an "
-                        f"async iterable, not {type(returned).__name__}; "
-                        f"declare it with `async def`"
-                    )
-                if tool.to_model_input is not None:
-                    model_input = tool.to_model_input(result)
+                token = _bound_tool_context.set(call)
+                try:
+                    return await self._call(kwargs)
+                finally:
+                    _bound_tool_context.reset(token)
+            except hooks_.HookDeferredException as exc:
+                return deferred_tool_result(
+                    exc.hook,
+                    tool_call_id=call.tool_call_id,
+                    tool_name=call.tool_name,
+                )
             except (Exception, asyncio.CancelledError) as exc:
                 return _error_tool_result(
                     exc,
                     tool_call_id=call.tool_call_id,
                     tool_name=call.tool_name,
                 )
-            part = types.messages.ToolResultPart(
-                tool_call_id=call.tool_call_id,
-                tool_name=call.tool_name,
-                result=result,
-                result_kind=types.messages.ToolResultPart.kind_for(result),
-                model_input=model_input,
-            )
-            return tool_result(part)
 
         data.args = base_kwargs
         chain = middleware_._build_tool_chain(_real)
@@ -847,64 +905,45 @@ class BoundToolCall:
             return res
 
 
-class GatedToolCall:
-    """ToolCall-shaped wrapper that awaits an approval hook before executing.
-
-    ``ToolRunner.schedule`` only consumes the ``__call__`` shape of
-    ``ToolCall``; this wrapper supplies the same shape while inserting
-    the hook await + denial path before the underlying tool runs.
-    """
-
-    def __init__(self, tc: ToolCall) -> None:
-        self._tc = tc
-
-    @property
-    def id(self) -> str:
-        return self._tc.id
-
-    @property
-    def name(self) -> str:
-        return self._tc.name
-
-    @property
-    def fn(self) -> Callable[..., Awaitable[Any]]:
-        return self._tc.fn
-
-    @property
-    def kwargs(self) -> dict[str, Any]:
-        return self._tc.kwargs
-
-    async def __call__(self) -> events_.ToolCallResult:
-        tc = self._tc
-        # If the model sent invalid arguments, skip the approval hook
-        # and return the validation error directly as a tool result.
-        try:
-            hook_kwargs = tc.kwargs
-        except Exception as exc:
-            return _error_tool_result(
-                exc,
-                tool_call_id=tc.id,
-                tool_name=tc.name,
-            )
-        try:
-            approval = await hooks_.hook(
-                f"approve_{tc.id}",
-                payload=types.tools.ToolApproval,
-                metadata={"tool": tc.name, "kwargs": hook_kwargs},
-                tool_call_id=tc.id,
-            )
-        except hooks_.HookDeferredException as e:
-            return deferred_tool_result(
-                e.hook, tool_call_id=tc.id, tool_name=tc.name
-            )
+def _gate_tool_call(
+    tc: BoundToolCall,
+    inner: _ToolCallFn,
+) -> _ToolCallFn:
+    async def gated(**kwargs: Any) -> events_.ToolCallResult:
+        approval = await hooks_.hook(
+            f"approve_{tc.id}",
+            payload=types.tools.ToolApproval,
+            metadata={"tool": tc.name, "kwargs": kwargs},
+            tool_call_id=tc.id,
+        )
         if approval.granted:
-            return await tc()
+            return await inner(**kwargs)
         return tool_result(
             tool_call_id=tc.id,
             tool_name=tc.name,
             result=f"Rejected: {approval.reason}",
             is_error=True,
         )
+
+    return gated
+
+
+class GatedToolCall(BoundToolCall):
+    """ToolCall-shaped wrapper that awaits an approval hook before executing.
+
+    Blocks on an approval hook.
+    """
+
+    def __init__(self, tc: BoundToolCall) -> None:
+        async def inner(**kwargs: Any) -> events_.ToolCallResult:
+            return await tc._call(kwargs)
+
+        gated = _gate_tool_call(tc, inner)
+        super().__init__(
+            part=tc._part,
+            tool=tc._tool,
+        )
+        self._wrapped_fn = gated
 
 
 class ToolCallCallable(Protocol):
@@ -928,10 +967,18 @@ class ToolCall(ToolCallCallable, Protocol):
     def name(self) -> str: ...
 
     @property
-    def fn(self) -> Callable[..., Awaitable[Any]]: ...
+    def fn(self) -> Callable[..., Any]: ...
 
     @property
     def kwargs(self) -> dict[str, Any]: ...
+
+    def wrap(
+        self,
+        wrapper: Callable[
+            [BoundToolCall, _ToolCallFn],
+            _ToolCallFn,
+        ],
+    ) -> BoundToolCall: ...
 
 
 _current_tool_call: contextvars.ContextVar[ToolCall] = contextvars.ContextVar(
@@ -1054,18 +1101,20 @@ class Context(pydantic.BaseModel):
         )
 
     @overload
-    def resolve(self, tool_part: types.messages.ToolCallPart) -> ToolCall: ...
+    def resolve(
+        self, tool_part: types.messages.ToolCallPart
+    ) -> BoundToolCall: ...
     @overload
     def resolve(
         self, tool_part: Sequence[types.messages.ToolCallPart]
-    ) -> list[ToolCall]: ...
+    ) -> list[BoundToolCall]: ...
 
     def resolve(
         self,
         tool_part: types.messages.ToolCallPart
         | Sequence[types.messages.ToolCallPart],
-    ) -> ToolCall | list[ToolCall]:
-        """Resolve ToolCallPart(s) into callable ToolCall object(s).
+    ) -> BoundToolCall | list[BoundToolCall]:
+        """Resolve ToolCallPart(s) into callable BoundToolCall object(s).
 
         Deprecated: use :meth:`Agent.resolve` instead.
         """
@@ -1426,18 +1475,20 @@ class Agent:
         return list(self._tools)
 
     @overload
-    def resolve(self, tool_part: types.messages.ToolCallPart) -> ToolCall: ...
+    def resolve(
+        self, tool_part: types.messages.ToolCallPart
+    ) -> BoundToolCall: ...
     @overload
     def resolve(
         self, tool_part: Sequence[types.messages.ToolCallPart]
-    ) -> list[ToolCall]: ...
+    ) -> list[BoundToolCall]: ...
 
     def resolve(
         self,
         tool_part: types.messages.ToolCallPart
         | Sequence[types.messages.ToolCallPart],
-    ) -> ToolCall | list[ToolCall]:
-        """Resolve ToolCallPart(s) into callable ToolCall object(s)."""
+    ) -> BoundToolCall | list[BoundToolCall]:
+        """Resolve ToolCallPart(s) into callable BoundToolCall object(s)."""
         return self._tool_resolver.resolve(tool_part)
 
     async def loop(

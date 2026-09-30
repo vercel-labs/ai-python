@@ -118,6 +118,41 @@ async def test_gated_tool_block_cycle(recorder: Recorder) -> None:
     assert hook_span.data.resolution == {"granted": True, "reason": "ok"}
 
 
+async def test_gated_tool_rejection_returns_error_without_running() -> None:
+    ran = False
+
+    @ai.tool(require_approval=True)
+    async def rejectable(x: int) -> str:
+        """A tool that records whether it ran."""
+        nonlocal ran
+        ran = True
+        return str(x)
+
+    my_agent = ai.Agent(tools=[rejectable])
+    mock_llm(
+        [
+            [tool_call_msg(name="rejectable", args='{"x": 1}')],
+            [text_msg("done", id="msg-2")],
+        ]
+    )
+
+    async with my_agent.run(MOCK_MODEL, [ai.user_message("go")]) as stream:
+        async for event in stream:
+            if isinstance(event, events_.RunBlocked):
+                ai.resolve_hook(
+                    event.hooks[0].hook_id,
+                    ai.tools.ToolApproval(
+                        granted=False,
+                        reason="not allowed",
+                    ),
+                )
+
+    assert not ran
+    result = stream.messages[-2].tool_results[0]
+    assert result.is_error
+    assert result.result == "Rejected: not allowed"
+
+
 async def test_busy_tool_defers_block_signal() -> None:
     """No block signal while an unblocked tool is still running."""
     release = asyncio.Event()
