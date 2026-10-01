@@ -48,6 +48,35 @@ if TYPE_CHECKING:
 DETACH_KEY = b"\x1d"
 """Ctrl-]: the key telnet uses, unlikely to collide with a TUI's bindings."""
 
+_CTRL_KEY = re.compile(
+    rb"\x1b\[(?:(\d+)(?::\d*)*;(\d+)(?::[12])?u|27;(\d+);(\d+)~)"
+)
+"""A key with modifiers, as the enhanced keyboard protocols send it: kitty's
+`CSI code;mods u` (a press or a repeat, not a release), or xterm's
+modifyOtherKeys `CSI 27;mods;code ~`."""
+
+
+def _detach_at(data: bytes, key: bytes) -> int:
+    """Where the detach key starts in what the terminal sent, or -1.
+
+    A control key is one byte, until a program switches the terminal to an
+    enhanced keyboard protocol (claude asks for kitty's). Then Ctrl-] comes
+    as Ctrl plus "]": `ESC[93;5u`, or `ESC[27;5;93~`. The bridge forwards
+    those modes to the terminal like any output, so it must know the key in
+    every form, or the detach key stops working while the program runs.
+    """
+    at = data.find(key)
+    if len(key) != 1 or key[0] >= 0x20:
+        return at
+    char = key[0] + 0x40  # 0x1d is Ctrl plus "]" (0x5d)
+    codes = {char, ord(chr(char).lower())}  # kitty sends letters lowercase
+    for m in _CTRL_KEY.finditer(data, 0, at if at >= 0 else len(data)):
+        code, mods = (m[1], m[2]) if m[1] else (m[4], m[3])
+        # Ctrl alone; Caps Lock and Num Lock (64, 128) may ride along.
+        if int(code) in codes and (int(mods) - 1) & ~(64 | 128) == 4:
+            return m.start()
+    return at
+
 
 _DEC_MODE = re.compile(rb"\x1b\[\?([0-9;]+)([hl])")
 _KITTY = re.compile(rb"\x1b\[([<>=])([0-9;]*)u")
@@ -178,10 +207,10 @@ async def bridge(
         if not data:
             end("terminal closed")
             return
-        if detach_key and detach_key in data:
-            before = data.split(detach_key, 1)[0]
-            if before:
-                spawn(pty.send(before))
+        at = _detach_at(data, detach_key) if detach_key else -1
+        if at >= 0:
+            if data[:at]:
+                spawn(_send(data[:at]))
             detached.set()
             return
         spawn(_send(data))

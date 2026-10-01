@@ -315,6 +315,68 @@ def test_the_modes_a_program_set_are_undone_and_nothing_else() -> None:
     ), "a program that set nothing leaves nothing to undo"
 
 
+@pytest.mark.parametrize(
+    ("data", "at"),
+    [
+        (b"\x1d", 0),
+        (b"ab\x1d", 2),
+        # kitty's keyboard protocol, which claude asks for
+        (b"\x1b[93;5u", 0),
+        (b"ab\x1b[93;5:1u", 2),  # a press, reported with its event type
+        (b"\x1b[93;69u", 0),  # Caps Lock on
+        (b"\x1b[93:125;5u", 0),  # with an alternate key
+        (b"\x1b[27;5;93~", 0),  # xterm's modifyOtherKeys
+        (b"\x1b[93;5:3u", -1),  # a release, not a press
+        (b"\x1b[93u", -1),  # "]" alone
+        (b"\x1b[93;6u", -1),  # Ctrl-Shift-]
+        (b"\x1b[91;5u", -1),  # Ctrl-[
+        (b"x\x1b[93;5uy\x1d", 1),  # the first of two
+    ],
+)
+def test_the_detach_key_in_every_form_a_terminal_sends_it(
+    data: bytes, at: int
+) -> None:
+    from ai.workspaces.experimental.tty import DETACH_KEY, _detach_at
+
+    assert _detach_at(data, DETACH_KEY) == at
+
+
+@pytest.mark.timeout(60)
+def test_bridge_detaches_on_the_key_in_the_kitty_protocol(
+    tmp_path: Path,
+) -> None:
+    """A terminal a program switched to the enhanced keyboard protocol sends
+    Ctrl-] as `ESC[93;5u`; the bridge detaches on it all the same."""
+    name = f"bridge-{uuid.uuid4().hex[:8]}"
+    pid, master = pty.fork()
+    if pid == 0:
+        os.chdir(tmp_path)
+        os.execv(
+            sys.executable, [sys.executable, "-c", DRIVER, str(tmp_path), name]
+        )
+    try:
+        assert b"$ " in _read_until(
+            master, b"$ "
+        ), "the bridged shell never showed a prompt"
+        os.write(master, b"\x1b[93;5u")
+        out = _read_until(master, b"BRIDGE-RETURNED:")
+        assert b"BRIDGE-RETURNED:None" in out, "the kitty Ctrl-] detaches"
+        _, raw = os.waitpid(pid, 0)
+        assert os.waitstatus_to_exitcode(raw) == 0
+    finally:
+        os.close(master)
+    import asyncio
+
+    from ai.workspaces.experimental import Local
+
+    async def cleanup() -> None:
+        async with Local(tmp_path) as ws:
+            if name in [p.name for p in await ws.ptys()]:
+                await (await ws.attach(name)).close()
+
+    asyncio.run(cleanup())
+
+
 def test_a_sequence_split_across_reads_is_still_seen() -> None:
     from ai.workspaces.experimental.tty import _TerminalModes
 

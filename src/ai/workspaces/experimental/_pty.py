@@ -124,7 +124,17 @@ class FramedPty(Pty):
     ) -> None:
         self.name = name
         self.pid = pid
-        self._send = send_bytes
+        sending = asyncio.Lock()
+
+        async def one_at_a_time(data: bytes) -> None:
+            # Callers send from several tasks at once (a keystroke each, a
+            # resize), and a channel may refuse a second writer mid-send:
+            # the sandbox's interactive stream raises anyio's
+            # BusyResourceError. One frame at a time, in the order sent.
+            async with sending:
+                await send_bytes(data)
+
+        self._send = one_at_a_time
         self._recv = recv_bytes
         self._close_channel = close_channel
         self._buf = b""
@@ -186,15 +196,21 @@ class FramedPty(Pty):
         if self._released:
             return
         self._released = True
+        # Bounded: a send stuck ahead of it must not hold the detach, and
+        # with it a terminal in raw mode.
         with contextlib.suppress(Exception):
-            await self._send(frame(DETACH))
+            async with asyncio.timeout(10):
+                await self._send(frame(DETACH))
         await self._release()
 
     async def close(self) -> None:
         if self._released:
             return
         try:
-            await self._send(frame(CLOSE))
+            # Bounded, as in detach(): a send stuck ahead of it must not hold
+            # the close.
+            async with asyncio.timeout(10):
+                await self._send(frame(CLOSE))
             # Give the holder a moment to report the exit status.
             async with asyncio.timeout(10):
                 await asyncio.shield(self._exit)
