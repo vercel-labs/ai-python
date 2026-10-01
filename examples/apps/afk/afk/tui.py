@@ -37,9 +37,12 @@ def verbs(row: Row) -> Verbs:
             "enter": ("push", ["push", sid]),
             "b": ("push --bg", ["push", sid, "--bg"]),
         }
-    first = "attach" if row.mode == "tui" else "peek"
+    # Peek reads the transcript, so it watches a TUI as well as an
+    # unattended agent; Enter is the one thing a row is mostly for.
+    peek = ("peek", ["peek", sid])
     return {
-        "enter": (first, [first, sid]),
+        "enter": ("attach", ["attach", sid]) if row.mode == "tui" else peek,
+        "p": peek,
         "l": ("pull", ["pull", sid]),
         "f": ("pull --files", ["pull", sid, "--files"]),
         "s": ("stop", ["stop", sid]),
@@ -148,9 +151,12 @@ class Picker(App[list[str] | None]):
         if self.confirming is not None and row is not None:
             keys.update(f"stop {row.label or row.short} ({row.sandbox})? y/N")
             return
+        keys_ = verbs(row) if row else {}
+        # A key that does what Enter does works, but is not shown twice.
         shown = [
             f"{k} {name}"
-            for k, (name, _) in (verbs(row) if row else {}).items()
+            for k, (name, argv) in keys_.items()
+            if k == "enter" or (name, argv) != keys_["enter"]
         ]
         keys.update(" · ".join([*shown, "q quit"]))
 

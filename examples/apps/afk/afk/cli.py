@@ -32,6 +32,7 @@ from ai.harnesses.experimental.errors import HarnessError
 from ai.workspaces.experimental import Gateway, vercel_ai_gateway
 from ai.workspaces.experimental.errors import (
     NotAuthenticatedError,
+    WorkspaceError,
     WorkspaceGoneError,
 )
 
@@ -351,7 +352,9 @@ async def main_async(argv: list[str]) -> int:
             )
             return 0 if args.verb == "stop" else 1
         return 0
-    except HarnessError as exc:
+    except (HarnessError, WorkspaceError) as exc:
+        # One line, never a traceback: a sandbox that cannot be reached
+        # right now (network, credentials) is a WorkspaceError.
         print(f"afk: {exc}")
         return 1
 
