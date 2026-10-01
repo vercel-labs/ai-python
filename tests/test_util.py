@@ -479,6 +479,23 @@ async def test_decouple_buffer_unbounded() -> None:
         assert [x async for x in it] == list(range(1, 10))
 
 
+async def test_merge_is_an_async_context_manager() -> None:
+    closed = False
+
+    async def src() -> AsyncIterator[int]:
+        nonlocal closed
+        try:
+            yield 1
+            await asyncio.Event().wait()
+        finally:
+            closed = True
+
+    async with util.merge(src()) as merged:
+        assert await anext(merged) == 1
+
+    assert closed
+
+
 async def test_merge_lockstep() -> None:
     """merge doesn't demand a new element from the source that just
     yielded until its own consumer asks for one."""

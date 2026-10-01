@@ -76,10 +76,11 @@ const DEFAULT_AGENT_LOOP_CODE = `class CustomAgent(ai.Agent):
             async with (
                 ai.stream(context=context) as stream,
                 ai.ToolRunner() as tr,
-            ):
                 # Process the LLM stream and concurrently start running
                 # tool calls as they come
-                async for event in ai.util.merge(stream, tr.events()):
+                ai.util.merge(stream, tr.events()) as events,
+            ):
+                async for event in events:
                     # Append the event to the history
                     yield event
 

@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING, Any
 
 import pytest
 
 import ai
+from ai import models
 from ai.types import events as events_
+from ai.types import messages as messages_
 from ai.types import usage as usage_
 
 from ..conftest import (
@@ -18,13 +21,11 @@ from ..conftest import (
     mock_llm,
     text_msg,
     tool_call_msg,
+    wait_all_tasks_blocked,
 )
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
-
-    from ai import models
-    from ai.types import messages as messages_
 
 
 def _by_name(
@@ -175,6 +176,73 @@ async def test_run_span_aggregates_usage(recorder: Recorder) -> None:
     assert run.data.usage is not None
     assert run.data.usage.input_tokens == 30
     assert run.data.usage.output_tokens == 5
+
+
+async def test_custom_loop_breaks_after_first_tool_result() -> None:
+    calls: list[int] = []
+
+    @ai.tool
+    async def record(value: int) -> str:
+        calls.append(value)
+        await asyncio.sleep(0)
+        return str(value)
+
+    tool_message = messages_.Message(
+        id="msg-1",
+        role="assistant",
+        parts=[
+            messages_.ToolCallPart(
+                tool_call_id=f"tc-{value}",
+                tool_name="record",
+                tool_args=f'{{"value": {value}}}',
+            )
+            for value in (1, 2, 3)
+        ],
+    )
+    responses = [[tool_message], [text_msg("done", id="msg-2")]]
+
+    async def stream(
+        model: models.Model,
+        messages: list[messages_.Message],
+        **kwargs: Any,
+    ) -> AsyncGenerator[events_.Event]:
+        response = responses.pop(0)
+        async for event in emit_events_for_messages(response):
+            yield event
+            await wait_all_tasks_blocked()
+
+    MOCK_PROVIDER._stream_impl = stream
+
+    class CustomAgent(ai.Agent):
+        async def loop(
+            self, context: ai.agents.Context
+        ) -> AsyncGenerator[events_.AgentEvent]:
+            while context.keep_running():
+                async with (
+                    models.stream(context=context) as model_stream,
+                    ai.ToolRunner() as runner,
+                    ai.util.merge(model_stream, runner.events()) as events,
+                ):
+                    async for event in events:
+                        yield event
+                        if isinstance(event, events_.ToolEnd):
+                            runner.schedule(context.resolve(event.tool_call))
+                        # We break out of the loop on a ToolCallResult...
+                        # we want to make sure that closing stream doesn't
+                        # blow up somehow
+                        if isinstance(event, events_.ToolCallResult):
+                            break
+                context.add(model_stream.message)
+                context.add(runner.get_tool_message())
+
+    async with CustomAgent(tools=[record]).run(
+        MOCK_MODEL, [ai.user_message("go")]
+    ) as run:
+        async for _ in run:
+            pass
+
+    assert calls == [1]
+    assert responses == []
 
 
 async def test_early_break_closes_span_tree(recorder: Recorder) -> None:
