@@ -19,7 +19,10 @@ from pydantic import BaseModel
 from ai.harnesses.experimental import Handle, claude_code, codex
 from ai.harnesses.experimental.errors import HarnessError
 from ai.workspaces.experimental import Local, VercelSandbox
-from ai.workspaces.experimental.errors import WorkspaceGoneError
+from ai.workspaces.experimental.errors import (
+    WorkspaceError,
+    WorkspaceGoneError,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -194,9 +197,10 @@ async def remote_rows(
             gone.append(name)
             for r in group:
                 rows.append(_remote_row(r, "gone"))
-        except HarnessError:
-            # Could not ask — network, credentials, the platform. It may well
-            # be running: keep the record, or it is the only way back lost.
+        except (HarnessError, WorkspaceError):
+            # Could not ask — network, credentials, the platform (the SDK says
+            # so as a WorkspaceError). It may well be running: keep the
+            # record, or it is the only way back lost.
             for r in group:
                 rows.append(_remote_row(r, "unreachable"))
 
@@ -225,7 +229,7 @@ async def _unattended_status(ws: VercelSandbox, r: Remote) -> str:
                 )
                 else "running"
             )
-    except HarnessError:
+    except (HarnessError, WorkspaceError):
         return "?"
 
 

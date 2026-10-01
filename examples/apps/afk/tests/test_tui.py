@@ -8,6 +8,7 @@ import pytest
 from afk.rows import Row
 from afk.tui import Picker
 from rich.text import Text
+from textual.widgets import Static
 
 HERE = [
     Row(
@@ -69,6 +70,8 @@ async def _press(*keys: str, remote_delay: float = 0.0) -> Picker:
         (["b"], ["push", "a3f5aaaa", "--bg"]),
         (["down", "down", "enter"], ["attach", "c2d1dddd"]),
         (["down", "down", "down", "enter"], ["peek", "9e7feeee"]),
+        (["down", "down", "p"], ["peek", "c2d1dddd"]),
+        (["down", "down", "down", "p"], ["peek", "9e7feeee"]),
         (["down", "down", "l"], ["pull", "c2d1dddd"]),
         (["down", "down", "f"], ["pull", "c2d1dddd", "--files"]),
         (["down", "down", "s", "y"], ["stop", "c2d1dddd"]),
@@ -76,6 +79,27 @@ async def _press(*keys: str, remote_delay: float = 0.0) -> Picker:
 )
 async def test_keys_choose_a_command(keys: list[str], argv: list[str]) -> None:
     assert (await _press(*keys)).return_value == argv
+
+
+@pytest.mark.parametrize(
+    ("downs", "keys"),
+    [
+        (
+            2,
+            "enter attach · p peek · l pull · f pull --files · s stop · q quit",
+        ),
+        # an unattended agent: Enter already peeks, so p is not shown twice
+        (3, "enter peek · l pull · f pull --files · s stop · q quit"),
+    ],
+)
+async def test_the_keys_shown_are_the_rows_own(downs: int, keys: str) -> None:
+    app = Picker(Text("~/proj"), HERE, _remote())
+    async with app.run_test(size=(100, 20)) as pilot:
+        await pilot.pause(0.1)
+        for _ in range(downs):
+            await pilot.press("down")
+        await pilot.pause(0.05)
+        assert str(app.query_one("#keys", Static).render()) == keys
 
 
 @pytest.mark.parametrize("answer", ["enter", "n", "escape", "q", "down"])
