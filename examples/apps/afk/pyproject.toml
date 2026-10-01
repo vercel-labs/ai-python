@@ -9,6 +9,7 @@ dependencies = [
     "vercel-sandbox",
     "vercel-internal-core",
     "vercel-oidc",
+    "textual>=8.2.8",
 ]
 
 [project.scripts]
