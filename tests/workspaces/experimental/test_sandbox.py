@@ -100,3 +100,34 @@ def test_a_live_token_passes_the_guard(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("VERCEL_OIDC_TOKEN", _jwt(time.time() + 3600))
     monkeypatch.delenv("VERCEL_TOKEN", raising=False)
     assert sandbox_credentials() == {}
+
+
+async def test_writes_from_many_tasks_go_one_at_a_time_in_order() -> None:
+    """The conduit refuses a second sender mid-send. Measured: codex's steer
+    test in a sandbox failed with "Another task is already writing to this
+    resource" when a steer and a reply to the agent were written at once."""
+    import asyncio
+    from types import SimpleNamespace
+    from typing import Any, cast
+
+    from ai.workspaces.experimental._sandbox import SandboxProcess
+
+    sent: list[bytes] = []
+    busy = False
+
+    async def send(data: bytes) -> None:
+        nonlocal busy
+        if busy:
+            raise RuntimeError(
+                "Another task is already writing to this resource"
+            )
+        busy = True
+        await asyncio.sleep(0.01)  # a slow link
+        sent.append(data)
+        busy = False
+
+    process = SandboxProcess(proc=cast("Any", None))  # never reached here
+    process._conduit = SimpleNamespace(stream=SimpleNamespace(send=send))
+    lines = [f'{{"id": {i}}}\n' for i in range(5)]
+    await asyncio.gather(*(process.write(line) for line in lines))
+    assert sent == [line.encode() for line in lines]
