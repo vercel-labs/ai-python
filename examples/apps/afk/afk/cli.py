@@ -13,6 +13,9 @@
 An id is whatever the list showed: a label you gave (`--as`), a word from a
 title, or a short id prefix. With none, the one conversation clearly in use
 is chosen; with several in play, afk asks. Ctrl-] detaches from any TUI.
+
+On a terminal, bare `afk` is a picker: arrow keys choose a conversation,
+Enter or a letter runs the command shown for it, q leaves the list as is.
 """
 
 from __future__ import annotations
@@ -139,6 +142,54 @@ async def listing(
     )
 
 
+async def picking(
+    cwd: Path,
+    gw: Gateway | None,
+    remote_gw: Gateway | None,
+    *,
+    everything: bool,
+) -> list[str] | None:
+    """The list as a picker, on a terminal: the command you chose, to run as
+    if typed, or None. The same rows as `listing`, arriving the same way."""
+    # textual is imported only when a picker is drawn
+    from rich.text import Text  # noqa: PLC0415
+
+    from . import tui  # noqa: PLC0415
+
+    state = st.load()
+
+    async def away() -> list[Row]:
+        remote, gone = await remote_rows(state, cwd, remote_gw)
+        if gone:
+            for name in gone:
+                state.forget_sandbox(name)
+            st.save(state)
+        return remote
+
+    probing = (
+        asyncio.create_task(away()) if state.for_origin(str(cwd)) else None
+    )
+    here, notes, answered = await local_rows(cwd, gw)
+    where = f"{BOLD}{_tilde(cwd)}{RESET}  {DIM}·  "
+    harnesses = ", ".join(answered) or "no harness found"
+    if not here and probing is None:
+        print(f"{where}{harnesses}{RESET}")
+        for note in notes:
+            print(f"  {DIM}{note}{RESET}")
+        print(
+            "\n  no conversations here yet — start one with `claude` or "
+            "`codex`\n"
+        )
+        return None
+    shown = here if everything else here[:LIST_CAP]
+    if len(here) > len(shown):
+        notes.append(f"… {len(here) - len(shown)} more; `afk --all` shows them")
+    head = Text.assemble((_tilde(cwd), "bold"), (f"  ·  {harnesses}", "dim"))
+    for note in notes:
+        head.append(f"\n  {note}", style="dim")
+    return await tui.pick(head, shown, probing)
+
+
 def _title(r: Row) -> str:
     t = (r.title or "").strip().replace("\n", " ")
     return (t[:43] + "…") if len(t) > 44 else t
@@ -241,6 +292,11 @@ async def main_async(argv: list[str]) -> int:
         # push needs this directory's conversations; the rest need afk's
         # own record of what it pushed, and then that one sandbox.
         if args.verb is None:
+            if sys.stdin.isatty() and sys.stdout.isatty():
+                chosen = await picking(
+                    cwd, gw, remote_gw, everything=args.everything
+                )
+                return 0 if chosen is None else await main_async(chosen)
             await listing(cwd, gw, remote_gw, everything=args.everything)
             return 0
         if args.verb == "push":

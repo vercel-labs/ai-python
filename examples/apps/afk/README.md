@@ -24,6 +24,11 @@ $ afk
 afk push <id> [--bg] · attach <id> · peek <id> · pull <id> [--files] · stop <id>
 ```
 
+On a terminal that list is a picker, drawn under your prompt rather than
+over the whole screen: arrow keys choose a conversation, Enter or a letter
+runs the command shown for it as if you had typed it (`stop` asks first),
+and `q` leaves the list in your scrollback. Piped, `afk` prints the list.
+
 ## The verbs
 
 | | |
