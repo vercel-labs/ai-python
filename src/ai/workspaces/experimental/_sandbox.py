@@ -141,6 +141,7 @@ class SandboxProcess(_base.Process):
         self._fifo = fifo
         self._conduit: Any = None
         self._conduit_scope: Any = None
+        self._writing = asyncio.Lock()
         self._os_pid: int | None = None
         self._streams_closed = False
 
@@ -210,9 +211,16 @@ class SandboxProcess(_base.Process):
         return await self._ok(["kill", "-0", str(pid)], timeout=5)
 
     async def write(self, data: str) -> None:
-        await self._ensure_conduit()
-        assert self._conduit is not None
-        await self._conduit.stream.send(data.encode())
+        # One writer at a time, as FramedPty does: the conduit is an
+        # interactive stream that refuses a second sender mid-send (anyio's
+        # BusyResourceError), and callers write from several tasks — a
+        # JSON-RPC client steering a turn while it answers the agent.
+        # Measured: codex's steer test failed in a sandbox on exactly that.
+        # The first write also opens the conduit; two must not open two.
+        async with self._writing:
+            await self._ensure_conduit()
+            assert self._conduit is not None
+            await self._conduit.stream.send(data.encode())
 
     async def _ensure_conduit(self) -> None:
         """Attach the input conduit on first use.
