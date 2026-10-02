@@ -10,3 +10,9 @@ Examples are grouped by the main API surface they demonstrate.
 
 Provider-specific model examples live under `models/<provider>/`, such as
 `models/gateway/`, `models/openai/`, and `models/anthropic/`.
+
+`models/gateway/jev_python_ast.py` uses Jev to build Python code through typed
+AST choices, with a live terminal preview and streamed prompt expansion and
+review. Set `AI_GATEWAY_API_KEY` and run it with `uv run python
+examples/models/gateway/jev_python_ast.py`. Set `MODEL_ID` to override the
+expansion/review model.
