@@ -133,9 +133,13 @@ class Adapter(Protocol):
         One writer, whichever way it is driven.
         """
 
-    async def running_sessions(self) -> set[str]:
-        """Conversations a client currently holds open (see session_lock)."""
-        return set()
+    async def running_sessions(self) -> dict[str, int | None]:
+        """Conversations a process has open, and its pid when known.
+
+        A client of this SDK (see session_lock), or the CLI however it was
+        started.
+        """
+        return {}
 
     async def list_sessions(self) -> list[Any]:
         """Conversations the harness has in this workspace."""

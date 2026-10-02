@@ -34,7 +34,7 @@ async def test_a_live_holder_blocks_a_second_acquire_until_release(
         with pytest.raises(SessionBusyError) as info:
             await lock.acquire(sid, pid=os.getpid())
         assert info.value.holder_pid == os.getpid()
-        assert sid in await lock.running()
+        assert (await lock.holders())[sid] == os.getpid()
     finally:
         await lock.release(sid)
     assert await lock.holder(sid) is None

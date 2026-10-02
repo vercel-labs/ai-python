@@ -29,6 +29,13 @@ if TYPE_CHECKING:
     from ....workspaces.experimental import _base
 
 
+async def config_dir(workspace: _base.Workspace) -> str:
+    """Resolve the CLI's config dir the way the CLI does, in the workspace."""
+    override = await workspace.exec(["printenv", "CLAUDE_CONFIG_DIR"])
+    found = override.stdout.strip() if override.exit_code == 0 else ""
+    return found or f"{await workspace.home()}/.claude"
+
+
 class WorkspaceSessionStore(claude_agent_sdk.SessionStore):
     def __init__(self, workspace: _base.Workspace, config_dir: str) -> None:
         self._ws = workspace
@@ -36,12 +43,10 @@ class WorkspaceSessionStore(claude_agent_sdk.SessionStore):
 
     @classmethod
     async def discover(
-        cls, workspace: _base.Workspace
+        cls, workspace: _base.Workspace, directory: str | None = None
     ) -> WorkspaceSessionStore:
-        """Resolve the CLI's config dir the way the CLI does, in the VM."""
-        override = await workspace.exec(["printenv", "CLAUDE_CONFIG_DIR"])
-        config_dir = override.stdout.strip() if override.exit_code == 0 else ""
-        return cls(workspace, config_dir or f"{await workspace.home()}/.claude")
+        """Open the store in the CLI's config dir: `directory`, or resolved."""
+        return cls(workspace, directory or await config_dir(workspace))
 
     def _path(self, key: sdk_types.SessionKey) -> str:
         project_dir = posixpath.join(self._projects, key["project_key"])

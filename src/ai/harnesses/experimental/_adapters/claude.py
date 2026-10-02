@@ -27,6 +27,7 @@ from ....workspaces.experimental import errors as workspace_errors
 from .. import (
     _approval,
     _capabilities,
+    _cli_processes,
     _handoff,
     _session,
     _session_lock,
@@ -77,6 +78,7 @@ class ClaudeAdapter:
         # runs somewhere other than this machine. None on Local: there the
         # SDK's own disk readers are exactly right.
         self._store: claude_store.WorkspaceSessionStore | None = None
+        self._config_dir: str | None = None
         self._lock: _session_lock.SessionLock | None = None
         self._held: set[str] = set()
         self._version: str | None = None
@@ -150,9 +152,10 @@ class ClaudeAdapter:
             # Ours to provision. Never on a user's own machine.
             await workspace.exec(["sh", "-c", INSTALL], timeout=600)
             probe = await self._probe(workspace)
+        self._config_dir = await claude_store.config_dir(workspace)
         if workspace.kind != "local":
             self._store = await claude_store.WorkspaceSessionStore.discover(
-                workspace
+                workspace, self._config_dir
             )
         if probe.exit_code != 0:
             raise errors.ExecutableMissingError(KIND, self._executable, INSTALL)
@@ -406,8 +409,44 @@ class ClaudeAdapter:
         await self._require_known(session_id)
         await self._acquire(session_id)
 
-    async def running_sessions(self) -> set[str]:
-        return await self._lock.running() if self._lock is not None else set()
+    async def running_sessions(self) -> dict[str, int | None]:
+        held = await self._lock.holders() if self._lock is not None else {}
+        return {**held, **await self._cli_sessions()}
+
+    async def _cli_sessions(self) -> dict[str, int]:
+        """Conversations a claude CLI has open, by pid, however it started.
+
+        The CLI records each of its processes in <config>/sessions/<pid>.json,
+        with the conversation it is on and when it started (`procStart`, in
+        UTC, as `ps` prints it). A record whose process is gone, or whose pid
+        now names a later process, is left behind, not a holder.
+        """
+        assert self._workspace is not None and self._config_dir is not None
+        directory = f"{self._config_dir}/sessions"
+        listing = await self._workspace.exec(["ls", directory], timeout=30)
+        names = [
+            name
+            for name in listing.stdout.split()
+            if listing.exit_code == 0 and name.endswith(".json")
+        ]
+        if not names:
+            return {}
+        running = await _cli_processes.processes(self._workspace)
+        held: dict[str, int] = {}
+        for name in names:
+            try:
+                record = json.loads(
+                    await self._workspace.read_text(f"{directory}/{name}")
+                )
+                pid, session_id = int(record["pid"]), str(record["sessionId"])
+            except (FileNotFoundError, ValueError, KeyError, TypeError):
+                continue
+            process = running.get(pid)
+            if process is not None and process.started == record.get(
+                "procStart"
+            ):
+                held[session_id] = pid
+        return held
 
     async def close_session(self, session_id: str) -> None:
         client = self._clients.pop(session_id, None)

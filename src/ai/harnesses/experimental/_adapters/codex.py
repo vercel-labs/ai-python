@@ -15,6 +15,8 @@ import asyncio
 import contextlib
 import importlib.metadata
 import json
+import posixpath
+import re
 from typing import TYPE_CHECKING, Any
 
 from ....types import events as events_
@@ -25,6 +27,7 @@ from ....workspaces.experimental import errors as workspace_errors
 from .. import (
     _approval,
     _capabilities,
+    _cli_processes,
     _handoff,
     _session,
     _session_lock,
@@ -39,6 +42,7 @@ KIND = "codex"
 # Internal marker delivered on a turn queue when the process dies.
 CRASHED = "__crashed__"
 INSTALL = "npm install -g @openai/codex"
+THREAD_ID = re.compile(r"[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}")
 
 # Codex asks only when its own policy escalates — sandbox escapes, blocked
 # network, MCP prompts — so coverage is "policy", like Claude's, for a
@@ -476,8 +480,37 @@ class CodexAdapter:
         await self._hand_over(session_id)
         await self._acquire(session_id)
 
-    async def running_sessions(self) -> set[str]:
-        return await self._lock.running() if self._lock is not None else set()
+    async def running_sessions(self) -> dict[str, int | None]:
+        held = await self._lock.holders() if self._lock is not None else {}
+        return {**held, **await self._cli_sessions()}
+
+    async def _cli_sessions(self) -> dict[str, int]:
+        """Threads a codex CLI has open, by pid, when its argv names them.
+
+        `codex resume <id>`, `codex exec resume <id>`. Codex records no
+        process per thread. Its own writer lock
+        (~/.codex/thread-writer-locks/<id>.lock) is held by the app-server
+        daemon the TUI talks to, not the TUI, and stays held a while after
+        the TUI exits (measured, codex 0.159). So a fresh `codex`, which
+        names no thread, is not found, nor a thread it switches to.
+        """
+        assert self._workspace is not None
+        held: dict[str, int] = {}
+        for process in (
+            await _cli_processes.processes(self._workspace)
+        ).values():
+            argv = process.argv
+            if (
+                not argv
+                or posixpath.basename(argv[0]) != "codex"
+                or "resume" not in argv
+            ):
+                continue
+            after = argv[argv.index("resume") + 1 :]
+            thread = next((a for a in after if THREAD_ID.fullmatch(a)), None)
+            if thread is not None:
+                held[thread] = process.pid
+        return held
 
     async def close_session(self, session_id: str) -> None:
         self._threads.discard(session_id)

@@ -46,8 +46,13 @@ class SessionInfo(BaseModel):
     updated_at: int | None = None
     created_at: int | None = None
     running: bool = False
-    """Whether a client currently holds this conversation open — it would
-    refuse `resume` with SessionBusyError; `fork` it instead."""
+    """Whether a process has this conversation open. A client of this SDK or
+    an `agent.tui()` holds it, and `resume` refuses with SessionBusyError;
+    the CLI started in a terminal is seen too (any `claude`, a `codex` only
+    as `codex resume <id>`) but holds nothing `resume` checks. `fork` it
+    instead."""
+    pid: int | None = None
+    """The process that has it open, in the workspace, when known."""
 
 
 class Turn:
