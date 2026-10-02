@@ -1,9 +1,10 @@
 """The list, as a picker: bare `afk` on a terminal.
 
 Drawn inline, under your prompt like the plain list, never the whole screen.
-Choosing returns the argv of the command it stands for; the CLI runs that
-command exactly as if you had typed it, with the terminal back to itself (a
-harness's TUI needs all of it, and an inline app cannot hand it over).
+Choosing returns the argv of the command it stands for — an afk verb, or a
+harness's own resume — and the CLI runs that command exactly as if you had
+typed it, with the terminal back to itself (a harness's TUI needs all of it,
+and an inline app cannot hand it over).
 Quitting leaves the list in the scrollback; choosing leaves the one-line
 command instead.
 """
@@ -29,23 +30,40 @@ if TYPE_CHECKING:
 Verbs = dict[str, tuple[str, list[str]]]
 """key -> (what the footer calls it, the argv it runs)."""
 
+RESUME = {"claude-code": ["claude", "--resume"], "codex": ["codex", "resume"]}
+"""Each harness's own command to reopen a conversation in its TUI here."""
+
 
 def verbs(row: Row) -> Verbs:
+    """A key means one thing on every row it is on. Enter puts you in the
+    conversation, wherever it is: resumed here, attached there; where you
+    cannot be in it, because something else is driving it, it peeks."""
     sid = row.session_id
-    if row.where == "here":
-        return {
-            "enter": ("push", ["push", sid]),
-            "b": ("push --bg", ["push", sid, "--bg"]),
-        }
     # Peek reads the transcript, so it watches a TUI as well as an
-    # unattended agent; Enter is the one thing a row is mostly for.
-    peek = ("peek", ["peek", sid])
+    # unattended agent, here or there.
+    peek = ("peek", ["afk", "peek", sid])
+    stop = ("stop", ["afk", "stop", sid])
+    if row.where == "here":
+        # Open in another terminal: resuming it too would make two writers.
+        return {
+            "enter": peek
+            if row.running
+            else ("resume", [*RESUME[row.kind], sid]),
+            "p": peek,
+            # Stop ends the process that has it open, so only when there is
+            # one afk can name.
+            **({"s": stop} if row.pid is not None else {}),
+            "u": ("push", ["afk", "push", sid]),
+            "b": ("push --bg", ["afk", "push", sid, "--bg"]),
+        }
     return {
-        "enter": ("attach", ["attach", sid]) if row.mode == "tui" else peek,
+        "enter": (
+            ("attach", ["afk", "attach", sid]) if row.mode == "tui" else peek
+        ),
         "p": peek,
-        "l": ("pull", ["pull", sid]),
-        "f": ("pull --files", ["pull", sid, "--files"]),
-        "s": ("stop", ["stop", sid]),
+        "l": ("pull", ["afk", "pull", sid]),
+        "f": ("pull --files", ["afk", "pull", sid, "--files"]),
+        "s": stop,
     }
 
 
@@ -149,7 +167,12 @@ class Picker(App[list[str] | None]):
         keys = self.query_one("#keys", Static)
         row = self.selected()
         if self.confirming is not None and row is not None:
-            keys.update(f"stop {row.label or row.short} ({row.sandbox})? y/N")
+            what = (
+                f"{KIND_SHORT[row.kind]}, pid {row.pid}"
+                if row.where == "here"
+                else row.sandbox
+            )
+            keys.update(f"stop {row.label or row.short} ({what})? y/N")
             return
         keys_ = verbs(row) if row else {}
         # A key that does what Enter does works, but is not shown twice.
@@ -195,7 +218,7 @@ class Picker(App[list[str] | None]):
         if chosen is None:
             return
         _, argv = chosen
-        if argv[0] == "stop":
+        if argv[:2] == ["afk", "stop"]:
             self.confirming = argv
             self.show_keys()
         else:
@@ -205,14 +228,16 @@ class Picker(App[list[str] | None]):
         # Leave the command it stands for, not the list, by the name the list
         # showed: what you would have typed, so the scrollback reads like a
         # shell session. The argv itself keeps the full id: never ambiguous.
+        # Only afk knows the list's names; a harness's own command needs the
+        # full id.
         row = self.selected()
-        name = (row.label or row.short) if row else None
+        name = (row.label or row.short) if row and argv[0] == "afk" else None
         shown = [
             name if row and name and a == row.session_id else a for a in argv
         ]
         self.exit(
             argv,
-            message=Text(f"› afk {shlex.join(shown)}", style="dim"),  # noqa: RUF001
+            message=Text(f"› {shlex.join(shown)}", style="dim"),  # noqa: RUF001
         )
 
 

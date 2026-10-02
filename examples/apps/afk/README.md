@@ -29,6 +29,20 @@ over the whole screen: arrow keys choose a conversation, Enter or a letter
 runs the command shown for it as if you had typed it (`stop` asks first),
 and `q` leaves the list in your scrollback. Piped, `afk` prints the list.
 
+A key means the same thing on every row it appears on:
+
+| key | |
+|---|---|
+| Enter | into the conversation: one here resumes in its harness's own TUI (`claude --resume <id>` or `codex resume <id>`), a pushed one is attached. Where something else is driving it — open in another terminal, or unattended — Enter peeks instead |
+| `p` | peek |
+| `s` | stop: a pushed one's sandbox, or the process a conversation here is open in |
+| `u`, `b` | push, push `--bg` (a conversation here) |
+| `l`, `f` | pull, pull `--files` (a pushed one) |
+
+A conversation here that is open in another terminal is `in use`. afk sees
+any `claude`, but a `codex` only when it was started as `codex resume <id>`:
+a fresh `codex` names no conversation afk can find.
+
 ## The verbs
 
 | | |
@@ -36,9 +50,9 @@ and `q` leaves the list in your scrollback. Piped, `afk` prints the list.
 | `afk [--all]` | this directory's conversations, and the ones pushed elsewhere, with a status; `--all` lists every one, not just the recent 15 |
 | `afk push [id] [--as NAME] [--bg] [--hours H]` | copy it and this directory into a sandbox of its own and open the TUI there, or run it unattended with `--bg`; the sandbox lives up to `H` hours (default 5) |
 | `afk attach <id>` | your terminal, back on its TUI; if you quit the TUI, attach opens it again in the sandbox |
-| `afk peek <id>` | watch an unattended agent's transcript, read-only |
+| `afk peek <id>` | watch a conversation's transcript, read-only: a pushed one, or one here open in another terminal |
 | `afk pull <id> [--files]` | bring a conversation home and open it in the TUI here; `--files` also brings the files it changed there, after showing them and asking |
-| `afk stop <id>` | end its sandbox |
+| `afk stop <id>` | end its sandbox; for a conversation here, end the process it is open in (that terminal gets its prompt back; the conversation stays) |
 | `afk setup` | choose the Vercel team afk's sandboxes use |
 
 **Ctrl-]** detaches from a sandbox TUI and leaves it running. A pulled

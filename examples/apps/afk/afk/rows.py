@@ -66,6 +66,10 @@ class Row(BaseModel):
     from_id: str | None = None
     handle: Handle | None = None
     mode: str | None = None
+    running: bool = False
+    """Here: a process has it open, maybe in another terminal."""
+    pid: int | None = None
+    """Here: that process, when the harness can tell."""
 
     @property
     def short(self) -> str:
@@ -140,6 +144,8 @@ async def local_rows(
                 title=info.title,
                 updated_at=info.updated_at,
                 status="",
+                running=info.running,
+                pid=info.pid,
             )
             row.status = (
                 "active " + age(info.updated_at)
