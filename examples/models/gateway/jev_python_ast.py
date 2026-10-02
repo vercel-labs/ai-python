@@ -27,7 +27,7 @@ import string
 import sys
 import time
 from collections.abc import AsyncIterator, Callable, Sequence
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import pydantic
 import pydantic_core
@@ -601,7 +601,7 @@ async def generate(
     while found := next_slot(state.tree):
         path, kind, in_function = found
         state.path = list(path)
-        parent: Any = state.tree
+        parent = cast("Any", state.tree)
         for key in path[:-1]:
             parent = parent[key]
         if kind == "statement":
@@ -638,6 +638,26 @@ async def generate(
             }
         else:
             menu = MENUS[kind]
+        criteria: Tree = (
+            statement_criteria(state.tree, path, menu)
+            if kind == "statement"
+            else argument_criteria(state.tree, path)
+            if kind == "argument"
+            else expression_criteria(state.tree, path, menu)
+            if kind == "expression"
+            else string_criteria(state.tree, path)
+            if kind == "string"
+            else identifier_criteria(state.tree, path, menu)
+            if kind == "identifier"
+            else {
+                key: (
+                    end_description(state.tree, path)
+                    if value is None
+                    else value
+                )
+                for key, value in menu.items()
+            }
+        )
         questions = Questions(
             next_piece=ai.ops.experimental.ChoiceQuestion(
                 instructions={
@@ -744,26 +764,7 @@ async def generate(
                         "writing the current block. Loops have no else clause."
                     ),
                 },
-                criteria=(
-                    statement_criteria(state.tree, path, menu)
-                    if kind == "statement"
-                    else argument_criteria(state.tree, path)
-                    if kind == "argument"
-                    else expression_criteria(state.tree, path, menu)
-                    if kind == "expression"
-                    else string_criteria(state.tree, path)
-                    if kind == "string"
-                    else identifier_criteria(state.tree, path, menu)
-                    if kind == "identifier"
-                    else {
-                        key: (
-                            end_description(state.tree, path)
-                            if value is None
-                            else value
-                        )
-                        for key, value in menu.items()
-                    }
-                ),
+                criteria=criteria,
             )
         )
         for retry in range(MAX_RETRIES + 1):
@@ -791,7 +792,7 @@ async def generate(
         replacement = copy.deepcopy(
             menu[answer.choice]
         )  # Validate before modifying the tree.
-        parent = state.tree
+        parent = cast("Any", state.tree)
         for key in path[:-1]:
             parent = parent[key]
         if kind == "statement" and answer.choice == "Elif":
