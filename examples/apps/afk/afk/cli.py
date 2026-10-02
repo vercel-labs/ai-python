@@ -152,8 +152,8 @@ async def picking(
     remote_gw: Gateway | None,
     *,
     everything: bool,
-) -> list[str] | None:
-    """The list as a picker, on a terminal: the command you chose, to run as
+) -> list[list[str]] | None:
+    """The list as a picker, on a terminal: the commands you chose, to run as
     if typed, or None. The same rows as `listing`, arriving the same way."""
     # textual is imported only when a picker is drawn
     from rich.text import Text  # noqa: PLC0415
@@ -302,17 +302,25 @@ async def main_async(argv: list[str]) -> int:
                 chosen = await picking(
                     cwd, gw, remote_gw, everything=args.everything
                 )
-                if chosen is None:
-                    return 0
-                if chosen[0] == "afk":
-                    return await main_async(chosen[1:])
-                # A harness's own command: afk is done, the terminal is its.
-                sys.stdout.flush()
-                try:
-                    os.execvp(chosen[0], chosen)
-                except OSError as exc:
-                    print(f"afk: could not run {chosen[0]}: {exc.strerror}")
-                    return 1
+                # Each command only if the one before it succeeded, as
+                # `a && b` runs them.
+                for command in chosen or []:
+                    if command[0] == "afk":
+                        code = await main_async(command[1:])
+                        if code != 0:
+                            return code
+                        continue
+                    # A harness's own command: afk is done, the terminal is
+                    # its.
+                    sys.stdout.flush()
+                    try:
+                        os.execvp(command[0], command)
+                    except OSError as exc:
+                        print(
+                            f"afk: could not run {command[0]}: {exc.strerror}"
+                        )
+                        return 1
+                return 0
             await listing(cwd, gw, remote_gw, everything=args.everything)
             return 0
         if args.verb == "push":

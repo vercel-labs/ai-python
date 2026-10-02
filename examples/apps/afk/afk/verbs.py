@@ -278,6 +278,24 @@ PEEK_HELD_EVERY = 5
 PEEK_QUIET = 8.0
 """Quiet seconds after the agent's last words before peek calls it done."""
 
+PEEK_IDLE = 30.0
+"""Quiet seconds, with nothing pending, before peek stops following a
+conversation a person drives: its transcript can end on an interrupted turn
+or an unanswered prompt, which never reads as a finished turn."""
+
+SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+
+def _pending(messages: list[Any]) -> bool:
+    """Whether the agent is mid-step: a tool call out, or a result in that it
+    has not answered yet."""
+    if not messages:
+        return False
+    last = messages[-1]
+    return last.role == "tool" or any(
+        getattr(p, "kind", "") == "tool_call" for p in last.parts
+    )
+
 
 async def peek(
     row: Row,
@@ -290,8 +308,10 @@ async def peek(
     maybe open in another terminal.
 
     Read-only: it reads the stored record, so it never becomes a second writer.
-    Returns when the agent has finished its turn; Ctrl-C stops watching, never
-    the agent.
+    Follows like `tail -f`, with a status line saying so on a terminal.
+    Returns when the agent has finished its turn, when it is no longer
+    running, or, for a conversation a person drives, when nothing has come in
+    for a while; Ctrl-C stops watching, never the agent.
     """
     if row.where == "here" and cwd is not None:
         ws: Local | VercelSandbox = Local(cwd, gateway=gateway)
@@ -307,15 +327,46 @@ async def peek(
         if row.where == "here"
         else f" · `afk pull {row.label or row.short} --files` brings it home"
     )
+    # A person drives it: here, or a pushed TUI. An unattended agent is
+    # followed until its turn is done, however quiet it gets on the way.
+    driven = row.where == "here" or row.mode == "tui"
     width = shutil.get_terminal_size().columns
-    style = render.Style(color=sys.stdout.isatty())
+    tty = sys.stdout.isatty()
+    style = render.Style(color=tty)
     name = row.label or row.short
+    loop = asyncio.get_running_loop()
+    changed = loop.time()
+    frame = 0
+
+    def status() -> None:
+        # One line under the transcript, redrawn in place: following, not
+        # frozen. Cut to the width, or a wrapped line would not redraw.
+        nonlocal frame
+        if not tty:
+            return
+        frame += 1
+        text = (
+            f"  {SPINNER[frame % len(SPINNER)]} following {name} · nothing "
+            f"new for {int(loop.time() - changed)}s · Ctrl-C to stop"
+        )[: width - 1]
+        sys.stdout.write(f"\r\x1b[2K{style.dim(text)}")
+        sys.stdout.flush()
+
+    def clear() -> None:
+        if tty:
+            sys.stdout.write("\r\x1b[2K")
+            sys.stdout.flush()
+
+    def end(why: str) -> None:
+        clear()
+        print(style.dim(f"\nafk: {name} {why}"))
+
     async with ws:
         async with HARNESSES[row.kind](workspace=ws) as agent:
             print(
                 style.dim(
                     f"afk: watching {name} · {KIND_SHORT[row.kind]} · "
-                    f"{where} — Ctrl-C stops watching; the agent keeps going"
+                    f"{where} — the agent keeps going when you stop watching"
                 )
             )
             messages = await agent.history(row.session_id)
@@ -326,40 +377,57 @@ async def peek(
                         f"  … {shown} earlier message{'s' * (shown != 1)}"
                     )
                 )
-            loop = asyncio.get_running_loop()
-            changed = loop.time()
             polls = 0
-            while True:
-                for m in messages[shown:]:
-                    drawn = render.lines(m, width, style)
-                    if drawn and m.role == "user":
-                        print()
-                    for line in drawn:
-                        print(line)
-                if len(messages) > shown:
-                    changed = loop.time()
-                shown = len(messages)
-                # The finished turn ends a peek; this check only catches an
-                # agent that died, so it need not list every session each poll.
-                polls += 1
-                held = polls % PEEK_HELD_EVERY != 1 or any(
-                    i.running
-                    for i in await agent.sessions()
-                    if i.session_id == row.session_id
-                )
-                if not held:
-                    print(style.dim(f"\nafk: {name} is not running{home}"))
-                    return
-                if (
-                    turn_finished(
-                        messages, CONTINUE_MARK if row.mode == "bg" else None
+            try:
+                while True:
+                    if len(messages) > shown:
+                        clear()
+                        for m in messages[shown:]:
+                            drawn = render.lines(m, width, style)
+                            if drawn and m.role == "user":
+                                print()
+                            for line in drawn:
+                                print(line)
+                        changed = loop.time()
+                    shown = len(messages)
+                    # The finished turn ends a peek; this check only catches
+                    # an agent that died, so it need not list every session
+                    # each poll.
+                    polls += 1
+                    held = polls % PEEK_HELD_EVERY != 1 or any(
+                        i.running
+                        for i in await agent.sessions()
+                        if i.session_id == row.session_id
                     )
-                    and loop.time() - changed >= PEEK_QUIET
-                ):
-                    print(style.dim(f"\nafk: {name} finished its turn{home}"))
-                    return
-                await asyncio.sleep(every)
-                messages = await agent.history(row.session_id)
+                    quiet = loop.time() - changed
+                    if not held:
+                        end(f"is not running{home}")
+                        return
+                    if (
+                        turn_finished(
+                            messages,
+                            CONTINUE_MARK if row.mode == "bg" else None,
+                        )
+                        and quiet >= PEEK_QUIET
+                    ):
+                        end(f"finished its turn{home}")
+                        return
+                    if driven and quiet >= PEEK_IDLE and not _pending(messages):
+                        end(
+                            f"has had nothing new for {int(PEEK_IDLE)}s; it "
+                            "may be waiting for input"
+                        )
+                        return
+                    # Redraw the status line while waiting for the next poll.
+                    deadline = loop.time() + every
+                    while (left := deadline - loop.time()) > 0:
+                        status()
+                        await asyncio.sleep(min(left, 0.25))
+                    messages = await agent.history(row.session_id)
+            except asyncio.CancelledError:
+                # Ctrl-C: the agent was never ours to stop.
+                end("keeps going; you stopped watching")
+                raise
 
 
 async def pull(
@@ -497,6 +565,17 @@ async def stop(row: Row, gateway: Gateway | None) -> None:
         except ProcessLookupError:
             print(f"afk: {row.short} had already exited")
             return
+        # Stopped means gone: whatever runs next on this conversation (a
+        # take-over's resume) must not overlap it.
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + STOP_WAIT
+        while _alive(row.pid):
+            if loop.time() > deadline:
+                raise HarnessError(
+                    f"{row.short} (pid {row.pid}) did not exit within "
+                    f"{STOP_WAIT:g}s of being asked to"
+                )
+            await asyncio.sleep(0.1)
         print(
             f"afk: stopped {row.short} ({KIND_SHORT[row.kind]}, pid {row.pid})"
         )
@@ -521,6 +600,20 @@ async def stop(row: Row, gateway: Gateway | None) -> None:
         f"afk: stopped {row.label} ({row.sandbox})"
         + (f"; it also held {', '.join(also)}" if also else "")
     )
+
+
+STOP_WAIT = 10.0
+"""Seconds a stopped process here gets to exit before afk says it did not."""
+
+
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
 
 
 def _remember_baseline(sandbox: str, manifest: dict[str, str]) -> None:

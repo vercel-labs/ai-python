@@ -1,10 +1,10 @@
 """The list, as a picker: bare `afk` on a terminal.
 
 Drawn inline, under your prompt like the plain list, never the whole screen.
-Choosing returns the argv of the command it stands for — an afk verb, or a
-harness's own resume — and the CLI runs that command exactly as if you had
-typed it, with the terminal back to itself (a harness's TUI needs all of it,
-and an inline app cannot hand it over).
+Choosing returns the commands it stands for — afk verbs, or a harness's own
+resume — and the CLI runs them exactly as if you had typed them, with the
+terminal back to itself (a harness's TUI needs all of it, and an inline app
+cannot hand it over).
 Quitting leaves the list in the scrollback; choosing leaves the one-line
 command instead.
 """
@@ -27,8 +27,10 @@ if TYPE_CHECKING:
 
     from textual import events
 
-Verbs = dict[str, tuple[str, list[str]]]
-"""key -> (what the footer calls it, the argv it runs)."""
+Command = list[str]
+Verbs = dict[str, tuple[str, list[Command]]]
+"""key -> (what the footer calls it, the commands it runs, in order, each
+only if the one before it succeeded: `a && b`)."""
 
 RESUME = {"claude-code": ["claude", "--resume"], "codex": ["codex", "resume"]}
 """Each harness's own command to reopen a conversation in its TUI here."""
@@ -36,33 +38,40 @@ RESUME = {"claude-code": ["claude", "--resume"], "codex": ["codex", "resume"]}
 
 def verbs(row: Row) -> Verbs:
     """A key means one thing on every row it is on. Enter puts you in the
-    conversation, wherever it is: resumed here, attached there; where you
-    cannot be in it, because something else is driving it, it peeks."""
+    conversation, wherever it is: resumed here, attached there. One open in
+    another terminal here, Enter takes over, as attach does there: that
+    process ends and the TUI opens here. Where afk cannot end what drives
+    it, Enter peeks."""
     sid = row.session_id
     # Peek reads the transcript, so it watches a TUI as well as an
     # unattended agent, here or there.
-    peek = ("peek", ["afk", "peek", sid])
-    stop = ("stop", ["afk", "stop", sid])
+    peek = ("peek", [["afk", "peek", sid]])
+    stop = ("stop", [["afk", "stop", sid]])
     if row.where == "here":
-        # Open in another terminal: resuming it too would make two writers.
+        resume = [*RESUME[row.kind], sid]
+        if not row.running:
+            enter = ("resume", [resume])
+        elif row.pid is not None:
+            # Stop waits until the process is gone: never two writers.
+            enter = ("take over", [["afk", "stop", sid], resume])
+        else:
+            enter = peek
         return {
-            "enter": peek
-            if row.running
-            else ("resume", [*RESUME[row.kind], sid]),
+            "enter": enter,
             "p": peek,
             # Stop ends the process that has it open, so only when there is
             # one afk can name.
             **({"s": stop} if row.pid is not None else {}),
-            "u": ("push", ["afk", "push", sid]),
-            "b": ("push --bg", ["afk", "push", sid, "--bg"]),
+            "u": ("push", [["afk", "push", sid]]),
+            "b": ("push --bg", [["afk", "push", sid, "--bg"]]),
         }
     return {
         "enter": (
-            ("attach", ["afk", "attach", sid]) if row.mode == "tui" else peek
+            ("attach", [["afk", "attach", sid]]) if row.mode == "tui" else peek
         ),
         "p": peek,
-        "l": ("pull", ["afk", "pull", sid]),
-        "f": ("pull --files", ["afk", "pull", sid, "--files"]),
+        "l": ("pull", [["afk", "pull", sid]]),
+        "f": ("pull --files", [["afk", "pull", sid, "--files"]]),
         "s": stop,
     }
 
@@ -84,7 +93,7 @@ def _clip(s: str, n: int) -> str:
     return s[: n - 1] + "…" if len(s) > n else s
 
 
-class Picker(App[list[str] | None]):
+class Picker(App[list[Command] | None]):
     CSS = """
     Screen:inline { border-top: none; border-bottom: none; }
     #head, #keys, OptionList { padding: 0 2; }
@@ -108,7 +117,7 @@ class Picker(App[list[str] | None]):
         self.here_rows = here
         self.remote_rows: list[Row] | None = None
         self._remote = remote
-        self.confirming: list[str] | None = None
+        self.confirming: tuple[str, list[Command]] | None = None
 
     def compose(self) -> ComposeResult:
         yield Static(self.head, id="head")
@@ -167,19 +176,25 @@ class Picker(App[list[str] | None]):
         keys = self.query_one("#keys", Static)
         row = self.selected()
         if self.confirming is not None and row is not None:
+            name = row.label or row.short
+            if self.confirming[0] == "take over":
+                keys.update(
+                    f"take over {name} from pid {row.pid}? it ends there. y/N"
+                )
+                return
             what = (
                 f"{KIND_SHORT[row.kind]}, pid {row.pid}"
                 if row.where == "here"
                 else row.sandbox
             )
-            keys.update(f"stop {row.label or row.short} ({what})? y/N")
+            keys.update(f"stop {name} ({what})? y/N")
             return
         keys_ = verbs(row) if row else {}
         # A key that does what Enter does works, but is not shown twice.
         shown = [
             f"{k} {name}"
-            for k, (name, argv) in keys_.items()
-            if k == "enter" or (name, argv) != keys_["enter"]
+            for k, (name, commands) in keys_.items()
+            if k == "enter" or (name, commands) != keys_["enter"]
         ]
         keys.update(" · ".join([*shown, "q quit"]))
 
@@ -205,11 +220,11 @@ class Picker(App[list[str] | None]):
 
     def act(self, key: str) -> None:
         # Every key comes through here, Enter too, so a pending question is
-        # answered first: only y stops; any other key is the N.
+        # answered first: only y goes ahead; any other key is the N.
         if self.confirming is not None:
-            argv, self.confirming = self.confirming, None
+            (_, commands), self.confirming = self.confirming, None
             if key == "y":
-                self.done(argv)
+                self.done(commands)
             else:
                 self.show_keys()
             return
@@ -217,33 +232,41 @@ class Picker(App[list[str] | None]):
         chosen = verbs(row).get(key) if row else None
         if chosen is None:
             return
-        _, argv = chosen
-        if argv[:2] == ["afk", "stop"]:
-            self.confirming = argv
+        # Anything that ends a process or a sandbox asks first.
+        if any(c[:2] == ["afk", "stop"] for c in chosen[1]):
+            self.confirming = chosen
             self.show_keys()
         else:
-            self.done(argv)
+            self.done(chosen[1])
 
-    def done(self, argv: list[str]) -> None:
-        # Leave the command it stands for, not the list, by the name the list
-        # showed: what you would have typed, so the scrollback reads like a
-        # shell session. The argv itself keeps the full id: never ambiguous.
-        # Only afk knows the list's names; a harness's own command needs the
-        # full id.
+    def done(self, commands: list[Command]) -> None:
+        # Leave the commands it stands for, not the list, by the name the
+        # list showed: what you would have typed, so the scrollback reads
+        # like a shell session. The commands themselves keep the full id:
+        # never ambiguous. Only afk knows the list's names; a harness's own
+        # command needs the full id.
         row = self.selected()
-        name = (row.label or row.short) if row and argv[0] == "afk" else None
-        shown = [
-            name if row and name and a == row.session_id else a for a in argv
-        ]
+        name = (row.label or row.short) if row else None
+
+        def typed(argv: Command) -> str:
+            if argv[0] != "afk" or row is None:
+                return shlex.join(argv)
+            return shlex.join(
+                [name if name and a == row.session_id else a for a in argv]
+            )
+
         self.exit(
-            argv,
-            message=Text(f"› {shlex.join(shown)}", style="dim"),  # noqa: RUF001
+            commands,
+            message=Text(
+                f"› {' && '.join(typed(c) for c in commands)}",  # noqa: RUF001
+                style="dim",
+            ),
         )
 
 
 async def pick(
     head: Text, here: list[Row], remote: Awaitable[list[Row]] | None
-) -> list[str] | None:
+) -> list[Command] | None:
     return await Picker(head, here, remote).run_async(
         inline=True, inline_no_clear=True
     )
