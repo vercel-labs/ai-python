@@ -10,6 +10,7 @@ from __future__ import annotations
 import base64
 import json
 import time
+from typing import Any
 
 import pytest
 
@@ -108,7 +109,7 @@ async def test_writes_from_many_tasks_go_one_at_a_time_in_order() -> None:
     resource" when a steer and a reply to the agent were written at once."""
     import asyncio
     from types import SimpleNamespace
-    from typing import Any, cast
+    from typing import cast
 
     from ai.workspaces.experimental._sandbox import SandboxProcess
 
@@ -131,3 +132,71 @@ async def test_writes_from_many_tasks_go_one_at_a_time_in_order() -> None:
     lines = [f'{{"id": {i}}}\n' for i in range(5)]
     await asyncio.gather(*(process.write(line) for line in lines))
     assert sent == [line.encode() for line in lines]
+
+
+def _refusing(code: str) -> Any:
+    """A live sandbox whose process API answers every run with `code`."""
+    from types import SimpleNamespace
+
+    import httpx2 as httpx
+    from vercel.sandbox import SandboxApiError
+
+    async def run_process(*_args: Any, **_kwargs: Any) -> Any:
+        data = {"error": {"code": code}}
+        raise SandboxApiError(httpx.Response(400, json=data), code, data=data)
+
+    return SimpleNamespace(run_process=run_process)
+
+
+async def test_a_command_not_on_path_is_exit_127_not_an_error() -> None:
+    """As on a local machine. Measured: in vercel/sandbox/node:24, which has
+    no harness CLIs, the `claude --version` probe raised `executable file
+    not found in $PATH` and the adapter never reached its install step."""
+    from ai.workspaces.experimental import VercelSandbox
+
+    ws = VercelSandbox()
+    ws._sandbox = _refusing("executable_not_found")
+    result = await ws.exec(["claude", "--version"])
+    assert result.exit_code == 127
+    assert result.stderr.startswith("claude: ")
+
+
+async def test_other_process_api_errors_still_raise() -> None:
+    from vercel.sandbox import SandboxApiError
+
+    from ai.workspaces.experimental import VercelSandbox
+
+    ws = VercelSandbox()
+    ws._sandbox = _refusing("internal")
+    with pytest.raises(SandboxApiError):
+        await ws.exec(["true"])
+
+
+async def test_a_conduit_that_exits_before_ready_names_python3() -> None:
+    """Measured in vercel/sandbox/ubuntu: the conduit shell printed this and
+    exited, and the write then failed as a bare ClosedResourceError."""
+    import contextlib
+    from collections.abc import AsyncIterator
+    from types import SimpleNamespace
+    from typing import cast
+
+    import anyio
+
+    from ai.workspaces.experimental._sandbox import SandboxProcess
+    from ai.workspaces.experimental.errors import WorkspaceError
+
+    said = [b"/bin/sh: 1: exec: python3: not found\n"]
+
+    async def receive() -> bytes:
+        if not said:
+            raise anyio.EndOfStream
+        return said.pop()
+
+    @contextlib.asynccontextmanager
+    async def open_interactive(*_args: Any) -> AsyncIterator[Any]:
+        yield SimpleNamespace(stream=SimpleNamespace(receive=receive))
+
+    sandbox = SimpleNamespace(open_interactive=open_interactive)
+    process = SandboxProcess(cast("Any", None), cast("Any", sandbox), "/f")
+    with pytest.raises(WorkspaceError, match=r"python3: not found\).*python3"):
+        await process.write("x")

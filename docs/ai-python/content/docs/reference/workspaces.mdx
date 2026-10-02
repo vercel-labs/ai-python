@@ -43,6 +43,7 @@ workspaces.VercelSandbox(
     project_id=None,
     workdir="/vercel/sandbox",
     snapshot=None,
+    image=None,
     env=None,
     forward_project_env=False,
     env_file=None,
@@ -64,6 +65,7 @@ support, and raises `ai.errors.InstallationError` when it is missing.
 | `token`, `team_id`, `project_id` | Vercel credentials. A project (OIDC) token alone is enough: it names its own team and project. | `None`: read from the environment or `.env.local` |
 | `workdir` | Working directory in the VM. | `"/vercel/sandbox"` |
 | `snapshot` | Snapshot id to start from. | `None` |
+| `image` | Vercel Container Registry image a new VM boots from (`"repo:tag"`, `"team/project/repo@sha256:..."`). Raises `ValueError` with `name` or `snapshot`. Harnesses need `python3` in the image, and `npm` to install their CLI. | `None`: the platform's default image |
 | `env` | Environment for everything run in the VM. | `None` |
 | `forward_project_env` | Also send every non-credential variable from `.env.local`. | `False` |
 | `env_file` | Path to the env file. | `None`: the nearest `.env.local`, searching up from `project_root` to the repository root |
@@ -76,7 +78,10 @@ support, and raises `ai.errors.InstallationError` when it is missing.
 | `allow_hosts` | Extra hosts the VM may reach when `gateway` is set. | `()` |
 
 Beyond `Workspace`, a sandbox has `name`: the platform's name for it, or
-`None` before it exists.
+`None` before it exists; and `image`: once open, the digest-pinned reference
+the platform reports for the VM (`"vercel/sandbox/node@sha256:..."` for
+`"vercel/sandbox/node:24"`; the tag is not kept), also after reconnecting by
+`name`, and before that the one passed in, or `None` for the default.
 
 `open()` with `name` raises `WorkspaceGoneError` when the sandbox is stopped
 or missing, `WorkspaceError` when it cannot be reached or was created without

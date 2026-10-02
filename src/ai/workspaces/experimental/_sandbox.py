@@ -265,7 +265,16 @@ class SandboxProcess(_base.Process):
                     try:
                         chunk = await self._conduit.stream.receive()
                     except Exception:  # the stream ended
-                        break
+                        # Measured: in an image without python3 the shell
+                        # prints `exec: python3: not found` and exits, and
+                        # the first write then failed as a bare
+                        # ClosedResourceError that named nothing.
+                        said = seen.decode(errors="replace").strip()
+                        raise errors_.WorkspaceError(
+                            "the sandbox input conduit exited before it was "
+                            f"ready ({said or 'no output'}); it runs python3 "
+                            "in the VM, so the image must provide it"
+                        ) from None
                     seen += chunk
         except TimeoutError as exc:
             raise errors_.WorkspaceError(
@@ -431,6 +440,7 @@ class VercelSandbox(_base.Workspace):
         project_id: str | None = None,
         workdir: str = DEFAULT_WORKDIR,
         snapshot: str | None = None,
+        image: str | None = None,
         env: Mapping[str, str] | None = None,
         forward_project_env: bool = False,
         env_file: str | Path | None = None,
@@ -463,6 +473,19 @@ class VercelSandbox(_base.Workspace):
         Egress is fixed when a VM is created: reconnecting by name to one
         made without a gateway and asking for one is refused.
 
+        `image` is the root filesystem a new sandbox boots from: a Vercel
+        Container Registry reference such as ``vercel/sandbox/python:3.14``,
+        ``my-repo:v1``, or ``team/project/repo@sha256:...``. Omitted, the
+        platform default is used (``vercel/sandbox/universal``). Like egress,
+        it is decided when the VM is created, so it cannot be combined with
+        `name` (a reconnect keeps the image its VM already has) or with
+        `snapshot` (a snapshot carries its own filesystem). Once open,
+        `image` reports the digest the platform resolved it to. Files and
+        `exec` work in any image; a process's stdin and ptys, and so every
+        harness, need ``python3`` in it, and installing a harness CLI needs
+        ``npm``. The default image has both; ``vercel/sandbox/node:24`` and
+        ``vercel/sandbox/ubuntu`` have no ``python3``.
+
         Needs the ``sandbox`` extra with interactive PTY support, and raises
         ``ai.errors.InstallationError`` here, before anything boots, when it
         is missing.
@@ -488,8 +511,24 @@ class VercelSandbox(_base.Workspace):
             )
             if v is not None
         }
+        # Refused here, before anything boots: a reconnect never creates, so
+        # an image with name= could only be ignored, and with snapshot= two
+        # sources would compete for the same root filesystem.
+        if image is not None and name is not None:
+            raise ValueError(
+                "image= is chosen when a sandbox is created; name= reconnects "
+                "to one that exists and keeps the image it booted from"
+            )
+        if image is not None and snapshot is not None:
+            raise ValueError(
+                "image= and snapshot= both name the filesystem a new sandbox "
+                "boots from; pass one"
+            )
+        if image is not None and not image.strip():
+            raise ValueError("image= must be a non-empty image reference")
         self._workdir = workdir
         self._snapshot = snapshot
+        self._image = image
         # `.env.local` is read to AUTHENTICATE — nothing more. After
         # `vercel link` + `vercel env pull` the Vercel credentials in that
         # file let us create a sandbox without being passed anything.
@@ -633,6 +672,8 @@ class VercelSandbox(_base.Workspace):
             options["execution_time_limit"] = self._execution_time_limit
         if self._ports:
             options["ports"] = self._ports
+        if self._image is not None:
+            options["image"] = self._image
         if self._snapshot is not None:
             from vercel.sandbox import SnapshotSource  # noqa: PLC0415
 
@@ -709,6 +750,19 @@ class VercelSandbox(_base.Workspace):
         await self._close_client()
 
     @property
+    def image(self) -> str | None:
+        """The image this sandbox booted from.
+
+        Once open, the digest-pinned reference the platform reports, such
+        as ``vercel/sandbox/node@sha256:...`` for ``vercel/sandbox/node:24``
+        (the tag is not kept); before that, the one passed to `image=`, or
+        None for the platform default.
+        """
+        if self._sandbox is not None and self._sandbox.image:
+            return self._sandbox.image
+        return self._image
+
+    @property
     def name(self) -> str | None:
         """The platform's name for this sandbox. None until open.
 
@@ -767,16 +821,27 @@ class VercelSandbox(_base.Workspace):
         env: Mapping[str, str] | None = None,
         timeout: float | None = None,
     ) -> _base.ExecResult:
+        from vercel.sandbox import SandboxApiError  # noqa: PLC0415
+
         command, *args = argv
-        done = await self._live().run_process(
-            command,
-            args,
-            cwd=self._workdir,
-            env={**self.env, **(env or {})},
-            kill_after=timeout,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
+        try:
+            done = await self._live().run_process(
+                command,
+                args,
+                cwd=self._workdir,
+                env={**self.env, **(env or {})},
+                kill_after=timeout,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+        except SandboxApiError as exc:
+            if exc.code != "executable_not_found":
+                raise
+            # Shell semantics, as `Local.exec`: a command that cannot be
+            # executed is exit 127, not an exception. Probes read the exit
+            # code to decide whether to install. The default image ships
+            # the harness CLIs, so only another image reaches this.
+            return _base.ExecResult(exit_code=127, stderr=f"{command}: {exc}")
         return _base.ExecResult(
             exit_code=done.returncode if done.returncode is not None else -1,
             stdout=await _text(done.stdout),

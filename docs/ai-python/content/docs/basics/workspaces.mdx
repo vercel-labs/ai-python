@@ -107,6 +107,7 @@ harness factory; it wins over the workspace's.
 | Option | Description | Default |
 |---|---|---|
 | `execution_time_limit` | How long the VM lives, in seconds. The platform default is short, so set it for long work. | `None`: the platform's default |
+| `image` | The image a new VM boots from: a [Vercel Container Registry](https://vercel.com/docs/sandbox/concepts/images) reference such as `"vercel/sandbox/python:3.14"` or your own `"my-repo:v1"`. Not with `name` or `snapshot`. Harnesses need `python3` in the image, and `npm` to install their CLI; the default image has both. | `None`: the platform's default image |
 | `keep` | Whether `close()` leaves the VM running. | `None`: `False` for a sandbox you created, `True` for one you reconnected to |
 | `name` | Reconnect to an existing sandbox instead of creating one. `sandbox.name` is set once the VM exists. | `None`: create one |
 | `ports` | Ports to expose. Get a URL with `await sandbox.reachable_url(port)`. | `None` |
