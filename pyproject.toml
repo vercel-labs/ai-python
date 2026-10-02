@@ -35,8 +35,14 @@ dependencies = [
 
 [project.optional-dependencies]
 anthropic = ["anthropic>=0.83.0,<2.0.0"]
+# the ceiling guards the private claude_agent_sdk imports in
+# ai.harnesses.experimental._adapters.remote_cli
+claude-code = ["claude-agent-sdk>=0.2.144,<0.3"]
 mcp = ["mcp>=2.0.0,<3.0.0"]
 openai = ["openai>=2.34.0,<4.0.0"]
+# TODO(vercel-py#415): set the floor to the first release that includes it.
+# Until then the dev group pins the tested commit from git.
+sandbox = ["vercel-sandbox"]
 otel = [
     "opentelemetry-exporter-otlp-proto-http>=1.30",
     "opentelemetry-sdk>=1.30",
@@ -66,6 +72,7 @@ bump = true
 [dependency-groups]
 dev = [
     "anthropic>=0.83.0",
+    "claude-agent-sdk>=0.2.144,<0.3",
     "mcp>=2.0.0,<3.0.0",
     "python-dotenv>=1.2.1",
     "pytest>=8.0",
@@ -79,6 +86,14 @@ dev = [
     "vercel-oidc>=0.8.0",
     "opentelemetry-sdk>=1.43.0",
     "opentelemetry-exporter-otlp-proto-http>=1.43.0",
+    # vercel/vercel-py#415 (interactive PTY) is merged to main but not
+    # released yet. uv.lock pins the commit; re-locking picks up main, which
+    # needs a `pytest -m sandbox` run. Its sibling packages come from the same
+    # main: vercel-sandbox on main needs unreleased vercel-internal-core.
+    "vercel-sandbox @ git+https://github.com/vercel/vercel-py@main#subdirectory=src/vercel-sandbox",
+    "vercel-internal-core @ git+https://github.com/vercel/vercel-py@main#subdirectory=src/vercel-internal-core",
+    "vercel-oidc @ git+https://github.com/vercel/vercel-py@main#subdirectory=src/vercel-oidc",
+    "pytest-timeout>=2.3",
 ]
 
 [tool.uv]
@@ -110,6 +125,16 @@ exclude = [
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+# Live harness tests drive real agent CLIs and sandboxes, so they are opt-in:
+# `uv run pytest -m live tests/harnesses` (a later -m overrides this one).
+addopts = "-m 'not live and not sandbox'"
+# The harness live suite drives real agents; hanging must be a failure.
+timeout = 300
+markers = [
+    "live: drives a real local harness installation (deselect with -m 'not live')",
+    "sandbox: needs Vercel Sandbox credentials (deselect with -m 'not sandbox')",
+    "slow: multi-turn or multi-process; minutes, not seconds",
+]
 filterwarnings = [
     "ignore:'asyncio\\.DefaultEventLoopPolicy' is deprecated.*:DeprecationWarning:async_solipsism\\.loop",
 ]
@@ -169,6 +194,11 @@ extend-ignore = [
     "PLW2901", # redefined-loop-name (intentional pattern for line processing)
     "RUF029",  # async generators/protocol hooks may not need an await
 ]
+
+[tool.ruff.lint.flake8-type-checking]
+# pydantic evaluates field annotations at runtime, so their imports must stay
+# real even under `from __future__ import annotations`
+runtime-evaluated-base-classes = ["pydantic.BaseModel"]
 
 [tool.ruff.lint.per-file-ignores]
 "examples/**/*.py" = [

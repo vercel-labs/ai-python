@@ -1,0 +1,368 @@
+---
+title: "ai.harnesses.experimental"
+description: Reference for driving coding-agent CLIs.
+type: reference
+summary: Reference for claude_code, codex, Harness, Session, Turn, Tui, Result, Handle, approvals, capabilities, and harness errors.
+---
+
+`ai.harnesses.experimental` drives coding-agent CLIs, Claude Code and Codex,
+on a [workspace](/docs/reference/workspaces). See
+[Harnesses](/docs/basics/harnesses) for a guide.
+
+This API is experimental and may change or be removed.
+
+```python
+from ai.harnesses import experimental as harnesses
+from ai.workspaces import experimental as workspaces
+
+async with harnesses.claude_code(workspace=workspaces.Local(".")) as agent:
+    result = await agent.run("What does this repo do?")
+```
+
+## Harnesses
+
+Each factory returns a `Harness`. They share these arguments:
+
+| Argument | Description | Default |
+|---|---|---|
+| `workspace` | `Workspace` the CLI runs in. | required |
+| `approve` | Async function that takes an `ApprovalContext` and returns a `Decision`. | `None`: every tool call is allowed |
+| `approval_timeout` | Seconds a hook may take before the call is denied. | `300.0` |
+| `model` | Model name passed to the CLI. | `None`: the CLI's default |
+| `gateway` | Upstream model provider LLM Gateway, as a `Gateway`. Overrides the workspace's gateway. | `None`: the workspace's gateway |
+| `effort` | `"low"`, `"medium"`, `"high"`, or `"max"`. | `None`: the CLI's default |
+| `executable` | CLI name or path. | `"claude"` or `"codex"` |
+
+### claude_code
+
+```python
+harnesses.claude_code(
+    *,
+    workspace,
+    approve=None,
+    approval_timeout=300.0,
+    model=None,
+    gateway=None,
+    effort=None,
+    executable="claude",
+)
+```
+
+Claude Code. Needs the `claude-code` extra, and raises
+`ai.errors.InstallationError` when it is missing. Takes only the shared
+arguments.
+
+### codex
+
+```python
+harnesses.codex(
+    *,
+    workspace,
+    approve=None,
+    approval_timeout=300.0,
+    model=None,
+    sandbox=None,
+    config=None,
+    gateway=None,
+    effort=None,
+    executable="codex",
+)
+```
+
+Codex over `codex app-server`. Needs only the `codex` CLI. Takes the shared
+arguments, plus:
+
+| Argument | Description | Default |
+|---|---|---|
+| `sandbox` | Codex's own sandbox mode: `"read-only"`, `"workspace-write"`, or `"danger-full-access"`. On a provider-owned workspace, other values raise `UnsupportedError` on open. | `"read-only"` on `Local`, `"danger-full-access"` on a provider-owned workspace |
+| `config` | Codex config overrides. Wins over values derived from `gateway` and `effort`, key by key. | `None` |
+
+`effort="max"` is sent to Codex as `"xhigh"`.
+
+## Harness
+
+One configured CLI, open on one workspace. Build it with `claude_code()` or
+`codex()`. Use it as an async context manager, or call `open()` and
+`close()`.
+
+```python
+agent.kind              # "claude-code" or "codex"
+agent.name              # same as kind
+agent.version           # what the CLI reported, or None
+agent.capabilities
+agent.workspace
+agent.options           # model, executable, sandbox, effort
+agent.approve           # the hook, or None
+agent.approval_timeout
+agent.is_open
+agent.process_ids       # local pids; empty in a sandbox
+```
+
+Methods:
+
+- `await open()`: Open the workspace, then probe the CLI. Idempotent.
+- `await close()`: End the CLI and its conversations. The workspace stays
+  open; close it yourself.
+- `await detach()`: Release this client and leave the CLI running. On a
+  workspace whose processes end with the client, this is `close()`.
+- `session(*, history=None)`: Start a new `Session`. With `history`, it
+  begins with that past.
+- `await run(prompt, *, history=None, output_type=None, retries=1,
+  timeout=None)`: Run one prompt in a throwaway conversation. Returns a
+  `Result`.
+- `await sessions()`: List the CLI's conversations in this workspace as
+  `SessionInfo` values, including ones started outside the SDK.
+- `await history(session_id, *, limit=None, offset=0)`: Return a stored
+  transcript as `ai.messages.Message` values, tool calls included.
+- `await resume(session_id)`: Continue an existing conversation. Raises
+  `SessionBusyError` when another client holds it, and `ResumeFailedError`
+  when it does not exist.
+- `await fork(session_id)`: Start a new conversation with the same past. The
+  original is never written.
+- `await tui(session_id=None, *, history=None, name=None, size=None)`: Open
+  the CLI's own TUI on a pty in the workspace. Returns a `Tui`. Passing both
+  `session_id` and `history` raises `ValueError`.
+
+Methods that need a capability the harness lacks raise `UnsupportedError`.
+Methods called before `open()` raise `HarnessClosedError`.
+
+## Session
+
+One conversation.
+
+```python
+session.session_id
+session.messages
+session.handle
+```
+
+`session_id` is the CLI's own id. It is empty until the first turn creates
+the conversation.
+
+Methods:
+
+- `await run(prompt, *, output_type=None, retries=1, timeout=None)`: Send a
+  prompt and wait for the turn to settle. Returns a `Result`.
+- `stream(prompt)`: Send a prompt and return a `Turn`.
+- `await steer(text)`: Send guidance to the running turn. Raises
+  `RuntimeError` when no turn is running.
+- `await stop()`: End the running turn. It settles as `"cancelled"`.
+- `await reclaim()`: Settle a turn whose consumer stopped iterating.
+- `await close()`: Release the conversation so another client can resume it.
+
+- `output_type`: The SDK adds the type's JSON schema to the prompt,
+  validates the reply, and asks again up to `retries` times before raising
+  pydantic's `ValidationError`.
+- `timeout`: The turn is stopped at the deadline and returns a cancelled
+  `Result`. With `output_type` too, a cancelled reply that does not validate
+  raises.
+
+## Turn
+
+A running turn. Iterate it for `ai.events.AgentEvent` values: model events
+plus `ToolCallResult`.
+
+```python
+turn = session.stream(prompt)
+async for event in turn:
+    ...
+turn.result
+turn.settled
+await turn.aclose()
+```
+
+`result` raises `RuntimeError` until the turn settles. A turn can be iterated
+once.
+
+## Result
+
+One settled turn.
+
+| Field | Description |
+|---|---|
+| `finish_reason` | `"stop"`, `"cancelled"`, or `"length"` (Claude Code hit its turn limit). |
+| `text` | The agent's final message, after its last tool call. |
+| `messages` | The conversation as of settling. |
+| `usage` | [`ai.types.usage.Usage`](/docs/reference/types). Claude Code reports cost in `usage.raw["cost_usd"]`. |
+| `output` | The validated value when the turn ran with `output_type`. |
+| `prompt_sent` | Exactly what the agent received. |
+| `approval_errors` | Approval hooks that raised or timed out. Those calls were denied. |
+| `cancelled` | `True` when `finish_reason` is `"cancelled"`. |
+
+## Tui
+
+A conversation a person drives in the CLI's own TUI.
+
+```python
+tui.session_id
+tui.handle
+tui.pty
+await tui.detach()
+await tui.close()
+```
+
+- `session_id` and `handle` are `None` for a bare `tui()` on Codex, which
+  picks its own id. Find the conversation later with `sessions()`.
+- `pty` is the `Pty` to attach with `ai.workspaces.experimental.tty.bridge`.
+- `detach()` drops the connection. A named TUI keeps running.
+- `close()` ends the TUI and releases the conversation.
+
+## SessionInfo
+
+One conversation in the CLI's store.
+
+| Field | Description |
+|---|---|
+| `kind` | `"claude-code"` or `"codex"`. |
+| `session_id` | The CLI's own id. |
+| `title` | The conversation's title or first prompt, or `None`. |
+| `cwd` | The directory it ran in, or `None`. |
+| `updated_at`, `created_at` | Timestamps as the CLI reports them, or `None`. |
+| `running` | `True` when a process has the conversation open. An SDK client or `agent.tui()` holds it, so `resume()` would raise `SessionBusyError`. A CLI started in a terminal shows as running too: any `claude`, and a `codex` started as `codex resume <id>`. `resume()` does not check for those. |
+| `pid` | The process that has it open, in the workspace, or `None`. |
+
+## Handle
+
+A conversation as plain, serializable data.
+
+| Field | Description |
+|---|---|
+| `kind` | `"claude-code"` or `"codex"`. |
+| `session_id` | The CLI's own id. |
+| `workspace` | `WorkspaceCoords`. |
+| `options` | Configuration the conversation was created with. |
+| `harness_version` | CLI version, or `None`. |
+
+A handle carries no approval hook and no key.
+
+## harness_from
+
+```python
+async with harnesses.harness_from(
+    handle,
+    *,
+    fork=False,
+    approve=None,
+    approval_timeout=300.0,
+    gateway=None,
+) as session:
+    ...
+```
+
+Rebuilds the harness and workspace a `Handle` names, and yields its
+conversation: resumed, or forked with `fork=True`. The harness closes when
+the block ends; the rebuilt workspace is not closed. Raises
+`ResumeFailedError` for an unknown harness kind.
+
+## workspace_from
+
+```python
+workspace = harnesses.workspace_from(coords)
+```
+
+Rebuilds a `Local` or `VercelSandbox` from `WorkspaceCoords`. A sandbox is
+reconnected by name. Other providers raise `WorkspaceError`.
+
+## Approvals
+
+### ApprovalContext
+
+What an approval hook decides with. It has no control verbs: the agent is
+waiting on the decision.
+
+| Field | Description |
+|---|---|
+| `call` | The `ToolCall` being decided. |
+| `history` | The conversation so far. |
+| `workspace` | The workspace the CLI runs in. |
+| `harness` | `"claude-code"` or `"codex"`. |
+| `session_id` | The conversation's id. |
+| `prompt` | The turn's prompt on Claude Code; `None` on Codex. |
+
+### ToolCall
+
+One tool call, as the CLI described it.
+
+| Field | Description |
+|---|---|
+| `id` | Call id. |
+| `name` | The CLI's native tool name, such as `Bash` or `fileChange`. Codex names shell calls `commandExecution`; the command is in `input`. |
+| `input` | Native arguments. |
+| `title` | Display text. Do not key policy on it. |
+| `kind` | A hint the CLI supplied, or `None`. |
+| `agent_id` | Set when a subagent made the call. |
+| `hints` | Extras the CLI supplied. |
+| `raw` | The untouched native payload. |
+
+### Allow
+
+```python
+harnesses.Allow(input=None, remember=False)
+```
+
+Lets the call run. `input` rewrites the arguments where
+`capabilities.rewrite_tool_input` is true (Claude Code only). `remember` is
+not supported on either harness. An unsupported option denies the call and
+raises `UnsupportedError` from the turn.
+
+### Deny
+
+```python
+harnesses.Deny(reason="", *, stop=False)
+```
+
+Blocks the call. `Deny("stay in the repo")` and `Deny(reason="stay in the
+repo")` are the same. `reason` reaches the agent where
+`capabilities.deny_reason` is true (Claude Code only). `stop=True` also ends
+the turn.
+
+### Decision
+
+`Allow | Deny`.
+
+## Capabilities
+
+What a harness can do, declared before anything runs. Read it from
+`agent.capabilities`.
+
+| Capability | Description | Claude Code | Codex |
+|---|---|---|---|
+| `run` | Run a prompt and wait for the result: `run()`. | yes | yes |
+| `stream` | Iterate a turn's events as they arrive: `stream()`. | yes | yes |
+| `steer` | Send guidance to the turn that is running: `session.steer()`. | yes | yes |
+| `stop` | Interrupt the running turn; it settles as cancelled: `session.stop()`. | yes | yes |
+| `resume` | Continue a conversation this process did not create: `resume()`, `harness_from()`. | yes | yes |
+| `fork` | Branch a conversation into a new one with the same past: `fork()`. | yes | yes |
+| `history` | Read stored transcripts in full, tool calls included: `history()`, `sessions()`. | yes | yes |
+| `images` | The CLI accepts image input. `run()` and `stream()` send text only today. | yes | yes |
+| `rewrite_tool_input` | Rewrite a call's arguments before it runs: `Allow(input={...})`. | yes | no |
+| `deny_reason` | The reason in `Deny(reason)` reaches the agent. Without it the call is still denied, but the reason is dropped. | yes | no |
+| `remember_decisions` | Keep an approval for the rest of the session: `Allow(remember=True)`. | no | no |
+| `approval` | Which tool calls reach the hook. `"policy"`: the CLI's own policy decides, so not every call does. | `"policy"` | `"policy"` |
+
+`approval` is an `ApprovalCoverage`:
+
+| Value | Meaning |
+|---|---|
+| `"all"` | Every tool call reaches the hook. |
+| `"policy"` | The CLI's own policy decides which calls reach the hook. |
+| `"none"` | No approval channel. |
+
+`capabilities.approve` is `True` unless `approval` is `"none"`.
+
+## Errors
+
+`ai.harnesses.experimental.errors` contains the harness errors. They
+subclass `HarnessError`, which subclasses `ai.errors.AIError`, except
+`NotAuthenticatedError`.
+
+| Error | Meaning | Attributes |
+|---|---|---|
+| `UnsupportedError` | The harness lacks a capability. | `harness`, `capability` |
+| `HarnessClosedError` | The harness is not open. | |
+| `ExecutableMissingError` | The CLI is not runnable in the workspace. | `kind`, `executable`, `install` |
+| `SessionBusyError` | Another client holds the conversation. Claims live in the workspace under `~/.ai-python/locks/`. | `session_id`, `holder_pid` |
+| `ResumeFailedError` | The conversation could not be reopened. | `session_id` |
+| `AgentCrashedError` | The CLI process died. | `harness`, `detail`, `exit_code` |
+| `TurnFailedError` | The CLI reported the turn as failed. | `harness`, `detail` |
+| `NotAuthenticatedError` | No credentials where the CLI runs. Re-exported from `ai.workspaces.experimental.errors`, so it subclasses `WorkspaceError`. | `harness`, `detail`, `hint` |

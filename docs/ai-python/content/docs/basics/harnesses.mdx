@@ -1,0 +1,415 @@
+---
+title: Harnesses
+description: Drive Claude Code and Codex from Python.
+type: guide
+summary: Run turns on coding-agent CLIs, stream events, steer, stop, approve tool calls, resume conversations, and open the CLI's own TUI.
+---
+
+A harness drives a coding-agent CLI you already have, `claude` or `codex`.
+Your program sends prompts. The CLI does the agent work with its own tools,
+login, and session store. The same code runs on either CLI, on this machine or
+in a [workspace](/docs/basics/workspaces) such as a Vercel Sandbox.
+
+This API is experimental and may change or be removed.
+
+Each harness needs its CLI installed. See [Harnesses](#harnesses).
+
+## Run a prompt
+
+```python title="harness_run.py"
+import asyncio
+
+from ai.harnesses import experimental as harnesses
+from ai.workspaces import experimental as workspaces
+
+
+async def main() -> None:
+    async with harnesses.claude_code(workspace=workspaces.Local(".")) as agent:
+        result = await agent.run("What does this repo do? One sentence.")
+
+    print(result.text)
+    print(result.finish_reason, result.usage.output_tokens)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+`claude_code()` and `codex()` return a `Harness` and share these arguments,
+so swapping one for the other is a one-word edit:
+
+```python
+agent = harnesses.codex(workspace=workspaces.Local("."), effort="high")
+```
+
+| Argument | Description | Default |
+|---|---|---|
+| `workspace` | Where the CLI runs. | required |
+| `approve` | Approval hook. See [Approve tool calls](#approve-tool-calls). | `None`: every call runs |
+| `approval_timeout` | Seconds a hook may take before the call is denied. | `300.0` |
+| `model` | Model name passed to the CLI. | `None`: the CLI's default |
+| `effort` | `"low"`, `"medium"`, `"high"`, or `"max"`. | `None`: the CLI's default |
+| `gateway` | Upstream model provider LLM Gateway. See [Workspaces](/docs/basics/workspaces#reach-a-model-through-ai-gateway). | `None`: the workspace's gateway |
+| `executable` | CLI name or path. | `"claude"` or `"codex"` |
+
+Each harness adds its own arguments; see [Harnesses](#harnesses).
+
+`run()` returns a `Result`:
+
+| Field | Description |
+|---|---|
+| `text` | The agent's final message, after its last tool call. |
+| `finish_reason` | `"stop"`, `"cancelled"`, or `"length"` (Claude Code hit its turn limit). |
+| `messages` | The conversation so far, as `ai.messages.Message` values. |
+| `usage` | Token usage. |
+| `output` | The validated value when you pass `output_type`. |
+| `prompt_sent` | Exactly what the agent received. |
+| `approval_errors` | Approval hooks that raised or timed out. |
+
+## Harnesses
+
+A missing extra raises `ai.errors.InstallationError` when you call the
+factory. A missing CLI raises `ExecutableMissingError` when the harness
+opens.
+
+### Claude Code
+
+`harnesses.claude_code()` drives the `claude` CLI through
+`claude-agent-sdk`. It needs the `claude-code` extra:
+
+```bash title="Terminal"
+uv add "ai[claude-code]"
+```
+
+It takes only the [shared arguments](#run-a-prompt).
+
+- Tool names are Claude Code's own, such as `Bash`, `Write`, and `Edit`.
+- `result.usage.raw["cost_usd"]` reports the turn's cost.
+
+### Codex
+
+`harnesses.codex()` drives the `codex` CLI over `codex app-server`. It needs
+no extra, only the `codex` CLI.
+
+It takes the [shared arguments](#run-a-prompt), plus:
+
+| Argument | Description | Default |
+|---|---|---|
+| `sandbox` | Codex's own sandbox mode: `"read-only"`, `"workspace-write"`, or `"danger-full-access"`. | `"read-only"` on `Local`, `"danger-full-access"` in a sandbox |
+| `config` | Codex `-c` config overrides. Wins over values derived from `gateway` and `effort`, key by key. | `None` |
+
+- In `"read-only"` mode Codex declines writes. Pass
+  `sandbox="workspace-write"` when it must edit files.
+- In a Vercel Sandbox, leave `sandbox` unset. Codex's own sandbox cannot
+  start inside the VM, so any other mode raises `UnsupportedError` when the
+  harness opens.
+- Tool names are Codex item kinds, such as `commandExecution` and
+  `fileChange`. The shell command is in the call's arguments, never the name.
+- `effort="max"` is sent to Codex as `"xhigh"`.
+
+## Keep a conversation
+
+`agent.run()` uses a throwaway conversation. Use a session for several turns
+that share context:
+
+```python
+session = agent.session()
+await session.run("Read utils.py.")
+result = await session.run("Which function is the slowest?")
+```
+
+The CLI creates the conversation on the first turn, so `session.session_id`
+is empty until then. Read `session.handle` after a turn, not before.
+
+## Stream events
+
+`session.stream()` returns a `Turn`. Iterate it for events, then read
+`turn.result`:
+
+```python
+import ai
+
+turn = session.stream("Refactor utils.py into a package.")
+async for event in turn:
+    if isinstance(event, ai.events.TextDelta):
+        print(event.chunk, end="", flush=True)
+    elif isinstance(event, ai.events.ToolEnd):
+        print(event.tool_call.tool_name, event.tool_call.tool_args)
+    elif isinstance(event, ai.events.ToolCallResult):
+        print(event.results[0].result)
+
+result = turn.result
+```
+
+A turn yields `ai.events.AgentEvent` values: model events plus
+`ToolCallResult`. The same consumers you use with `ai.Agent` streams work
+here. Every event carries `.message`, the assistant message so far.
+
+## Steer and stop
+
+Control verbs live on the session, because only one turn runs at a time:
+
+```python
+turn = session.stream("Refactor utils.py into a package.")
+steered = False
+async for event in turn:
+    if isinstance(event, ai.events.ToolStart) and not steered:
+        await session.steer("Keep it one module; just split the functions.")
+        steered = True
+```
+
+- `steer(text)` sends guidance to the running turn. The agent acts on it
+  before the turn ends. The steer is added to the transcript as a user
+  message.
+- `stop()` ends the turn. It settles as `finish_reason == "cancelled"`, keeps
+  what was streamed, and the session stays usable.
+- `run(..., timeout=seconds)` stops the turn at the deadline and returns a
+  cancelled `Result`. It does not raise, except with `output_type` (see
+  [Structured output](#structured-output)).
+
+A bare `break` leaves the turn running. The next `session.run()` settles it.
+Call `await session.reclaim()` before another `session.stream()`.
+
+## Approve tool calls
+
+Pass `approve=` to decide which tool calls run:
+
+```python
+async def approve(ctx: harnesses.ApprovalContext) -> harnesses.Decision:
+    target = ctx.call.input.get("file_path", "")
+    if target and not ctx.workspace.contains(target):
+        return harnesses.Deny("stay inside the workspace")
+    return harnesses.Allow()
+
+
+async with harnesses.claude_code(
+    workspace=workspaces.Local("."), approve=approve
+) as agent:
+    ...
+```
+
+Without a hook, every tool call is allowed. Nobody is at a terminal to
+answer, so a hook is how you restrict the agent.
+
+The hook receives an `ApprovalContext`:
+
+| Field | Description |
+|---|---|
+| `call` | The `ToolCall`: the CLI's own tool name (`call.name`) and arguments (`call.input`), untranslated. See [Harnesses](#harnesses) for each CLI's names. |
+| `history` | The conversation so far. |
+| `workspace` | The workspace the CLI runs in. |
+| `harness` | `"claude-code"` or `"codex"`. |
+| `session_id` | The conversation's id. |
+| `prompt` | The turn's prompt on Claude Code; `None` on Codex. |
+
+It returns a decision:
+
+| Decision | Effect |
+|---|---|
+| `Allow()` | The call runs. |
+| `Allow(input={...})` | The call runs with rewritten arguments. Claude Code only. |
+| `Deny(reason)` | The call is blocked. On Claude Code the agent reads the reason; on Codex it only learns the call was refused. |
+| `Deny(reason, stop=True)` | The call is blocked and the turn ends. |
+
+- A decision the harness cannot honor, such as `Allow(input=...)` on Codex
+  or `Allow(remember=True)` on either, denies the call and raises
+  `UnsupportedError` from the turn.
+- A hook that raises or runs past `approval_timeout` denies the call. The
+  failure is listed in `result.approval_errors`.
+- The hook is a gate, not an audit log. The CLI decides which calls to ask
+  about, and read-only tools never reach it. Read the event stream to see
+  every call.
+
+## Capabilities
+
+Each harness declares what it can do in `agent.capabilities`, before
+anything runs. Using a capability a harness lacks raises `UnsupportedError`;
+the one exception is `deny_reason`, whose absence only drops the reason.
+
+| Capability | Description | Claude Code | Codex |
+|---|---|---|---|
+| `run` | Run a prompt and wait for the result: `run()`. | yes | yes |
+| `stream` | Iterate a turn's events as they arrive: `stream()`. | yes | yes |
+| `steer` | Send guidance to the turn that is running: `session.steer()`. | yes | yes |
+| `stop` | Interrupt the running turn; it settles as cancelled: `session.stop()`. | yes | yes |
+| `resume` | Continue a conversation this process did not create: `resume()`, `harness_from()`. | yes | yes |
+| `fork` | Branch a conversation into a new one with the same past: `fork()`. | yes | yes |
+| `history` | Read stored transcripts in full, tool calls included: `history()`, `sessions()`. | yes | yes |
+| `images` | The CLI accepts image input. `run()` and `stream()` send text only today. | yes | yes |
+| `rewrite_tool_input` | Rewrite a call's arguments before it runs: `Allow(input={...})`. | yes | no |
+| `deny_reason` | The reason in `Deny(reason)` reaches the agent. Without it the call is still denied, but the reason is dropped. | yes | no |
+| `remember_decisions` | Keep an approval for the rest of the session: `Allow(remember=True)`. | no | no |
+| `approval` | Which tool calls reach the hook. `"policy"`: the CLI's own policy decides, so not every call does. | `"policy"` | `"policy"` |
+
+## Resume and fork
+
+A `Handle` names a conversation as plain data. Save it and continue later,
+from any process:
+
+```python
+saved = session.handle.model_dump_json()
+
+handle = harnesses.Handle.model_validate_json(saved)
+async with harnesses.harness_from(handle, approve=approve) as session:
+    await session.run("Continue.")
+```
+
+A handle holds the harness kind, the CLI's own session id, the workspace, and
+the options. It never holds a hook or a key, so pass `approve=` and `gateway=`
+again. The SDK keeps no registry of conversations. Store handles in your own
+database.
+
+A harness can also read its CLI's store, including conversations a person
+started in a terminal:
+
+```python
+infos = await agent.sessions()
+messages = await agent.history(infos[0].session_id)
+branch = await agent.fork(infos[0].session_id)
+same = await agent.resume(infos[0].session_id)
+```
+
+- `fork()` starts a new conversation with the same past. The original is
+  never written.
+- `resume()` continues the original. Only one client may write a
+  conversation. If another SDK client or an `agent.tui()` holds it,
+  `resume()` raises `SessionBusyError`, and `SessionInfo.running` is `True`.
+- A `claude` or `codex` that a person started in a terminal holds no claim,
+  so `resume()` does not refuse it. `sessions()` still shows it as
+  `running`, with its `pid`: any `claude`, and a `codex` started as
+  `codex resume <id>`. A fresh `codex` names no conversation, so it is not
+  seen. Fork conversations you did not start.
+
+`harness_from(handle, fork=True)` forks instead of resuming.
+
+## Hand off a conversation
+
+Pass `history=` to start a new conversation from an earlier one. It works
+across harnesses and machines:
+
+```python
+history = await claude_agent.history(session_id)  # or result.messages
+result = await codex_agent.run("Carry on.", history=history)
+session = sandbox_agent.session(history=history)
+```
+
+The receiving CLI stores the history natively before the first turn. Tool
+calls keep their original names. Two limits:
+
+- Reasoning cannot go into Claude Code. It is dropped with a warning.
+- Paths point to the source machine. Copy the files and tell the agent where
+  they are now.
+
+## Open the CLI's TUI
+
+`agent.tui()` opens the CLI's own interactive UI on a pseudo-terminal in the
+workspace. Attach your terminal with `tty.bridge`:
+
+```python
+from ai.workspaces.experimental import tty
+
+tui = await agent.tui(session_id, name="work")
+await tty.bridge(tui.pty)  # Ctrl-] detaches
+
+await tty.bridge(await workspace.attach("work"))  # later, from any process
+```
+
+- A `Tui` has `session_id`, `handle`, `pty`, `detach()`, and `close()`. It has
+  no `run`, `steer`, or `stop`, because a person drives it.
+- A `name` keeps the TUI running after you detach. Without one it ends with
+  your connection.
+- `tui(history=...)` starts a new TUI conversation with a past.
+- A bare `tui()` on Codex has `session_id` and `handle` of `None`, because
+  Codex picks its own id. Find the conversation later with `sessions()`.
+- `tty` is POSIX only and needs a real terminal on stdin. Import it
+  explicitly.
+
+## Structured output
+
+Pass `output_type` to `run()`:
+
+```python
+import pydantic
+
+
+class Finding(pydantic.BaseModel):
+    file: str
+    line: int
+    title: str
+
+
+result = await session.run(prompt, output_type=list[Finding], retries=2)
+findings: list[Finding] = result.output
+```
+
+The SDK adds the JSON schema to the prompt, validates the reply, and asks
+again with the error up to `retries` times. Then it raises pydantic's
+`ValidationError`. With `timeout=`, a cancelled reply that does not validate
+raises too. `result.prompt_sent` shows the edited prompt.
+
+## Errors
+
+Harness errors live in `ai.harnesses.experimental.errors`. They subclass
+`HarnessError`, which subclasses `ai.errors.AIError`. `NotAuthenticatedError`
+is shared with workspaces and subclasses `WorkspaceError`.
+
+| Error | Meaning |
+|---|---|
+| `UnsupportedError` | This harness lacks the capability. |
+| `HarnessClosedError` | The harness is not open. |
+| `ExecutableMissingError` | The CLI is not runnable in the workspace. |
+| `SessionBusyError` | Another client writes this conversation. Fork it. |
+| `ResumeFailedError` | The conversation could not be reopened. |
+| `AgentCrashedError` | The CLI process died. |
+| `TurnFailedError` | The CLI reported the turn as failed. |
+| `NotAuthenticatedError` | No credentials where the CLI runs. |
+
+A refusal or a cancelled turn is a normal `Result`, not an error.
+
+## How it works
+
+- **Layering.** Caller, then `Harness`, then one adapter per CLI, then the
+  workspace. Adapters never start processes; they ask the workspace. That is
+  why one adapter runs locally and in a microVM. A workspace knows nothing
+  about harnesses.
+- **A borrowed conversation model.** Messages, parts, events, and usage are
+  the `ai` types. `result.messages` works anywhere `ai` messages do, such as
+  [AI SDK UI](/docs/basics/ai-sdk-ui).
+- **Structured output is a layer.** It only calls `run()`. It is the one
+  place the SDK edits your prompt, which is why `prompt_sent` exists.
+
+## Examples
+
+One runnable file per feature:
+
+- [`examples/harnesses/basic.py`](https://github.com/vercel-labs/ai-python/blob/main/examples/harnesses/basic.py):
+  one prompt.
+- [`examples/harnesses/streaming.py`](https://github.com/vercel-labs/ai-python/blob/main/examples/harnesses/streaming.py):
+  events as they arrive.
+- [`examples/harnesses/steering.py`](https://github.com/vercel-labs/ai-python/blob/main/examples/harnesses/steering.py):
+  redirect a running turn.
+- [`examples/harnesses/tool_approval.py`](https://github.com/vercel-labs/ai-python/blob/main/examples/harnesses/tool_approval.py):
+  an approval hook.
+- [`examples/harnesses/take_over.py`](https://github.com/vercel-labs/ai-python/blob/main/examples/harnesses/take_over.py):
+  fork a conversation you did not start.
+- [`examples/harnesses/resume.py`](https://github.com/vercel-labs/ai-python/blob/main/examples/harnesses/resume.py):
+  save a handle, continue in another process.
+- [`examples/harnesses/handoff.py`](https://github.com/vercel-labs/ai-python/blob/main/examples/harnesses/handoff.py):
+  move a conversation between harnesses.
+- [`examples/harnesses/sandbox.py`](https://github.com/vercel-labs/ai-python/blob/main/examples/harnesses/sandbox.py):
+  the same code in a Vercel Sandbox.
+- [`examples/harnesses/copy_files.py`](https://github.com/vercel-labs/ai-python/blob/main/examples/harnesses/copy_files.py):
+  copy a project in and results out.
+- [`examples/harnesses/reconnect.py`](https://github.com/vercel-labs/ai-python/blob/main/examples/harnesses/reconnect.py):
+  detach, then come back to a sandbox.
+- [`examples/harnesses/tui.py`](https://github.com/vercel-labs/ai-python/blob/main/examples/harnesses/tui.py):
+  the CLI's own TUI, attached to your terminal.
+
+Apps:
+
+- [`examples/apps/afk`](https://github.com/vercel-labs/ai-python/tree/main/examples/apps/afk):
+  a CLI that pushes local conversations into a sandbox TUI and brings them
+  back.
+- [`examples/apps/deepysec`](https://github.com/vercel-labs/ai-python/tree/main/examples/apps/deepysec):
+  a security-scanning pipeline with fan-out across sandboxes and structured
+  output.

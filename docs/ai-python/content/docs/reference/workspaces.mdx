@@ -1,0 +1,317 @@
+---
+title: "ai.workspaces.experimental"
+description: Reference for places where harnesses run.
+type: reference
+summary: Reference for Local, VercelSandbox, Workspace, copy, Process, Pty, Gateway, tty, and workspace errors.
+---
+
+`ai.workspaces.experimental` contains the places a
+[harness](/docs/reference/harnesses) runs: a local directory or a Vercel
+Sandbox. See [Workspaces](/docs/basics/workspaces) for a guide.
+
+This API is experimental and may change or be removed.
+
+```python
+from ai.workspaces import experimental as workspaces
+
+async with workspaces.Local("./project") as workspace:
+    result = await workspace.exec(["ls"])
+```
+
+## Local
+
+```python
+workspaces.Local(path, *, env=None, gateway=None)
+```
+
+A directory on this machine. `open()` creates it when missing. `close()`
+ends every process it spawned.
+
+| Argument | Description | Default |
+|---|---|---|
+| `path` | Directory path. `~` is expanded. | required |
+| `env` | Environment for everything run here, on top of this process's environment. | `None` |
+| `gateway` | Upstream model provider LLM Gateway, as a `Gateway`. The credential goes in the CLI's environment. | `None` |
+
+## VercelSandbox
+
+```python
+workspaces.VercelSandbox(
+    *,
+    token=None,
+    team_id=None,
+    project_id=None,
+    workdir="/vercel/sandbox",
+    snapshot=None,
+    image=None,
+    env=None,
+    forward_project_env=False,
+    env_file=None,
+    project_root=None,
+    execution_time_limit=None,
+    ports=None,
+    name=None,
+    keep=None,
+    gateway=None,
+    allow_hosts=(),
+)
+```
+
+A Vercel Sandbox microVM. Needs the `sandbox` extra with interactive PTY
+support, and raises `ai.errors.InstallationError` when it is missing.
+
+| Argument | Description | Default |
+|---|---|---|
+| `token`, `team_id`, `project_id` | Vercel credentials. A project (OIDC) token alone is enough: it names its own team and project. | `None`: read from the environment or `.env.local` |
+| `workdir` | Working directory in the VM. | `"/vercel/sandbox"` |
+| `snapshot` | Snapshot id to start from. | `None` |
+| `image` | Vercel Container Registry image a new VM boots from (`"repo:tag"`, `"team/project/repo@sha256:..."`). Raises `ValueError` with `name` or `snapshot`. Harnesses need `python3` in the image, and `npm` to install their CLI. | `None`: the platform's default image |
+| `env` | Environment for everything run in the VM. | `None` |
+| `forward_project_env` | Also send every non-credential variable from `.env.local`. | `False` |
+| `env_file` | Path to the env file. | `None`: the nearest `.env.local`, searching up from `project_root` to the repository root |
+| `project_root` | Where to start searching for `.env.local`. | `None`: the current directory |
+| `execution_time_limit` | VM lifetime in seconds. | `None`: the platform's default |
+| `ports` | Ports to expose when the VM is created. | `None` |
+| `name` | Reconnect to an existing sandbox instead of creating one. | `None`: create one |
+| `keep` | Whether `close()` leaves the VM running. | `None`: `False` for a sandbox you created, `True` for one you reconnected to |
+| `gateway` | Upstream model provider LLM Gateway, as a `Gateway`. Locks outbound traffic to an allowlist and injects the credential at the firewall; see [Workspaces](/docs/basics/workspaces#reach-a-model-through-ai-gateway). | `None` |
+| `allow_hosts` | Extra hosts the VM may reach when `gateway` is set. | `()` |
+
+Beyond `Workspace`, a sandbox has `name`: the platform's name for it, or
+`None` before it exists; and `image`: once open, the digest-pinned reference
+the platform reports for the VM (`"vercel/sandbox/node@sha256:..."` for
+`"vercel/sandbox/node:24"`; the tag is not kept), also after reconnecting by
+`name`, and before that the one passed in, or `None` for the default.
+
+`open()` with `name` raises `WorkspaceGoneError` when the sandbox is stopped
+or missing, `WorkspaceError` when it cannot be reached or was created without
+credential injection for the requested gateway, and `NotAuthenticatedError`
+when the Vercel credentials are rejected.
+
+## Workspace
+
+The base class both workspaces implement. Use it as an async context
+manager, or call `open()` and `close()`.
+
+```python
+workspace.kind
+workspace.owner
+workspace.duplex_spawn
+workspace.path
+workspace.coords
+workspace.env
+workspace.gateway
+```
+
+| Property | Description |
+|---|---|
+| `kind` | `"local"` or `"sandbox"`. |
+| `owner` | `"user"` or `"provider"`. The SDK installs a missing CLI only on a provider-owned workspace. |
+| `duplex_spawn` | Whether `spawn()` gives a writable stdin. `True` on both. |
+| `path` | The working directory as the agent sees it. |
+| `coords` | `WorkspaceCoords` for this workspace. A `VercelSandbox` raises `WorkspaceError` before it is open. |
+| `env` | Environment for everything run here. |
+| `gateway` | The workspace's `Gateway`, or `None`. |
+
+Methods:
+
+- `await open()` and `await close()`.
+- `await exec(argv, *, env=None, timeout=None)`: Run a command to
+  completion. Returns `ExecResult`. On `Local`, a program that cannot start
+  gives `exit_code=127`, and `timeout` kills the command and raises
+  `TimeoutError`.
+- `await spawn(argv, *, env=None)`: Start a process with duplex stdio.
+  Returns `Process`.
+- `await pty(argv, *, env=None, name=None, size=None)`: Run a program on a
+  pseudo-terminal. Returns `Pty`. A `name` keeps it running after you
+  detach; a name already running raises `WorkspaceError`. `size` is
+  `(cols, rows)`, `(80, 24)` by default.
+- `await attach(name)`: Reconnect to a named pty. Returns `Pty`. Raises
+  `WorkspaceError` when none is running.
+- `await ptys()`: List named ptys still running. Returns `list[PtyInfo]`.
+- `await read_text(path)`, `await read_bytes(path)`: Read a file. Relative
+  paths resolve against `path`. Raise `FileNotFoundError` when it is
+  missing.
+- `await write_text(path, data)`: Write a file, creating parent directories.
+- `await exists(path)`: Whether a path exists.
+- `await home()`: The home directory on the workspace's machine. The SDK
+  keeps its state there, under `~/.ai-python/` (session locks, named ptys).
+- `await reachable_url(port)`: A URL the agent can reach for a port.
+- `contains(candidate)`: Whether an absolute path is inside `path`. Pure-path
+  check; relative paths return `False`.
+- `injects_credentials_for(host)`: Whether requests to `host` get the
+  credential at egress.
+- `workspace / "path"`: Build a `WorkspacePath`.
+
+## copy
+
+```python
+await workspaces.copy(source, dest, *, ignore=None, gitignore=True)
+```
+
+Copy a directory between your machine and a workspace, or between two
+workspaces. Mark the workspace side with `workspace / "path"`. Two plain paths
+raise `TypeError`.
+
+| Argument | Description | Default |
+|---|---|---|
+| `source`, `dest` | `str`, `Path`, or `WorkspacePath`. | required |
+| `ignore` | Glob patterns to skip. | `None`: common noise such as `.git`, `node_modules`, `.venv`, and caches |
+| `gitignore` | Also skip what the tree's `.gitignore` files exclude. | `True` |
+
+Returns the number of files copied.
+
+## contains
+
+```python
+workspaces.contains(root, candidate)
+```
+
+Pure-path containment. Returns `True` when `candidate` is an absolute path
+inside `root`. Does not touch the filesystem.
+
+## WorkspacePath
+
+A path and the workspace it lives in. Built with `workspace / "path"`.
+Supports `/` for sub-paths. `str()` gives `"kind:path"`.
+
+| Field | Description |
+|---|---|
+| `workspace` | The `Workspace`. |
+| `path` | The path inside it. |
+
+## WorkspaceCoords
+
+A serializable locator for a workspace. A harness `Handle` carries it.
+
+| Field | Description |
+|---|---|
+| `provider` | `"local"` or `"sandbox"`. |
+| `location` | The directory, or the sandbox's name. |
+| `options` | Provider options, such as the sandbox `workdir`. |
+
+## ExecResult
+
+A finished command.
+
+| Field | Description |
+|---|---|
+| `exit_code` | The exit status. |
+| `stdout` | Standard output, as text. |
+| `stderr` | Standard error, as text. |
+
+## Process
+
+A live process from `spawn()`.
+
+```python
+process.pid
+await process.write(data)
+await process.readline()
+await process.read_stderr()
+await process.os_pid()
+await process.wait()
+await process.detach()
+await process.terminate()
+await process.kill()
+```
+
+- `pid`: Local pid, or `None` in a sandbox.
+- `os_pid()`: The pid where the process runs, or `None` when unknown.
+- `detach()`: Release the handle and leave the process running, where the
+  workspace allows it. On `Local` this is `terminate()`.
+- `terminate()`: Returns only once the process is gone. In a sandbox it
+  raises `WorkspaceError` when the process survives `SIGKILL`.
+- `wait()`: The exit status.
+
+## Pty
+
+The master side of a pseudo-terminal.
+
+```python
+pty.name
+pty.pid
+await pty.send(data)
+await pty.receive()
+await pty.resize(cols, rows)
+await pty.detach()
+await pty.close()
+await pty.wait()
+```
+
+- `name`: Set for a named pty, otherwise `None`.
+- `pid`: The program's pid where it runs.
+- `send(data)` and `receive()` take and return `bytes`. `receive()` returns
+  `b""` when the program has ended.
+- `resize(cols, rows)` changes the window size.
+- `detach()` drops the connection. A named program keeps running; an unnamed
+  one ends.
+- `close()` ends the program.
+- `wait()` returns the exit status, or `None` when the connection ended
+  first.
+
+## PtyInfo
+
+A named pty listed by `ptys()`.
+
+| Field | Description |
+|---|---|
+| `name` | What `attach()` takes. |
+| `pid` | The program's pid. |
+| `attached` | Whether a client is connected. Attaching anyway takes it over. |
+
+## Gateway
+
+Where a CLI reaches its model: a base URL and a credential.
+
+```python
+gateway = workspaces.Gateway(base_url="https://...", credential="...")
+gateway.host          # hostname of base_url
+gateway.is_brokered   # True when credential is the placeholder
+gateway.brokered()    # a copy with the placeholder credential
+```
+
+The placeholder is `"ai-python-brokered-credential"`. Harnesses hand it to
+the CLI on a workspace that injects the real key at egress.
+
+## vercel_ai_gateway
+
+```python
+workspaces.vercel_ai_gateway(
+    *,
+    api_key=None,
+    base_url="https://ai-gateway.vercel.sh",
+)
+```
+
+Returns a `Gateway` for Vercel AI Gateway. `api_key` defaults to
+`AI_GATEWAY_API_KEY`. Raises `NotAuthenticatedError` when there is no key.
+
+## tty
+
+`ai.workspaces.experimental.tty` attaches this process's terminal to a
+`Pty`. It is POSIX only and is not imported by the package:
+
+```python
+from ai.workspaces.experimental import tty
+
+status = await tty.bridge(pty, detach_key=tty.DETACH_KEY)
+```
+
+- `bridge` puts the terminal in raw mode, forwards input, output, and window
+  size, and restores the terminal on the way out.
+- It returns the program's exit status, or `None` when you detach or the
+  connection ends.
+- `DETACH_KEY` is Ctrl-] (`b"\x1d"`). Pass `detach_key=None` to disable it.
+- It raises `RuntimeError` when stdin is not a terminal.
+
+## Errors
+
+`ai.workspaces.experimental.errors` contains the workspace errors. All
+subclass `WorkspaceError`, which subclasses `ai.errors.AIError`.
+
+| Error | Meaning | Attributes |
+|---|---|---|
+| `WorkspaceError` | The workspace could not do what was asked. | |
+| `WorkspaceGoneError` | The workspace no longer exists. Any other `WorkspaceError` may mean it still does. | |
+| `NotAuthenticatedError` | No usable credentials where the CLI runs, or for the sandbox. | `harness`, `detail`, `hint` |
