@@ -4,10 +4,11 @@
     afk push [id] [--bg]     into a sandbox: the TUI there, or unattended
     afk attach <id>          your terminal, back on its TUI (reopened if it
                              exited)
-    afk peek <id>            watch an unattended agent, read-only
+    afk peek <id>            watch a conversation, read-only, here or pushed
     afk pull <id> [--files]  bring it home, in the TUI; --files brings its
                              edits too
-    afk stop <id>            end its sandbox
+    afk stop <id>            end its sandbox; here, end the process it is
+                             open in
     afk setup                choose the Vercel team afk's sandboxes use
 
 An id is whatever the list showed: a label you gave (`--as`), a word from a
@@ -16,6 +17,8 @@ is chosen; with several in play, afk asks. Ctrl-] detaches from any TUI.
 
 On a terminal, bare `afk` is a picker: arrow keys choose a conversation,
 Enter or a letter runs the command shown for it, q leaves the list as is.
+Enter puts you in the conversation: its harness's own resume for one here,
+attach for a pushed one, or a peek at one something else is driving.
 """
 
 from __future__ import annotations
@@ -275,9 +278,10 @@ async def main_async(argv: list[str]) -> int:
         return 0
     try:
         gw = gateway()
-        # Vercel is needed only once a sandbox is: never for a directory
-        # with nothing pushed, so a first `afk` asks nothing.
-        needs_sandbox = args.verb is not None or bool(
+        # Vercel is needed only once a sandbox is: a push, or a directory
+        # with something pushed from it. A first `afk` asks nothing, nor a
+        # peek at a conversation here.
+        needs_sandbox = args.verb == "push" or bool(
             st.load().for_origin(str(cwd))
         )
         remote_gw = (
@@ -291,13 +295,24 @@ async def main_async(argv: list[str]) -> int:
     try:
         # Each verb gathers only what it needs: the list asks everything;
         # push needs this directory's conversations; the rest need afk's
-        # own record of what it pushed, and then that one sandbox.
+        # own record of what it pushed, and then that one sandbox. Peek and
+        # stop work here too: when nothing pushed matches, they look here.
         if args.verb is None:
             if sys.stdin.isatty() and sys.stdout.isatty():
                 chosen = await picking(
                     cwd, gw, remote_gw, everything=args.everything
                 )
-                return 0 if chosen is None else await main_async(chosen)
+                if chosen is None:
+                    return 0
+                if chosen[0] == "afk":
+                    return await main_async(chosen[1:])
+                # A harness's own command: afk is done, the terminal is its.
+                sys.stdout.flush()
+                try:
+                    os.execvp(chosen[0], chosen)
+                except OSError as exc:
+                    print(f"afk: could not run {chosen[0]}: {exc.strerror}")
+                    return 1
             await listing(cwd, gw, remote_gw, everything=args.everything)
             return 0
         if args.verb == "push":
@@ -319,11 +334,20 @@ async def main_async(argv: list[str]) -> int:
                 local_gateway=gw,
             )
             return 0
-        row = choose(
-            stored_rows(st.load(), cwd), args.id, where="remote", verb=args.verb
-        )
+        rows = stored_rows(st.load(), cwd)
+        if args.verb in ("peek", "stop") and not any(
+            r.matches(args.id) for r in rows
+        ):
+            rows, _, _ = await local_rows(cwd, gw)
+        row = choose(rows, args.id, where=None, verb=args.verb)
         if row is None:
             return 1
+        if row.where == "here":
+            if args.verb == "peek":
+                await verbs.peek(row, gw, cwd=cwd)
+            else:
+                await verbs.stop(row, None)
+            return 0
         try:
             if args.verb == "attach":
                 await verbs.attach(row, remote_gw)

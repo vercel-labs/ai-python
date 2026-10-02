@@ -66,15 +66,18 @@ async def _press(*keys: str, remote_delay: float = 0.0) -> Picker:
 @pytest.mark.parametrize(
     ("keys", "argv"),
     [
-        (["enter"], ["push", "a3f5aaaa"]),
-        (["b"], ["push", "a3f5aaaa", "--bg"]),
-        (["down", "down", "enter"], ["attach", "c2d1dddd"]),
-        (["down", "down", "down", "enter"], ["peek", "9e7feeee"]),
-        (["down", "down", "p"], ["peek", "c2d1dddd"]),
-        (["down", "down", "down", "p"], ["peek", "9e7feeee"]),
-        (["down", "down", "l"], ["pull", "c2d1dddd"]),
-        (["down", "down", "f"], ["pull", "c2d1dddd", "--files"]),
-        (["down", "down", "s", "y"], ["stop", "c2d1dddd"]),
+        (["enter"], ["claude", "--resume", "a3f5aaaa"]),
+        (["down", "enter"], ["codex", "resume", "01a0cccc"]),
+        (["p"], ["afk", "peek", "a3f5aaaa"]),
+        (["u"], ["afk", "push", "a3f5aaaa"]),
+        (["b"], ["afk", "push", "a3f5aaaa", "--bg"]),
+        (["down", "down", "enter"], ["afk", "attach", "c2d1dddd"]),
+        (["down", "down", "down", "enter"], ["afk", "peek", "9e7feeee"]),
+        (["down", "down", "p"], ["afk", "peek", "c2d1dddd"]),
+        (["down", "down", "down", "p"], ["afk", "peek", "9e7feeee"]),
+        (["down", "down", "l"], ["afk", "pull", "c2d1dddd"]),
+        (["down", "down", "f"], ["afk", "pull", "c2d1dddd", "--files"]),
+        (["down", "down", "s", "y"], ["afk", "stop", "c2d1dddd"]),
     ],
 )
 async def test_keys_choose_a_command(keys: list[str], argv: list[str]) -> None:
@@ -84,6 +87,7 @@ async def test_keys_choose_a_command(keys: list[str], argv: list[str]) -> None:
 @pytest.mark.parametrize(
     ("downs", "keys"),
     [
+        (0, "enter resume · p peek · u push · b push --bg · q quit"),
         (
             2,
             "enter attach · p peek · l pull · f pull --files · s stop · q quit",
@@ -132,4 +136,81 @@ async def test_local_rows_are_there_while_sandboxes_answer() -> None:
         await pilot.pause(0.1)
         assert app.remote_rows is None
         await pilot.press("enter")
-    assert app.return_value == ["push", "a3f5aaaa"]
+    assert app.return_value == ["claude", "--resume", "a3f5aaaa"]
+
+
+IN_USE = [
+    # Open in another terminal, and the harness can say which process.
+    Row(
+        where="here",
+        kind="claude-code",
+        session_id="77e1ffff",
+        title="refactor the router",
+        status="in use 1m",
+        running=True,
+        pid=4242,
+    ),
+    # Open somewhere, but no process afk could stop: the SDK lock's
+    # pid-less moment, say.
+    Row(
+        where="here",
+        kind="codex",
+        session_id="5b0c0000",
+        title="write the changelog",
+        status="in use 3m",
+        running=True,
+    ),
+]
+
+
+async def _press_in_use(*keys: str) -> tuple[Picker, str]:
+    app = Picker(Text("~/proj"), IN_USE, None)
+    async with app.run_test(size=(100, 20)) as pilot:
+        await pilot.pause(0.1)
+        for key in keys:
+            await pilot.press(key)
+        await pilot.pause(0.05)
+        shown = str(app.query_one("#keys", Static).render())
+    return app, shown
+
+
+@pytest.mark.parametrize(
+    ("keys", "argv"),
+    [
+        # Enter cannot resume what another terminal is writing: it peeks.
+        (["enter"], ["afk", "peek", "77e1ffff"]),
+        (["down", "enter"], ["afk", "peek", "5b0c0000"]),
+        (["s", "y"], ["afk", "stop", "77e1ffff"]),
+        (["u"], ["afk", "push", "77e1ffff"]),
+    ],
+)
+async def test_a_conversation_open_elsewhere(
+    keys: list[str], argv: list[str]
+) -> None:
+    app, _ = await _press_in_use(*keys)
+    assert app.return_value == argv
+
+
+async def test_stop_here_names_the_process_it_ends() -> None:
+    _, shown = await _press_in_use("s")
+    assert shown == "stop 77e1 (claude, pid 4242)? y/N"
+
+
+@pytest.mark.parametrize(
+    ("downs", "keys"),
+    [
+        (0, "enter peek · s stop · u push · b push --bg · q quit"),
+        # no process afk can name: nothing to stop
+        (1, "enter peek · u push · b push --bg · q quit"),
+    ],
+)
+async def test_stop_is_offered_only_with_a_process(
+    downs: int, keys: str
+) -> None:
+    _, shown = await _press_in_use(*(["down"] * downs))
+    assert shown == keys
+
+
+async def test_stop_does_nothing_without_a_process() -> None:
+    app, _ = await _press_in_use("down", "s", "y")
+    assert app.return_value is None

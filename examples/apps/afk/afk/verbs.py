@@ -2,9 +2,9 @@
 
 push   — copy it into a sandbox and open the TUI there (or run it unattended).
 attach — your terminal, back on its TUI; reopened there if it had exited.
-peek   — watch an unattended agent's transcript, read-only.
+peek   — watch a conversation's transcript, read-only, here or there.
 pull   — bring a conversation home and open it here; --files brings its edits.
-stop   — end its sandbox; each push has its own.
+stop   — end its sandbox, each push has its own; here, end its process.
 
 Nothing here depends on how a conversation began: `push` reads the
 harness's own store, so a conversation started by typing `claude` in a
@@ -15,7 +15,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
 import shutil
+import signal
 import sys
 import tempfile
 from datetime import timedelta
@@ -278,26 +280,42 @@ PEEK_QUIET = 8.0
 
 
 async def peek(
-    row: Row, gateway: Gateway | None, *, every: float = 2.0
+    row: Row,
+    gateway: Gateway | None,
+    *,
+    cwd: Path | None = None,
+    every: float = 2.0,
 ) -> None:
-    """Follow an unattended agent's transcript.
+    """Follow a conversation's transcript: one pushed, or one here (`cwd`),
+    maybe open in another terminal.
 
     Read-only: it reads the stored record, so it never becomes a second writer.
     Returns when the agent has finished its turn; Ctrl-C stops watching, never
     the agent.
     """
-    if row.handle is None or not row.sandbox:
+    if row.where == "here" and cwd is not None:
+        ws: Local | VercelSandbox = Local(cwd, gateway=gateway)
+        where = "here"
+    elif row.handle is not None and row.sandbox:
+        ws = VercelSandbox(name=row.sandbox, gateway=gateway)
+        where = row.sandbox
+    else:
         raise HarnessError("nothing to peek at")
+    # Only a pushed one has a home to come back to.
+    home = (
+        ""
+        if row.where == "here"
+        else f" · `afk pull {row.label or row.short} --files` brings it home"
+    )
     width = shutil.get_terminal_size().columns
     style = render.Style(color=sys.stdout.isatty())
     name = row.label or row.short
-    async with VercelSandbox(name=row.sandbox, gateway=gateway) as ws:
+    async with ws:
         async with HARNESSES[row.kind](workspace=ws) as agent:
             print(
                 style.dim(
                     f"afk: watching {name} · {KIND_SHORT[row.kind]} · "
-                    f"{row.sandbox} — Ctrl-C stops watching; the agent keeps "
-                    "going"
+                    f"{where} — Ctrl-C stops watching; the agent keeps going"
                 )
             )
             messages = await agent.history(row.session_id)
@@ -330,12 +348,7 @@ async def peek(
                     if i.session_id == row.session_id
                 )
                 if not held:
-                    print(
-                        style.dim(
-                            f"\nafk: {name} is no longer running · `afk pull "
-                            f"{name} --files` brings it home"
-                        )
-                    )
+                    print(style.dim(f"\nafk: {name} is not running{home}"))
                     return
                 if (
                     turn_finished(
@@ -343,12 +356,7 @@ async def peek(
                     )
                     and loop.time() - changed >= PEEK_QUIET
                 ):
-                    print(
-                        style.dim(
-                            f"\nafk: {name} finished its turn · `afk pull "
-                            f"{name} --files` brings it home"
-                        )
-                    )
+                    print(style.dim(f"\nafk: {name} finished its turn{home}"))
                     return
                 await asyncio.sleep(every)
                 messages = await agent.history(row.session_id)
@@ -473,7 +481,26 @@ def _yes(ask: Callable[[str], str], prompt: str) -> bool:
 
 async def stop(row: Row, gateway: Gateway | None) -> None:
     """End the conversation's sandbox — the only reliable way to end what
-    runs in it. Each push has its own, so nothing else goes with it."""
+    runs in it. Each push has its own, so nothing else goes with it.
+
+    Here, end the process that has it open, maybe in another terminal: that
+    terminal gets its prompt back, and the conversation stays, to resume."""
+    if row.where == "here":
+        if row.pid is None:
+            raise HarnessError(
+                f"afk cannot tell which process has {row.short} open"
+                if row.running
+                else f"{row.short} is not open anywhere here"
+            )
+        try:
+            os.kill(row.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            print(f"afk: {row.short} had already exited")
+            return
+        print(
+            f"afk: stopped {row.short} ({KIND_SHORT[row.kind]}, pid {row.pid})"
+        )
+        return
     if not row.sandbox:
         raise HarnessError("nothing to stop")
     # The platform's stop takes a few seconds and cannot be hurried: say so
