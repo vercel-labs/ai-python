@@ -116,16 +116,17 @@ class SessionLock:
             return None
         return holder
 
-    async def running(self) -> set[str]:
-        """Every conversation with a live holder, in one pass."""
+    async def holders(self) -> dict[str, int | None]:
+        """Every conversation with a live holder, and its pid, in one pass."""
         root = await self.root()
         listing = await self._workspace.exec(["ls", root], timeout=30)
-        live: set[str] = set()
+        live: dict[str, int | None] = {}
         for session_id in (
             listing.stdout.split() if listing.exit_code == 0 else []
         ):
-            if await self.holder(session_id) is not None:
-                live.add(session_id)
+            holder = await self.holder(session_id)
+            if holder is not None:
+                live[session_id] = holder.pid
         return live
 
     # -- plumbing ---------------------------------------------------------

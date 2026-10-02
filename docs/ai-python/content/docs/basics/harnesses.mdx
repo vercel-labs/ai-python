@@ -275,8 +275,10 @@ same = await agent.resume(infos[0].session_id)
   conversation. If another SDK client or an `agent.tui()` holds it,
   `resume()` raises `SessionBusyError`, and `SessionInfo.running` is `True`.
 - A `claude` or `codex` that a person started in a terminal holds no claim,
-  so `resume()` cannot tell it is open. Fork conversations you did not
-  start.
+  so `resume()` does not refuse it. `sessions()` still shows it as
+  `running`, with its `pid`: any `claude`, and a `codex` started as
+  `codex resume <id>`. A fresh `codex` names no conversation, so it is not
+  seen. Fork conversations you did not start.
 
 `harness_from(handle, fork=True)` forks instead of resuming.
 

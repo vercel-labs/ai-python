@@ -200,6 +200,7 @@ class Harness:
         running = await self.adapter.running_sessions()
         for info in infos:
             info.running = info.session_id in running
+            info.pid = running.get(info.session_id)
         return infos
 
     async def history(

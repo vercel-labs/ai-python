@@ -218,7 +218,8 @@ One conversation in the CLI's store.
 | `title` | The conversation's title or first prompt, or `None`. |
 | `cwd` | The directory it ran in, or `None`. |
 | `updated_at`, `created_at` | Timestamps as the CLI reports them, or `None`. |
-| `running` | `True` when a client holds the conversation, so `resume()` would raise `SessionBusyError`. |
+| `running` | `True` when a process has the conversation open. An SDK client or `agent.tui()` holds it, so `resume()` would raise `SessionBusyError`. A CLI started in a terminal shows as running too: any `claude`, and a `codex` started as `codex resume <id>`. `resume()` does not check for those. |
+| `pid` | The process that has it open, in the workspace, or `None`. |
 
 ## Handle
 
