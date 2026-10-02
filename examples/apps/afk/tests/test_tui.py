@@ -66,21 +66,23 @@ async def _press(*keys: str, remote_delay: float = 0.0) -> Picker:
 @pytest.mark.parametrize(
     ("keys", "argv"),
     [
-        (["enter"], ["claude", "--resume", "a3f5aaaa"]),
-        (["down", "enter"], ["codex", "resume", "01a0cccc"]),
-        (["p"], ["afk", "peek", "a3f5aaaa"]),
-        (["u"], ["afk", "push", "a3f5aaaa"]),
-        (["b"], ["afk", "push", "a3f5aaaa", "--bg"]),
-        (["down", "down", "enter"], ["afk", "attach", "c2d1dddd"]),
-        (["down", "down", "down", "enter"], ["afk", "peek", "9e7feeee"]),
-        (["down", "down", "p"], ["afk", "peek", "c2d1dddd"]),
-        (["down", "down", "down", "p"], ["afk", "peek", "9e7feeee"]),
-        (["down", "down", "l"], ["afk", "pull", "c2d1dddd"]),
-        (["down", "down", "f"], ["afk", "pull", "c2d1dddd", "--files"]),
-        (["down", "down", "s", "y"], ["afk", "stop", "c2d1dddd"]),
+        (["enter"], [["claude", "--resume", "a3f5aaaa"]]),
+        (["down", "enter"], [["codex", "resume", "01a0cccc"]]),
+        (["p"], [["afk", "peek", "a3f5aaaa"]]),
+        (["u"], [["afk", "push", "a3f5aaaa"]]),
+        (["b"], [["afk", "push", "a3f5aaaa", "--bg"]]),
+        (["down", "down", "enter"], [["afk", "attach", "c2d1dddd"]]),
+        (["down", "down", "down", "enter"], [["afk", "peek", "9e7feeee"]]),
+        (["down", "down", "p"], [["afk", "peek", "c2d1dddd"]]),
+        (["down", "down", "down", "p"], [["afk", "peek", "9e7feeee"]]),
+        (["down", "down", "l"], [["afk", "pull", "c2d1dddd"]]),
+        (["down", "down", "f"], [["afk", "pull", "c2d1dddd", "--files"]]),
+        (["down", "down", "s", "y"], [["afk", "stop", "c2d1dddd"]]),
     ],
 )
-async def test_keys_choose_a_command(keys: list[str], argv: list[str]) -> None:
+async def test_keys_choose_a_command(
+    keys: list[str], argv: list[list[str]]
+) -> None:
     assert (await _press(*keys)).return_value == argv
 
 
@@ -136,8 +138,10 @@ async def test_local_rows_are_there_while_sandboxes_answer() -> None:
         await pilot.pause(0.1)
         assert app.remote_rows is None
         await pilot.press("enter")
-    assert app.return_value == ["claude", "--resume", "a3f5aaaa"]
+    assert app.return_value == [["claude", "--resume", "a3f5aaaa"]]
 
+
+RESUME_77E1 = ["claude", "--resume", "77e1ffff"]
 
 IN_USE = [
     # Open in another terminal, and the harness can say which process.
@@ -177,15 +181,19 @@ async def _press_in_use(*keys: str) -> tuple[Picker, str]:
 @pytest.mark.parametrize(
     ("keys", "argv"),
     [
-        # Enter cannot resume what another terminal is writing: it peeks.
-        (["enter"], ["afk", "peek", "77e1ffff"]),
-        (["down", "enter"], ["afk", "peek", "5b0c0000"]),
-        (["s", "y"], ["afk", "stop", "77e1ffff"]),
-        (["u"], ["afk", "push", "77e1ffff"]),
+        # Enter takes over what another terminal has open, once you say y:
+        # that process ends first, then the TUI opens here.
+        (["enter", "y"], [["afk", "stop", "77e1ffff"], RESUME_77E1]),
+        (["enter", "n"], None),
+        # No process afk can end: Enter peeks.
+        (["down", "enter"], [["afk", "peek", "5b0c0000"]]),
+        (["p"], [["afk", "peek", "77e1ffff"]]),
+        (["s", "y"], [["afk", "stop", "77e1ffff"]]),
+        (["u"], [["afk", "push", "77e1ffff"]]),
     ],
 )
 async def test_a_conversation_open_elsewhere(
-    keys: list[str], argv: list[str]
+    keys: list[str], argv: list[list[str]] | None
 ) -> None:
     app, _ = await _press_in_use(*keys)
     assert app.return_value == argv
@@ -196,10 +204,18 @@ async def test_stop_here_names_the_process_it_ends() -> None:
     assert shown == "stop 77e1 (claude, pid 4242)? y/N"
 
 
+async def test_take_over_asks_first_and_names_the_process() -> None:
+    _, shown = await _press_in_use("enter")
+    assert shown == "take over 77e1 from pid 4242? it ends there. y/N"
+
+
 @pytest.mark.parametrize(
     ("downs", "keys"),
     [
-        (0, "enter peek · s stop · u push · b push --bg · q quit"),
+        (
+            0,
+            "enter take over · p peek · s stop · u push · b push --bg · q quit",
+        ),
         # no process afk can name: nothing to stop
         (1, "enter peek · u push · b push --bg · q quit"),
     ],

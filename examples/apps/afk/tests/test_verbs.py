@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import os
+import signal
 import subprocess
 import sys
 from typing import TYPE_CHECKING, Any
@@ -12,7 +16,7 @@ from afk.rows import Row
 
 from ai.harnesses.experimental import SessionInfo
 from ai.harnesses.experimental.errors import HarnessError
-from ai.types.messages import Message, TextPart
+from ai.types.messages import Message, TextPart, ToolCallPart
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -28,33 +32,70 @@ def _here(**kw: Any) -> Row:
     )
 
 
+def _detached(code: str) -> int:
+    """A process standing in for a CLI in another terminal: not afk's child,
+    so nothing here reaps it, as nothing in afk reaps a real one."""
+    out = subprocess.run(
+        [
+            "sh",
+            "-c",
+            f'"{sys.executable}" -c "{code}" >/dev/null 2>&1 & echo $!',
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return int(out.stdout)
+
+
 @pytest.fixture
 def other_terminal() -> Any:
-    """A process standing in for a CLI in another terminal."""
-    p = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
-    yield p
-    p.kill()
-    p.wait()
+    pids: list[int] = []
+
+    def spawn(code: str = "import time; time.sleep(60)") -> int:
+        pids.append(_detached(code))
+        return pids[-1]
+
+    yield spawn
+    for pid in pids:
+        with contextlib.suppress(ProcessLookupError):
+            os.kill(pid, signal.SIGKILL)
 
 
-async def test_stop_ends_the_process_and_says_which(
-    other_terminal: subprocess.Popen[bytes],
-    capsys: pytest.CaptureFixture[str],
+async def test_stop_returns_once_the_process_is_gone(
+    other_terminal: Any, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    await verbs.stop(_here(running=True, pid=other_terminal.pid), None)
-    assert other_terminal.wait(timeout=10) == -15  # SIGTERM
+    pid = other_terminal()
+    await verbs.stop(_here(running=True, pid=pid), None)
+    # Gone by the time stop returns: a take-over's resume never overlaps it.
+    assert not verbs._alive(pid)
     assert capsys.readouterr().out == (
-        f"afk: stopped 77e1 (claude, pid {other_terminal.pid})\n"
+        f"afk: stopped 77e1 (claude, pid {pid})\n"
     )
 
 
-async def test_stop_of_a_process_already_gone_says_so(
-    other_terminal: subprocess.Popen[bytes],
-    capsys: pytest.CaptureFixture[str],
+async def test_stop_says_when_the_process_will_not_exit(
+    other_terminal: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    other_terminal.kill()
-    other_terminal.wait()
-    await verbs.stop(_here(running=True, pid=other_terminal.pid), None)
+    pid = other_terminal(
+        "import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+        "time.sleep(60)"
+    )
+    await asyncio.sleep(0.5)  # let it install the handler
+    monkeypatch.setattr(verbs, "STOP_WAIT", 0.5)
+    with pytest.raises(HarnessError, match=r"did not exit within 0\.5s"):
+        await verbs.stop(_here(running=True, pid=pid), None)
+    assert verbs._alive(pid)
+
+
+async def test_stop_of_a_process_already_gone_says_so(
+    other_terminal: Any, capsys: pytest.CaptureFixture[str]
+) -> None:
+    pid = other_terminal()
+    os.kill(pid, signal.SIGKILL)
+    while verbs._alive(pid):
+        await asyncio.sleep(0.05)
+    await verbs.stop(_here(running=True, pid=pid), None)
     assert capsys.readouterr().out == "afk: 77e1 had already exited\n"
 
 
@@ -131,3 +172,94 @@ async def test_peek_here_reads_this_directory_and_offers_no_pull(
 async def test_peek_needs_somewhere_to_look() -> None:
     with pytest.raises(HarnessError, match="nothing to peek at"):
         await verbs.peek(_here(), None)
+
+
+def _peek_at(
+    monkeypatch: pytest.MonkeyPatch, messages: list[Message], *, running: bool
+) -> None:
+    agent = _Agent(messages, running=running)
+    monkeypatch.setitem(
+        verbs.HARNESSES, "claude-code", lambda *, workspace: agent
+    )
+
+
+INTERRUPTED = [
+    Message(role="user", parts=[TextPart(text="fix the router")]),
+    Message(
+        role="user", parts=[TextPart(text="[Request interrupted by user]")]
+    ),
+]
+
+
+async def test_peek_stops_when_a_session_open_here_goes_quiet(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # Still open, but its transcript ends on an interrupted turn, which never
+    # reads as a finished one: peek used to follow it forever.
+    _peek_at(monkeypatch, INTERRUPTED, running=True)
+    monkeypatch.setattr(verbs, "PEEK_IDLE", 0.3)
+    await asyncio.wait_for(
+        verbs.peek(_here(), None, cwd=tmp_path, every=0.05), 5
+    )
+    assert (
+        capsys.readouterr().out.rstrip().endswith("it may be waiting for input")
+    )
+
+
+async def test_peek_keeps_following_while_a_tool_call_is_out(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # A long tool call (a test suite) is quiet too, and not idle.
+    call = ToolCallPart(tool_call_id="c1", tool_name="Bash", tool_args="{}")
+    _peek_at(
+        monkeypatch,
+        [INTERRUPTED[0], Message(role="assistant", parts=[call])],
+        running=True,
+    )
+    monkeypatch.setattr(verbs, "PEEK_IDLE", 0.1)
+    with pytest.raises(TimeoutError):
+        await asyncio.wait_for(
+            verbs.peek(_here(), None, cwd=tmp_path, every=0.05), 1
+        )
+    # Stopping the watch says the agent goes on.
+    assert (
+        capsys.readouterr()
+        .out.rstrip()
+        .endswith("afk: 77e1 keeps going; you stopped watching")
+    )
+
+
+async def test_peek_on_a_terminal_says_it_is_following(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _peek_at(monkeypatch, INTERRUPTED, running=True)
+    monkeypatch.setattr(verbs, "PEEK_IDLE", 0.6)
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
+    await asyncio.wait_for(
+        verbs.peek(_here(), None, cwd=tmp_path, every=0.1), 5
+    )
+    out = capsys.readouterr().out
+    assert "following 77e1 · nothing new for 0s · Ctrl-C to stop" in out
+    # Redrawn in place, and cleared before the line that ends it.
+    assert "\r\x1b[2K" in out
+    assert out.rstrip().endswith("it may be waiting for input\x1b[0m")
+
+
+async def test_peek_piped_draws_no_status_line(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _peek_at(monkeypatch, INTERRUPTED, running=True)
+    monkeypatch.setattr(verbs, "PEEK_IDLE", 0.3)
+    await asyncio.wait_for(
+        verbs.peek(_here(), None, cwd=tmp_path, every=0.05), 5
+    )
+    out = capsys.readouterr().out
+    assert "following" not in out and "\x1b" not in out
