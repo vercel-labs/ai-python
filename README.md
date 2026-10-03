@@ -126,8 +126,13 @@ The default loop supports streaming text, tool calls, tool results, provider-exe
 Subclass `ai.Agent` and override `loop` to take manual control of streaming and tool dispatch:
 
 ```python
+from typing import AsyncGenerator
+
+
 class CustomAgent(ai.Agent):
-    async def loop(self, context: ai.Context) -> AsyncGenerator[ai.events.AgentEvent]:
+    async def loop(
+        self, context: ai.Context
+    ) -> AsyncGenerator[ai.events.AgentEvent, None]:
         while context.keep_running():
             async with (
                 ai.stream(context=context) as s,
