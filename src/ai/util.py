@@ -5,7 +5,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import dataclasses
-from collections.abc import AsyncGenerator, MutableSet
+import weakref
+from collections.abc import AsyncGenerator, Callable, MutableSet
 from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
@@ -30,7 +31,7 @@ _EMPTY: Any = _Empty()
 
 @dataclasses.dataclass
 class _Stop:
-    exception: Exception | None = None
+    exception: BaseException | None = None
 
 
 _STOP = _Stop()
@@ -56,7 +57,7 @@ class AsyncIterableQueue[T](asyncio.Queue[_Stop | T]):
                     return
             yield el
 
-    async def athrow(self, e: Exception) -> None:
+    async def athrow(self, e: BaseException) -> None:
         await self.put(_Stop(exception=e))
 
     async def astop(self) -> None:
@@ -207,6 +208,38 @@ class TaskGroup(asyncio.TaskGroup):
             raise
 
 
+_LOOP_CLOSING_MAP: weakref.WeakKeyDictionary[
+    asyncio.AbstractEventLoop, asyncio.Task[None]
+] = weakref.WeakKeyDictionary()
+
+
+def get_loop_closing_checker() -> Callable[[], bool]:
+    """Get a function that checks if the current loop has started closing.
+
+    It only is guaranteed to detect a close that started *after* the call,
+    since we lazily construct the structure used to do it.
+
+    More precisely, the returned function returns whether a dummy task
+    has been cancelled, which in practice will only occur if something
+    cancels *every* task, which occurs when `run` is torn down.
+    """
+
+    async def forever() -> None:
+        await asyncio.Future()
+
+    loop = asyncio.get_running_loop()
+    assert loop
+    if not (t := _LOOP_CLOSING_MAP.get(loop)):
+        t = _LOOP_CLOSING_MAP[loop] = asyncio.create_task(
+            forever(), name="closing-dummy"
+        )
+        # The task references the loop, so drop the entry ourselves.
+        t.add_done_callback(lambda _: _LOOP_CLOSING_MAP.pop(loop, None))
+    # Basically the idea here is that the only way this dummy future
+    # will ever get cancelled is if *all* futures are cancelled.
+    return lambda: t.cancelling() > 0 or t.cancelled()
+
+
 @contextlib.asynccontextmanager
 async def maybe_aclosing(
     iter: AsyncIterable[Any],
@@ -227,7 +260,6 @@ async def maybe_aclosing(
 async def decouple[T](
     iter: AsyncIterable[T],
     *,
-    task_group: asyncio.TaskGroup | None = None,
     buffer: int | None,
 ) -> AsyncGenerator[T]:
     """Drive ``iter`` from a single worker task and yield its items.
@@ -250,6 +282,9 @@ async def decouple[T](
     queue: AsyncIterableQueue[T] = AsyncIterableQueue()
     sem = None if buffer is None else asyncio.Semaphore(buffer)
 
+    done = False
+    is_loop_closing = get_loop_closing_checker()
+
     async def worker() -> None:
         async with maybe_aclosing(iter):
             try:
@@ -261,22 +296,43 @@ async def decouple[T](
                 # TODO: I'm not sure if this case can ever matter, but
                 # think about it more.
 
-                # We don't need to wait before the *first* iteration
+                # We don't need to wait before ther *first* iteration
                 # because we don't get spawned until the first anext()
                 # anyway.
                 async for x in iter:
-                    await queue.put(x)
+                    queue.put_nowait(x)
                     if sem is not None:
-                        await sem.acquire()
-            except Exception as e:
-                await queue.put(_Stop(exception=e))
+                        try:
+                            await sem.acquire()
+                        except asyncio.CancelledError as e:
+                            # Three reasons we might have been cancelled:
+                            # 1. Enclosing decouple()'s finally block
+                            # 2. Approximately *all* tasks being cancelled
+                            # 3. Something internal to the generator body
+                            #    (probably a TaskGroup)
+                            #
+                            # In case 3, we wait again on the sem (to
+                            # preserve lockstep behavior), then we
+                            # re-assert the cancellation so it gets
+                            # delivered back into the generator body
+                            # if it blocks.
+                            if done or is_loop_closing():
+                                raise
+                            await sem.acquire()
+                            # Recancel the task, so that it gets
+                            # delivered, but then also *uncancel* it,
+                            # so the count doesn't go up.
+                            task.cancel(str(e))
+                            task.uncancel()
+                    if done:
+                        break
+            except (Exception, asyncio.CancelledError, BaseExceptionGroup) as e:
+                queue.put_nowait(_Stop(exception=e))
                 return
-        await queue.put(_STOP)
+            else:
+                queue.put_nowait(_STOP)
 
-    if task_group:
-        task = task_group.create_task(worker())
-    else:
-        task = asyncio.create_task(worker())
+    task = asyncio.create_task(worker(), name=f"decouple for {iter}")
 
     try:
         async for el in queue:
@@ -284,6 +340,9 @@ async def decouple[T](
             if sem is not None:
                 sem.release()
     finally:
+        done = True
+        if sem is not None:
+            sem.release()
         # cancel is a no-op if a task is already done or cancelled
         if not task.cancelling():
             task.cancel()

@@ -992,7 +992,7 @@ class ToolRunner:
         Cancel the task and ignore its result.
         """
         self._waiter.discard(task)
-        task.cancel()
+        task.cancel("task discarded")
 
     def add_result(self, res: events_.ToolCallResult) -> None:
         async def _feed() -> events_.ToolCallResult:

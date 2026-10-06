@@ -37,8 +37,7 @@ the consumer:
 - `0`: lockstep. The iterable is only advanced when the consumer asks for an
   item. This is how `merge` drives its sources.
 
-Every step of the iterable runs in the same worker task. Pass
-`task_group` to run the worker in an existing `asyncio.TaskGroup`.
+Every step of the iterable runs in the same worker task.
 
 This makes the lockstep variant useful for when an async generator needs to
 be driven from multiple different tasks.
