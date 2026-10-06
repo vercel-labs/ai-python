@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 from collections.abc import AsyncGenerator, Callable
 from typing import Any, cast
 
@@ -74,6 +75,28 @@ def test_complex_type_schema() -> None:
     props = _schema(send)["properties"]
     assert props["recipients"]["type"] == "array"
     assert props["recipients"]["items"]["type"] == "string"
+
+
+class _Wrapper:
+    def __init__(self, fn: Callable[..., Any]) -> None:
+        self.fn = fn
+        functools.update_wrapper(self, fn)
+
+    async def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        return await self.fn(*args, **kwargs)
+
+
+def test_wrapped_callable_schema() -> None:
+    # On 3.14, update_wrapper copies __annotate__ but not __annotations__.
+    @ai.tool
+    @_Wrapper
+    async def fetch(url: str, timeout: int | None = None) -> str:
+        """Fetch URL."""
+        return url
+
+    props = _schema(fetch)["properties"]
+    assert props["url"]["type"] == "string"
+    assert {"type": "integer"} in props["timeout"]["anyOf"]
 
 
 # -- Execution (ToolCall) --------------------------------------------------
