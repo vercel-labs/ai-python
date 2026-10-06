@@ -5,12 +5,11 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import dataclasses
-from collections.abc import MutableSet
+from collections.abc import AsyncGenerator, MutableSet
 from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
     from collections.abc import (
-        AsyncGenerator,
         AsyncIterable,
         AsyncIterator,
         Collection,
@@ -292,7 +291,52 @@ async def decouple[T](
             await task
 
 
-async def merge[T](
+class AsyncContextManagerGenerator[YieldT, SendT](
+    AsyncGenerator[YieldT, SendT]
+):
+    def __init__(self, iter: AsyncGenerator[YieldT, SendT]) -> None:
+        self._iter = iter
+
+    def __aiter__(self) -> AsyncIterator[YieldT]:
+        return self
+
+    async def __anext__(self) -> YieldT:
+        return await anext(self._iter)
+
+    async def aclose(self) -> None:
+        await self._iter.aclose()
+
+    async def asend(self, value: SendT, /) -> YieldT:
+        return await self._iter.asend(value)
+
+    async def athrow(self, *args: Any) -> YieldT:
+        return await self._iter.athrow(*args)
+
+    async def __aenter__(
+        self,
+    ) -> AsyncContextManagerGenerator[YieldT, SendT]:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        await self.aclose()
+
+
+def merge[T](
+    *aiterables: AsyncIterable[T],
+    restart: bool = True,
+    priority: bool = False,
+) -> AsyncContextManagerGenerator[T, None]:
+    return AsyncContextManagerGenerator(
+        _merge(*aiterables, restart=restart, priority=priority)
+    )
+
+
+async def _merge[T](
     *aiterables: AsyncIterable[T],
     restart: bool = True,
     priority: bool = False,

@@ -13,8 +13,9 @@ summary: Reference for ai.util.
 become available.
 
 ```python
-async for event in ai.util.merge(stream, tool_runner.events()):
-    ...
+async with ai.util.merge(stream, tool_runner.events()) as events:
+    async for event in events:
+        ...
 ```
 
 ## decouple
