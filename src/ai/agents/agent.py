@@ -630,7 +630,10 @@ def tool[**P, T, R](
 
     def wrap(fn: Any) -> AgentTool:
         sig = inspect.signature(fn)
-        hints = get_type_hints(fn) if hasattr(fn, "__annotations__") else {}
+        try:
+            hints = get_type_hints(fn)
+        except TypeError:
+            hints = {}
 
         fields: dict[str, Any] = {}
         for param_name, param in sig.parameters.items():
