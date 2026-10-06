@@ -70,7 +70,9 @@ Agents can emit event values that are not raw provider stream events.
 - `Retry`: Discards everything since the most recent `StreamStart`: the
   in-progress assistant message and any tool results for it. The
   library does not emit this yet; it is for custom loops that retry a model
-  call after it already produced events.
+  call after it already produced events. Such loops should call
+  `ToolRunner.discard_all()` to cancel tools scheduled for the discarded
+  response.
 
 Agent event union:
 
