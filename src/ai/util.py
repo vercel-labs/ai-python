@@ -305,25 +305,84 @@ class decouple[T]:  # noqa: N801
         *,
         buffer: int | None,
     ) -> None:
-        self._queue: AsyncIterableQueue[T] = AsyncIterableQueue()
-        self._worker_sem = None if buffer is None else asyncio.Semaphore(buffer)
-
         # How many anexts have been cancelled - avoid signalling the sem
         # when they are.
         self._cancelled_nexts = 0
 
-        self._buffer = buffer
-        self._cur_fut: asyncio.Future[None] | None = None
+        self._worker = _DecoupleWorker(iter, buffer)
 
-        self._done = False
-        self._is_loop_closing = get_loop_closing_checker()
+    async def __anext__(self) -> T:
+        try:
+            if self._cancelled_nexts:
+                self._cancelled_nexts -= 1
+            elif self._worker.sem is not None:
+                self._worker.sem.release()
+                if self._worker.cur_fut:
+                    run_right_now(self._worker.cur_fut, None)
+            return await anext(self._worker.queue)
+        except asyncio.CancelledError:
+            self._cancelled_nexts += 1
+            raise
 
-        self._task = asyncio.create_task(
-            self._worker(iter), name=f"decouple for {iter}"
+    def __aiter__(self) -> AsyncIterator[T]:
+        return self
+
+    async def aclose(self) -> None:
+        self._worker.stop()
+        with contextlib.suppress(asyncio.CancelledError):
+            await self._worker.task
+
+    def __del__(self) -> None:
+        # Dropped without aclose(): stop the worker so it closes iter
+        # in its own task, like an async generator's finalizer would.
+        worker = getattr(self, "_worker", None)
+        if (
+            worker is not None
+            and not worker.task.done()
+            and not worker.task.get_loop().is_closed()
+        ):
+            worker.stop()
+
+    async def asend(self, value: Any, /) -> T:
+        raise RuntimeError("decouple does not support asend()")
+
+    async def athrow(self, *args: Any) -> T:
+        raise RuntimeError("decouple does not support athrow()")
+
+
+# Strong references to running decouple workers. The worker must not
+# reference its decouple, so that a dropped decouple gets collected and
+# its __del__ can stop the worker; this keeps the worker itself alive
+# until then.
+_DECOUPLE_TASKS: set[asyncio.Task[None]] = set()
+
+
+class _DecoupleWorker[T]:
+    def __init__(self, iter: AsyncIterable[T], buffer: int | None) -> None:
+        self.queue: AsyncIterableQueue[T] = AsyncIterableQueue()
+        self.buffer = buffer
+        self.sem = None if buffer is None else asyncio.Semaphore(buffer)
+        self.cur_fut: asyncio.Future[None] | None = None
+        self.done = False
+        self.is_loop_closing = get_loop_closing_checker()
+        self.task = asyncio.create_task(
+            self.run(iter), name=f"decouple for {iter}"
         )
+        _DECOUPLE_TASKS.add(self.task)
+        self.task.add_done_callback(_DECOUPLE_TASKS.discard)
+
+    def stop(self) -> None:
+        self.done = True
+        if self.cur_fut and not self.cur_fut.done():
+            self.cur_fut.set_result(None)
+        if self.sem is not None:
+            self.sem.release()
+        # cancel is a no-op if a task is already done or cancelled
+        if not self.task.cancelling():
+            self.task.cancel()
 
     async def _acquire(self) -> None:
-        if self._worker_sem is None:
+        if self.sem is None:
             return
         try:
             # For the running in lock-step case, we go to sleep on a
@@ -335,13 +394,13 @@ class decouple[T]:  # noqa: N801
             # have already populated the queue and the consumer will
             # be able to read it without ever blocking either, so we
             # shave two trips through the scheduler.
-            if self._buffer == 0 and self._worker_sem.locked():
-                self._cur_fut = asyncio.Future()
+            if self.buffer == 0 and self.sem.locked():
+                self.cur_fut = asyncio.Future()
                 try:
-                    await self._cur_fut
+                    await self.cur_fut
                 finally:
-                    self._cur_fut = None
-            await self._worker_sem.acquire()
+                    self.cur_fut = None
+            await self.sem.acquire()
         except asyncio.CancelledError as e:
             # Three reasons we might have been cancelled:
             # 1. aclose()
@@ -354,66 +413,32 @@ class decouple[T]:  # noqa: N801
             # re-assert the cancellation so it gets
             # delivered back into the generator body
             # if it blocks.
-            if self._done or self._is_loop_closing():
+            if self.done or self.is_loop_closing():
                 raise
-            await self._worker_sem.acquire()
+            await self.sem.acquire()
             # Recancel the task, so that it gets
             # delivered, but then also *uncancel* it,
             # so the count doesn't go up.
-            self._task.cancel(str(e))
-            self._task.uncancel()
+            self.task.cancel(str(e))
+            self.task.uncancel()
 
     def _put(self, x: _Stop | T) -> None:
-        self._queue.put_nowait(x)
+        self.queue.put_nowait(x)
 
-    async def _worker(self, iter: AsyncIterable[T]) -> None:
+    async def run(self, iter: AsyncIterable[T]) -> None:
         async with maybe_aclosing(iter):
             try:
                 await self._acquire()
                 async for x in iter:
                     self._put(x)
                     await self._acquire()
-                    if self._done:
+                    if self.done:
                         break
             except (Exception, asyncio.CancelledError, BaseExceptionGroup) as e:
                 self._put(_Stop(exception=e))
                 return
             else:
                 self._put(_STOP)
-
-    async def __anext__(self) -> T:
-        try:
-            if self._cancelled_nexts:
-                self._cancelled_nexts -= 1
-            elif self._worker_sem is not None:
-                self._worker_sem.release()
-                if self._cur_fut:
-                    run_right_now(self._cur_fut, None)
-            return await anext(self._queue)
-        except asyncio.CancelledError:
-            self._cancelled_nexts += 1
-            raise
-
-    def __aiter__(self) -> AsyncIterator[T]:
-        return self
-
-    async def aclose(self) -> None:
-        self._done = True
-        if self._cur_fut and not self._cur_fut.done():
-            self._cur_fut.set_result(None)
-        if self._worker_sem is not None:
-            self._worker_sem.release()
-        # cancel is a no-op if a task is already done or cancelled
-        if not self._task.cancelling():
-            self._task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await self._task
-
-    async def asend(self, value: Any, /) -> T:
-        raise RuntimeError("decouple does not support asend()")
-
-    async def athrow(self, *args: Any) -> T:
-        raise RuntimeError("decouple does not support athrow()")
 
 
 class AsyncContextManagerGenerator[YieldT, SendT](

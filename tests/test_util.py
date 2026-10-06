@@ -745,6 +745,31 @@ async def test_decouple_taskgroup_child_failure_then_close() -> None:
         await asyncio.wait_for(it.aclose(), 5)
 
 
+async def test_decouple_dropped_closes_source_in_worker() -> None:
+    """A decouple dropped without aclose() still closes the source,
+    from the worker task."""
+    ran_in: asyncio.Task[Any] | None = None
+    closed_in: asyncio.Task[Any] | None = None
+
+    async def src() -> AsyncIterator[int]:
+        nonlocal ran_in, closed_in
+        ran_in = asyncio.current_task()
+        try:
+            for i in range(10):
+                yield i
+        finally:
+            closed_in = asyncio.current_task()
+
+    it = util.decouple(src(), buffer=0)
+    assert await anext(it) == 0
+    del it
+    gc.collect()
+    for _ in range(20):
+        await asyncio.sleep(0)
+    assert ran_in is not None
+    assert closed_in is ran_in
+
+
 def test_decouple_loop_shutdown_while_waiting_for_demand() -> None:
     """asyncio.run's shutdown cancels the worker while it waits for
     demand; it must exit instead of waiting forever."""
