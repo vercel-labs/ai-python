@@ -5,6 +5,10 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import contextvars
+import gc
+import sys
+import threading
+import weakref
 from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator
 from typing import Any, cast
 
@@ -391,22 +395,8 @@ async def test_maybe_aclosing_runs_aclose_on_exception() -> None:
 
 async def test_decouple_yields_all_items() -> None:
     """Basic: every item from the source is yielded in order."""
-    result = await _collect(
-        util.decouple(_from_list([1, 2, 3]), task_group=None, buffer=0)
-    )
+    result = await _collect(util.decouple(_from_list([1, 2, 3]), buffer=0))
     assert result == [1, 2, 3]
-
-
-async def test_decouple_with_task_group() -> None:
-    """Works equivalently when given an explicit TaskGroup."""
-
-    async def consume() -> list[int]:
-        async with asyncio.TaskGroup() as tg:
-            return await _collect(
-                util.decouple(_from_list([1, 2, 3]), task_group=tg, buffer=0)
-            )
-
-    assert await consume() == [1, 2, 3]
 
 
 async def test_decouple_forwards_exception_to_consumer() -> None:
@@ -418,7 +408,7 @@ async def test_decouple_forwards_exception_to_consumer() -> None:
 
     items: list[int] = []
     with pytest.raises(ValueError, match="boom"):
-        async for x in util.decouple(failing(), task_group=None, buffer=0):
+        async for x in util.decouple(failing(), buffer=0):
             items.append(x)
     assert items == [1]
 
@@ -433,7 +423,7 @@ async def test_decouple_lockstep() -> None:
             advanced.append(i)
             yield i
 
-    it = util.decouple(src(), task_group=None, buffer=0)
+    it = util.decouple(src(), buffer=0)
     async with util.maybe_aclosing(it):
         for n in range(5):
             assert await anext(it) == n
@@ -452,7 +442,7 @@ async def test_decouple_buffer_bounded() -> None:
             advanced.append(i)
             yield i
 
-    it = util.decouple(src(), task_group=None, buffer=2)
+    it = util.decouple(src(), buffer=2)
     async with util.maybe_aclosing(it):
         for n in range(5):
             assert await anext(it) == n
@@ -470,7 +460,7 @@ async def test_decouple_buffer_unbounded() -> None:
             advanced.append(i)
             yield i
 
-    it = util.decouple(src(), task_group=None, buffer=None)
+    it = util.decouple(src(), buffer=None)
     async with util.maybe_aclosing(it):
         assert await anext(it) == 0
         for _ in range(50):
@@ -610,7 +600,7 @@ async def test_decouple_contextvar_stable_across_yields() -> None:
         assert var.get() == "hello"
         yield "b"
 
-    assert await _collect(util.decouple(src(), task_group=None, buffer=0)) == [
+    assert await _collect(util.decouple(src(), buffer=0)) == [
         "a",
         "b",
     ]
@@ -638,15 +628,175 @@ async def test_decouple_aclose_runs_iter_cleanup_in_worker_context() -> None:
             var.reset(token)  # would raise on context mismatch
 
     n = 0
-    async with util.maybe_aclosing(
-        util.decouple(src(), task_group=None, buffer=0)
-    ) as it:
+    async with util.maybe_aclosing(util.decouple(src(), buffer=0)) as it:
         async for _ in it:
             n += 1
             if n == 3:
                 break
 
     assert cleanup_seen == "worker"
+
+
+async def _fail_soon() -> None:
+    await asyncio.sleep(0.1)
+    raise ValueError("child")
+
+
+async def test_decouple_taskgroup_child_failure_surfaces() -> None:
+    """A TaskGroup in the source whose child fails cancels the worker
+    while it waits for demand. That cancel is delivered to the source
+    on the next anext, so the TaskGroup reports just the child error."""
+    log: list[str] = []
+
+    async def src() -> AsyncIterator[int]:
+        async with asyncio.TaskGroup() as tg:
+            tg.create_task(_fail_soon())
+            yield 1
+            log.append("resumed")
+            await asyncio.sleep(10)
+            yield 2
+
+    it = util.decouple(src(), buffer=0)
+    async with util.maybe_aclosing(it):
+        assert await anext(it) == 1
+        await asyncio.sleep(1)
+        assert log == []
+        with pytest.RaisesGroup(pytest.RaisesExc(ValueError, match="child")):
+            await anext(it)
+        assert log == ["resumed"]
+
+
+async def test_decouple_taskgroup_child_failure_recoverable() -> None:
+    """The source can handle the TaskGroup error and keep going, with
+    the worker's cancellation count back at zero."""
+
+    async def src() -> AsyncIterator[str]:
+        try:
+            async with asyncio.TaskGroup() as tg:
+                tg.create_task(_fail_soon())
+                yield "a"
+                await asyncio.sleep(10)
+        except* ValueError:
+            pass
+        task = asyncio.current_task()
+        assert task is not None
+        assert task.cancelling() == 0
+        await asyncio.sleep(0.1)
+        yield "b"
+
+    it = util.decouple(src(), buffer=0)
+    async with util.maybe_aclosing(it):
+        assert await anext(it) == "a"
+        await asyncio.sleep(1)
+        assert [x async for x in it] == ["b"]
+
+
+async def test_decouple_taskgroup_child_failure_sync_yields() -> None:
+    """Same as above, but the source keeps yielding without awaiting
+    while the cancel is pending. Once the TaskGroup handles it, no
+    stray cancel is left behind on the worker.
+
+    On 3.12, uncancel() doesn't clear a pending cancel, so it does
+    leak; the best we can do is surface it to the consumer."""
+
+    async def src() -> AsyncIterator[int]:
+        try:
+            async with asyncio.TaskGroup() as tg:
+                tg.create_task(_fail_soon())
+                yield 1
+                yield 2
+                yield 3
+        except* ValueError:
+            pass
+        await asyncio.sleep(0.1)
+        yield 4
+
+    got: list[int] = []
+
+    async def consume() -> None:
+        async for x in util.decouple(src(), buffer=0):
+            got.append(x)
+            await asyncio.sleep(1)
+
+    if sys.version_info >= (3, 13):
+        await consume()
+        assert got == [1, 2, 3, 4]
+    else:
+        with pytest.raises(asyncio.CancelledError):
+            await consume()
+        assert got == [1, 2, 3]
+
+
+async def test_decouple_taskgroup_child_failure_then_close() -> None:
+    """Closing the consumer after the child failed doesn't hang, and
+    the child error isn't lost."""
+
+    async def src() -> AsyncIterator[int]:
+        async with asyncio.TaskGroup() as tg:
+            tg.create_task(_fail_soon())
+            yield 1
+            await asyncio.sleep(10)
+
+    it = util.decouple(src(), buffer=0)
+    assert await anext(it) == 1
+    await asyncio.sleep(1)
+    with pytest.RaisesGroup(
+        pytest.RaisesExc(ValueError, match="child"),
+        GeneratorExit,
+    ):
+        await asyncio.wait_for(it.aclose(), 5)
+
+
+def test_decouple_loop_shutdown_while_waiting_for_demand() -> None:
+    """asyncio.run's shutdown cancels the worker while it waits for
+    demand; it must exit instead of waiting forever."""
+    closed = False
+
+    async def src() -> AsyncIterator[int]:
+        nonlocal closed
+        try:
+            for i in range(10):
+                yield i
+        finally:
+            closed = True
+
+    leaked: list[AsyncGenerator[int]] = []
+
+    async def main() -> None:
+        it = util.decouple(src(), buffer=0)
+        leaked.append(it)
+        assert await anext(it) == 0
+
+    thread = threading.Thread(target=asyncio.run, args=(main(),), daemon=True)
+    thread.start()
+    thread.join(5)
+    assert not thread.is_alive()
+    assert closed
+
+
+def test_loop_closing_checker_does_not_leak_loop() -> None:
+    loops: list[weakref.ref[asyncio.AbstractEventLoop]] = []
+
+    async def main() -> None:
+        loops.append(weakref.ref(asyncio.get_running_loop()))
+        util.get_loop_closing_checker()
+
+    for _ in range(3):
+        asyncio.run(main())
+    gc.collect()
+    assert [r() for r in loops] == [None, None, None]
+
+
+async def test_loop_closing_checker_recovers_after_cancel() -> None:
+    """If something cancels the dummy task without the loop closing, a
+    later checker doesn't report the loop as closing."""
+    closing = util.get_loop_closing_checker()
+    others = asyncio.all_tasks() - {asyncio.current_task()}
+    for t in others:
+        t.cancel()
+    await asyncio.wait(others)
+    assert closing()
+    assert not util.get_loop_closing_checker()()
 
 
 # -- merge: TaskGroup-inside-asyncgen wrapping ----------------------------
