@@ -304,6 +304,16 @@ async with ai.ToolRunner() as runner:
 Use `add_result(result)` when a custom loop executes a tool itself but still
 wants the runner to aggregate the result message.
 
+Scheduling a tool call whose `id` is already scheduled returns the existing
+task instead of running the tool again, so a loop can schedule calls
+speculatively (e.g. as soon as each `ToolEnd` arrives) and again once the
+response is final.
+
+`discard(task)` cancels a task and drops its result. `discard_all()` discards
+every scheduled task; pass `except_=[...]` to keep the tasks for specific tool
+calls. Call it on a `Retry` event to drop tool calls from the discarded
+response.
+
 ### Streaming tool aliases
 
 Async-iterable tools can yield partial output while they run.

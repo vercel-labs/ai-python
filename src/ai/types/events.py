@@ -653,7 +653,9 @@ class Retry(BaseEvent):
     Nothing in the library emits this yet.  It is for custom loops that
     retry a model call after it already produced events (e.g. a durable
     step that failed mid-stream); ``MessageHydrator``, ``RunStateTracker``
-    and the AI SDK UI adapter all handle it.
+    and the AI SDK UI adapter all handle it.  Loops emitting it should
+    call ``ToolRunner.discard_all()`` to cancel tools scheduled for the
+    discarded response.
     """
 
     kind: Literal["retry"] = "retry"
