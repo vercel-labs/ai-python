@@ -253,6 +253,7 @@ class MessageHydrator:
         self.messages_by_id: dict[str, messages.Message] = {}
         self._parts_by_message_id: dict[str, dict[str, messages.Part]] = {}
         self._streaming_index: int | None = None
+        self._retry_filter = RetryFilter()
         self._message_selected = seed_message is not None
         self._seed_checked = False
         # A stream that exhausts without StreamEnd died mid-response.
@@ -262,6 +263,8 @@ class MessageHydrator:
         self.response_model: str | None = None
 
     def feed[T: BaseEvent](self, event: T) -> T:
+        if not self._retry_filter.feed(event):
+            return event
         # ToolCallResult and HookEvent always carry full messages, so we just
         # use them.
         if isinstance(event, ToolCallResult | HookEvent):
@@ -670,6 +673,52 @@ AgentEvent = Annotated[
 ]
 
 
+class RetryFilter:
+    """Spot tool output for tool calls that a :class:`Retry` discarded.
+
+    In a distributed setup, a tool scheduled for a response that later
+    gets retried can still deliver its result (or a partial result, or
+    a hook event) after the ``Retry``.  Feed every event in order;
+    :meth:`feed` returns False for such leftovers.  A tool call id that
+    the retried response reuses counts as live again.
+    """
+
+    def __init__(self) -> None:
+        self._response: set[str] = set()
+        self._discarded: set[str] = set()
+
+    def feed(self, event: BaseEvent) -> bool:
+        match event:
+            case StreamStart():
+                self._response = set()
+            case (
+                ToolStart(tool_call_id=id)
+                | ToolDelta(tool_call_id=id)
+                | ToolEnd(tool_call_id=id)
+                | BuiltinToolStart(tool_call_id=id)
+                | BuiltinToolDelta(tool_call_id=id)
+                | BuiltinToolEnd(tool_call_id=id)
+            ):
+                self._response.add(id)
+                self._discarded.discard(id)
+            case StreamEnd():
+                ids = {tc.tool_call_id for tc in event.message.tool_calls}
+                self._response |= ids
+                self._discarded -= ids
+            case Retry():
+                self._discarded |= self._response
+                self._response = set()
+            case ToolCallResult():
+                return not event.results or not all(
+                    r.tool_call_id in self._discarded for r in event.results
+                )
+            case PartialToolCallResult():
+                return event.tool_call_id not in self._discarded
+            case HookEvent():
+                return event.hook.tool_call_id not in self._discarded
+        return True
+
+
 class RunStateTracker:
     """Fold an agent event stream into run state (blocked-on-hooks).
 
@@ -706,6 +755,7 @@ class RunStateTracker:
         self._streaming = 0
         self._stream_ended = False
         self._blocked = False
+        self._retry_filter = RetryFilter()
 
     @property
     def blocked(self) -> bool:
@@ -716,6 +766,8 @@ class RunStateTracker:
         return list(self._deferred.values())
 
     def feed(self, event: AgentEvent) -> RunBlocked | None:
+        if not self._retry_filter.feed(event):
+            return None
         match event:
             case StreamStart():
                 self._streaming += 1

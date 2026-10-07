@@ -431,10 +431,13 @@ def test_tracker_retry_after_stream_end_forgets_scheduled_calls() -> None:
 
     # tc-2 from the discarded response must not keep the run "busy".
     assert tracker.feed(events_.StreamStart()) is None
-    assert tracker.feed(_hook_event(hook)) is None
-    transition = tracker.feed(
-        events_.StreamEnd(message=_multi_call_msg(("tc-1", "gated")))
+    assert (
+        tracker.feed(
+            events_.StreamEnd(message=_multi_call_msg(("tc-1", "gated")))
+        )
+        is None
     )
+    transition = tracker.feed(_hook_event(hook))
     assert isinstance(transition, events_.RunBlocked)
 
 
@@ -442,3 +445,63 @@ def test_message_aggregator_tolerates_block_events() -> None:
     agg = ai.agents.MessageAggregator()
     agg.feed(events_.RunBlocked())
     assert agg.snapshot().messages == ()
+
+
+def test_tracker_ignores_hook_for_retried_tool_call() -> None:
+    """A late pending hook for a discarded call must not block the run."""
+    tracker = events_.RunStateTracker()
+    hook: messages_.HookPart[Any] = messages_.HookPart(
+        hook_id="h1",
+        hook_type="ToolApproval",
+        status="pending",
+        tool_call_id="tc-1",
+    )
+
+    tracker.feed(events_.StreamStart())
+    tracker.feed(events_.ToolStart(tool_call_id="tc-1", tool_name="gated"))
+    tracker.feed(events_.Retry())
+    tracker.feed(events_.StreamStart())
+    tracker.feed(events_.StreamEnd(message=text_msg("done")))
+
+    assert tracker.feed(_hook_event(hook)) is None
+    assert not tracker.blocked
+    assert tracker.deferred_hooks == []
+
+
+async def test_run_drops_leftover_tool_output_after_retry() -> None:
+    hook: messages_.HookPart[Any] = messages_.HookPart(
+        hook_id="h1",
+        hook_type="ToolApproval",
+        status="pending",
+        tool_call_id="tc-1",
+    )
+    result = ai.tool_message(
+        ai.tool_result_part("tc-1", tool_name="gated", result="stale")
+    )
+
+    class MyAgent(ai.Agent):
+        async def loop(
+            self, context: ai.Context
+        ) -> AsyncGenerator[events_.AgentEvent]:
+            yield events_.StreamStart()
+            yield events_.ToolStart(tool_call_id="tc-1", tool_name="gated")
+            yield events_.Retry()
+            yield events_.StreamStart()
+            yield _hook_event(hook)
+            yield events_.ToolCallResult(
+                message=result, results=result.tool_results
+            )
+            yield events_.StreamEnd(message=text_msg("done"))
+
+    async with MyAgent().run(MOCK_MODEL, [ai.user_message("go")]) as stream:
+        kinds = [event.kind async for event in stream]
+
+    assert kinds == [
+        "stream_start",
+        "tool_start",
+        "retry",
+        "stream_start",
+        "stream_end",
+    ]
+    assert stream.deferred_hooks == []
+    assert not stream.blocked
