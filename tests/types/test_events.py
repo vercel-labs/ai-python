@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pydantic
 import pytest
 
@@ -381,6 +383,52 @@ def test_message_hydrator_retry_discards_response_and_tool_results() -> None:
     assert hydrator.message.tool_calls[0].tool_args == '{"q":"full"}'
 
 
+@pytest.mark.parametrize("retried_id", ["tc2", "tc1"])
+def test_message_hydrator_drops_late_result_for_retried_tool_call(
+    retried_id: str,
+) -> None:
+    hydrator = events.MessageHydrator()
+    dropped = messages.Message(id="assistant-1", role="assistant", parts=[])
+    retried = messages.Message(id="assistant-2", role="assistant", parts=[])
+
+    def call(message: messages.Message, id: str) -> list[events.Event]:
+        part = messages.ToolCallPart(
+            tool_call_id=id, tool_name="search", tool_args="{}"
+        )
+        return [
+            events.StreamStart(message=message),
+            events.ToolStart(
+                message=message, tool_call_id=id, tool_name="search"
+            ),
+            events.ToolEnd(message=message, tool_call_id=id, tool_call=part),
+        ]
+
+    def result(id: str) -> events.ToolCallResult:
+        part = messages.ToolResultPart(
+            tool_call_id=id, tool_name="search", result=id
+        )
+        return events.ToolCallResult(
+            message=messages.Message(
+                id=f"tool-{id}", role="tool", parts=[part]
+            ),
+            results=[part],
+        )
+
+    for event in call(dropped, "tc1"):
+        hydrator.feed(event)
+    hydrator.feed(events.Retry())
+    for event in call(retried, retried_id):
+        hydrator.feed(event)
+    hydrator.feed(result("tc1"))
+    hydrator.feed(result(retried_id))
+
+    # A result for tc1 only survives if the retried response also called it.
+    assert [m.id for m in hydrator.messages] == [
+        "assistant-2",
+        f"tool-{retried_id}",
+    ]
+
+
 def test_message_hydrator_retry_before_any_stream_is_noop() -> None:
     hydrator = events.MessageHydrator()
     retry = hydrator.feed(events.Retry())
@@ -478,3 +526,46 @@ class TestReplayMessageEvents:
             p for p in rebuilt.parts if isinstance(p, messages.ToolCallPart)
         )
         assert tool.provider_metadata == {"p": {"tc": 2}}
+
+
+def test_retry_filter_drops_leftover_tool_output() -> None:
+    def hook(tool_call_id: str) -> events.HookEvent:
+        part: messages.HookPart[Any] = messages.HookPart(
+            hook_id=f"h-{tool_call_id}",
+            hook_type="ToolApproval",
+            status="pending",
+            tool_call_id=tool_call_id,
+        )
+        return events.HookEvent(
+            message=messages.Message(role="internal", parts=[part]), hook=part
+        )
+
+    def result(tool_call_id: str) -> events.ToolCallResult:
+        part = messages.ToolResultPart(
+            tool_call_id=tool_call_id, tool_name="search", result="r"
+        )
+        return events.ToolCallResult(
+            message=messages.Message(role="tool", parts=[part]),
+            results=[part],
+        )
+
+    def partial(tool_call_id: str) -> events.PartialToolCallResult:
+        return events.PartialToolCallResult(
+            tool_call_id=tool_call_id, value="p"
+        )
+
+    f = events.RetryFilter()
+    assert f.feed(events.StreamStart())
+    assert f.feed(events.ToolStart(tool_call_id="tc1", tool_name="search"))
+    assert f.feed(events.ToolStart(tool_call_id="tc2", tool_name="search"))
+    assert f.feed(events.Retry())
+    assert f.feed(events.StreamStart())
+    assert f.feed(events.ToolStart(tool_call_id="tc2", tool_name="search"))
+
+    # tc1 was discarded; tc2 came back in the retried response.
+    assert not f.feed(result("tc1"))
+    assert not f.feed(partial("tc1"))
+    assert not f.feed(hook("tc1"))
+    assert f.feed(result("tc2"))
+    assert f.feed(partial("tc2"))
+    assert f.feed(hook("tc2"))

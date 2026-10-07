@@ -746,6 +746,78 @@ async def test_retry_resets_step_and_reemits_retried_parts() -> None:
     ]
 
 
+async def test_retry_drops_late_results_for_discarded_tool_calls() -> None:
+    """The client has no part for a discarded tool call, so a late result
+    for it would make the AI SDK error out."""
+
+    def call(id: str) -> list[agent_events_.AgentEvent]:
+        part = messages_.ToolCallPart(
+            tool_call_id=id, tool_name="search", tool_args="{}"
+        )
+        return [
+            events_.ToolStart(tool_call_id=id, tool_name="search"),
+            events_.ToolEnd(tool_call_id=id, tool_call=part),
+        ]
+
+    def result(id: str) -> events_.ToolCallResult:
+        msg = ai.tool_message(
+            ai.tool_result_part(id, tool_name="search", result=id)
+        )
+        return events_.ToolCallResult(message=msg, results=msg.tool_results)
+
+    out = await _collect(
+        [
+            events_.StreamStart(),
+            *call("tc1"),
+            events_.Retry(),
+            events_.StreamStart(),
+            *call("tc2"),
+            events_.StreamEnd(),
+            events_.PartialToolCallResult(
+                tool_call_id="tc1",
+                tool_name="search",
+                value="partial",
+                aggregator_factory=ai.agents.ConcatAggregator,
+            ),
+            result("tc1"),
+            result("tc2"),
+        ]
+    )
+
+    outputs = [
+        e.tool_call_id
+        for e in out
+        if isinstance(e, ui_events.UIToolOutputAvailableEvent)
+    ]
+    assert outputs == ["tc2"]
+
+
+async def test_retry_drops_late_approval_for_discarded_tool_call() -> None:
+    hook: messages_.HookPart[Any] = messages_.HookPart(
+        hook_id="h1",
+        hook_type="ToolApproval",
+        status="pending",
+        tool_call_id="tc1",
+    )
+    out = await _collect(
+        [
+            events_.StreamStart(),
+            events_.ToolStart(tool_call_id="tc1", tool_name="bash"),
+            events_.Retry(),
+            events_.StreamStart(),
+            events_.HookEvent(
+                message=messages_.Message(role="internal", parts=[hook]),
+                hook=hook,
+            ),
+            events_.StreamEnd(),
+        ]
+    )
+
+    assert not any(
+        isinstance(e, ui_events.UIToolApprovalRequestEvent) for e in out
+    )
+
+
 async def test_retry_before_any_output_is_dropped() -> None:
     out = await _collect(
         [

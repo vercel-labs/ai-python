@@ -233,8 +233,11 @@ class MessageAggregator(
         self._messages: list[types.messages.Message] = []
         self._index_by_id: dict[str, int] = {}
         self._streaming_index: int | None = None
+        self._retry_filter = events_.RetryFilter()
 
     def feed(self, item: events_.AgentEvent) -> None:
+        if not self._retry_filter.feed(item):
+            return
         if isinstance(item, events_.Retry):
             # Drop the in-progress model response and everything after
             # it (its tool results); the retried stream re-adds them,
@@ -1573,9 +1576,12 @@ class Agent:
 
         async def _real(call: Context) -> AsyncGenerator[events_.AgentEvent]:
             tracker = events_.RunStateTracker()
+            retry_filter = events_.RetryFilter()
             source = self.loop(call)
             async with contextlib.aclosing(runtime.run(source)) as events:
                 async for event in events:
+                    if not retry_filter.feed(event):
+                        continue
                     # Feed the tracker before the replay filter: replayed
                     # StreamEnds carry the tool calls the dispatcher is
                     # about to re-run, which the fold must count.
