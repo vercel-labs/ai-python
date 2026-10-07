@@ -119,6 +119,35 @@ async def test_tool_call_with_json_args() -> None:
     assert not result.results[0].has_model_input
 
 
+def test_speculative_flag() -> None:
+    @ai.tool
+    async def default() -> str:
+        """Default."""
+        return ""
+
+    @ai.tool(speculative=True)
+    async def safe() -> str:
+        """Safe to run speculatively."""
+        return ""
+
+    @ai.tool(require_approval=True, speculative=False)
+    async def unsafe() -> str:
+        """Not safe to run speculatively."""
+        return ""
+
+    assert default.speculative is None
+    assert safe.speculative is True
+    assert unsafe.speculative is False
+    assert unsafe.require_approval
+
+    agent = ai.Agent(tools=[safe, unsafe])
+    for tool, expected in ((safe, True), (unsafe, False)):
+        part = ai.messages.ToolCallPart(
+            tool_call_id="tc-1", tool_name=tool.name, tool_args="{}"
+        )
+        assert agent.resolve(part).speculative is expected
+
+
 # -- ToolCall binds a ToolCallPart to a Tool and returns tool messages ----
 
 

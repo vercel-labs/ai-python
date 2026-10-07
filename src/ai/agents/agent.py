@@ -481,6 +481,7 @@ class AgentTool:
     aggregator: Callable[[], events_.Aggregator[Any, Any, Any]] | None = None
     to_model_input: Callable[[Any], Any] | None = None
     return_type: Any = None
+    speculative: bool | None = None
 
     @property
     def name(self) -> str:
@@ -558,6 +559,19 @@ def tool[**P](
     require_approval: bool,
     to_model_input: Callable[[Any], Any] | None = None,
     return_type: Any = None,
+    speculative: bool | None = None,
+) -> Callable[
+    [Callable[P, Awaitable[Any] | AsyncIterable[Any]]], AgentTool
+]: ...
+
+
+@overload
+def tool[**P](
+    *,
+    speculative: bool | None,
+    require_approval: bool = False,
+    to_model_input: Callable[[Any], Any] | None = None,
+    return_type: Any = None,
 ) -> Callable[
     [Callable[P, Awaitable[Any] | AsyncIterable[Any]]], AgentTool
 ]: ...
@@ -569,6 +583,7 @@ def tool[**P](
     return_type: Any,
     require_approval: bool = False,
     to_model_input: Callable[[Any], Any] | None = None,
+    speculative: bool | None = None,
 ) -> Callable[
     [Callable[P, Awaitable[Any] | AsyncIterable[Any]]], AgentTool
 ]: ...
@@ -580,6 +595,7 @@ def tool[**P](
     aggregator: Callable[[], events_.Aggregator[Any, Any, Any]],
     require_approval: bool = False,
     return_type: Any = None,
+    speculative: bool | None = None,
 ) -> Callable[[Callable[P, AsyncIterable[Any]]], AgentTool]: ...
 
 
@@ -589,6 +605,7 @@ def tool[**P](
     to_model_input: Callable[[Any], Any],
     require_approval: bool = False,
     return_type: Any = None,
+    speculative: bool | None = None,
 ) -> Callable[
     [Callable[P, Awaitable[Any] | AsyncIterable[Any]]], AgentTool
 ]: ...
@@ -602,6 +619,7 @@ def tool[**P, T, R](
     require_approval: bool = False,
     to_model_input: Callable[[Any], Any] | None = None,
     return_type: Any = None,
+    speculative: bool | None = None,
 ) -> (
     Callable[[Callable[P, AsyncIterable[Any]]], AgentTool]
     | Callable[[Callable[P, Awaitable[R]]], AgentTool]
@@ -682,6 +700,7 @@ def tool[**P, T, R](
             or _tool_result_type_from_return_annotation(
                 annotated_return_type, effective_aggregator
             ),
+            speculative=speculative,
         )
 
     if fn is None:
@@ -716,6 +735,10 @@ class BoundToolCall:
     @property
     def fn(self) -> Callable[..., Awaitable[Any]]:
         return self._tool.fn
+
+    @property
+    def speculative(self) -> bool | None:
+        return self._tool.speculative
 
     @property
     def kwargs(self) -> dict[str, Any]:
@@ -878,6 +901,10 @@ class GatedToolCall:
     def kwargs(self) -> dict[str, Any]:
         return self._tc.kwargs
 
+    @property
+    def speculative(self) -> bool | None:
+        return self._tc.speculative
+
     async def __call__(self) -> events_.ToolCallResult:
         tc = self._tc
         # If the model sent invalid arguments, skip the approval hook
@@ -936,6 +963,9 @@ class ToolCall(ToolCallCallable, Protocol):
 
     @property
     def kwargs(self) -> dict[str, Any]: ...
+
+    @property
+    def speculative(self) -> bool | None: ...
 
 
 _current_tool_call: contextvars.ContextVar[ToolCall] = contextvars.ContextVar(

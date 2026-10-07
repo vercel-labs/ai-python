@@ -252,7 +252,12 @@ tool.tool
 tool.fn
 tool.validator
 tool.require_approval
+tool.speculative
 ```
+
+`speculative` says whether the tool is safe to run before the model response
+is final, when a retry may cancel it. `None` (the default) leaves it up to the
+agent loop.
 
 Pass `AgentTool` values to `Agent(tools=[...])`.
 
@@ -286,6 +291,7 @@ tool_call.id
 tool_call.name
 tool_call.fn
 tool_call.kwargs
+tool_call.speculative
 result = await tool_call()
 ```
 
