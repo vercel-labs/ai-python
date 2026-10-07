@@ -1465,6 +1465,8 @@ class Agent:
     sequence side effects against consumer code depend on this.
     """
 
+    SPECULATIVE_DEFAULT = True
+
     def __init__(
         self,
         *,
@@ -1499,31 +1501,45 @@ class Agent:
         """Resolve ToolCallPart(s) into callable ToolCall object(s)."""
         return self._tool_resolver.resolve(tool_part)
 
+    def is_speculative(self, tool_call: ToolCall) -> bool:
+        if tool_call.speculative is not None:
+            return tool_call.speculative
+        return self.SPECULATIVE_DEFAULT
+
+    def stream(
+        self, *, context: Context
+    ) -> contextlib.AbstractAsyncContextManager[
+        AsyncIterator[events_.AgentEvent]
+    ]:
+        return models.stream(context=context)
+
     async def loop(
         self, context: Context
     ) -> AsyncGenerator[events_.AgentEvent]:
-        """Stream, execute tools, repeat.
-
-        Override in a subclass to customise the agent's control flow.
-        (A custom loop keeps run/model/tool/hook spans — those live in
-        the layers it calls — but loses per-step grouping unless it
-        opens its own ``telemetry.span`` blocks.)
-        """
+        """Stream, execute tools, repeat."""
         while context.keep_running():
             async with (
                 telemetry.span(telemetry.LoopTurnSpanData()),
-                models.stream(context=context) as stream,
+                self.stream(context=context) as stream,
                 ToolRunner() as tr,
                 util.merge(stream, tr.events()) as events,
             ):
+                message = None
                 async for event in events:
                     yield event
 
                     if isinstance(event, types.events.ToolEnd):
                         tool = self.resolve(event.tool_call)
-                        tr.schedule(tool)
+                        if self.is_speculative(tool):
+                            tr.schedule(tool)
+                    elif isinstance(event, types.events.StreamEnd):
+                        message = event.message
+                        for tool in self.resolve(event.message.tool_calls):
+                            tr.schedule(tool)
+                    elif isinstance(event, types.events.Retry):
+                        tr.discard_all()
 
-                context.add(stream.message)
+                context.add(message)
                 # This adds the tool message to the history, which
                 # also has the effect of causing another turn through
                 # the loop.

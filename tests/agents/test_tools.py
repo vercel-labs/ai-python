@@ -148,6 +148,33 @@ def test_speculative_flag() -> None:
         assert agent.resolve(part).speculative is expected
 
 
+def test_agent_is_speculative_falls_back_to_default() -> None:
+    @ai.tool
+    async def default() -> str:
+        """Default."""
+        return ""
+
+    @ai.tool(speculative=False)
+    async def unsafe() -> str:
+        """Not safe to run speculatively."""
+        return ""
+
+    class Cautious(ai.Agent):
+        SPECULATIVE_DEFAULT = False
+
+    def part(tool: ai.AgentTool) -> ai.messages.ToolCallPart:
+        return ai.messages.ToolCallPart(
+            tool_call_id="tc-1", tool_name=tool.name, tool_args="{}"
+        )
+
+    for agent, expected in (
+        (ai.Agent(tools=[default, unsafe]), True),
+        (Cautious(tools=[default, unsafe]), False),
+    ):
+        assert agent.is_speculative(agent.resolve(part(default))) is expected
+        assert not agent.is_speculative(agent.resolve(part(unsafe)))
+
+
 # -- ToolCall binds a ToolCallPart to a Tool and returns tool messages ----
 
 
