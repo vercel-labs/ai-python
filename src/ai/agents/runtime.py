@@ -33,7 +33,9 @@ class Runtime:
 
     async def put_hook(self, hook_part: messages_.HookPart[Any]) -> None:
         msg = messages_.Message(role="internal", parts=[hook_part])
-        await self.put_event(events_.HookEvent(message=msg, hook=hook_part))
+        await self.put_event(
+            events_.HookEvent.for_hook(message=msg, hook=hook_part)
+        )
 
     async def signal_done(self) -> None:
         await self._event_queue.astop()

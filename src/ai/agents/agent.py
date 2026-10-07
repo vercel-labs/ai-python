@@ -1142,15 +1142,14 @@ class AgentStream(Generic[AgentOutputT]):
         # consumer has seen so far.
         if isinstance(event, events_.RunBlocked):
             self._blocked = True
+        elif isinstance(event, events_.PendingHookEvent):
+            self._deferred_hooks[event.hook.hook_id] = event.hook
         elif isinstance(event, events_.HookEvent):
-            if event.hook.status == "pending":
-                self._deferred_hooks[event.hook.hook_id] = event.hook
-            else:
-                # A blocked run can only resume via a hook resolution
-                # or cancellation (see RunBlocked), so this is also the
-                # unblock signal.
-                self._deferred_hooks.pop(event.hook.hook_id, None)
-                self._blocked = False
+            # A blocked run can only resume via a hook resolution
+            # or cancellation (see RunBlocked), so this is also the
+            # unblock signal.
+            self._deferred_hooks.pop(event.hook.hook_id, None)
+            self._blocked = False
         return event
 
     def __aiter__(self) -> Self:

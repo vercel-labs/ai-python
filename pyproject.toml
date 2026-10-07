@@ -168,6 +168,7 @@ extend-ignore = [
     "PLW1514", # unspecified-encoding (UTF-8 is Python 3 default)
     "PLW2901", # redefined-loop-name (intentional pattern for line processing)
     "RUF029",  # async generators/protocol hooks may not need an await
+    "TC003",   # annoying and wrong if TYPE_CHECKING for stdlib imports
 ]
 
 [tool.ruff.lint.per-file-ignores]

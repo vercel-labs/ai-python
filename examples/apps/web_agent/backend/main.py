@@ -74,10 +74,7 @@ async def chat(request: ChatRequest) -> fastapi.responses.StreamingResponse:
             # async generator that does this check and yields the events.
             async def process() -> AsyncGenerator[ai.events.AgentEvent]:
                 async for event in result:
-                    if (
-                        isinstance(event, ai.events.HookEvent)
-                        and event.hook.status == "pending"
-                    ):
+                    if isinstance(event, ai.events.PendingHookEvent):
                         ai.defer_hook(event.hook)
                     yield event
 

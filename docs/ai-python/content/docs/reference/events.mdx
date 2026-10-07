@@ -65,7 +65,10 @@ Agents can emit event values that are not raw provider stream events.
 - `ToolCallResult`: Carries the tool result message and result parts.
 - `PartialToolCallResult`: Carries values yielded by streaming tools and
   `yield_from`.
-- `HookEvent`: Carries an internal hook message and `HookPart`.
+- `HookEvent`: Carries an internal hook message and `HookPart`. Every
+  instance is one of the per-status subclasses — `PendingHookEvent`,
+  `ResolvedHookEvent`, or `CancelledHookEvent` — so match on the subclass
+  instead of checking `hook.status`.
 - `RunBlocked`: Emitted when the run is blocked on deferred hooks.
 - `Retry`: Discards everything since the most recent `StreamStart`: the
   in-progress assistant message and any tool results for it. The
@@ -79,7 +82,9 @@ Agent event union:
   and `Retry`.
   The union is annotated with a Pydantic discriminator on the `kind` field,
   so use it as a field or `TypeAdapter` type when deserializing events and
-  Pydantic picks the right event class from `kind`.
+  Pydantic picks the right event class from `kind`. Hook events all share
+  `kind: "hook"`; validating against `HookEvent` dispatches to the
+  per-status subclass from `hook.status`.
 
 ## Aggregator
 
