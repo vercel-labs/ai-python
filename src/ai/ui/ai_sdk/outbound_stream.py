@@ -638,8 +638,13 @@ async def to_stream(
 ) -> AsyncGenerator[ui_events.UIMessageStreamEvent]:
     """Walk internal events once, emitting AI SDK UI stream events."""
     state = _StreamState()
+    # The client drops a discarded step's tool parts on reset-step, so
+    # any later output for those tool calls would make it error out.
+    retry_filter = events_.RetryFilter()
 
     async for event in events:
+        if not retry_filter.feed(event):
+            continue
         match event:
             case events_.ToolCallResult():
                 for ui_event in state.on_tool_result(event):

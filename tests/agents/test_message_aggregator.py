@@ -5,7 +5,7 @@ from __future__ import annotations
 import ai
 from ai.types import events as events_
 
-from ..conftest import text_msg, tool_result_msg
+from ..conftest import text_msg, tool_call_msg, tool_result_msg
 
 
 def test_consecutive_snapshots_replace() -> None:
@@ -67,6 +67,19 @@ def test_retry_drops_response_and_its_tool_results() -> None:
     bundle = agg.snapshot()
     assert [m.id for m in bundle.messages] == ["msg-a", tool_a.id, "msg-c"]
     assert bundle.messages[0].text == "again"
+
+
+def test_retry_drops_late_result_for_discarded_tool_call() -> None:
+    agg = ai.agents.MessageAggregator()
+    agg.feed(events_.StreamEnd(message=tool_call_msg(id="msg-a", tc_id="tc-a")))
+    agg.feed(events_.Retry())
+    agg.feed(events_.StreamEnd(message=tool_call_msg(id="msg-b", tc_id="tc-b")))
+    stale = tool_result_msg(tc_id="tc-a", result="stale")
+    fresh = tool_result_msg(tc_id="tc-b", result="fresh")
+    agg.feed(events_.ToolCallResult(message=stale, results=stale.tool_results))
+    agg.feed(events_.ToolCallResult(message=fresh, results=fresh.tool_results))
+
+    assert [m.id for m in agg.snapshot().messages] == ["msg-b", fresh.id]
 
 
 def test_retry_without_stream_in_progress_is_noop() -> None:
