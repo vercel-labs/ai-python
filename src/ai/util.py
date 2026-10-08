@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+import collections
 import contextlib
 import dataclasses
 import functools
 import weakref
 from collections.abc import AsyncGenerator, Callable, MutableSet
 from typing import TYPE_CHECKING, Any, Literal
+
+import anyio
+import sniffio
 
 if TYPE_CHECKING:
     from collections.abc import (
@@ -198,6 +202,14 @@ class TaskGroup(asyncio.TaskGroup):
             raise
 
 
+def _is_loop_running() -> bool:
+    try:
+        sniffio.current_async_library()
+        return True
+    except sniffio.AsyncLibraryNotFoundError:
+        return False
+
+
 @contextlib.contextmanager
 def _filter_generator_exit() -> Iterator[None]:
     def strip(eg: BaseExceptionGroup[Any]) -> BaseExceptionGroup[Any] | None:
@@ -267,7 +279,10 @@ def get_loop_closing_checker() -> Callable[[], bool]:
     async def forever() -> None:
         await asyncio.Future()
 
-    loop = asyncio.get_running_loop()
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return lambda: False
     assert loop
     if not (t := _LOOP_CLOSING_MAP.get(loop)):
         t = _LOOP_CLOSING_MAP[loop] = asyncio.create_task(
@@ -304,10 +319,13 @@ def run_right_now[T](fut: asyncio.Future[T], val: T) -> None:
     between two tasks, since it avoids going through the event loop
     scheduler.
     """
+    if fut.done():
+        return
+
     # As a (10%?) microoptimization for the 1-callback common case, we
     # don't implement this for > 1.
     # If anybody cared it could be done in a specialized branch.
-    if len(fut._callbacks) != 1:
+    if not fut._callbacks or len(fut._callbacks) != 1:
         fut.set_result(val)
         return
 
@@ -356,22 +374,63 @@ class decouple[T]:  # noqa: N801
         iter: AsyncIterable[T],
         *,
         buffer: int | None,
+        task_group: anyio.abc.TaskGroup | None = None,
     ) -> None:
         # How many anexts have been cancelled - avoid signalling the sem
         # when they are.
         self._cancelled_nexts = 0
 
-        self._worker = _DecoupleWorker(iter, buffer)
+        self._iter = iter
+        self._buffer = buffer
+        self._task_group = task_group
+        self._exit_stack = contextlib.AsyncExitStack()
+
+    async def __aenter__(self) -> decouple[T]:
+        await self._start()
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        await self.aclose()
+
+    async def _start(self) -> None:
+        if not hasattr(self, "_worker"):
+            tg = self._task_group
+            if tg is None:
+                tg = await self._exit_stack.enter_async_context(
+                    anyio.create_task_group()
+                )
+            queue: collections.deque[_Stop | T] = collections.deque()
+            recv_sem = anyio.Semaphore(0, fast_acquire=True)
+            self._queue = queue
+            self._recv_sem = recv_sem
+
+            def put(x: _Stop | T) -> None:
+                recv_sem.release()
+                queue.append(x)
+
+            self._worker = _DecoupleWorker(tg, self._iter, self._buffer, put)
 
     async def __anext__(self) -> T:
+        await self._start()
         try:
             if self._cancelled_nexts:
                 self._cancelled_nexts -= 1
-            elif self._worker.sem is not None:
-                self._worker.sem.release()
-                if self._worker.cur_fut:
-                    run_right_now(self._worker.cur_fut, None)
-            return await anext(self._worker.queue)
+            else:
+                self._worker.release()
+
+            await self._recv_sem.acquire()
+            item = self._queue.popleft()
+
+            if isinstance(item, _Stop):
+                if item.exception is not None:
+                    raise item.exception
+                raise StopAsyncIteration
+            return item
         except asyncio.CancelledError:
             self._cancelled_nexts += 1
             raise
@@ -380,19 +439,31 @@ class decouple[T]:  # noqa: N801
         return self
 
     async def aclose(self) -> None:
+        await self._start()
         self._worker.stop()
-        with contextlib.suppress(asyncio.CancelledError):
-            await self._worker.task
+        try:
+            # XXX: don't really need this
+            with contextlib.suppress(anyio.get_cancelled_exc_class()):
+                await self._worker.task
+            # XXX: wait, I had kind of been assuming no worker
+            # failures, but they can fail on the aclose!!
+            if self._worker.task.exception:
+                raise self._worker.task.exception
+        except anyio.TaskCancelled:
+            pass
+        except anyio.TaskFailed as e:
+            assert e.__cause__ is not None
+            raise e.__cause__ from None
+        finally:
+            # genuinely we don't care
+            with contextlib.suppress(BaseExceptionGroup):
+                await self._exit_stack.aclose()
 
     def __del__(self) -> None:
         # Dropped without aclose(): stop the worker so it closes iter
         # in its own task, like an async generator's finalizer would.
         worker = getattr(self, "_worker", None)
-        if (
-            worker is not None
-            and not worker.task.done()
-            and not worker.task.get_loop().is_closed()
-        ):
+        if worker is not None and _is_loop_running():
             worker.stop()
 
     async def asend(self, value: Any, /) -> T:
@@ -402,39 +473,67 @@ class decouple[T]:  # noqa: N801
         raise RuntimeError("decouple does not support athrow()")
 
 
-# Strong references to running decouple workers. The worker must not
-# reference its decouple, so that a dropped decouple gets collected and
-# its __del__ can stop the worker; this keeps the worker itself alive
-# until then.
-_DECOUPLE_TASKS: set[asyncio.Task[None]] = set()
+def is_anyio_cancellation(exc: asyncio.CancelledError) -> bool:
+    # Sometimes third party frameworks catch a CancelledError and
+    # raise a new one, so as a workaround we have to look at the
+    # previous ones in __context__ too for a matching cancel message
+    while True:
+        if (
+            exc.args
+            and isinstance(exc.args[0], str)
+            and exc.args[0].startswith("Cancelled via cancel scope ")
+        ):
+            return True
+
+        if isinstance(exc.__context__, asyncio.CancelledError):
+            exc = exc.__context__
+            continue
+
+        return False
 
 
 class _DecoupleWorker[T]:
-    def __init__(self, iter: AsyncIterable[T], buffer: int | None) -> None:
-        self.queue: AsyncIterableQueue[T] = AsyncIterableQueue()
-        self.buffer = buffer
-        self.sem = None if buffer is None else asyncio.Semaphore(buffer)
-        self.cur_fut: asyncio.Future[None] | None = None
-        self.done = False
-        self.is_loop_closing = get_loop_closing_checker()
-        self.task = asyncio.create_task(
-            self.run(iter), name=f"decouple for {iter}"
+    def __init__(
+        self,
+        tg: anyio.abc.TaskGroup,
+        iter: AsyncIterable[T],
+        buffer: int | None,
+        put: Callable[[_Stop | T], None],
+    ) -> None:
+        self._put = put
+        self._sem = (
+            None
+            if buffer is None
+            else anyio.Semaphore(buffer, fast_acquire=True)
         )
-        _DECOUPLE_TASKS.add(self.task)
-        self.task.add_done_callback(_DECOUPLE_TASKS.discard)
+        self._done = False
+        self._is_loop_closing = get_loop_closing_checker()
+        self.task = tg.create_task(self._run(iter), name=f"decouple for {iter}")
+
+        self._use_fut = (
+            buffer == 0 and sniffio.current_async_library() == "asyncio"
+        )
+        self._cur_fut: asyncio.Future[None] | None = None
+
+    def release(self) -> None:
+        if self._sem is not None:
+            self._sem.release()
+            if self._cur_fut:
+                run_right_now(self._cur_fut, None)
 
     def stop(self) -> None:
-        self.done = True
-        if self.cur_fut and not self.cur_fut.done():
-            self.cur_fut.set_result(None)
-        if self.sem is not None:
-            self.sem.release()
+        self._done = True
+        if self._sem is not None:
+            self._sem.release()
+        if self._cur_fut and not self._cur_fut.done():
+            self._cur_fut.set_result(None)
         # cancel is a no-op if a task is already done or cancelled
-        if not self.task.cancelling():
-            self.task.cancel()
+        # XXX: want to resotre this...
+        # if not self.task.cancelling():
+        self.task.cancel()
 
     async def _acquire(self) -> None:
-        if self.sem is None:
+        if self._sem is None:
             return
         try:
             # For the running in lock-step case, we go to sleep on a
@@ -446,45 +545,64 @@ class _DecoupleWorker[T]:
             # have already populated the queue and the consumer will
             # be able to read it without ever blocking either, so we
             # shave two trips through the scheduler.
-            if self.buffer == 0 and self.sem.locked():
-                self.cur_fut = asyncio.Future()
+            if self._use_fut and self._sem.value == 0:
+                self._cur_fut = asyncio.Future()
                 try:
-                    await self.cur_fut
+                    await self._cur_fut
                 finally:
-                    self.cur_fut = None
-            await self.sem.acquire()
-        except asyncio.CancelledError as e:
+                    self._cur_fut = None
+
+            # In general, we need to shield this acquire because we
+            # don't want an anyio cancellation that occurs in the loop
+            # body to mess us up... but setting up a CancelScope is
+            # hella slow, so we just don't, and then if we have to
+            # retry things in the exception handler, we scope there.
+            await self._sem.acquire()
+        except anyio.get_cancelled_exc_class() as e:
             # Three reasons we might have been cancelled:
             # 1. aclose()
             # 2. Approximately *all* tasks being cancelled
             # 3. Something internal to the generator body
             #    (probably a TaskGroup)
+            # 4. anyio nested cancellation
             #
             # In case 3, we wait again on the sem (to
             # preserve lockstep behavior), then we
             # re-assert the cancellation so it gets
             # delivered back into the generator body
             # if it blocks.
-            if self.done or self.is_loop_closing():
+            #
+            # In case 4 we do the same, and it should be fine, at
+            # least if everything is nested properly?
+            if self._done or self._is_loop_closing():
                 raise
-            await self.sem.acquire()
-            # Recancel the task, so that it gets
-            # delivered, but then also *uncancel* it,
-            # so the count doesn't go up.
-            self.task.cancel(str(e))
-            self.task.uncancel()
+            # We do need a CancelScope here, to protect from nested whatevers...
+            with (
+                anyio.CancelScope(shield=True),
+                contextlib.suppress(asyncio.CancelledError),
+            ):
+                await self._sem.acquire()
 
-    def _put(self, x: _Stop | T) -> None:
-        self.queue.put_nowait(x)
+            if isinstance(
+                e, asyncio.CancelledError
+            ) and not is_anyio_cancellation(e):
+                # For asyncio cancellations, it is edge triggered, so
+                # we need to recancel the task, so that it gets
+                # delivered, but then also *uncancel* it, so the count
+                # doesn't go up.
+                task = asyncio.current_task()
+                assert task
+                task.cancel(str(e))
+                task.uncancel()
 
-    async def run(self, iter: AsyncIterable[T]) -> None:
+    async def _run(self, iter: AsyncIterable[T]) -> None:
         async with maybe_aclosing(iter):
             try:
                 await self._acquire()
                 async for x in iter:
                     self._put(x)
                     await self._acquire()
-                    if self.done:
+                    if self._done:
                         break
             except (Exception, asyncio.CancelledError, BaseExceptionGroup) as e:
                 self._put(_Stop(exception=e))
@@ -538,6 +656,19 @@ def merge[T](
     )
 
 
+@contextlib.asynccontextmanager
+async def _collapse_exception_group() -> AsyncIterator[None]:
+    try:
+        yield
+    except BaseExceptionGroup as eg:
+        if len(eg.exceptions) != 1:
+            raise
+        exc = eg.exceptions[0]
+    else:
+        return
+    raise exc
+
+
 async def _merge[T](
     *aiterables: AsyncIterable[T],
     restart: bool = True,
@@ -569,12 +700,19 @@ async def _merge[T](
     if priority and restart:
         raise ValueError("cannot specify priority=True and restart=True")
 
+    # decouple_tg only runs decouple workers, which don't fail, so
+    # don't let it wrap whatever comes out of the body in a group.
     async with (
+        _collapse_exception_group(),
+        anyio.create_task_group() as decouple_tg,
         contextlib.AsyncExitStack() as stack,
         TaskGroup() as tg,
     ):
         raw_aiters = [aiter(iter) for iter in aiterables]
-        aiters = [decouple(iter, buffer=0) for iter in raw_aiters]
+        aiters = [
+            decouple(iter, buffer=0, task_group=decouple_tg)
+            for iter in raw_aiters
+        ]
 
         @stack.push_async_callback
         async def _close_iters() -> None:
@@ -638,6 +776,6 @@ async def _merge[T](
                 ):
                     if ok and otask is None and idx not in fired:
                         niter = aiters[idx] = decouple(
-                            aiterables[idx], buffer=0
+                            aiterables[idx], buffer=0, task_group=decouple_tg
                         )
                         tasks[idx] = tg.create_task(anext(niter, _EMPTY))
