@@ -257,6 +257,35 @@ async def maybe_aclosing(
             await aclose()
 
 
+def run_right_now[T](fut: asyncio.Future[T], val: T) -> None:
+    """Signal a future and try to run a task blocked on it *right now*.
+
+    This can give big (~2x) speedups on tight loops ping-ponging
+    between two tasks, since it avoids going through the event loop
+    scheduler.
+    """
+    # As a (10%?) microoptimization for the 1-callback common case, we
+    # don't implement this for > 1.
+    # If anybody cared it could be done in a specialized branch.
+    if len(fut._callbacks) != 1:
+        fut.set_result(val)
+        return
+
+    callback, context = fut._callbacks[0]
+    # Blow away the callback, since we are calling it ourselves.
+    fut.remove_done_callback(callback)
+    fut.set_result(val)
+
+    loop = asyncio.get_running_loop()
+    cur = asyncio.current_task()
+    assert cur
+    asyncio._leave_task(loop, cur)
+    try:
+        context.run(callback, fut)
+    finally:
+        asyncio._enter_task(loop, cur)
+
+
 async def decouple[T](
     iter: AsyncIterable[T],
     *,
@@ -281,11 +310,13 @@ async def decouple[T](
     """
     queue: AsyncIterableQueue[T] = AsyncIterableQueue()
     sem = None if buffer is None else asyncio.Semaphore(buffer)
+    fut: asyncio.Future[None] | None = None
 
     done = False
     is_loop_closing = get_loop_closing_checker()
 
     async def worker() -> None:
+        nonlocal fut
         async with maybe_aclosing(iter):
             try:
                 # N.B: There's a potential case, if iter is *not* a
@@ -303,6 +334,24 @@ async def decouple[T](
                     queue.put_nowait(x)
                     if sem is not None:
                         try:
+                            # For the running in lock-step case, we go
+                            # to sleep on a future that we can run
+                            # with run_right_now(), which allows us to
+                            # run it without hitting the scheduler.
+                            #
+                            # If we manage to produce a value without
+                            # blocking, then by the time we block
+                            # again (back on this future), we'll have
+                            # already populated the queue and the
+                            # consumer will be able to read it without
+                            # ever blocking either, so we shave two
+                            # trips through the scheduler.
+                            if buffer == 0 and sem.locked():
+                                fut = asyncio.Future()
+                                try:
+                                    await fut
+                                finally:
+                                    fut = None
                             await sem.acquire()
                         except asyncio.CancelledError as e:
                             # Three reasons we might have been cancelled:
@@ -339,8 +388,12 @@ async def decouple[T](
             yield el
             if sem is not None:
                 sem.release()
+                if fut:
+                    run_right_now(fut, None)
     finally:
         done = True
+        if fut and not fut.done():
+            fut.set_result(None)
         if sem is not None:
             sem.release()
         # cancel is a no-op if a task is already done or cancelled
