@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import dataclasses
+import functools
 import weakref
 from collections.abc import AsyncGenerator, Callable, MutableSet
 from typing import TYPE_CHECKING, Any, Literal
@@ -14,6 +15,7 @@ if TYPE_CHECKING:
         AsyncIterable,
         AsyncIterator,
         Collection,
+        Coroutine,
         Generator,
         Iterable,
         Iterator,
@@ -194,6 +196,56 @@ class TaskGroup(asyncio.TaskGroup):
             ):
                 raise exc from None
             raise
+
+
+@contextlib.contextmanager
+def _filter_generator_exit() -> Iterator[None]:
+    def strip(eg: BaseExceptionGroup[Any]) -> BaseExceptionGroup[Any] | None:
+        kept: list[BaseException] = []
+        for exc in eg.exceptions:
+            if isinstance(exc, BaseExceptionGroup):
+                if (sub := strip(exc)) is not None:
+                    kept.append(sub)
+            elif not isinstance(exc, GeneratorExit):
+                kept.append(exc)
+        return eg.derive(kept) if kept else None
+
+    try:
+        yield
+    except BaseExceptionGroup as eg:
+        if (rest := strip(eg)) is not None:
+            raise rest from eg
+
+
+class _AsyncGenProxy[Y, S](AsyncGenerator[Y, S]):
+    def __init__(self, gen: AsyncGenerator[Y, S]) -> None:
+        self._gen = gen
+
+    def __aiter__(self) -> AsyncGenerator[Y, S]:
+        return self
+
+    def __anext__(self) -> Coroutine[Any, Any, Y]:
+        return self._gen.__anext__()
+
+    def asend(self, value: S) -> Coroutine[Any, Any, Y]:
+        return self._gen.asend(value)
+
+    def athrow(self, *args: Any) -> Coroutine[Any, Any, Y]:
+        return self._gen.athrow(*args)
+
+    async def aclose(self) -> None:
+        with _filter_generator_exit():
+            await self._gen.aclose()
+
+
+def filter_generator_exit[**P, Y, S](
+    func: Callable[P, AsyncGenerator[Y, S]],
+) -> Callable[P, _AsyncGenProxy[Y, S]]:
+    @functools.wraps(func)
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> _AsyncGenProxy[Y, S]:
+        return _AsyncGenProxy(func(*args, **kwargs))
+
+    return wrapper
 
 
 _LOOP_CLOSING_MAP: weakref.WeakKeyDictionary[
