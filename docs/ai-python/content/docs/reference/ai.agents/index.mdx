@@ -43,10 +43,25 @@ forwarded `PartialToolCallResult` events.
 - `BoundToolCall`
 - `ToolCallCallable`
 
+`BoundToolCall.fn` is always the underlying `AgentTool` function.
+`BoundToolCall.wrap` returns a new bound call with the same `fn` and a wrapper
+that returns a `ToolCallResult` inside argument validation and exception
+handling:
+
+```python
+def wrap(call: ai.agents.BoundToolCall, inner):
+    async def wrapped(**kwargs):
+        print(call.name)
+        return await inner(**kwargs)
+
+    return wrapped
+
+
+wrapped_call = tool_call.wrap(wrap)
+```
+
 ## GatedToolCall
 
-`GatedToolCall` wraps a tool call that requires approval or another gate before
-execution.
-
-Use it in custom agent loops when you need to delay or externally approve a
-scheduled tool call.
+`GatedToolCall` remains available for compatibility. It is a
+`BoundToolCall` subclass that uses the wrapper mechanism to apply the built-in
+approval gate before invoking the wrapped call.
