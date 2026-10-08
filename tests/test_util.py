@@ -230,9 +230,7 @@ async def test_taskgroup_unwraps_lone_generator_exit() -> None:
     with pytest.raises(GeneratorExit) as exc_info:
         async with util.TaskGroup():
             raise GeneratorExit
-    # It is *also* the group, so it stays honest about its origin.
-    assert isinstance(exc_info.value, util.TaskGroupGenExit)
-    assert isinstance(exc_info.value, BaseExceptionGroup)
+    assert not isinstance(exc_info.value, BaseExceptionGroup)
 
 
 async def test_taskgroup_aclose_swallows_generator_exit() -> None:
