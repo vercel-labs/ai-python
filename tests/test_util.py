@@ -846,6 +846,29 @@ async def test_decouple_anyio_cancel_not_delivered_in_shield() -> None:
     assert got == list(range(10))
 
 
+async def test_decouple_reports_cancel_raised_by_source() -> None:
+    """A CancelledError that comes out of the source on its own, without
+    anyone cancelling the worker, reaches the consumer as a RuntimeError
+    instead of quietly ending the stream."""
+
+    async def src() -> AsyncIterator[int]:
+        yield 1
+        t = asyncio.create_task(asyncio.sleep(10))
+        t.cancel()
+        await t
+        yield 2
+
+    got: list[int] = []
+    with pytest.raises(RuntimeError) as exc_info:
+        async for x in util.decouple(src(), buffer=0):
+            got.append(x)
+    assert isinstance(exc_info.value.__cause__, asyncio.CancelledError)
+    assert got == [1]
+    task = asyncio.current_task()
+    assert task is not None
+    assert task.cancelling() == 0
+
+
 async def test_decouple_taskgroup_child_failure_sync_yields() -> None:
     """Same as above, but the source keeps yielding without awaiting
     while the cancel is pending. Once the TaskGroup handles it, no
@@ -877,8 +900,9 @@ async def test_decouple_taskgroup_child_failure_sync_yields() -> None:
         await consume()
         assert got == [1, 2, 3, 4]
     else:
-        with pytest.raises(asyncio.CancelledError):
+        with pytest.raises(RuntimeError) as exc_info:
             await consume()
+        assert isinstance(exc_info.value.__cause__, asyncio.CancelledError)
         assert got == [1, 2, 3]
 
 

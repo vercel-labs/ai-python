@@ -657,9 +657,27 @@ class _DecoupleWorker[T]:
                     await self._acquire()
                     if self._done:
                         break
-            except (Exception, asyncio.CancelledError, BaseExceptionGroup) as e:
+            except (Exception, BaseExceptionGroup) as e:
                 self._put(_Stop(exception=e))
-                return
+            except asyncio.CancelledError as e:
+                task = asyncio.current_task()
+                assert task
+                if task.cancelling():
+                    # Someone is actually cancelling the worker.
+                    self._put(_STOP)
+                    raise
+                # A cancel came out of the iterator without anyone
+                # cancelling the worker. That's probably the < 3.13
+                # uncancel() misbehavior, where a cancel we re-armed
+                # stays pending even after the count drops back to 0.
+                # Don't re-raise a cancel outside of its scope in the
+                # consumer; report it as an error instead.
+                err = RuntimeError(
+                    "iterator raised CancelledError without the decouple "
+                    "worker being cancelled"
+                )
+                err.__cause__ = e
+                self._put(_Stop(exception=err))
             else:
                 self._put(_STOP)
 
