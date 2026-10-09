@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-import asyncio
 import contextlib
 import contextvars
 import dataclasses
 import importlib
 import json
 from typing import TYPE_CHECKING, Any, cast
+
+import anyio
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Callable
@@ -37,7 +38,7 @@ _pool: contextvars.ContextVar[dict[str, _Connection] | None] = (
     contextvars.ContextVar("mcp_connections", default=None)
 )
 
-_pool_lock = asyncio.Lock()
+_pool_lock = anyio.Lock()
 
 
 def _import_mcp_module(module_name: str) -> Any:
@@ -133,10 +134,8 @@ def _make_tool_fn(
             connection_key, transport_factory
         )
         try:
-            result = await asyncio.wait_for(
-                client.call_tool(tool_name, kwargs),
-                timeout=30.0,
-            )
+            with anyio.fail_after(30.0):
+                result = await client.call_tool(tool_name, kwargs)
         except TimeoutError as e:
             raise RuntimeError(
                 f"MCP tool call timed out after 30 seconds: {tool_name}"
