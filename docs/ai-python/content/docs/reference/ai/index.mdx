@@ -346,6 +346,7 @@ Hook exports:
 - `cancel_hook`: Cancel a live hook by label.
 - `HookRegistry`: Store live and pre-registered hook resolutions.
 - `get_hook_registry`: Return the current hook registry.
+- `HookCancelled`: Raised from a hook's awaiter when the hook is cancelled.
 - `HookDeferredException`: Signal that a hook was deferred for a later run.
 
 ### yield_from

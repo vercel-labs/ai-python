@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import AsyncGenerator
 from typing import Any
 
+import anyio
 import pydantic
 import pytest
 
@@ -61,7 +61,7 @@ async def test_resolve_live_future() -> None:
 
 
 async def test_cancel_live_hook() -> None:
-    """cancel_hook() cancels the future, causing CancelledError in graph."""
+    """cancel_hook() makes the awaiting hook() raise HookCancelled."""
     was_cancelled = False
 
     class MyAgent(ai.Agent):
@@ -74,7 +74,8 @@ async def test_cancel_live_hook() -> None:
                     yield event
             try:
                 await ai.hook("cancel_me", payload=Confirmation)
-            except asyncio.CancelledError:
+            except ai.HookCancelled as e:
+                assert e.reason == "denied"
                 was_cancelled = True
 
     my_agent = MyAgent()
@@ -89,6 +90,28 @@ async def test_cancel_live_hook() -> None:
                 await ai.cancel_hook("cancel_me", reason="denied")
 
     assert was_cancelled
+
+
+async def test_resolve_live_hook_twice_raises() -> None:
+    class MyAgent(ai.Agent):
+        async def loop(
+            self, context: ai.Context
+        ) -> AsyncGenerator[ai.events.Event]:
+            async with ai.models.stream(context=context) as stream:
+                async for event in stream:
+                    yield event
+            await ai.hook("twice", payload=Confirmation)
+
+    mock_llm([[text_msg("OK")]])
+
+    async with MyAgent().run(MOCK_MODEL, [ai.user_message("go")]) as stream:
+        async for event in stream:
+            if not isinstance(event, agent_events_.HookEvent):
+                continue
+            if event.hook.status == "pending":
+                ai.resolve_hook("twice", {"approved": True})
+                with pytest.raises(anyio.FutureAlreadyFinished):
+                    ai.resolve_hook("twice", {"approved": False})
 
 
 # -- cancel_hook() on non-existent label raises ----------------------------
@@ -389,7 +412,7 @@ async def test_cancelled_hook_span(recorder: Recorder) -> None:
                     yield event
             try:
                 await ai.hook(self.label, payload=Confirmation)
-            except asyncio.CancelledError:
+            except ai.HookCancelled:
                 pass
 
     mock_llm([[text_msg("OK")]])
