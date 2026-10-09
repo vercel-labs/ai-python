@@ -43,7 +43,6 @@ from .. import models, type_utils, types, util
 from ..types import builders
 from ..types import events as events_
 from ..types.messages import MessageBundle
-from . import _middleware as middleware_
 from . import hooks as hooks_
 from . import runtime
 
@@ -761,36 +760,29 @@ class BoundToolCall:
                     message=msg, results=msg.tool_results
                 )
 
-        # Best-effort parse so middleware sees usable kwargs when possible.
-        # If parsing fails, middleware still gets the raw tool_call_id /
-        # tool_name and can replace kwargs before _real() executes.
+        # If the model's args are bad, overrides can still supply them;
+        # otherwise the parse error becomes the tool result.
+        parse_error: Exception | None = None
         try:
-            base_kwargs = self.kwargs
-        except Exception:
-            base_kwargs = {}
+            kwargs = self.kwargs
+        except Exception as exc:
+            kwargs = {}
+            parse_error = exc
 
         if overrides:
             # Overrides come from user code, not the model — validate
             # eagerly so programming errors surface immediately.
-            base_kwargs = _validate_kwargs(
-                self._tool, {**base_kwargs, **overrides}
-            )
-
-        call = middleware_.ToolContext(
-            tool_call_id=self._part.tool_call_id,
-            tool_name=self._part.tool_name,
-            kwargs=base_kwargs,
-        )
+            kwargs = _validate_kwargs(self._tool, {**kwargs, **overrides})
+            parse_error = None
 
         tool = self._tool
-
-        async def _real(
-            call: middleware_.ToolContext,
-        ) -> events_.ToolCallResult:
+        data.args = kwargs
+        async with telemetry.span(data) as sp:
             result: Any
             model_input: Any = types.messages.MODEL_INPUT_UNSET
             try:
-                kwargs = _validate_kwargs(tool, call.kwargs)
+                if parse_error is not None:
+                    raise parse_error
                 # The returned value decides how the tool runs, so a
                 # plain `def` returning a coroutine works too.
                 returned = tool.fn(**kwargs)
@@ -808,8 +800,8 @@ class BoundToolCall:
                         )
                     agg = await _aggregate_from(
                         returned,
-                        tool_call_id=call.tool_call_id,
-                        tool_name=call.tool_name,
+                        tool_call_id=self.id,
+                        tool_name=self.name,
                         aggregator=tool.aggregator,
                     )
                     result = agg.snapshot()
@@ -825,30 +817,26 @@ class BoundToolCall:
                 if tool.to_model_input is not None:
                     model_input = tool.to_model_input(result)
             except (Exception, asyncio.CancelledError) as exc:
-                return _error_tool_result(
-                    exc,
-                    tool_call_id=call.tool_call_id,
-                    tool_name=call.tool_name,
+                res = _error_tool_result(
+                    exc, tool_call_id=self.id, tool_name=self.name
                 )
-            part = types.messages.ToolResultPart(
-                tool_call_id=call.tool_call_id,
-                tool_name=call.tool_name,
-                result=result,
-                result_kind=types.messages.ToolResultPart.kind_for(result),
-                model_input=model_input,
-            )
-            return tool_result(part)
-
-        data.args = base_kwargs
-        chain = middleware_._build_tool_chain(_real)
-        async with telemetry.span(data) as sp:
-            res = await chain(call)
-            if res.results:
-                sp.data.result = res.results[0].result
-                sp.data.is_error = any(p.is_error for p in res.results)
+            else:
+                res = tool_result(
+                    types.messages.ToolResultPart(
+                        tool_call_id=self.id,
+                        tool_name=self.name,
+                        result=result,
+                        result_kind=types.messages.ToolResultPart.kind_for(
+                            result
+                        ),
+                        model_input=model_input,
+                    )
+                )
+            sp.data.result = res.results[0].result
+            sp.data.is_error = res.results[0].is_error
             # A tool exception is caught and converted to an error
-            # result before it reaches this block, so it never hits the
-            # span's own except path — thread it through explicitly.
+            # result above, so it never hits the span's own except
+            # path — thread it through explicitly.
             if res.exception is not None:
                 sp.error = telemetry.SpanError.from_exception(res.exception)
             return res
@@ -1510,7 +1498,6 @@ class Agent:
         *,
         params: models.InferenceRequestParams | None = None,
         hook_registry: hooks_.HookRegistry | None = None,
-        _middleware: list[middleware_._Middleware] | None = None,
     ) -> AbstractAsyncContextManager[AgentStream[str]]: ...
     @overload
     def run[T: pydantic.BaseModel](
@@ -1521,7 +1508,6 @@ class Agent:
         output_type: type[T],
         params: models.InferenceRequestParams | None = None,
         hook_registry: hooks_.HookRegistry | None = None,
-        _middleware: list[middleware_._Middleware] | None = None,
     ) -> AbstractAsyncContextManager[AgentStream[T]]: ...
     def run(
         self,
@@ -1531,7 +1517,6 @@ class Agent:
         output_type: type[pydantic.BaseModel] | None = None,
         params: models.InferenceRequestParams | None = None,
         hook_registry: hooks_.HookRegistry | None = None,
-        _middleware: list[middleware_._Middleware] | None = None,
     ) -> AbstractAsyncContextManager[AgentStream[Any]]:
         """Run the agent loop, yielding events to the consumer.
 
@@ -1566,7 +1551,6 @@ class Agent:
             output_type=output_type,
             params=params,
             hook_registry=hook_registry,
-            _middleware=_middleware,
         )
 
     @contextlib.asynccontextmanager
@@ -1578,7 +1562,6 @@ class Agent:
         output_type: type[pydantic.BaseModel] | None,
         params: models.InferenceRequestParams | None,
         hook_registry: hooks_.HookRegistry | None,
-        _middleware: list[middleware_._Middleware] | None,
     ) -> AsyncIterator[AgentStream[Any]]:
         context = Context(
             model=model,
@@ -1600,10 +1583,10 @@ class Agent:
             # shares the enclosing run's hooks); otherwise start fresh.
             registry = hooks_._hook_registry.get(None) or hooks_.HookRegistry()
 
-        async def _real(call: Context) -> AsyncGenerator[events_.AgentEvent]:
+        async def _events() -> AsyncGenerator[events_.AgentEvent]:
             tracker = events_.RunStateTracker()
             retry_filter = events_._RetryFilter()
-            source = self.loop(call)
+            source = self.loop(context)
             async with contextlib.aclosing(runtime.run(source)) as events:
                 async for event in events:
                     if not retry_filter.feed(event):
@@ -1622,13 +1605,6 @@ class Agent:
                         yield transition
 
         async def _stream() -> AsyncGenerator[events_.AgentEvent]:
-            # Activate middleware for this run (and everything it calls).
-            # When middleware is None (default), inherit the parent's
-            # middleware from the context var — this lets nested agents
-            # share middleware.  When middleware is explicitly provided,
-            # *extend* the parent stack so that outer cross-cutting
-            # concerns (tracing, durability) are preserved.  Pass
-            # ``_middleware=[]`` to clear the stack entirely.
             async with telemetry.span(
                 telemetry.RunSpanData(
                     agent=type(self).__name__,
@@ -1646,14 +1622,9 @@ class Agent:
             ) as sp:
                 initial_count = len(context.messages)
                 agent_token = _current_agent.set(self)
-                mw_token: middleware_.Token | None = None
-                if _middleware is not None:
-                    parent = middleware_.get()
-                    mw_token = middleware_.activate(parent + _middleware)
                 try:
-                    chain = middleware_._build_agent_run_chain(_real)
                     async with contextlib.aclosing(
-                        util.decouple(chain(context), buffer=self.LOOP_BUFFER)
+                        util.decouple(_events(), buffer=self.LOOP_BUFFER)
                     ) as events:
                         async for event in events:
                             # a blocked run can only resume via a hook
@@ -1668,8 +1639,6 @@ class Agent:
                                 sp.data.blocked = False
                             yield event
                 finally:
-                    if mw_token is not None:
-                        middleware_.deactivate(mw_token)
                     _current_agent.reset(agent_token)
                     # Record whatever got produced, even on error or
                     # early close.
