@@ -28,6 +28,7 @@ from .agent import (
 )
 from .hooks import (
     TOOL_APPROVAL_HOOK_TYPE,
+    HookCancelled,
     HookDeferredException,
     HookRegistry,
     cancel_hook,
@@ -46,6 +47,7 @@ __all__ = [
     "ConcatAggregator",
     "Context",
     "GatedToolCall",
+    "HookCancelled",
     "HookDeferredException",
     "HookRegistry",
     "LastAggregator",

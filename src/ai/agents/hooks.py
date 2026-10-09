@@ -20,11 +20,11 @@ Cancellation::
 
 from __future__ import annotations
 
-import asyncio
 import contextlib
 import contextvars
 from typing import TYPE_CHECKING, Any, cast
 
+import anyio
 import pydantic
 
 from .. import experimental_telemetry as telemetry
@@ -77,7 +77,7 @@ class HookRegistry:
         self._live_hooks: dict[
             str,
             tuple[
-                asyncio.Future[dict[str, Any]],
+                anyio.Future[dict[str, Any]],
                 dict[str, Any],
                 runtime_.Runtime,
             ],
@@ -128,6 +128,14 @@ async def use_hook_registry(registry: HookRegistry) -> AsyncIterator[None]:
         yield
     finally:
         _hook_registry.reset(token)
+
+
+class HookCancelled(Exception):  # noqa: N818
+    """Raised from a hook's awaiter when the hook is cancelled."""
+
+    def __init__(self, reason: str | None = None) -> None:
+        super().__init__(reason)
+        self.reason = reason
 
 
 class HookDeferredException(Exception):  # noqa: N818
@@ -216,7 +224,7 @@ async def _hook_impl(call: middleware_.HookContext) -> pydantic.BaseModel:
     # No resolution available — suspend.  The span covers the whole
     # suspension: how long the run sat waiting on external input.
     async with telemetry.span(data) as sp:
-        future: asyncio.Future[dict[str, Any]] = asyncio.Future()
+        future: anyio.Future[dict[str, Any]] = anyio.Future()
 
         registry._live_hooks[label] = (future, hook_metadata, rt)
 
@@ -235,15 +243,18 @@ async def _hook_impl(call: middleware_.HookContext) -> pydantic.BaseModel:
 
         # Await resolution — may be resolved externally or cancelled.
         try:
-            resolution = await future
-        except asyncio.CancelledError as exc:
+            await future.wait()
+            if (exc := future.exception) is not None:
+                raise exc
+            resolution = future.return_value
+        except (HookCancelled, anyio.get_cancelled_exc_class()) as e:
             sp.data.status = "cancelled"
-            # ``cancel_hook(reason=...)`` rides on the CancelledError.
             attrs: dict[str, Any] = {}
-            if exc.args and exc.args[0] is not None:
-                attrs["reason"] = exc.args[0]
+            if isinstance(e, HookCancelled) and e.reason is not None:
+                attrs["reason"] = e.reason
             sp.add_event(telemetry.HOOK_CANCELLED, attrs)
-            await sp.push()
+            with anyio.CancelScope(shield=True):
+                await sp.push()
             raise
         finally:
             # Clean up live registry.
@@ -332,12 +343,10 @@ def resolve_hook(
     # Path 1: live hook — resolve the future directly.
     if label in reg._live_hooks:
         future, _, _rt = reg._live_hooks[label]
-        if future.cancelled():
-            pass
-        elif isinstance(resolution, BaseException):
-            future.set_exception(resolution)
+        if isinstance(resolution, BaseException):
+            future.exception = resolution
         else:
-            future.set_result(resolution)
+            future.return_value = resolution
         return
 
     # Path 2: no live hook — pre-register for later consumption.
@@ -372,7 +381,8 @@ async def cancel_hook(
 ) -> None:
     """Cancel a deferred hook.
 
-    Only works for live hooks (long-running mode).  Raises ValueError
+    Only works for live hooks (long-running mode).  The awaiting
+    ``hook()`` call raises :class:`HookCancelled`.  Raises ValueError
     if the hook is not currently deferred.  ``hook`` may be a label
     string or a HookPart whose ``hook_id`` supplies it.  ``registry``
     selects the :class:`HookRegistry` to use, defaulting to the current
@@ -384,7 +394,7 @@ async def cancel_hook(
         raise ValueError(f"No deferred hook with label: {label!r}")
 
     future, hook_metadata, rt = reg._live_hooks.pop(label)
-    future.cancel(reason)
+    future.exception = HookCancelled(reason)
 
     # Emit cancelled signal.
     await rt.put_hook(

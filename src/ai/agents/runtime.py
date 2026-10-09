@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import contextlib
 import contextvars
+import math
 from typing import TYPE_CHECKING, Any
+
+import anyio
 
 from .. import util
 from ..types import events as events_
@@ -24,19 +27,19 @@ class Runtime:
     _SENTINEL = _Sentinel()
 
     def __init__(self) -> None:
-        self._event_queue: util.AsyncIterableQueue[events_.AgentEvent] = (
-            util.AsyncIterableQueue()
-        )
+        self._event_send, self._event_recv = anyio.create_memory_object_stream[
+            events_.AgentEvent
+        ](math.inf)
 
     async def put_event(self, event: events_.AgentEvent) -> None:
-        await self._event_queue.put(event)
+        self._event_send.send_nowait(event)
 
     async def put_hook(self, hook_part: messages_.HookPart[Any]) -> None:
         msg = messages_.Message(role="internal", parts=[hook_part])
         await self.put_event(events_.HookEvent(message=msg, hook=hook_part))
 
     async def signal_done(self) -> None:
-        await self._event_queue.astop()
+        self._event_send.close()
 
 
 _runtime: contextvars.ContextVar[Runtime] = contextvars.ContextVar("runtime")
@@ -75,6 +78,6 @@ def run(
 
             await rt.signal_done()
 
-    # Merge while prioritizing the _event_queue, so that partial tool
+    # Merge while prioritizing the event stream, so that partial tool
     # results will always precede the real tool result.
-    return util.merge(rt._event_queue, _drain(), restart=False, priority=True)
+    return util.merge(rt._event_recv, _drain(), restart=False, priority=True)
