@@ -7,11 +7,15 @@ import functools
 from collections.abc import AsyncGenerator, Callable
 from typing import Any, cast
 
+import anyio
+import anyio.lowlevel
 import pydantic
 import pytest
 
 import ai
 from ai.types import events as events_
+
+from ..conftest import Recorder
 
 # Declaring a tool with a plain `def` is a type error by design; go
 # through an untyped view of the decorator to reach the runtime check.
@@ -160,13 +164,13 @@ async def test_tool_runner_discard_cancels_and_omits_task() -> None:
 
     async with ai.ToolRunner() as runner:
         task = runner.schedule(speculative)
-        assert isinstance(task, asyncio.Task)
+        assert isinstance(task, anyio.TaskHandle)
         await started.wait()
         runner.discard(task)
 
         assert [event async for event in runner.events()] == []
         assert runner.get_tool_message() is None
-        with pytest.raises(asyncio.CancelledError):
+        with pytest.raises(anyio.TaskCancelled):
             await task
 
 
@@ -245,6 +249,49 @@ async def test_cancelled_tool_call_returns_error_result() -> None:
     assert result.results[0].is_error
     assert "CancelledError" in str(result.results[0].result)
     assert isinstance(result.exception, asyncio.CancelledError)
+
+
+async def test_tool_runner_cancelled_tool_reports_error_result() -> None:
+    """Cancelling a scheduled tool through its handle still yields an
+    error result, even though the handle's cancel scope stays cancelled
+    while the span closes."""
+    started = anyio.Event()
+
+    @ai.tool
+    async def wait_forever() -> str:
+        """Wait until cancelled."""
+        started.set()
+        await anyio.sleep_forever()
+        return "unreachable"
+
+    class SlowEnd(Recorder):
+        async def on_span_end(
+            self, span: ai.experimental_telemetry.Span
+        ) -> None:
+            await anyio.lowlevel.checkpoint()
+            await super().on_span_end(span)
+
+    rec = SlowEnd()
+    ai.experimental_telemetry.register(rec)
+    try:
+        part = ai.messages.ToolCallPart(
+            tool_call_id="tc-cancelled",
+            tool_name="wait_forever",
+            tool_args="{}",
+        )
+        async with ai.ToolRunner() as runner:
+            task = runner.schedule(
+                ai.agents.BoundToolCall(part=part, tool=wait_forever)
+            )
+            await started.wait()
+            task.cancel()
+            (result,) = [event async for event in runner.events()]
+    finally:
+        ai.experimental_telemetry.unregister(rec)
+
+    assert result.results[0].is_error
+    assert isinstance(result.exception, anyio.get_cancelled_exc_class())
+    assert [s.name for s in rec.ended] == ["tool_execution"]
 
 
 async def test_tool_call_catches_errors() -> None:

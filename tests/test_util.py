@@ -203,25 +203,53 @@ async def test_cleanup_with_non_generator_iterable() -> None:
 
 
 async def test_empty_multiwaiter_returns_none() -> None:
-    """Waiting with no tracked futures finishes rather than blocking."""
-    assert await util.MultiWaiter[int]() is None
+    """Waiting with nothing tracked finishes rather than blocking."""
+    async with util.MultiWaiter[anyio.Event]() as waiter:
+        assert await waiter is None
 
 
-async def test_multiwaiter_discard_ignores_completed_future() -> None:
-    """A queued completion from a discarded future is not returned later."""
-    loop = asyncio.get_running_loop()
-    discarded: asyncio.Future[int] = loop.create_future()
-    kept: asyncio.Future[int] = loop.create_future()
-    waiter = util.MultiWaiter(discarded)
+async def test_multiwaiter_discard_ignores_completed_item() -> None:
+    """A queued completion from a discarded item is not returned later."""
+    discarded = anyio.Event()
+    kept = anyio.Event()
+    async with util.MultiWaiter(discarded) as waiter:
+        discarded.set()
+        await asyncio.sleep(0)  # Let its watcher enqueue it.
+        waiter.discard(discarded)
+        waiter.add(kept)
+        kept.set()
 
-    discarded.set_result(1)
-    await asyncio.sleep(0)  # Let its done callback enqueue the future.
-    waiter.discard(discarded)
-    waiter.add(kept)
-    kept.set_result(2)
+        assert await waiter is kept
+        assert not waiter.tasks()
 
-    assert await waiter is kept
-    assert not waiter.tasks()
+
+async def test_multiwaiter_preserves_completion_order() -> None:
+    events = [anyio.Event() for _ in range(3)]
+    async with util.MultiWaiter(*events) as waiter:
+        await asyncio.sleep(0)  # Let the watchers start waiting.
+        for i in (2, 0, 1):
+            events[i].set()
+        assert [await waiter for _ in range(3)] == [
+            events[2],
+            events[0],
+            events[1],
+        ]
+        assert await waiter is None
+
+
+async def test_multiwaiter_discard_wakes_waiter() -> None:
+    """Discarding the last item wakes a blocked waiter with None."""
+    ev = anyio.Event()
+    got: list[anyio.Event | None] = []
+    async with util.MultiWaiter(ev) as waiter, anyio.create_task_group() as tg:
+
+        async def wait() -> None:
+            got.append(await waiter)
+
+        tg.start_soon(wait)
+        await asyncio.sleep(0)
+        waiter.discard(ev)
+    assert got == [None]
 
 
 # -- TaskGroup --------------------------------------------------------------
