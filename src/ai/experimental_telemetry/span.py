@@ -89,6 +89,7 @@ from typing import (
     runtime_checkable,
 )
 
+import anyio
 import pydantic
 
 # ``typing.TypeVar`` lacks the ``default=`` kwarg on Python <3.13.
@@ -1033,7 +1034,8 @@ async def _span_impl(
                     # token from a different task's context.
                     misordered = True
         sp.ended_at = now_ns()
-        await sp.push()
+        with anyio.CancelScope(shield=True):
+            await sp.push()
         if misordered:
             raise RuntimeError(
                 f"span {sp.name!r} closed out of order: it is not the "
