@@ -415,6 +415,25 @@ async def test_tool_call_malformed_args_become_error_message() -> None:
     result = await tc()
 
     assert result.results[0].is_error
+    assert "JSONDecodeError" in str(result.results[0].result)
+
+
+async def test_tool_call_overrides_repair_malformed_args() -> None:
+    @ai.tool
+    async def double(x: int) -> int:
+        """Double a number."""
+        return x * 2
+
+    part = ai.messages.ToolCallPart(
+        tool_call_id="tc-1",
+        tool_name="double",
+        tool_args='{"x": ',
+    )
+    tc = ai.agents.BoundToolCall(part=part, tool=double)
+
+    result = await tc(x=99)
+
+    assert result.results[0].result == 198
 
 
 # -- Helpers ---------------------------------------------------------------
