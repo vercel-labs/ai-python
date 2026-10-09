@@ -1,4 +1,5 @@
-"""stop and peek on a conversation here, one open in another terminal."""
+"""stop and peek on a conversation here, one open in another terminal;
+attach on one pushed unattended."""
 
 from __future__ import annotations
 
@@ -8,15 +9,18 @@ import os
 import signal
 import subprocess
 import sys
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
 import pytest
 from afk import rows, verbs
-from afk.rows import Row
+from afk import state as st
+from afk.rows import CONTINUE, Row
 
-from ai.harnesses.experimental import SessionInfo
+from ai.harnesses.experimental import Handle, SessionInfo
 from ai.harnesses.experimental.errors import HarnessError
 from ai.types.messages import Message, TextPart, ToolCallPart
+from ai.workspaces.experimental import WorkspaceCoords, tty
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -263,3 +267,193 @@ async def test_peek_piped_draws_no_status_line(
     )
     out = capsys.readouterr().out
     assert "following" not in out and "\x1b" not in out
+
+
+PUSHED = [Message(role="user", parts=[TextPart(text=CONTINUE)])]
+DONE = [*PUSHED, Message(role="assistant", parts=[TextPart(text="Done.")])]
+WORKING = [
+    *PUSHED,
+    Message(
+        role="assistant",
+        parts=[
+            ToolCallPart(tool_call_id="c1", tool_name="Bash", tool_args="{}")
+        ],
+    ),
+]
+
+
+class _Sandbox:
+    """The pushed one's sandbox: no ptys yet, and a process that ends when
+    asked to."""
+
+    def __init__(self, pid: int | None) -> None:
+        self.alive = pid is not None
+        self.ran: list[list[str]] = []
+
+    async def __aenter__(self) -> _Sandbox:
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        pass
+
+    async def ptys(self) -> list[Any]:
+        return []
+
+    async def exec(self, argv: list[str], timeout: float) -> Any:
+        self.ran.append(argv)
+        if argv[:2] == ["kill", "-TERM"]:
+            self.alive = False
+        return SimpleNamespace(exit_code=0 if self.alive else 1)
+
+
+class _Remote:
+    """The harness in that sandbox: the conversation, still held by the
+    unattended agent until its process ends."""
+
+    def __init__(self, ws: _Sandbox, messages: list[Message], pid: int | None):
+        self.ws = ws
+        self.messages = messages
+        self.pid = pid
+        self.opened: list[tuple[str, str]] = []
+
+    async def open(self) -> None:
+        pass
+
+    async def close(self) -> None:
+        pass
+
+    async def detach(self) -> None:
+        pass
+
+    async def sessions(self) -> list[SessionInfo]:
+        return [
+            SessionInfo(
+                kind="claude-code",
+                session_id="1495ffff",
+                running=self.ws.alive,
+                pid=self.pid,
+            )
+        ]
+
+    async def history(self, session_id: str) -> list[Message]:
+        return self.messages
+
+    async def tui(self, session_id: str, *, name: str) -> Any:
+        assert not self.ws.alive, "the TUI must not overlap the agent"
+        self.opened.append((session_id, name))
+        return SimpleNamespace(pty=SimpleNamespace(name=name))
+
+
+def _pushed_bg(
+    monkeypatch: pytest.MonkeyPatch, messages: list[Message], pid: int | None
+) -> tuple[Row, _Sandbox, _Remote]:
+    handle = Handle(
+        kind="claude-code",
+        session_id="1495ffff",
+        workspace=WorkspaceCoords(provider="vercel-sandbox", location="lime"),
+    )
+    st.save(
+        st.State(
+            remotes=[
+                st.Remote(
+                    label="tests",
+                    origin="/proj",
+                    sandbox="lime",
+                    mode="bg",
+                    handle=handle,
+                    pushed_at=st.now(),
+                )
+            ]
+        )
+    )
+    ws = _Sandbox(pid)
+    agent = _Remote(ws, messages, pid)
+    monkeypatch.setattr(verbs, "VercelSandbox", lambda **kw: ws)
+    monkeypatch.setitem(
+        rows.HARNESSES, "claude-code", lambda *, workspace: agent
+    )
+
+    async def detached(pty: Any) -> None:
+        return None
+
+    monkeypatch.setattr(tty, "bridge", detached)
+    row = Row(
+        where="remote",
+        kind="claude-code",
+        session_id="1495ffff",
+        status="finished",
+        label="tests",
+        sandbox="lime",
+        handle=handle,
+        mode="bg",
+    )
+    return row, ws, agent
+
+
+def _never(prompt: str) -> str:
+    raise AssertionError(f"asked {prompt!r}")
+
+
+@pytest.mark.parametrize(
+    ("messages", "pid", "answer", "ended"),
+    [
+        # finished: it only waits for a next turn; ended without a question
+        (DONE, 4242, _never, [["kill", "-TERM", "4242"]]),
+        # mid-turn: ended after a yes
+        (WORKING, 4242, lambda prompt: "y", [["kill", "-TERM", "4242"]]),
+        # its process already gone: nothing to end
+        (WORKING, None, _never, []),
+    ],
+)
+async def test_attach_opens_an_unattended_one_in_the_tui(
+    monkeypatch: pytest.MonkeyPatch,
+    messages: list[Message],
+    pid: int | None,
+    answer: Any,
+    ended: list[list[str]],
+) -> None:
+    row, ws, agent = _pushed_bg(monkeypatch, messages, pid)
+    await verbs.attach(row, None, ask=answer)
+    assert [a for a in ws.ran if a[:2] == ["kill", "-TERM"]] == ended
+    # The same conversation, under a pty the next attach reconnects to.
+    assert agent.opened == [("1495ffff", "afk-tests")]
+    (record,) = st.load().remotes
+    assert (record.mode, record.pty) == ("tui", "afk-tests")
+
+
+async def test_attach_leaves_one_mid_turn_working_on_a_no(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    row, ws, agent = _pushed_bg(monkeypatch, WORKING, 4242)
+    asked: list[str] = []
+
+    def no(prompt: str) -> str:
+        asked.append(prompt)
+        return ""
+
+    await verbs.attach(row, None, ask=no)
+    assert asked == [
+        "afk: tests is still working; attaching ends its turn there, and you "
+        "go on from where it stopped. go ahead? [y/N] "
+    ]
+    assert ws.alive and not agent.opened
+    assert st.load().remotes[0].mode == "bg"
+    assert capsys.readouterr().out == (
+        "afk: left tests working; `afk peek tests` to watch\n"
+    )
+
+
+async def test_attach_says_when_the_agent_will_not_exit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    row, ws, agent = _pushed_bg(monkeypatch, DONE, 4242)
+
+    async def ignores_term(argv: list[str], timeout: float) -> Any:
+        ws.ran.append(argv)
+        return SimpleNamespace(exit_code=0)
+
+    monkeypatch.setattr(ws, "exec", ignores_term)
+    monkeypatch.setattr(verbs, "STOP_WAIT", 0.1)
+    with pytest.raises(HarnessError, match=r"did not exit within 0\.1s"):
+        await verbs.attach(row, None)
+    assert not agent.opened

@@ -72,7 +72,7 @@ async def _press(*keys: str, remote_delay: float = 0.0) -> Picker:
         (["u"], [["afk", "push", "a3f5aaaa"]]),
         (["b"], [["afk", "push", "a3f5aaaa", "--bg"]]),
         (["down", "down", "enter"], [["afk", "attach", "c2d1dddd"]]),
-        (["down", "down", "down", "enter"], [["afk", "peek", "9e7feeee"]]),
+        (["down", "down", "down", "enter"], [["afk", "attach", "9e7feeee"]]),
         (["down", "down", "p"], [["afk", "peek", "c2d1dddd"]]),
         (["down", "down", "down", "p"], [["afk", "peek", "9e7feeee"]]),
         (["down", "down", "l"], [["afk", "pull", "c2d1dddd"]]),
@@ -94,8 +94,11 @@ async def test_keys_choose_a_command(
             2,
             "enter attach · p peek · l pull · f pull --files · s stop · q quit",
         ),
-        # an unattended agent: Enter already peeks, so p is not shown twice
-        (3, "enter peek · l pull · f pull --files · s stop · q quit"),
+        # an unattended agent: Enter attaches too, its agent ended first
+        (
+            3,
+            "enter attach · p peek · l pull · f pull --files · s stop · q quit",
+        ),
     ],
 )
 async def test_the_keys_shown_are_the_rows_own(downs: int, keys: str) -> None:

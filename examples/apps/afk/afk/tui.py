@@ -40,8 +40,9 @@ def verbs(row: Row) -> Verbs:
     """A key means one thing on every row it is on. Enter puts you in the
     conversation, wherever it is: resumed here, attached there. One open in
     another terminal here, Enter takes over, as attach does there: that
-    process ends and the TUI opens here. Where afk cannot end what drives
-    it, Enter peeks."""
+    process ends and the TUI opens here. One pushed unattended, attach ends
+    the agent there and opens the TUI on its conversation, asking first if
+    it is mid-turn. Where afk cannot end what drives it, Enter peeks."""
     sid = row.session_id
     # Peek reads the transcript, so it watches a TUI as well as an
     # unattended agent, here or there.
@@ -66,9 +67,7 @@ def verbs(row: Row) -> Verbs:
             "b": ("push --bg", [["afk", "push", sid, "--bg"]]),
         }
     return {
-        "enter": (
-            ("attach", [["afk", "attach", sid]]) if row.mode == "tui" else peek
-        ),
+        "enter": ("attach", [["afk", "attach", sid]]),
         "p": peek,
         "l": ("pull", [["afk", "pull", sid]]),
         "f": ("pull --files", [["afk", "pull", sid, "--files"]]),

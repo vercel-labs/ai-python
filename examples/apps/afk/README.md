@@ -33,7 +33,7 @@ A key means the same thing on every row it appears on:
 
 | key | |
 |---|---|
-| Enter | into the conversation: one here resumes in its harness's own TUI (`claude --resume <id>` or `codex resume <id>`), a pushed one is attached. One here that is open in another terminal is taken over, after a y: that process ends first, then the TUI opens here (`afk stop <id> && claude --resume <id>`). Where afk cannot end what drives it, or it runs unattended, Enter peeks |
+| Enter | into the conversation: one here resumes in its harness's own TUI (`claude --resume <id>` or `codex resume <id>`), a pushed one is attached. One here that is open in another terminal is taken over, after a y: that process ends first, then the TUI opens here (`afk stop <id> && claude --resume <id>`). Where afk cannot end what drives it, Enter peeks |
 | `p` | peek |
 | `s` | stop: a pushed one's sandbox, or the process a conversation here is open in |
 | `u`, `b` | push, push `--bg` (a conversation here) |
@@ -49,7 +49,7 @@ a fresh `codex` names no conversation afk can find.
 |---|---|
 | `afk [--all]` | this directory's conversations, and the ones pushed elsewhere, with a status; `--all` lists every one, not just the recent 15 |
 | `afk push [id] [--as NAME] [--bg] [--hours H]` | copy it and this directory into a sandbox of its own and open the TUI there, or run it unattended with `--bg`; the sandbox lives up to `H` hours (default 5) |
-| `afk attach <id>` | your terminal, back on its TUI; if you quit the TUI, attach opens it again in the sandbox |
+| `afk attach <id>` | your terminal, back on its TUI; if you quit the TUI, attach opens it again in the sandbox. One pushed with `--bg` opens in the TUI there: its unattended agent is ended first, after a y if it is still mid-turn |
 | `afk peek <id>` | follow a conversation's transcript like `tail -f`, read-only: a pushed one, or one here open in another terminal. A status line says it is following; it ends when the agent finishes its turn or stops running, or, for one a person drives, after 30s with nothing new. Ctrl-C stops watching, never the agent |
 | `afk pull <id> [--files]` | bring a conversation home and open it in the TUI here; `--files` also brings the files it changed there, after showing them and asking |
 | `afk stop <id>` | end its sandbox; for a conversation here, end the process it is open in and wait until it has exited (that terminal gets its prompt back; the conversation stays) |
@@ -88,8 +88,10 @@ $ afk peek tests               # tail what it is doing
 $ afk pull tests --files       # bring the result home, its edits too, in the TUI
 ```
 
-An unattended agent can be watched, pulled, or stopped, not taken over:
-that is the SDK's live-reattach follow-up.
+To step in, `afk attach tests` opens it in the TUI in its sandbox, on the
+same conversation. The unattended agent still holds that conversation after
+its turn, so attach ends it first; mid-turn, it asks, since that ends the
+turn. From then on it is a TUI like any other.
 
 **Bring the work home.** `pull` alone brings only the conversation: your
 files are never touched. `pull --files` also brings what the agent changed
@@ -133,8 +135,8 @@ A remote conversation's status says what you can do with it:
 
 | status | meaning |
 |---|---|
-| `running` | its TUI runs in the sandbox with no terminal on it (`afk attach` to open it), or an unattended agent is mid-turn (`afk peek` to watch) |
-| `finished` | an unattended agent has finished its turn; `afk pull --files` brings it home |
+| `running` | its TUI runs in the sandbox with no terminal on it (`afk attach` to open it), or an unattended agent is mid-turn (`afk peek` to watch, `afk attach` to step in) |
+| `finished` | an unattended agent has finished its turn; `afk attach` opens it in the TUI there, `afk pull --files` brings it home |
 | `open elsewhere` | a terminal is on it right now, maybe yours in another tab; `afk attach` takes it over |
 | `idle` | its TUI has exited; `afk attach` reopens it there, `afk pull` brings it home |
 | `gone` | its sandbox no longer exists; afk forgets it |

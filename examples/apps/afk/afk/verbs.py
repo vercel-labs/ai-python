@@ -187,22 +187,25 @@ async def push(
         )  # keep=True: leaves the VM and everything in it running
 
 
-async def attach(row: Row, gateway: Gateway | None) -> None:
+async def attach(
+    row: Row,
+    gateway: Gateway | None,
+    *,
+    ask: Callable[[str], str] = input,
+) -> None:
     """Your terminal on the conversation's TUI in its sandbox.
 
     If the TUI is still running, reconnect to it; if it has exited (you quit it,
     or it crashed), open it again there on the same conversation.
+
+    One pushed with --bg has no TUI yet: the agent that ran it unattended
+    still holds the conversation after its turn, so it is ended first —
+    mid-turn, only after a yes — and the TUI opens on the same conversation.
+    From then on it is a TUI like any other: detach, attach, peek.
     """
-    if (
-        row.mode != "tui"
-        or not row.pty
-        or not row.sandbox
-        or row.handle is None
-    ):
-        raise HarnessError(
-            f"{row.label or row.short} was not pushed as a TUI; `afk peek` "
-            "watches an unattended one"
-        )
+    if not row.sandbox or row.handle is None:
+        raise HarnessError(f"{row.label or row.short} has no sandbox to attach")
+    name = row.label or row.short
     async with VercelSandbox(name=row.sandbox, gateway=gateway) as ws:
         live = {p.name: p for p in await ws.ptys()}
         if row.pty in live:
@@ -226,16 +229,77 @@ async def attach(row: Row, gateway: Gateway | None) -> None:
             return
         agent = HARNESSES[row.kind](workspace=ws)
         await agent.open()
+        if row.mode == "bg":
+            held = next(
+                (
+                    i
+                    for i in await agent.sessions()
+                    if i.session_id == row.session_id and i.running
+                ),
+                None,
+            )
+            if held is not None:
+                # Ending it mid-turn ends that turn: ask. A finished one
+                # only waits for a next turn that will not come.
+                working = not turn_finished(
+                    await agent.history(row.session_id), CONTINUE_MARK
+                )
+                if working and not _yes(
+                    ask,
+                    f"afk: {name} is still working; attaching ends its turn "
+                    "there, and you go on from where it stopped. go ahead? "
+                    "[y/N] ",
+                ):
+                    print(
+                        f"afk: left {name} working; `afk peek {name}` to watch"
+                    )
+                    await agent.close()
+                    return
+                if held.pid is None:
+                    await agent.close()
+                    raise HarnessError(
+                        f"afk cannot tell which process in {row.sandbox} has "
+                        f"{name} open; `afk peek {name}` to watch"
+                    )
+                # Stopped means gone: the TUI must not overlap it.
+                pid = str(held.pid)
+                await ws.exec(["kill", "-TERM", pid], timeout=30)
+                loop = asyncio.get_running_loop()
+                deadline = loop.time() + STOP_WAIT
+                while (
+                    await ws.exec(["kill", "-0", pid], timeout=30)
+                ).exit_code == 0:
+                    if loop.time() > deadline:
+                        await agent.close()
+                        raise HarnessError(
+                            f"{name} (pid {pid} in {row.sandbox}) did not "
+                            f"exit within {STOP_WAIT:g}s of being asked to"
+                        )
+                    await asyncio.sleep(0.5)
         try:
-            tui = await agent.tui(row.session_id, name=row.pty)
+            tui = await agent.tui(
+                row.session_id, name=row.pty or _pty_name(name)
+            )
         except SessionBusyError as busy:
             print(f"afk: {busy}")
             await agent.close()
             return
-        print(
-            f"afk: {row.label}'s TUI had exited; reopened it in {row.sandbox} "
-            "— Ctrl-] detaches"
-        )
+        if row.mode == "bg":
+            # A TUI from now on: the next attach reconnects to its pty.
+            current = st.load()
+            for r in current.remotes:
+                if r.session_id == row.session_id:
+                    r.mode, r.pty = "tui", tui.pty.name
+            st.save(current)
+            print(
+                f"afk: {name} · {row.sandbox} · in the TUI now, on the same "
+                "conversation — Ctrl-] detaches"
+            )
+        else:
+            print(
+                f"afk: {name}'s TUI had exited; reopened it in {row.sandbox} "
+                "— Ctrl-] detaches"
+            )
         status = await tty.bridge(tui.pty)
         if status is None:
             print(f"afk: detached; `afk attach {row.label}` to come back")
