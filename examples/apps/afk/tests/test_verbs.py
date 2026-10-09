@@ -11,7 +11,7 @@ import sys
 from typing import TYPE_CHECKING, Any
 
 import pytest
-from afk import verbs
+from afk import rows, verbs
 from afk.rows import Row
 
 from ai.harnesses.experimental import SessionInfo
@@ -158,7 +158,7 @@ async def test_peek_here_reads_this_directory_and_offers_no_pull(
         opened.append(workspace)
         return agent
 
-    monkeypatch.setitem(verbs.HARNESSES, "claude-code", harness)
+    monkeypatch.setitem(rows.HARNESSES, "claude-code", harness)
     await verbs.peek(_here(), None, cwd=tmp_path, every=0)
     assert opened[0].kind == "local"
     assert str(opened[0].path) == str(tmp_path.resolve())
@@ -179,7 +179,7 @@ def _peek_at(
 ) -> None:
     agent = _Agent(messages, running=running)
     monkeypatch.setitem(
-        verbs.HARNESSES, "claude-code", lambda *, workspace: agent
+        rows.HARNESSES, "claude-code", lambda *, workspace: agent
     )
 
 
