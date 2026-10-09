@@ -6,6 +6,9 @@ Usage (from repo root):
     uv run examples/.test_scripts/run-examples.py --image  # also image samples
     uv run examples/.test_scripts/run-examples.py --video  # also video samples
     uv run examples/.test_scripts/run-examples.py --e2e  # also e2e test scripts
+    uv run examples/.test_scripts/run-examples.py --harnesses
+        # also harness samples: need logged-in `claude` and `codex` CLIs, and
+        # AI_GATEWAY_API_KEY plus Vercel credentials for the sandbox ones
     uv run examples/.test_scripts/run-examples.py --all  # everything
     uv run examples/.test_scripts/run-examples.py --parallel  # in parallel
     uv run examples/.test_scripts/run-examples.py models/stream.py
@@ -74,6 +77,21 @@ AUDIO_SAMPLES: list[Sample] = [
     Sample("media/speech_generation.py"),
 ]
 
+# These drive real coding-agent CLIs, not a model, so --model and --protocol
+# do not apply. harnesses/tui.py is left out: it needs an interactive terminal.
+HARNESS_SAMPLES: list[Sample] = [
+    Sample("harnesses/basic.py", timeout=300.0),
+    Sample("harnesses/streaming.py", timeout=300.0),
+    Sample("harnesses/steering.py", timeout=300.0),
+    Sample("harnesses/tool_approval.py", timeout=300.0),
+    Sample("harnesses/take_over.py", timeout=300.0),
+    Sample("harnesses/resume.py", timeout=300.0),
+    Sample("harnesses/handoff.py", timeout=600.0),
+    Sample("harnesses/sandbox.py", timeout=600.0),
+    Sample("harnesses/copy_files.py", timeout=600.0),
+    Sample("harnesses/reconnect.py", timeout=900.0),
+]
+
 BROKEN_SAMPLES: list[Sample] = []
 
 # E2E tests pick non-default ports so they don't collide with a running
@@ -104,6 +122,7 @@ KNOWN_SAMPLES = [
     *IMAGE_SAMPLES,
     *VIDEO_SAMPLES,
     *AUDIO_SAMPLES,
+    *HARNESS_SAMPLES,
     *BROKEN_SAMPLES,
     *E2E_TESTS,
 ]
@@ -249,6 +268,11 @@ def main() -> None:
         "--audio", action="store_true", help="include audio samples"
     )
     parser.add_argument(
+        "--harnesses",
+        action="store_true",
+        help="include harness samples (real claude/codex CLIs)",
+    )
+    parser.add_argument(
         "--broken", action="store_true", help="include broken samples"
     )
     parser.add_argument(
@@ -290,6 +314,7 @@ def main() -> None:
         or args.image
         or args.video
         or args.audio
+        or args.harnesses
         or args.broken
         or args.e2e
     )
@@ -310,6 +335,8 @@ def main() -> None:
         samples.extend(VIDEO_SAMPLES)
     if not args.examples and (args.audio or args.all):
         samples.extend(AUDIO_SAMPLES)
+    if not args.examples and (args.harnesses or args.all):
+        samples.extend(HARNESS_SAMPLES)
     if not args.examples and (args.broken or args.all):
         samples.extend(BROKEN_SAMPLES)
     if not args.examples and (args.e2e or args.all):

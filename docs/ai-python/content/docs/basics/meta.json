@@ -13,6 +13,8 @@
     "durable-execution",
     "subagents-and-multi-agent",
     "human-in-the-loop",
+    "harnesses",
+    "workspaces",
     "ai-sdk-ui",
     "telemetry"
   ]

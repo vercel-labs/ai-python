@@ -1,0 +1,240 @@
+---
+title: Workspaces
+description: Choose where a harness runs and its files live.
+type: guide
+summary: Run harnesses in a local directory or a Vercel Sandbox, copy files, run commands and terminals, and reach a model through AI Gateway.
+---
+
+A workspace is where a [harness](/docs/basics/harnesses) runs. It owns every
+path and process: the CLI, the commands the agent runs, and the files it
+reads and writes. Change the workspace and the rest of your code stays the
+same.
+
+This API is experimental and may change or be removed.
+
+## Local
+
+`Local` is a directory on this machine. It needs no extra.
+
+```python
+from ai.harnesses import experimental as harnesses
+from ai.workspaces import experimental as workspaces
+
+async with harnesses.codex(workspace=workspaces.Local("./project")) as agent:
+    await agent.run("Summarize the README.")
+```
+
+On your own machine a missing CLI raises `ExecutableMissingError`. The SDK
+never installs software there.
+
+## Vercel Sandbox
+
+`VercelSandbox` is a Vercel Sandbox microVM. It needs the `sandbox` extra:
+
+```bash title="Terminal"
+uv add "ai[sandbox]"
+```
+
+The extra needs a `vercel-sandbox` build with interactive PTY support
+([vercel/vercel-py#415](https://github.com/vercel/vercel-py/pull/415), not
+released yet). A missing or older package raises
+`ai.errors.InstallationError` at construction.
+
+```python
+gateway = workspaces.vercel_ai_gateway()  # AI_GATEWAY_API_KEY
+
+async with workspaces.VercelSandbox(gateway=gateway) as sandbox:
+    await workspaces.copy("./my-project", sandbox / "project")
+    async with harnesses.codex(workspace=sandbox) as agent:
+        await agent.run("Fix the failing test in project/.")
+    await workspaces.copy(sandbox / "project", "./out")
+```
+
+- The SDK installs the CLI into the sandbox, which is yours to provision.
+- The VM is the isolation boundary, so Codex runs there with full access. See
+  [Codex](/docs/basics/harnesses#codex).
+- A harness opens its workspace but never closes it. Open the sandbox with
+  `async with`, as above, so it stops when you are done.
+
+### Credentials
+
+`VercelSandbox()` takes Vercel credentials from, in this order:
+
+- `token`, `team_id`, and `project_id` arguments. A project (OIDC) token
+  alone is enough: it names its own team and project.
+- `VERCEL_TOKEN`, `VERCEL_TEAM_ID`, and `VERCEL_PROJECT_ID`, or
+  `VERCEL_OIDC_TOKEN`, in the environment.
+- `.env.local` from `vercel link` and `vercel env pull`, found by searching
+  up from the current directory to the repository root. Pass `env_file=` or
+  `project_root=` to look elsewhere.
+
+The OIDC token is short-lived. When it expires, sandbox creation raises
+`NotAuthenticatedError` telling you to pull it again.
+
+Only the Vercel credentials are read from `.env.local`; everything else in it
+stays on your machine. Pass what the work needs with `env={...}`, or send the
+whole file with `forward_project_env=True`. `env` applies to everything run
+in the workspace, including the commands the agent runs.
+
+### Reach a model through AI Gateway
+
+A CLI authenticates where it runs. Your terminal login does not exist inside
+a VM, so give the workspace a gateway:
+
+```python
+gateway = workspaces.vercel_ai_gateway()
+sandbox = workspaces.VercelSandbox(gateway=gateway)
+```
+
+`vercel_ai_gateway()` reads `AI_GATEWAY_API_KEY` from the environment, or
+takes `api_key=`. It raises `NotAuthenticatedError` when there is no key.
+
+With a gateway, the sandbox locks its outbound traffic to an allowlist:
+
+- The gateway host. The sandbox firewall writes the key into requests to it,
+  so the VM only ever holds a placeholder.
+- `registry.npmjs.org`, so the CLI can be installed.
+- Any hosts in `allow_hosts=[...]`.
+
+Everything else is refused.
+
+`Local(path, gateway=gateway)` works too. There is no firewall locally, so
+the real key goes in the CLI's environment. You can also pass `gateway=` to a
+harness factory; it wins over the workspace's.
+
+### Options and reconnect
+
+| Option | Description | Default |
+|---|---|---|
+| `execution_time_limit` | How long the VM lives, in seconds. The platform default is short, so set it for long work. | `None`: the platform's default |
+| `image` | The image a new VM boots from: a [Vercel Container Registry](https://vercel.com/docs/sandbox/concepts/images) reference such as `"vercel/sandbox/python:3.14"` or your own `"my-repo:v1"`. Not with `name` or `snapshot`. Harnesses need `python3` in the image, and `npm` to install their CLI; the default image has both. | `None`: the platform's default image |
+| `keep` | Whether `close()` leaves the VM running. | `None`: `False` for a sandbox you created, `True` for one you reconnected to |
+| `name` | Reconnect to an existing sandbox instead of creating one. `sandbox.name` is set once the VM exists. | `None`: create one |
+| `ports` | Ports to expose. Get a URL with `await sandbox.reachable_url(port)`. | `None` |
+| `snapshot` | Start from a sandbox snapshot. | `None` |
+| `workdir` | The working directory. | `"/vercel/sandbox"` |
+
+```python
+async with workspaces.VercelSandbox(keep=True, gateway=gateway) as sandbox:
+    agent = harnesses.claude_code(workspace=sandbox)
+    await agent.open()
+    session = agent.session()
+    await session.run("Start the migration.")
+    saved = session.handle.model_dump_json()
+    await agent.detach()  # the CLI keeps running in the VM
+    name = sandbox.name
+
+# later, anywhere:
+async with workspaces.VercelSandbox(name=name, gateway=gateway) as sandbox:
+    ...
+```
+
+- `agent.detach()` releases your client and leaves the CLI running.
+  `agent.close()` ends it.
+- Without an approval hook, a detached agent runs to completion. With one, it
+  waits at its next tool call until a client reconnects.
+- Outbound rules are fixed when the VM is created. Reconnecting with
+  `gateway=` to a sandbox made without one raises `WorkspaceError`.
+
+## Copy files
+
+`copy()` moves a directory between your machine and a workspace. Mark the
+workspace side with `workspace / "path"`:
+
+```python
+await workspaces.copy("./project", sandbox / "project")  # in
+await workspaces.copy(sandbox / "reviews", "./reviews")  # out
+await workspaces.copy(one / "out", other / "in")  # between workspaces
+```
+
+`workspace / "path"` builds a `WorkspacePath`. Two plain paths raise
+`TypeError`; use `shutil` for local copies.
+
+`copy()` skips what the tree's `.gitignore` files exclude, and common noise
+such as `.git`, `node_modules`, and `.venv`. Pass `ignore=[...]` to set your
+own glob patterns, or `gitignore=False` to ignore `.gitignore`. It returns
+the number of files copied.
+
+For single files, use the workspace methods. Never use `pathlib`, which
+breaks as soon as the workspace is remote:
+
+```python
+text = await sandbox.read_text("project/notes.md")
+await sandbox.write_text("project/todo.md", "- ship it\n")
+data = await sandbox.read_bytes("project/logo.png")
+found = await sandbox.exists("project/setup.py")
+```
+
+`read_text` raises `FileNotFoundError` for a missing file.
+
+## Run commands
+
+```python
+result = await sandbox.exec(["pytest", "-q"], timeout=120)
+print(result.exit_code, result.stdout, result.stderr)
+```
+
+`exec` returns an `ExecResult`. On `Local`, a program that cannot start
+returns `exit_code=127` instead of raising, and a command that runs past
+`timeout` is killed and raises `TimeoutError`.
+
+`spawn(argv)` starts a long-running `Process` with `write`, `readline`,
+`read_stderr`, `wait`, `terminate`, and `detach`. `terminate()` returns only
+once the process is gone.
+
+`workspace.contains(path)` checks whether an absolute path is inside the
+workspace, without touching any filesystem. Relative paths return `False`.
+Use it in approval hooks.
+
+## Terminals
+
+`pty(argv)` runs a program on a pseudo-terminal and returns a `Pty`:
+
+```python
+pty = await sandbox.pty(["bash"], name="shell", size=(120, 40))
+await pty.send(b"ls\n")
+print(await pty.receive())
+await pty.detach()
+
+pty = await sandbox.attach("shell")  # from any process
+print(await sandbox.ptys())  # [PtyInfo(name="shell", pid=..., attached=False)]
+await pty.close()
+```
+
+- A named pty keeps running after `detach()`. `attach(name)` reconnects to
+  it, and `ptys()` lists them. An unnamed pty ends with your connection.
+- `close()` ends the program. `resize(cols, rows)` and `wait()` are also
+  available.
+- To attach your own terminal, use `tty.bridge(pty)` from
+  `ai.workspaces.experimental.tty`. It is POSIX only and not imported by the
+  package.
+
+## Coordinates
+
+`workspace.coords` is a `WorkspaceCoords` with `provider`, `location`, and
+`options`. A harness `Handle` carries it, and
+`harnesses.workspace_from(coords)` rebuilds the workspace. A sandbox is
+rebuilt by reconnecting to it by name.
+
+## Errors
+
+Workspace errors live in `ai.workspaces.experimental.errors` and subclass
+`WorkspaceError`, which subclasses `ai.errors.AIError`.
+
+| Error | Meaning |
+|---|---|
+| `WorkspaceGoneError` | The sandbox is stopped or never existed. |
+| `WorkspaceError` | The workspace could not do what was asked, for example a sandbox that could not be reached. |
+| `NotAuthenticatedError` | No usable credentials where the CLI runs, or for the sandbox itself. |
+
+Only forget a saved sandbox on `WorkspaceGoneError`. Any other
+`WorkspaceError` may mean the VM is still running.
+
+## Examples
+
+- [`examples/harnesses/sandbox.py`](https://github.com/vercel-labs/ai-python/blob/main/examples/harnesses/sandbox.py)
+  runs both harnesses in a Vercel Sandbox.
+- [`examples/harnesses/copy_files.py`](https://github.com/vercel-labs/ai-python/blob/main/examples/harnesses/copy_files.py)
+  copies a project in and the results out.
+- [`examples/harnesses/reconnect.py`](https://github.com/vercel-labs/ai-python/blob/main/examples/harnesses/reconnect.py)
+  leaves work running in a sandbox and comes back to it.
