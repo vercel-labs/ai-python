@@ -9,7 +9,7 @@ import dataclasses
 import functools
 import weakref
 from collections.abc import AsyncGenerator, Callable, MutableSet
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Protocol
 
 import anyio
 import sniffio
@@ -72,61 +72,93 @@ class AsyncIterableQueue[T](asyncio.Queue[_Stop | T]):
         await self.put(_STOP)
 
 
-class MultiWaiter[T]:
-    """Waiter object for waiting on multiple futures.
+class Waitable(Protocol):
+    async def wait(self) -> object: ...
+
+
+class MultiWaiter[T: Waitable]:
+    """Waiter object for waiting on multiple waitables.
+
+    Anything with an async ``wait()`` method works: ``anyio.Event``,
+    ``anyio.TaskHandle``, etc. Must be entered as an async context
+    manager, since each item is waited on by a task of its own.
 
     The advantages over using asyncio.wait are:
-      * New futures may be added while the object is already being waited on
-      * Completion order of the tasks is preserved.
+      * New items may be added while the object is already being waited on
+      * Completion order of the items is preserved.
 
     A *potential* downside is:
-      * Batching of future completion is lost
+      * Batching of completion is lost
 
     But that is actually good for our use cases, since that introduces
     a potential mismatch when using workflows/temporal.
     """
 
-    def __init__(self, *tasks: asyncio.Future[T]) -> None:
-        self._queue: asyncio.Queue[asyncio.Future[T]] = asyncio.Queue(0)
-        self._tasks: dict[asyncio.Future[T], Literal[True]] = {}
+    def __init__(self, *items: T) -> None:
+        self._queue: collections.deque[T] = collections.deque()
+        self._items: dict[T, anyio.TaskHandle[None] | None] = {}
+        self._wakeup: anyio.Event | None = None
+        self._tg: anyio.abc.TaskGroup | None = None
+        self._exit_stack = contextlib.AsyncExitStack()
+        self.add(*items)
 
-        # We bind this to an attribute so that the bound method is
-        # always the same and can be passed to remove_done_callback.
-        self._callback = self._queue.put_nowait
-        self.add(*tasks)
+    async def _watch(self, item: T) -> None:
+        await item.wait()
+        self._queue.append(item)
+        self._notify()
 
-    def add(self, *tasks: asyncio.Future[T]) -> None:
-        for task in tasks:
-            self._tasks[task] = True
-            task.add_done_callback(self._callback)
+    def _notify(self) -> None:
+        if self._wakeup is not None:
+            self._wakeup.set()
 
-    def discard(self, *tasks: asyncio.Future[T]) -> None:
-        for task in tasks:
-            self._tasks.pop(task, None)
-            task.remove_done_callback(self._callback)
-            # Queue it up so that a waiter pops out of the loop
-            self._queue.put_nowait(task)
+    def add(self, *items: T) -> None:
+        for item in items:
+            self._items[item] = (
+                self._tg.create_task(self._watch(item)) if self._tg else None
+            )
+
+    def discard(self, *items: T) -> None:
+        for item in items:
+            if item in self._items:
+                if handle := self._items.pop(item):
+                    handle.cancel()
+                # Wake up a waiter so that it can pop out of the loop
+                self._notify()
 
     def clear(self) -> None:
-        for task in self._tasks:
-            task.remove_done_callback(self._callback)
-        self._tasks.clear()
+        for handle in self._items.values():
+            if handle:
+                handle.cancel()
+        self._items.clear()
+        self._queue.clear()
+        self._notify()
 
-    def tasks(self) -> Collection[asyncio.Future[T]]:
-        return self._tasks.keys()
+    def tasks(self) -> Collection[T]:
+        return self._items.keys()
 
-    async def wait(self) -> asyncio.Future[T] | None:
-        while self._tasks:
-            t = await self._queue.get()
-            # Only return the future if it hasn't been discarded
-            if self._tasks.pop(t, None):
+    async def wait(self) -> T | None:
+        while self._items:
+            if not self._queue:
+                self._wakeup = anyio.Event()
+                await self._wakeup.wait()
+                continue
+            t = self._queue.popleft()
+            # Only return the item if it hasn't been discarded
+            if t in self._items:
+                del self._items[t]
                 return t
         return None
 
-    def __await__(self) -> Generator[Any, Any, asyncio.Future[T] | None]:
+    def __await__(self) -> Generator[Any, Any, T | None]:
         return self.wait().__await__()
 
     async def __aenter__(self) -> MultiWaiter[T]:
+        self._tg = await self._exit_stack.enter_async_context(
+            create_task_group()
+        )
+        for item, handle in self._items.items():
+            if handle is None:
+                self._items[item] = self._tg.create_task(self._watch(item))
         return self
 
     async def __aexit__(
@@ -136,6 +168,10 @@ class MultiWaiter[T]:
         tb: Any | None,
     ) -> bool:
         self.clear()
+        self._tg = None
+        # The watchers are all cancelled, so don't hand the exception
+        # to the task group; it would just get wrapped in a group.
+        await self._exit_stack.aclose()
         return False
 
 
