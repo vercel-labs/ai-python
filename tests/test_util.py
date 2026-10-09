@@ -337,6 +337,78 @@ async def test_taskgroup_cancellation_order_is_fifo() -> None:
         await run_once()
 
 
+# -- create_task_group ------------------------------------------------------
+
+
+async def test_create_task_group_unwraps_lone_generator_exit() -> None:
+    with pytest.raises(GeneratorExit) as exc_info:
+        async with util.create_task_group():
+            raise GeneratorExit
+    assert not isinstance(exc_info.value, BaseExceptionGroup)
+
+
+async def test_create_task_group_aclose_swallows_generator_exit() -> None:
+    async def gen() -> AsyncGenerator[int]:
+        async with util.create_task_group():
+            yield 1
+            yield 2
+
+    g = gen()
+    assert await g.__anext__() == 1
+    await g.aclose()
+
+
+async def test_create_task_group_aclose_still_propagates_task_error() -> None:
+    async def boom() -> None:
+        raise ValueError("x")
+
+    async def gen() -> AsyncGenerator[int]:
+        async with util.create_task_group() as tg:
+            tg.start_soon(boom)
+            await asyncio.sleep(0)
+            yield 1
+            yield 2
+
+    g = gen()
+    assert await g.__anext__() == 1
+    with pytest.raises(BaseExceptionGroup) as exc_info:
+        await g.aclose()
+    assert exc_info.group_contains(ValueError, match="x")
+
+
+async def test_create_task_group_non_generator_exit_propagates() -> None:
+    with pytest.raises(BaseExceptionGroup) as exc_info:
+        async with util.create_task_group():
+            raise ValueError("x")
+    assert exc_info.group_contains(ValueError, match="x")
+
+
+async def test_create_task_group_cancellation_order_is_fifo() -> None:
+    async def run_once() -> None:
+        cancelled: list[int] = []
+        started = [asyncio.Event() for _ in range(3)]
+
+        async def work(i: int) -> None:
+            started[i].set()
+            try:
+                await asyncio.Future()
+            finally:
+                cancelled.append(i)
+
+        with pytest.raises(ExceptionGroup):
+            async with util.create_task_group() as tg:
+                for i in range(3):
+                    tg.start_soon(work, i)
+                for event in started:
+                    await event.wait()
+                raise RuntimeError("stop")
+
+        assert cancelled == [0, 1, 2]
+
+    for _ in range(20):
+        await run_once()
+
+
 # -- maybe_aclosing --------------------------------------------------------
 
 

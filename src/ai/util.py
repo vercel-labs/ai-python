@@ -202,6 +202,51 @@ class TaskGroup(asyncio.TaskGroup):
             raise
 
 
+@contextlib.asynccontextmanager
+async def create_task_group() -> AsyncIterator[anyio.abc.TaskGroup]:
+    """anyio TaskGroup that propagates GeneratorExit and has deterministic teardown.
+
+    If the context body raises a GeneratorExit, we don't want to leave
+    it wrapped in a plain ExceptionGroup, because that does the wrong
+    thing when it bubbles out through an async generator's aclose().
+
+    So if a GeneratorExit is raised inside the context and that is the
+    *only* exception reported, re-raise the GeneratorExit itself.
+
+    If there are multiple exceptions, keep them packaged in the group so
+    as to not lose anything (a bare GeneratorExit would be swallowed by
+    aclose(), silently dropping the other exceptions).
+
+    On exceptional exit with an asyncio backend, tasks are cancelled
+    in the order they were created. (Trio randomizes the scheduling
+    order anyway so god help you.)
+    """
+    tg = anyio.create_task_group()
+    if sniffio.current_async_library() == "asyncio":
+        # Bang in ordered sets so we tear down in order.
+        atg: Any = tg
+        atg._tasks = OrderedSet()
+        atg.cancel_scope._tasks = OrderedSet()
+        atg.cancel_scope._child_scopes = OrderedSet()
+
+    body_exc: BaseException | None = None
+    try:
+        async with tg:
+            try:
+                yield tg
+            except BaseException as e:
+                body_exc = e
+                raise
+    except BaseExceptionGroup as eg:
+        if (
+            isinstance(body_exc, GeneratorExit)
+            and len(eg.exceptions) == 1
+            and eg.exceptions[0] is body_exc
+        ):
+            raise body_exc from None
+        raise
+
+
 def _is_loop_running() -> bool:
     try:
         sniffio.current_async_library()
@@ -440,20 +485,8 @@ class decouple[T]:  # noqa: N801
 
     async def aclose(self) -> None:
         await self._start()
-        self._worker.stop()
         try:
-            # XXX: don't really need this
-            with contextlib.suppress(anyio.get_cancelled_exc_class()):
-                await self._worker.task
-            # XXX: wait, I had kind of been assuming no worker
-            # failures, but they can fail on the aclose!!
-            if self._worker.task.exception:
-                raise self._worker.task.exception
-        except anyio.TaskCancelled:
-            pass
-        except anyio.TaskFailed as e:
-            assert e.__cause__ is not None
-            raise e.__cause__ from None
+            await self._worker.aclose()
         finally:
             # genuinely we don't care
             with contextlib.suppress(BaseExceptionGroup):
@@ -531,6 +564,22 @@ class _DecoupleWorker[T]:
         # XXX: want to resotre this...
         # if not self.task.cancelling():
         self.task.cancel()
+
+    async def aclose(self) -> None:
+        self.stop()
+        try:
+            # XXX: don't really need this
+            with contextlib.suppress(anyio.get_cancelled_exc_class()):
+                await self.task
+            # XXX: wait, I had kind of been assuming no worker
+            # failures, but they can fail on the aclose!!
+            if self.task.exception:
+                raise self.task.exception
+        except anyio.TaskCancelled:
+            pass
+        except anyio.TaskFailed as e:
+            assert e.__cause__ is not None
+            raise e.__cause__ from None
 
     async def _acquire(self) -> None:
         if self._sem is None:
