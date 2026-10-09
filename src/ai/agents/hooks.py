@@ -23,14 +23,13 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import contextvars
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 import pydantic
 
 from .. import experimental_telemetry as telemetry
 from .. import types
 from ..types import messages as messages_
-from . import _middleware as middleware_
 from . import runtime as runtime_
 
 if TYPE_CHECKING:
@@ -175,32 +174,16 @@ async def hook[T: pydantic.BaseModel](
             Defaults to the current registry.
 
     """
-    call = middleware_.HookContext(
-        label=_label(hook),
-        payload=payload,
-        metadata=metadata or {},
-        tool_call_id=tool_call_id,
-        registry=registry,
-    )
-
-    chain = middleware_._build_hook_chain(_hook_impl)
-    result = await chain(call)
-    return cast("T", result)
-
-
-async def _hook_impl(call: middleware_.HookContext) -> pydantic.BaseModel:
-    """Core hook logic — the innermost ``next`` in the middleware chain."""
     rt = runtime_.get_runtime()
-    registry = _registry(call.registry)
-    label = call.label
-    payload = call.payload
-    hook_metadata = call.metadata
+    registry = _registry(registry)
+    label = _label(hook)
+    hook_metadata = dict(metadata or {})
 
     data = telemetry.HookSpanData(
         label=label,
         hook_type=payload.__name__,
         metadata=hook_metadata,
-        tool_call_id=call.tool_call_id,
+        tool_call_id=tool_call_id,
     )
 
     # Pre-registered resolution (serverless re-entry).
@@ -226,7 +209,7 @@ async def _hook_impl(call: middleware_.HookContext) -> pydantic.BaseModel:
             hook_type=payload.__name__,
             status="pending",
             metadata=hook_metadata,
-            tool_call_id=call.tool_call_id,
+            tool_call_id=tool_call_id,
         )
 
         await rt.put_hook(hook_part)
@@ -262,7 +245,7 @@ async def _hook_impl(call: middleware_.HookContext) -> pydantic.BaseModel:
                 status="resolved",
                 metadata=hook_metadata,
                 resolution=resolution,
-                tool_call_id=call.tool_call_id,
+                tool_call_id=tool_call_id,
             )
         )
 
