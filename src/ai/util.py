@@ -204,7 +204,7 @@ class TaskGroup(asyncio.TaskGroup):
 
 @contextlib.asynccontextmanager
 async def create_task_group() -> AsyncIterator[anyio.abc.TaskGroup]:
-    """anyio TaskGroup that propagates GeneratorExit and has deterministic teardown.
+    """Make an anyio TaskGroup with GeneratorExit handling and ordered teardown.
 
     If the context body raises a GeneratorExit, we don't want to leave
     it wrapped in a plain ExceptionGroup, because that does the wrong
@@ -357,7 +357,7 @@ async def maybe_aclosing(
             await aclose()
 
 
-def run_right_now[T](fut: asyncio.Future[T], val: T) -> None:
+def run_right_now[T](fut: asyncio.Future[T], val: T) -> bool:
     """Signal a future and try to run a task blocked on it *right now*.
 
     This can give big (~2x) speedups on tight loops ping-ponging
@@ -365,14 +365,14 @@ def run_right_now[T](fut: asyncio.Future[T], val: T) -> None:
     scheduler.
     """
     if fut.done():
-        return
+        return False
 
     # As a (10%?) microoptimization for the 1-callback common case, we
     # don't implement this for > 1.
     # If anybody cared it could be done in a specialized branch.
     if not fut._callbacks or len(fut._callbacks) != 1:
         fut.set_result(val)
-        return
+        return False
 
     callback, context = fut._callbacks[0]
     # Blow away the callback, since we are calling it ourselves.
@@ -387,6 +387,8 @@ def run_right_now[T](fut: asyncio.Future[T], val: T) -> None:
         context.run(callback, fut)
     finally:
         asyncio._enter_task(loop, cur)
+
+    return True
 
 
 class decouple[T]:  # noqa: N801
@@ -548,11 +550,13 @@ class _DecoupleWorker[T]:
         )
         self._cur_fut: asyncio.Future[None] | None = None
 
-    def release(self) -> None:
+    def release(self) -> bool:
+        ran_eagerly = False
         if self._sem is not None:
             self._sem.release()
             if self._cur_fut:
-                run_right_now(self._cur_fut, None)
+                ran_eagerly = run_right_now(self._cur_fut, None)
+        return ran_eagerly
 
     def stop(self) -> None:
         self._done = True
@@ -705,19 +709,6 @@ def merge[T](
     )
 
 
-@contextlib.asynccontextmanager
-async def _collapse_exception_group() -> AsyncIterator[None]:
-    try:
-        yield
-    except BaseExceptionGroup as eg:
-        if len(eg.exceptions) != 1:
-            raise
-        exc = eg.exceptions[0]
-    else:
-        return
-    raise exc
-
-
 async def _merge[T](
     *aiterables: AsyncIterable[T],
     restart: bool = True,
@@ -749,24 +740,34 @@ async def _merge[T](
     if priority and restart:
         raise ValueError("cannot specify priority=True and restart=True")
 
-    # decouple_tg only runs decouple workers, which don't fail, so
-    # don't let it wrap whatever comes out of the body in a group.
+    exc: BaseExceptionGroup | None = None
+
+    # Elements that workers have produced, as (index, element), and an
+    # event that gets set when one is added.
+    ready: list[tuple[int, _Stop | T]] = []
+    wakeup = anyio.Event()
+
+    def start(idx: int, iterable: AsyncIterable[T]) -> _DecoupleWorker[T]:
+        def put(x: _Stop | T) -> None:
+            ready.append((idx, x))
+            wakeup.set()
+
+        worker = _DecoupleWorker(worker_tg, iterable, 0, put)
+        worker.release()
+        return worker
+
     async with (
-        _collapse_exception_group(),
-        anyio.create_task_group() as decouple_tg,
+        create_task_group() as worker_tg,
         contextlib.AsyncExitStack() as stack,
-        TaskGroup() as tg,
     ):
         raw_aiters = [aiter(iter) for iter in aiterables]
-        aiters = [
-            decouple(iter, buffer=0, task_group=decouple_tg)
-            for iter in raw_aiters
-        ]
+        workers = [start(idx, iter) for idx, iter in enumerate(raw_aiters)]
+        running = [True] * len(workers)
 
         @stack.push_async_callback
-        async def _close_iters() -> None:
-            for iter in aiters:
-                await iter.aclose()
+        async def _close_workers() -> None:
+            for worker in workers:
+                await worker.aclose()
 
         # We consider anything that doesn't __aiter__ to itself to be
         # potentially restartable.
@@ -775,56 +776,56 @@ async def _merge[T](
             for aiterable, aiterator in zip(aiterables, raw_aiters, strict=True)
         ]
 
-        # Launch a task doing anext on every iterator
-        tasks: list[asyncio.Future[T] | None] = [
-            tg.create_task(anext(iter, _EMPTY)) for iter in aiters
-        ]
+        while any(running):
+            if not ready:
+                await wakeup.wait()
+                wakeup = anyio.Event()
 
-        while any(tasks):
-            pending = [t for t in tasks if t]
-            done_set, _ = await asyncio.wait(
-                pending,
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-            # We might see an exception before the callback that
-            # cancels the main task makes it in, so check.
-            if any(t.exception() for t in done_set):
-                return
+            if errors := [
+                val.exception
+                for _, val in ready
+                if isinstance(val, _Stop) and val.exception is not None
+            ]:
+                exc = BaseExceptionGroup("unhandled errors in merge", errors)
+                break
 
-            done = sorted(done_set, key=pending.index)
+            ready.sort(key=lambda r: r[0])
+            n = 1 if priority else len(ready)
+            done = ready[:n]
+            del ready[:n]
 
             fired = []
-            for t in done:
-                idx = tasks.index(t)
-                val = t.result()
-                if val is _EMPTY:
-                    tasks[idx] = None
+            for idx, val in done:
+                if isinstance(val, _Stop):
+                    running[idx] = False
                 else:
                     yield val
-                    # Fire off a new task for the relevant iterator
+                    # Ask the relevant iterator for its next element
                     fired.append(idx)
-                    iter = aiters[idx]
-                    tasks[idx] = tg.create_task(anext(iter, _EMPTY))
-                    # sleep(0) to approximate 3.14's eager_start. Make
-                    # sure that a trivially read task (like a get() on
-                    # a queue with elements) can run to completion.
-                    await asyncio.sleep(0)
-
-                if priority:
-                    break
+                    ran_eagerly = workers[idx].release()
+                    if priority:
+                        # Make sure that a trivially ready element (like a
+                        # get() on a queue with elements) gets produced
+                        # before we look at what's ready again.
+                        if not ran_eagerly:
+                            await anyio.sleep(0)
+                        # ... and once more so the worker goes
+                        await anyio.sleep(0)
 
             if restart and fired:
                 # Also, we try *restarting* other stopped streams
                 # that may have more to do now.
                 # N.B: We do this *after* the values are yielded, so
                 # they've had a chance to trigger things, and we do it
-                # after *all* tasks have been handled, so that if a
-                # task *just* finished, we still restart it.
-                for idx, (ok, otask) in enumerate(
-                    zip(restartable, tasks, strict=True)
+                # after *all* ready elements have been handled, so
+                # that if an iterator *just* finished, we still
+                # restart it.
+                for idx, (ok, alive) in enumerate(
+                    zip(restartable, running, strict=True)
                 ):
-                    if ok and otask is None and idx not in fired:
-                        niter = aiters[idx] = decouple(
-                            aiterables[idx], buffer=0, task_group=decouple_tg
-                        )
-                        tasks[idx] = tg.create_task(anext(niter, _EMPTY))
+                    if ok and not alive and idx not in fired:
+                        workers[idx] = start(idx, aiterables[idx])
+                        running[idx] = True
+
+    if exc:
+        raise exc
