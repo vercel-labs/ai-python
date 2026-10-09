@@ -41,6 +41,9 @@ interactive session that carries the frames, takes several seconds there."""
 
 SCROLLBACK = 256 * 1024
 
+LINGER = 10.0
+"""Seconds a holder keeps reading from its client after the exit frame."""
+
 
 def frame(kind: bytes, payload: bytes = b"") -> bytes:
     return kind + struct.pack(">I", len(payload)) + payload
@@ -191,10 +194,20 @@ def main() -> int:
                     send(frame(b"o", scrollback))
         status = os.waitstatus_to_exitcode(raw_status)
         send(frame(b"x", str(status).encode()))
-        if client is not None:
-            client.close()
         server.close()
         _unlink(sock_path, sock_path + ".pid", sock_path + ".client")
+        if client is not None:
+            # Linger: a client may still be sending (the first resize of a
+            # program that already ended). Its write to a closed socket
+            # fails, and asyncio then drops the output and exit frames it
+            # has received but not read yet. So stop writing, keep reading
+            # until it hangs up, then close.
+            with contextlib.suppress(OSError):
+                client.shutdown(socket.SHUT_WR)
+                client.settimeout(LINGER)
+                while client.recv(65536):
+                    pass
+            client.close()
         return status
 
     while True:
