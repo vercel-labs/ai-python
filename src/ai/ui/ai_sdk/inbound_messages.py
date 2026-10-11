@@ -245,6 +245,8 @@ def _parse(
                     )
 
                 case ui_messages_.UIToolInvocationPart() as inv:
+                    if inv.state == "input-streaming":
+                        continue
                     tool_args = json.dumps(inv.args) if inv.args else "{}"
                     is_completed = (
                         inv.state in _TOOL_RESULT_STATES
@@ -297,6 +299,8 @@ def _parse(
                         | ui_messages_.UIDynamicToolPart()
                     ) as tp
                 ):
+                    if tp.state == "input-streaming":
+                        continue
                     tool_input = (
                         tp.raw_input
                         if tp.state == "output-error" and tp.input is None
