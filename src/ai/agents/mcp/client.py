@@ -15,7 +15,7 @@ if TYPE_CHECKING:
     import mcp.client.session
     import mcp.types
 
-from ... import errors, types
+from ... import errors, types, util
 from ..agent import AgentTool, Tool
 
 __all__ = [
@@ -30,12 +30,24 @@ class _Connection:
     """Internal connection state - never exposed to users."""
 
     client: mcp.client.session.ClientSession
-    exit_stack: contextlib.AsyncExitStack
+    close: anyio.Event
+    closed: anyio.Event
+
+
+@dataclasses.dataclass
+class _Pool:
+    # Each connection is served by a task in this group, since the
+    # transports hold task groups that must be entered and exited in
+    # the same task.
+    tg: anyio.abc.TaskGroup
+    connections: dict[str, _Connection] = dataclasses.field(
+        default_factory=dict
+    )
 
 
 # Connection pool stored in contextvar, scoped to Agent.run()
-_pool: contextvars.ContextVar[dict[str, _Connection] | None] = (
-    contextvars.ContextVar("mcp_connections", default=None)
+_pool: contextvars.ContextVar[_Pool | None] = contextvars.ContextVar(
+    "mcp_connections", default=None
 )
 
 _pool_lock = anyio.Lock()
@@ -57,17 +69,59 @@ def _import_mcp_module(module_name: str) -> Any:
 
 
 @contextlib.asynccontextmanager
-async def ensure_connection_pool() -> AsyncIterator[dict[str, _Connection]]:
-    pool = orig_pool = _pool.get()
-    if pool is None:
-        pool = {}
-        _pool.set(pool)
-    try:
-        yield pool
-    finally:
-        if orig_pool is None:
+async def connection_pool() -> AsyncIterator[_Pool]:
+    """Open a fresh connection pool, closing its connections on exit."""
+    async with util.create_task_group() as tg:
+        token = _pool.set(pool := _Pool(tg))
+        try:
+            yield pool
+        finally:
             await close_connections()
-        _pool.set(orig_pool)
+            _pool.reset(token)
+
+
+@contextlib.asynccontextmanager
+async def ensure_connection_pool() -> AsyncIterator[_Pool]:
+    if (pool := _pool.get()) is not None:
+        yield pool
+    else:
+        async with connection_pool() as pool:
+            yield pool
+
+
+async def _serve_connection(
+    transport_factory: Callable[
+        [], contextlib.AbstractAsyncContextManager[Any]
+    ],
+    *,
+    task_status: anyio.abc.TaskStatus[_Connection],
+) -> None:
+    mcp_session = _import_mcp_module("mcp.client.session")
+    client_session = cast(
+        "type[mcp.client.session.ClientSession]", mcp_session.ClientSession
+    )
+
+    conn: _Connection | None = None
+    closed = anyio.Event()
+    try:
+        async with transport_factory() as streams:
+            read_stream, write_stream = streams[0], streams[1]
+            async with client_session(
+                read_stream=read_stream,
+                write_stream=write_stream,
+            ) as client:
+                await client.initialize()
+                conn = _Connection(
+                    client=client, close=anyio.Event(), closed=closed
+                )
+                task_status.started(conn)
+                await conn.close.wait()
+    except Exception:
+        # Errors while closing an established connection are ignored.
+        if conn is None:
+            raise
+    finally:
+        closed.set()
 
 
 async def _get_or_create_connection(
@@ -77,11 +131,6 @@ async def _get_or_create_connection(
     ],
 ) -> mcp.client.session.ClientSession:
     """Get an existing connection or create a new one."""
-    mcp_session = _import_mcp_module("mcp.client.session")
-    client_session = cast(
-        "type[mcp.client.session.ClientSession]", mcp_session.ClientSession
-    )
-
     pool = _pool.get()
 
     if pool is None:
@@ -91,28 +140,14 @@ async def _get_or_create_connection(
         )
 
     async with _pool_lock:
-        if key in pool:
-            return pool[key].client
+        if key in pool.connections:
+            return pool.connections[key].client
 
-        exit_stack = contextlib.AsyncExitStack()
-
-        try:
-            streams = await exit_stack.enter_async_context(transport_factory())
-            read_stream, write_stream = streams[0], streams[1]
-
-            client = client_session(
-                read_stream=read_stream,
-                write_stream=write_stream,
-            )
-            await exit_stack.enter_async_context(client)
-            await client.initialize()
-
-            pool[key] = _Connection(client=client, exit_stack=exit_stack)
-            return client
-
-        except BaseException:
-            await exit_stack.aclose()
-            raise
+        conn: _Connection = await pool.tg.start(
+            _serve_connection, transport_factory
+        )
+        pool.connections[key] = conn
+        return conn.client
 
 
 def _make_tool_fn(
@@ -215,8 +250,11 @@ async def get_stdio_tools(
             ),
         )
 
-    client = await _get_or_create_connection(connection_key, transport_factory)
-    result = await client.list_tools()
+    async with ensure_connection_pool():
+        client = await _get_or_create_connection(
+            connection_key, transport_factory
+        )
+        result = await client.list_tools()
 
     return [
         _mcp_tool_to_native(
@@ -323,16 +361,9 @@ async def close_connections() -> None:
         return
 
     async with _pool_lock:
-        if not pool:
-            return
-
-        for conn in pool.values():
-            await _close_connection_safely(conn)
-
-        pool.clear()
-
-
-async def _close_connection_safely(conn: _Connection) -> None:
-    """Close a connection, suppressing any errors."""
-    with contextlib.suppress(Exception):
-        await conn.exit_stack.aclose()
+        conns = list(pool.connections.values())
+        pool.connections.clear()
+        for conn in conns:
+            conn.close.set()
+        for conn in conns:
+            await conn.closed.wait()

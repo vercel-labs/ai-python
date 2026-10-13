@@ -61,19 +61,16 @@ def run(
         # yield while we have outstanding contextvar manipulations.
         token = _runtime.set(rt)
 
-        # MCP connection pool — scoped to this run.
-        mcp_pool: dict[str, mcp_client._Connection] = {}
-        mcp_token = mcp_client._pool.set(mcp_pool)
-
         try:
-            async with contextlib.aclosing(source) as events:
+            # MCP connection pool — scoped to this run.
+            async with (
+                mcp_client.connection_pool(),
+                contextlib.aclosing(source) as events,
+            ):
                 async for event in events:
                     yield event
 
         finally:
-            await mcp_client.close_connections()
-            mcp_client._pool.reset(mcp_token)
-
             _runtime.reset(token)
 
             await rt.signal_done()
