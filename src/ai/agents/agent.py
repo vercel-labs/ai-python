@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import contextlib
 import contextvars
 import dataclasses
@@ -31,6 +30,7 @@ from typing import (
     overload,
 )
 
+import anyio
 import pydantic
 
 # ``typing.TypeVar`` lacks the ``default=`` kwarg on Python <3.13.
@@ -50,7 +50,7 @@ from . import runtime
 def _unwrap_singleton_group(exc: BaseException) -> BaseException:
     """Collapse nested singleton ``BaseExceptionGroup``s to the inner exception.
 
-    A failing task inside an ``asyncio.TaskGroup`` is always re-raised
+    A failing task inside a task group is always re-raised
     inside an ``ExceptionGroup`` even when there's only one — which
     obscures the real type and message.  When the group has exactly
     one child we unwrap so the original exception, traceback, and
@@ -820,7 +820,7 @@ class BoundToolCall:
                     )
                 if tool.to_model_input is not None:
                     model_input = tool.to_model_input(result)
-            except (Exception, asyncio.CancelledError) as exc:
+            except (Exception, anyio.get_cancelled_exc_class()) as exc:
                 return _error_tool_result(
                     exc,
                     tool_call_id=call.tool_call_id,
@@ -953,25 +953,27 @@ class _RestartableToolStream:
 class ToolRunner:
     def __init__(self) -> None:
         self._tool_results: list[events_.ToolCallResult] = []
-        self._tg_base = util.TaskGroup()
-        self._waiter: util.MultiWaiter[events_.ToolCallResult] = (
-            util.MultiWaiter()
-        )
+        self._exit_stack = contextlib.AsyncExitStack()
+        self._waiter: util.MultiWaiter[
+            anyio.TaskHandle[events_.ToolCallResult]
+        ] = util.MultiWaiter()
 
     async def __aenter__(self) -> Self:
-        self._tg = await self._tg_base.__aenter__()
+        self._tg = await self._exit_stack.enter_async_context(
+            util.create_task_group()
+        )
+        await self._exit_stack.enter_async_context(self._waiter)
         return self
 
-    async def __aexit__(self, *args: Any) -> None:
-        self._waiter.clear()
-        return await self._tg_base.__aexit__(*args)
+    async def __aexit__(self, *args: Any) -> bool | None:
+        return await self._exit_stack.__aexit__(*args)
 
     def events(self) -> _RestartableToolStream:
         return _RestartableToolStream(self)
 
     def schedule(
         self, tc: ToolCallCallable
-    ) -> asyncio.Task[events_.ToolCallResult]:
+    ) -> anyio.TaskHandle[events_.ToolCallResult]:
         """Schedule a tool call (or any callable producing a ToolCallResult).
 
         See :class:`ToolCallCallable` — accepts both :class:`ToolCall` and
@@ -980,19 +982,19 @@ class ToolRunner:
         in custom logic (e.g. an approval hook await) and still ride the
         runner's merge-and-iterate flow.
 
-        Returns the task.
+        Returns the task handle.
         """
         task = self._tg.create_task(tc())
         self._waiter.add(task)
         return task
 
-    def discard(self, task: asyncio.Task[events_.ToolCallResult]) -> None:
+    def discard(self, task: anyio.TaskHandle[events_.ToolCallResult]) -> None:
         """Discard a task from the ToolRunner.
 
         Cancel the task and ignore its result.
         """
         self._waiter.discard(task)
-        task.cancel("task discarded")
+        task.cancel()
 
     def add_result(self, res: events_.ToolCallResult) -> None:
         async def _feed() -> events_.ToolCallResult:
@@ -1010,13 +1012,11 @@ class ToolRunner:
     async def _iterate(self) -> AsyncGenerator[events_.ToolCallResult]:
         while t := await self._waiter:
             try:
-                res = t.result()
-            except asyncio.CancelledError:
+                res = t.return_value
+            except anyio.TaskCancelled:
                 # If a task got cancelled, that's fine.
-                # Need to catch it or the whole runner gets zapped.
                 continue
 
-            assert res is not None
             self._tool_results.append(res)
             yield res
 

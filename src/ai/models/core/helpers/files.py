@@ -10,10 +10,10 @@ Pure media utilities (detection, encoding, inference) live in
 :mod:`ai.types.media`.
 """
 
-import asyncio
 import ipaddress
 import socket
 
+import anyio
 import httpx2 as httpx
 
 DEFAULT_MAX_BYTES = 100 * 1024 * 1024  # 100 MiB
@@ -102,9 +102,9 @@ class _DownloadTransport(httpx.AsyncHTTPTransport):
     ) -> httpx.Response:
         url = request.url
         _validate_url(url)
-        async with asyncio.timeout(_DNS_TIMEOUT):
-            records = await asyncio.get_running_loop().getaddrinfo(
-                url.raw_host.decode("ascii"),
+        with anyio.fail_after(_DNS_TIMEOUT):
+            records = await anyio.getaddrinfo(
+                url.raw_host,
                 url.port or (443 if url.scheme == "https" else 80),
                 type=socket.SOCK_STREAM,
                 proto=socket.IPPROTO_TCP,

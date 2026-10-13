@@ -9,6 +9,8 @@ from typing import Any
 
 import mcp.types
 import pytest
+from mcp.client._memory import InMemoryTransport
+from mcp.server.mcpserver import MCPServer
 
 import ai
 from ai.agents.mcp.client import _mcp_tool_to_native
@@ -148,3 +150,47 @@ def _spec(tool: ai.AgentTool) -> ai.tools.ToolSpec:
     spec = tool.tool.spec
     assert spec is not None
     return spec
+
+
+async def test_mcp_connection_created_lazily_by_tool_call() -> None:
+    """A connection opened from inside a tool call (whose transport runs
+    a task group) survives the tool call and is closed at the end of
+    the run."""
+    server = MCPServer("test")
+
+    @server.tool()
+    def add(a: int, b: int) -> int:
+        """Add two numbers."""
+        return a + b
+
+    connects = 0
+
+    def transport_factory() -> contextlib.AbstractAsyncContextManager[Any]:
+        nonlocal connects
+        connects += 1
+        return InMemoryTransport(server)
+
+    mcp_tool = mcp.types.Tool(
+        name="add",
+        input_schema={
+            "type": "object",
+            "properties": {"a": {"type": "integer"}, "b": {"type": "integer"}},
+        },
+    )
+    native = _mcp_tool_to_native(mcp_tool, "mem:add", transport_factory, None)
+
+    mock_llm(
+        [
+            [tool_call_msg(tc_id="tc-1", name="add", args='{"a": 1, "b": 2}')],
+            [tool_call_msg(tc_id="tc-2", name="add", args='{"a": 3, "b": 4}')],
+            [text_msg("Done.", id="msg-3")],
+        ]
+    )
+    async with ai.Agent(tools=[native]).run(
+        MOCK_MODEL, [ai.user_message("add")]
+    ) as stream:
+        msgs = await collect_messages(stream)
+
+    results = [r.result for m in msgs for r in m.tool_results]
+    assert results == [{"result": 3}, {"result": 7}]
+    assert connects == 1
