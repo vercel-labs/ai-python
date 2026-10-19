@@ -73,6 +73,9 @@ class Cost(BaseModel):
     """What keeping that snapshot costs per month, from now."""
     pending: bool = False
     """A session is still running: its CPU and data sent come when it stops."""
+    per_hour: float = 0.0
+    """While running: what its memory costs per hour, billed every hour it
+    is up, busy or not. CPU adds while it computes."""
     unpriced: str | None = None
     """A region this table has no rates for."""
 
@@ -96,6 +99,7 @@ class Cost(BaseModel):
             snapshot_per_month=self.snapshot_per_month
             + other.snapshot_per_month,
             pending=self.pending or other.pending,
+            per_hour=self.per_hour + other.per_hour,
             unpriced=self.unpriced or other.unpriced,
         )
 
@@ -119,6 +123,7 @@ def session_cost(
         cpu=(session.active_cpu_ms or 0) / 3_600_000 * cpu_rate,
         network=(session.egress_bytes or 0) / GB * network_rate,
         pending=running,
+        per_hour=gb * memory_rate if running else 0.0,
     )
 
 
@@ -150,7 +155,16 @@ def money(value: float) -> str:
 
 
 def label(cost: Cost) -> str:
-    """The list's one-word cost: "$0.012", "$0.012+" while running."""
+    """The list's cost: "$0.012", or "$0.012 · $0.085/h" while running."""
     if cost.unpriced:
         return f"? ({cost.unpriced})"
-    return money(cost.total) + ("+" if cost.pending else "")
+    if cost.pending and cost.per_hour:
+        return f"{money(cost.total)} · {money(cost.per_hour)}/h"
+    return money(cost.total)
+
+
+def spent(cost: Cost) -> str:
+    """A cost in a sentence: "$0.012", or "$0.012 so far" while running."""
+    if cost.unpriced:
+        return f"? ({cost.unpriced})"
+    return money(cost.total) + (" so far" if cost.pending else "")

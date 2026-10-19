@@ -85,7 +85,7 @@ def line(row: Row) -> Text:
         t.append(row.status, style="dim")
     else:
         t.append(f"{_clip(display_name(row), 34):34s} {row.status or '…':9s} ")
-        t.append(f"{(row.cost or ''):9s} ")
+        t.append(f"{(row.cost or ''):18s} ")
         origin = f"← from {row.from_id[:4]} · " if row.from_id else ""
         detail = f"{row.detail} · " if row.detail else ""
         t.append(f"{detail}{origin}{row.sandbox}", style="dim")

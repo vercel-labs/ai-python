@@ -754,7 +754,7 @@ async def stop(row: Row, gateway: Gateway | None) -> None:
     kept = snapshot_detail(after) or "a snapshot"
     print(
         f"afk: stopped {name}; its files are kept ({kept}) · "
-        f"{cost_.label(spent)} so far, "
+        f"cost {cost_.spent(spent)}, "
         f"{cost_.money(spent.snapshot_per_month)}/month to keep · "
         f"`afk attach {name}` resumes it, `afk rm {name}` deletes it"
     )
@@ -775,7 +775,7 @@ async def rm(row: Row, gateway: Gateway | None) -> None:
     st.save(current)
     print(
         f"afk: deleted {name} and its snapshot · it cost "
-        f"{cost_.label(spent)}"
+        f"{cost_.spent(spent)}"
     )
 
 

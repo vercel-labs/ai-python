@@ -154,14 +154,14 @@ async def listing(
             called = _clip(display_name(r), 34)
             print(
                 f"  {r.short}  {KIND_SHORT[r.kind]:6s} {called:34s} "
-                f"{r.status:9s} {(r.cost or ''):9s} "
+                f"{r.status:9s} {(r.cost or ''):18s} "
                 f"{new}{DIM}{detail}{origin}{r.sandbox}{RESET}"
             )
         st.save(state)
-        if any((r.cost or "").endswith("+") for r in remote):
+        if any("/h" in (r.cost or "") for r in remote):
             print(
-                f"  {DIM}+ running: CPU and data sent are billed when it "
-                f"stops{RESET}"
+                f"  {DIM}/h: memory, every hour it runs; CPU adds while it "
+                f"computes{RESET}"
             )
         if gone:
             for name in gone:
