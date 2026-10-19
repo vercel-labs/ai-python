@@ -24,17 +24,19 @@ from ai.workspaces.experimental.errors import (
     WorkspaceGoneError,
 )
 
+from . import cost as cost_
+from .state import CONTINUE_MARK as CONTINUE_MARK
+
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from ai.workspaces.experimental import Gateway
+    from ai.workspaces.experimental import Gateway, SandboxInfo
 
     from .state import Remote, State
 
 HARNESSES = {"claude-code": claude_code, "codex": codex}
 KIND_SHORT = {"claude-code": "claude", "codex": "codex"}
 
-CONTINUE_MARK = "This conversation was moved here from another machine."
 CONTINUE = (
     CONTINUE_MARK
     + " The project now lives "
@@ -66,10 +68,16 @@ class Row(BaseModel):
     from_id: str | None = None
     handle: Handle | None = None
     mode: str | None = None
+    asked: str | None = None
+    """Remote: where its unattended turn began (see Remote.mark)."""
     running: bool = False
     """Here: a process has it open, maybe in another terminal."""
     pid: int | None = None
     """Here: that process, when the harness can tell."""
+    cost: str | None = None
+    """Remote: what its sandbox has cost so far, e.g. "$0.012+"."""
+    detail: str | None = None
+    """Remote: what the status leaves out — a stopped one's snapshot."""
 
     @property
     def short(self) -> str:
@@ -174,6 +182,29 @@ async def remote_rows(
         by_sandbox.setdefault(r.sandbox, []).append(r)
 
     async def probe(name: str, group: list[Remote]) -> None:
+        # Asked first WITHOUT resuming it: a stopped sandbox stays stopped,
+        # and costs nothing more, because it was listed.
+        try:
+            described = await VercelSandbox(name=name, gateway=gateway).info()
+        except WorkspaceGoneError:
+            gone.append(name)
+            for r in group:
+                rows.append(_remote_row(r, "gone"))
+            return
+        except (HarnessError, WorkspaceError):
+            for r in group:
+                rows.append(_remote_row(r, "unreachable"))
+            return
+        spent = cost_.label(cost_.sandbox_cost(described))
+        if described.status not in ("running", "pending"):
+            if described.resumable:
+                status = "expired" if described.expired else "stopped"
+                detail = snapshot_detail(described)
+            else:
+                status, detail = described.status, None
+            for r in group:
+                rows.append(_remote_row(r, status, cost=spent, detail=detail))
+            return
         try:
             async with VercelSandbox(name=name, gateway=gateway) as ws:
                 # Ask only what the rows need: a TUI's status is its pty, so
@@ -197,7 +228,7 @@ async def remote_rows(
                         )
                     else:
                         status = await _unattended_status(ws, r)
-                    rows.append(_remote_row(r, status))
+                    rows.append(_remote_row(r, status, cost=spent))
         except WorkspaceGoneError:
             # The platform says it is stopped or was never there: forget it.
             gone.append(name)
@@ -230,9 +261,7 @@ async def _unattended_status(ws: VercelSandbox, r: Remote) -> str:
             # next one that will not come: say which it is.
             return (
                 "finished"
-                if turn_finished(
-                    await agent.history(r.session_id), CONTINUE_MARK
-                )
+                if turn_finished(await agent.history(r.session_id), r.mark)
                 else "running"
             )
     except (HarnessError, WorkspaceError):
@@ -248,7 +277,25 @@ def stored_rows(state: State, origin: Path) -> list[Row]:
     return rows
 
 
-def _remote_row(r: Remote, status: str) -> Row:
+def snapshot_detail(info: SandboxInfo) -> str:
+    """`snapshot 0.8 GB, kept to Nov 18`: what `attach` resumes from."""
+    snap = info.snapshot
+    if snap is None:
+        return ""
+    size = f"snapshot {snap.size_bytes / cost_.GB:.1f} GB"
+    if snap.expires_at is None:
+        return size
+    until = time.strftime("%b %d", time.localtime(snap.expires_at / 1000))
+    return f"{size}, kept to {until}"
+
+
+def _remote_row(
+    r: Remote,
+    status: str,
+    *,
+    cost: str | None = None,
+    detail: str | None = None,
+) -> Row:
     return Row(
         where="remote",
         kind=r.handle.kind,
@@ -262,6 +309,9 @@ def _remote_row(r: Remote, status: str) -> Row:
         from_id=r.from_id,
         handle=r.handle,
         mode=r.mode,
+        asked=r.mark,
+        cost=cost,
+        detail=detail,
     )
 
 

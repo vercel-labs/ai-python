@@ -300,6 +300,9 @@ class _Sandbox:
     async def ptys(self) -> list[Any]:
         return []
 
+    async def info(self) -> Any:
+        return SimpleNamespace(status="running")
+
     async def exec(self, argv: list[str], timeout: float) -> Any:
         self.ran.append(argv)
         if argv[:2] == ["kill", "-TERM"]:

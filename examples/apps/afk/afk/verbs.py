@@ -27,21 +27,26 @@ from typing import TYPE_CHECKING, Any
 from ai.harnesses.experimental.errors import HarnessError, SessionBusyError
 from ai.workspaces.experimental import Local, VercelSandbox, copy, tty
 
-from . import files, render
+from . import cost as cost_
+from . import files, gitflow, render
 from . import state as st
 from .rows import (
     CONTINUE,
-    CONTINUE_MARK,
     HARNESSES,
     KIND_SHORT,
     Row,
+    snapshot_detail,
     turn_finished,
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import AsyncIterator, Callable
 
     from ai.workspaces.experimental import Gateway
+
+
+OPEN = ("*",)
+"""Every host: what a sandbox may reach unless `--no-network`."""
 
 
 def _pty_name(label: str) -> str:
@@ -55,6 +60,9 @@ async def push(
     label: str | None,
     background: bool,
     hours: float,
+    prompt: str | None = None,
+    network: bool = True,
+    git_history: bool = False,
     gateway: Gateway | None,
     local_gateway: Gateway | None = None,
 ) -> st.Remote:
@@ -78,6 +86,17 @@ async def push(
             "afk push needs a way for the sandbox to reach a model: sign in "
             "to Vercel, or set AI_GATEWAY_API_KEY"
         )
+    current = st.load()
+    if not current.told_billing:
+        print(
+            "afk: a sandbox is billed for what it uses (CPU, memory, data it "
+            "sends; once stopped, its snapshot as storage) — `afk` shows what "
+            "each has cost. The agent in it reaches its model through AI "
+            "Gateway, billed per token, not through your claude or ChatGPT "
+            "subscription. (Said once.)"
+        )
+        current.told_billing = True
+        st.save(current)
     # 1. The past, from the harness's own store here.
     async with Local(cwd, gateway=local_gateway) as here:
         async with HARNESSES[row.kind](workspace=here) as agent:
@@ -88,6 +107,10 @@ async def push(
         keep=True,
         gateway=gateway,
         execution_time_limit=timedelta(hours=hours).total_seconds(),
+        # Open by default: real projects install packages, clone, call
+        # APIs. The model key is still injected at egress, never in the VM.
+        # `--no-network` leaves only the gateway (and npm, for the CLI).
+        allow_hosts=OPEN if network else (),
     )
     await ws.open()
     recorded = False
@@ -96,9 +119,24 @@ async def push(
         _remember_baseline(
             ws.name or "", await asyncio.to_thread(files.manifest, cwd)
         )
+        git = None
+        if await asyncio.to_thread(gitflow.repo_root, cwd) is not None:
+            # The work goes on a branch; `pull --files` brings it home as one.
+            git = await gitflow.start(
+                ws,
+                cwd,
+                branch=gitflow.branch_for(label or ws.name or "push"),
+                history=git_history,
+            )
         print(
             f"afk: sandbox {ws.name} · copied {copied} files · lives up to "
             f"{hours:g}h"
+            + (
+                f" · on branch {git.branch}"
+                + (" with its history" if git.history else "")
+                if git
+                else ""
+            )
         )
         agent = HARNESSES[row.kind](workspace=ws)
         await agent.open()
@@ -107,7 +145,8 @@ async def push(
             # A Turn is an async iterable: iterate it. Let the turn begin
             # before letting go — the first event proves the agent is
             # working — then this client detaches and the VM keeps it.
-            events = aiter(session.stream(CONTINUE.format(path=ws.path)))
+            asked = prompt or CONTINUE.format(path=ws.path)
+            events = aiter(session.stream(asked))
             first = asyncio.ensure_future(anext(events))
             with contextlib.suppress(Exception):
                 await asyncio.wait_for(asyncio.shield(first), 120)
@@ -122,6 +161,8 @@ async def push(
                 handle=session.handle,
                 from_id=row.session_id,
                 pushed_at=st.now(),
+                asked=asked,
+                git=git,
             )
             _remember(remote)
             recorded = True
@@ -149,6 +190,7 @@ async def push(
             handle=tui.handle,
             from_id=row.session_id,
             pushed_at=st.now(),
+            git=git,
         )
         _remember(remote)
         recorded = True
@@ -206,6 +248,9 @@ async def attach(
     if not row.sandbox or row.handle is None:
         raise HarnessError(f"{row.label or row.short} has no sandbox to attach")
     name = row.label or row.short
+    # A stopped sandbox resumes from its snapshot as it opens, and is left
+    # running: you are about to work in it.
+    await _say_if_resuming(row, gateway, "open its TUI")
     async with VercelSandbox(name=row.sandbox, gateway=gateway) as ws:
         live = {p.name: p for p in await ws.ptys()}
         if row.pty in live:
@@ -242,7 +287,7 @@ async def attach(
                 # Ending it mid-turn ends that turn: ask. A finished one
                 # only waits for a next turn that will not come.
                 working = not turn_finished(
-                    await agent.history(row.session_id), CONTINUE_MARK
+                    await agent.history(row.session_id), row.asked
                 )
                 if working and not _yes(
                     ask,
@@ -350,6 +395,22 @@ or an unanswered prompt, which never reads as a finished turn."""
 SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
 
+async def _held(agent: Any, ws: Any, row: Row) -> bool:
+    """Whether something still drives the conversation.
+
+    A pushed TUI is alive while its pty is: codex lists a thread only once
+    it has had a turn, so asking the harness made a fresh codex TUI read as
+    "not running" (measured). Anything else, the harness's own answer.
+    """
+    if row.where == "remote" and row.mode == "tui" and row.pty:
+        return any(p.name == row.pty for p in await ws.ptys())
+    return any(
+        i.running
+        for i in await agent.sessions()
+        if i.session_id == row.session_id
+    )
+
+
 def _pending(messages: list[Any]) -> bool:
     """Whether the agent is mid-step: a tool call out, or a result in that it
     has not answered yet."""
@@ -377,11 +438,12 @@ async def peek(
     running, or, for a conversation a person drives, when nothing has come in
     for a while; Ctrl-C stops watching, never the agent.
     """
+    ws: contextlib.AbstractAsyncContextManager[Local | VercelSandbox]
     if row.where == "here" and cwd is not None:
-        ws: Local | VercelSandbox = Local(cwd, gateway=gateway)
+        ws = Local(cwd, gateway=gateway)
         where = "here"
     elif row.handle is not None and row.sandbox:
-        ws = VercelSandbox(name=row.sandbox, gateway=gateway)
+        ws = _opened(row, gateway, "read its transcript")
         where = row.sandbox
     else:
         raise HarnessError("nothing to peek at")
@@ -425,8 +487,8 @@ async def peek(
         clear()
         print(style.dim(f"\nafk: {name} {why}"))
 
-    async with ws:
-        async with HARNESSES[row.kind](workspace=ws) as agent:
+    async with ws as opened:
+        async with HARNESSES[row.kind](workspace=opened) as agent:
             print(
                 style.dim(
                     f"afk: watching {name} · {KIND_SHORT[row.kind]} · "
@@ -458,10 +520,8 @@ async def peek(
                     # an agent that died, so it need not list every session
                     # each poll.
                     polls += 1
-                    held = polls % PEEK_HELD_EVERY != 1 or any(
-                        i.running
-                        for i in await agent.sessions()
-                        if i.session_id == row.session_id
+                    held = polls % PEEK_HELD_EVERY != 1 or await _held(
+                        agent, opened, row
                     )
                     quiet = loop.time() - changed
                     if not held:
@@ -470,7 +530,7 @@ async def peek(
                     if (
                         turn_finished(
                             messages,
-                            CONTINUE_MARK if row.mode == "bg" else None,
+                            row.asked if row.mode == "bg" else None,
                         )
                         and quiet >= PEEK_QUIET
                     ):
@@ -508,13 +568,24 @@ async def pull(
     first, and written only on your yes."""
     if row.handle is None or not row.sandbox:
         raise HarnessError("nothing to pull")
-    async with VercelSandbox(name=row.sandbox, gateway=gateway) as ws:
+    async with _opened(row, gateway, "bring it home") as ws:
         async with HARNESSES[row.kind](workspace=ws) as there:
             history = await there.history(row.session_id)
         if with_files:
-            await _pull_files(
-                cwd, ws, st.load().baselines.get(row.sandbox), ask
+            pushed = next(
+                (
+                    r
+                    for r in st.load().remotes
+                    if r.session_id == row.session_id
+                ),
+                None,
             )
+            if pushed is not None and pushed.git is not None:
+                await _pull_branch(cwd, ws, pushed.git, row.label or row.short)
+            else:
+                await _pull_files(
+                    cwd, ws, st.load().baselines.get(row.sandbox), ask
+                )
     async with Local(cwd, gateway=local_gateway) as here:
         agent = HARNESSES[row.kind](workspace=here)
         await agent.open()
@@ -531,6 +602,23 @@ async def pull(
             "afk: it is in this directory's list now, like any conversation "
             "here"
         )
+
+
+async def _pull_branch(
+    cwd: Path, ws: VercelSandbox, push: gitflow.GitPush, name: str
+) -> None:
+    """The work as your branch: its commits, and a last one for what was
+    left uncommitted, on the tree you pushed. Your checkout is untouched;
+    merge it like any branch."""
+    count = await gitflow.bring_home(ws, cwd, push, label=name)
+    if count == 0:
+        print(f"afk: {name} changed nothing; no branch to bring home")
+        return
+    print(
+        f"afk: {push.branch} has {count} commit{'s' * (count != 1)} on the "
+        f"tree you pushed · `git log {push.branch}` to look, "
+        f"`git merge {push.branch}` to take it"
+    )
 
 
 async def _pull_files(
@@ -615,8 +703,9 @@ def _yes(ask: Callable[[str], str], prompt: str) -> bool:
 
 
 async def stop(row: Row, gateway: Gateway | None) -> None:
-    """End the conversation's sandbox — the only reliable way to end what
-    runs in it. Each push has its own, so nothing else goes with it.
+    """Stop the conversation's sandbox and keep its files: the VM stops, a
+    snapshot is kept, and `attach` resumes it on the same conversation. Each
+    push has its own sandbox, so nothing else goes with it. `rm` deletes it.
 
     Here, end the process that has it open, maybe in another terminal: that
     terminal gets its prompt back, and the conversation stays, to resume."""
@@ -649,24 +738,86 @@ async def stop(row: Row, gateway: Gateway | None) -> None:
         return
     if not row.sandbox:
         raise HarnessError("nothing to stop")
+    name = row.label or row.short
+    info = await VercelSandbox(name=row.sandbox, gateway=gateway).info()
+    if info.status not in ("running", "pending"):
+        print(
+            f"afk: {name} is already {info.status}; `afk attach {name}` "
+            f"resumes it, `afk rm {name}` deletes it"
+        )
+        return
     # The platform's stop takes a few seconds and cannot be hurried: say so
     # first.
-    print(f"afk: stopping {row.label} ({row.sandbox})…", flush=True)
-    async with VercelSandbox(name=row.sandbox, keep=False, gateway=gateway):
-        pass
+    print(f"afk: stopping {name} ({row.sandbox})…", flush=True)
+    ws = VercelSandbox(name=row.sandbox, gateway=gateway)
+    await ws.open()
+    await ws.stop()
+    after = await VercelSandbox(name=row.sandbox, gateway=gateway).info()
+    spent = cost_.sandbox_cost(after)
+    kept = snapshot_detail(after) or "a snapshot"
+    print(
+        f"afk: stopped {name}; its files are kept ({kept}) · "
+        f"{cost_.label(spent)} so far, "
+        f"{cost_.money(spent.snapshot_per_month)}/month to keep · "
+        f"`afk attach {name}` resumes it, `afk rm {name}` deletes it"
+    )
+
+
+async def rm(row: Row, gateway: Gateway | None) -> None:
+    """Delete the conversation's sandbox and its snapshot: nothing is kept,
+    and nothing more is billed. Never resumes it first."""
+    if not row.sandbox:
+        raise HarnessError("nothing to delete")
+    name = row.label or row.short
+    ws = VercelSandbox(name=row.sandbox, gateway=gateway)
+    spent = cost_.sandbox_cost(await ws.info())
+    print(f"afk: deleting {name} ({row.sandbox})…", flush=True)
+    await ws.destroy()
     current = st.load()
-    # A sandbox shared by several pushes predates one-sandbox-per-push; say so.
-    also = [
-        r.label
-        for r in current.remotes
-        if r.sandbox == row.sandbox and r.session_id != row.session_id
-    ]
     current.forget_sandbox(row.sandbox)
     st.save(current)
     print(
-        f"afk: stopped {row.label} ({row.sandbox})"
-        + (f"; it also held {', '.join(also)}" if also else "")
+        f"afk: deleted {name} and its snapshot · it cost "
+        f"{cost_.label(spent)}"
     )
+
+
+@contextlib.asynccontextmanager
+async def _opened(
+    row: Row, gateway: Gateway | None, why: str
+) -> AsyncIterator[VercelSandbox]:
+    """The conversation's sandbox, open. A stopped one is resumed for this,
+    and stopped again after: reading it must not leave it running (and
+    billed) until its time limit."""
+    assert row.sandbox is not None
+    resumed = await _say_if_resuming(row, gateway, why)
+    ws = VercelSandbox(name=row.sandbox, gateway=gateway)
+    await ws.open()
+    try:
+        yield ws
+    finally:
+        if resumed:
+            await ws.stop()
+            print(
+                f"afk: stopped {row.label or row.short} again; its files "
+                "are kept"
+            )
+        else:
+            await ws.close()
+
+
+async def _say_if_resuming(row: Row, gateway: Gateway | None, why: str) -> bool:
+    """Whether opening the sandbox will resume it; says so first if so."""
+    assert row.sandbox is not None
+    info = await VercelSandbox(name=row.sandbox, gateway=gateway).info()
+    if info.status in ("running", "pending"):
+        return False
+    print(
+        f"afk: {row.label or row.short} is {info.status}; resuming it from "
+        f"its snapshot to {why}…",
+        flush=True,
+    )
+    return True
 
 
 STOP_WAIT = 10.0

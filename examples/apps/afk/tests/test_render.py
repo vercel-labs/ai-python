@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import json
 
+from afk import state as st
 from afk.render import Style, lines
 from afk.rows import CONTINUE, CONTINUE_MARK, turn_finished
 from afk.verbs import _peek_start  # noqa: PLC2701
 
+from ai.harnesses.experimental import Handle
 from ai.types.messages import Message, TextPart, ToolCallPart, ToolResultPart
+from ai.workspaces.experimental import WorkspaceCoords
 
 PLAIN = Style(color=False)
 
@@ -165,3 +168,34 @@ def test_a_pushed_turn_is_not_finished_before_it_shows_up() -> None:
         Message(role="assistant", parts=[TextPart(text="Done.")]),
     ]
     assert turn_finished(done, CONTINUE_MARK)
+
+
+def test_a_pushed_turn_with_its_own_prompt_is_found_by_that_prompt() -> None:
+    """`push --bg --prompt`: the turn began at that prompt, not at the
+    continue text, which is nowhere in the transcript."""
+    remote = st.Remote(
+        label="t",
+        origin="/x",
+        sandbox="sb",
+        mode="bg",
+        handle=Handle(
+            kind="claude-code",
+            session_id="s",
+            workspace=WorkspaceCoords(provider="sandbox", location="sb"),
+        ),
+        pushed_at=0,
+        asked="make the tests pass",
+    )
+    past = [
+        Message(role="user", parts=[TextPart(text="plan it")]),
+        Message(role="assistant", parts=[TextPart(text="Ready.")]),
+    ]
+    assert not turn_finished(past, remote.mark)
+    done = [
+        *past,
+        Message(role="user", parts=[TextPart(text="make the tests pass")]),
+        Message(role="assistant", parts=[TextPart(text="All green.")]),
+    ]
+    assert turn_finished(done, remote.mark)
+    old = remote.model_copy(update={"asked": None})
+    assert old.mark == CONTINUE_MARK, "a record from before keeps working"

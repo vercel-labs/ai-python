@@ -92,12 +92,14 @@ async def test_keys_choose_a_command(
         (0, "enter resume · p peek · u push · b push --bg · q quit"),
         (
             2,
-            "enter attach · p peek · l pull · f pull --files · s stop · q quit",
+            "enter attach · p peek · l pull · f pull --files · s stop · r rm"
+            " · q quit",
         ),
         # an unattended agent: Enter attaches too, its agent ended first
         (
             3,
-            "enter attach · p peek · l pull · f pull --files · s stop · q quit",
+            "enter attach · p peek · l pull · f pull --files · s stop · r rm"
+            " · q quit",
         ),
     ],
 )

@@ -7,8 +7,11 @@
     afk peek <id>            watch a conversation, read-only, here or pushed
     afk pull <id> [--files]  bring it home, in the TUI; --files brings its
                              edits too
-    afk stop <id>            end its sandbox; here, end the process it is
-                             open in
+    afk stop <id>            stop its sandbox, keeping its files to resume;
+                             here, end the process it is open in
+    afk rm <id>              delete its sandbox and snapshot
+    afk wait [id]            poll until it (or any pushed one) stops
+                             running, then ring the terminal bell
     afk setup                choose the Vercel team afk's sandboxes use
 
 An id is whatever the list showed: a label you gave (`--as`), a word from a
@@ -130,11 +133,25 @@ async def listing(
     if away is not None:
         print(f"\n  {BOLD}remote{RESET}", flush=True)
         remote, gone = await away
+        news = {r.session_id: was for r, was in state.changed(remote)}
         for r in remote:
             origin = f"← from {r.from_id[:4]} · " if r.from_id else ""
+            detail = f"{r.detail} · " if r.detail else ""
+            new = (
+                f"{BOLD}← new, was {news[r.session_id]}{RESET} "
+                if r.session_id in news
+                else ""
+            )
             print(
                 f"  {r.short}  {KIND_SHORT[r.kind]:6s} {(r.label or ''):14s} "
-                f"{r.status:14s} {DIM}{origin}{r.sandbox}{RESET}"
+                f"{r.status:14s} {(r.cost or ''):9s} "
+                f"{new}{DIM}{detail}{origin}{r.sandbox}{RESET}"
+            )
+        st.save(state)
+        if any((r.cost or "").endswith("+") for r in remote):
+            print(
+                f"  {DIM}+ running: CPU and data sent are billed when it "
+                f"stops{RESET}"
             )
         if gone:
             for name in gone:
@@ -142,7 +159,7 @@ async def listing(
             st.save(state)
     print(
         f"\n{DIM}afk push <id> [--bg] · attach <id> · peek <id> · pull <id> "
-        f"[--files] · stop <id>{RESET}"
+        f"[--files] · stop <id> · rm <id>{RESET}"
     )
 
 
@@ -164,10 +181,13 @@ async def picking(
 
     async def away() -> list[Row]:
         remote, gone = await remote_rows(state, cwd, remote_gw)
-        if gone:
-            for name in gone:
-                state.forget_sandbox(name)
-            st.save(state)
+        for name in gone:
+            state.forget_sandbox(name)
+        for r, was in state.changed(remote):
+            r.detail = f"new, was {was}" + (
+                f" · {r.detail}" if r.detail else ""
+            )
+        st.save(state)
         return remote
 
     probing = (
@@ -240,6 +260,30 @@ async def main_async(argv: list[str]) -> int:
     )
     p_push.add_argument("--as", dest="label", help="a label to call it by")
     p_push.add_argument(
+        "--git-history",
+        action="store_true",
+        help=(
+            "in a git repository, give the sandbox its whole history (for "
+            "tasks that read `git log`), not only the tree"
+        ),
+    )
+    p_push.add_argument(
+        "--no-network",
+        dest="network",
+        action="store_false",
+        help=(
+            "lock the sandbox's network: only the model gateway (and npm, "
+            "to install the CLI) are reachable"
+        ),
+    )
+    p_push.add_argument(
+        "--prompt",
+        help=(
+            "with --bg: what to tell the agent, instead of asking it to "
+            "continue from where it left off"
+        ),
+    )
+    p_push.add_argument(
         "--hours",
         type=float,
         default=DEFAULT_HOURS,
@@ -257,7 +301,22 @@ async def main_async(argv: list[str]) -> int:
         action="store_true",
         help="also bring home the files it changed there; asks first",
     )
-    sub.add_parser("stop").add_argument("id")
+    sub.add_parser(
+        "stop", help="stop its sandbox; its files are kept to resume"
+    ).add_argument("id")
+    sub.add_parser(
+        "rm", help="delete its sandbox and snapshot; nothing is kept"
+    ).add_argument("id")
+    p_wait = sub.add_parser(
+        "wait", help="poll until a pushed conversation stops running"
+    )
+    p_wait.add_argument("id", nargs="?")
+    p_wait.add_argument(
+        "--every",
+        type=float,
+        default=WAIT_EVERY,
+        help=f"seconds between looks (default {WAIT_EVERY:g})",
+    )
     sub.add_parser("setup")
     args = parser.parse_args(argv)
 
@@ -325,6 +384,9 @@ async def main_async(argv: list[str]) -> int:
             return 0
         if args.verb == "push":
             rows, _, _ = await local_rows(cwd, gw)
+            if args.prompt is not None and not args.bg:
+                print("afk: --prompt is for --bg; in the TUI, type it there")
+                return 2
             row = choose(rows, args.id, where="here", verb="push")
             if row is None:
                 return 1
@@ -337,11 +399,16 @@ async def main_async(argv: list[str]) -> int:
                 row,
                 label=args.label,
                 background=args.bg,
+                prompt=args.prompt,
+                network=args.network,
+                git_history=args.git_history,
                 hours=_hours(args.hours, gw, remote_gw),
                 gateway=remote_gw,
                 local_gateway=gw,
             )
             return 0
+        if args.verb == "wait":
+            return await waiting(cwd, remote_gw, args.id, every=args.every)
         rows = stored_rows(st.load(), cwd)
         if args.verb in ("peek", "stop") and not any(
             r.matches(args.id) for r in rows
@@ -367,6 +434,8 @@ async def main_async(argv: list[str]) -> int:
                 )
             elif args.verb == "stop":
                 await verbs.stop(row, remote_gw)
+            elif args.verb == "rm":
+                await verbs.rm(row, remote_gw)
         except WorkspaceGoneError:
             # These verbs trust afk's record without asking every sandbox
             # first; when the record turns out stale, correct it here.
@@ -375,20 +444,73 @@ async def main_async(argv: list[str]) -> int:
             st.save(state)
             what = (
                 "already gone"
-                if args.verb == "stop"
-                else "gone (stopped or expired)"
+                if args.verb in ("stop", "rm")
+                else "gone: it no longer exists"
             )
             print(
                 f"afk: {row.label or row.short}'s sandbox {row.sandbox} is "
                 f"{what}; afk has forgotten it"
             )
-            return 0 if args.verb == "stop" else 1
+            return 0 if args.verb in ("stop", "rm") else 1
         return 0
     except (HarnessError, WorkspaceError) as exc:
         # One line, never a traceback: a sandbox that cannot be reached
         # right now (network, credentials) is a WorkspaceError.
         print(f"afk: {exc}")
         return 1
+
+
+WAIT_EVERY = 30.0
+RUNNING = ("running", "open elsewhere", "?", "")
+"""Statuses that mean the agent may still be working."""
+
+
+async def waiting(
+    cwd: Path, remote_gw: Gateway | None, query: str | None, *, every: float
+) -> int:
+    """Poll until the conversation (or every pushed one that is running)
+    stops running: finished, idle, stopped, expired, gone. Each look is
+    `info()` per sandbox, which resumes nothing. Ctrl-C stops waiting,
+    never the agent. Exit 0 once one has stopped, 1 if none was running."""
+    state = st.load()
+    targets = stored_rows(state, cwd)
+    if query is not None:
+        row = choose(targets, query, where="remote", verb="wait")
+        if row is None:
+            return 1
+        targets = [row]
+    first, _ = await remote_rows(state, cwd, remote_gw)
+    watched = {
+        r.session_id
+        for r in first
+        if r.status in RUNNING
+        and any(t.session_id == r.session_id for t in targets)
+    }
+    if not watched:
+        print("afk: nothing pushed from here is running; `afk` lists them")
+        return 1
+    names = ", ".join(
+        r.label or r.short for r in first if r.session_id in watched
+    )
+    print(f"afk: waiting for {names} · every {every:g}s · Ctrl-C stops waiting")
+    while True:
+        await asyncio.sleep(every)
+        state = st.load()
+        now, gone = await remote_rows(state, cwd, remote_gw)
+        done = [
+            r
+            for r in now
+            if r.session_id in watched and r.status not in RUNNING
+        ]
+        for name in gone:
+            state.forget_sandbox(name)
+        state.changed(now)
+        st.save(state)
+        if done:
+            for r in done:
+                cost_ = f" · {r.cost}" if r.cost else ""
+                print(f"\a afk: {r.label or r.short} is {r.status}{cost_}")
+            return 0
 
 
 def _hours(

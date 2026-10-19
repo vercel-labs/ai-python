@@ -66,12 +66,15 @@ def verbs(row: Row) -> Verbs:
             "u": ("push", [["afk", "push", sid]]),
             "b": ("push --bg", [["afk", "push", sid, "--bg"]]),
         }
+    stopped = row.status in ("stopped", "expired")
     return {
-        "enter": ("attach", [["afk", "attach", sid]]),
+        # Attach resumes a stopped one from its snapshot.
+        "enter": ("resume" if stopped else "attach", [["afk", "attach", sid]]),
         "p": peek,
         "l": ("pull", [["afk", "pull", sid]]),
         "f": ("pull --files", [["afk", "pull", sid, "--files"]]),
-        "s": stop,
+        **({} if stopped else {"s": stop}),
+        "r": ("rm", [["afk", "rm", sid]]),
     }
 
 
@@ -82,8 +85,10 @@ def line(row: Row) -> Text:
         t.append(row.status, style="dim")
     else:
         t.append(f"{(row.label or ''):14s} {row.status or '…':14s} ")
+        t.append(f"{(row.cost or ''):9s} ")
         origin = f"← from {row.from_id[:4]} · " if row.from_id else ""
-        t.append(f"{origin}{row.sandbox}", style="dim")
+        detail = f"{row.detail} · " if row.detail else ""
+        t.append(f"{detail}{origin}{row.sandbox}", style="dim")
     return t
 
 
@@ -181,6 +186,12 @@ class Picker(App[list[Command] | None]):
                     f"take over {name} from pid {row.pid}? it ends there. y/N"
                 )
                 return
+            if self.confirming[0] == "rm":
+                keys.update(
+                    f"delete {name}'s sandbox {row.sandbox} and its snapshot? "
+                    "nothing is kept. y/N"
+                )
+                return
             what = (
                 f"{KIND_SHORT[row.kind]}, pid {row.pid}"
                 if row.where == "here"
@@ -232,7 +243,7 @@ class Picker(App[list[Command] | None]):
         if chosen is None:
             return
         # Anything that ends a process or a sandbox asks first.
-        if any(c[:2] == ["afk", "stop"] for c in chosen[1]):
+        if any(c[:2] in (["afk", "stop"], ["afk", "rm"]) for c in chosen[1]):
             self.confirming = chosen
             self.show_keys()
         else:

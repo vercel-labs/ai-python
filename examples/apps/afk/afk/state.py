@@ -14,11 +14,16 @@ from __future__ import annotations
 import os
 import time
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel
 
 from ai.harnesses.experimental import Handle
+
+from .gitflow import GitPush
+
+CONTINUE_MARK = "This conversation was moved here from another machine."
+"""The start of the continue prompt (see rows.CONTINUE)."""
 
 Mode = Literal["tui", "bg"]
 
@@ -38,6 +43,16 @@ class Remote(BaseModel):
     from_id: str | None = None
     """The local conversation it was copied from. Push copies; both remain."""
     pushed_at: int
+    git: GitPush | None = None
+    """In a repository: the branch the work is on, to bring it home."""
+    asked: str | None = None
+    """What an unattended push said to the agent: `--prompt`, or the
+    continue prompt. Finding it in the transcript is how afk knows where
+    the pushed turn began. None in records from before it was kept."""
+
+    @property
+    def mark(self) -> str:
+        return self.asked or CONTINUE_MARK
 
     @property
     def session_id(self) -> str:
@@ -48,6 +63,11 @@ class State(BaseModel):
     """Everything afk remembers. Small on purpose."""
 
     remotes: list[Remote] = []
+    seen: dict[str, str] = {}
+    """Per pushed conversation: the status the list last showed you, to say
+    what changed since."""
+    told_billing: bool = False
+    """Whether the first push has said how sandboxes and models are billed."""
     baselines: dict[str, dict[str, str]] = {}
     """Per sandbox: sha256 of every file push copied into it, by path. What
     `pull --files` compares against to tell the sandbox's changes from yours."""
@@ -63,8 +83,23 @@ class State(BaseModel):
         return seen
 
     def forget_sandbox(self, name: str) -> None:
+        for r in self.remotes:
+            if r.sandbox == name:
+                self.seen.pop(r.session_id, None)
         self.remotes = [r for r in self.remotes if r.sandbox != name]
         self.baselines.pop(name, None)
+
+    def changed(self, rows: list[Any]) -> list[tuple[Any, str]]:
+        """The rows whose status changed since the list last showed them,
+        with what it was; and remember what it is now."""
+        out = []
+        for row in rows:
+            before = self.seen.get(row.session_id)
+            if before is not None and before != row.status and row.status:
+                out.append((row, before))
+            if row.status and row.status != "unreachable":
+                self.seen[row.session_id] = row.status
+        return out
 
 
 def state_path() -> Path:

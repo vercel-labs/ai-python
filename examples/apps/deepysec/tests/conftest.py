@@ -27,3 +27,21 @@ def fixture_app() -> Path:
     if not path:
         pytest.skip("set DEEPYSEC_FIXTURE to the vulnerable-app fixture")
     return Path(path)
+
+
+ENV_FILE = EXAMPLE.parents[2] / ".env.local"
+
+
+@pytest.fixture(autouse=True)
+def live_credentials(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Live tests get the repository's `.env.local`, as the SDK suite does,
+    over whatever this shell exported (measured: a stale token there made
+    the pipeline test fail with a 401 from the gateway)."""
+    if request.node.get_closest_marker("live") is None or not ENV_FILE.exists():
+        return
+    for line in ENV_FILE.read_text().splitlines():
+        if "=" in line and not line.lstrip().startswith("#"):
+            key, value = line.split("=", 1)
+            monkeypatch.setenv(key.strip(), value.strip().strip('"'))
