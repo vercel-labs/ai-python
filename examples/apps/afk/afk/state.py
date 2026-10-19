@@ -43,6 +43,8 @@ class Remote(BaseModel):
     from_id: str | None = None
     """The local conversation it was copied from. Push copies; both remain."""
     pushed_at: int
+    title: str | None = None
+    """The conversation's title when it was pushed, to list it by."""
     git: GitPush | None = None
     """In a repository: the branch the work is on, to bring it home."""
     asked: str | None = None

@@ -20,7 +20,7 @@ from textual.binding import Binding, BindingType
 from textual.widgets import OptionList, Static
 from textual.widgets.option_list import Option
 
-from .rows import KIND_SHORT, Row
+from .rows import KIND_SHORT, Row, display_name
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable
@@ -84,7 +84,7 @@ def line(row: Row) -> Text:
         t.append(f"{_clip(row.title or '', 44):46s} ")
         t.append(row.status, style="dim")
     else:
-        t.append(f"{(row.label or ''):14s} {row.status or '…':14s} ")
+        t.append(f"{_clip(display_name(row), 34):34s} {row.status or '…':9s} ")
         t.append(f"{(row.cost or ''):9s} ")
         origin = f"← from {row.from_id[:4]} · " if row.from_id else ""
         detail = f"{row.detail} · " if row.detail else ""

@@ -45,7 +45,15 @@ from ai.workspaces.experimental.errors import (
 from . import account, verbs
 from . import state as st
 from .resolve import AmbiguousError, NoMatchError, match, pick
-from .rows import KIND_SHORT, Row, local_rows, remote_rows, stored_rows
+from .rows import (
+    KIND_SHORT,
+    Row,
+    display_name,
+    local_rows,
+    remote_rows,
+    stored_rows,
+    titled,
+)
 
 if TYPE_CHECKING:
     from typing import TextIO
@@ -133,6 +141,7 @@ async def listing(
     if away is not None:
         print(f"\n  {BOLD}remote{RESET}", flush=True)
         remote, gone = await away
+        remote = titled(remote, here)
         news = {r.session_id: was for r, was in state.changed(remote)}
         for r in remote:
             origin = f"← from {r.from_id[:4]} · " if r.from_id else ""
@@ -142,9 +151,10 @@ async def listing(
                 if r.session_id in news
                 else ""
             )
+            called = _clip(display_name(r), 34)
             print(
-                f"  {r.short}  {KIND_SHORT[r.kind]:6s} {(r.label or ''):14s} "
-                f"{r.status:14s} {(r.cost or ''):9s} "
+                f"  {r.short}  {KIND_SHORT[r.kind]:6s} {called:34s} "
+                f"{r.status:9s} {(r.cost or ''):9s} "
                 f"{new}{DIM}{detail}{origin}{r.sandbox}{RESET}"
             )
         st.save(state)
@@ -179,8 +189,11 @@ async def picking(
 
     state = st.load()
 
+    local = asyncio.create_task(local_rows(cwd, gw))
+
     async def away() -> list[Row]:
         remote, gone = await remote_rows(state, cwd, remote_gw)
+        remote = titled(remote, (await local)[0])
         for name in gone:
             state.forget_sandbox(name)
         for r, was in state.changed(remote):
@@ -193,7 +206,7 @@ async def picking(
     probing = (
         asyncio.create_task(away()) if state.for_origin(str(cwd)) else None
     )
-    here, notes, answered = await local_rows(cwd, gw)
+    here, notes, answered = await local
     where = f"{BOLD}{_tilde(cwd)}{RESET}  {DIM}·  "
     harnesses = ", ".join(answered) or "no harness found"
     if not here and probing is None:
@@ -212,6 +225,10 @@ async def picking(
     for note in notes:
         head.append(f"\n  {note}", style="dim")
     return await tui.pick(head, shown, probing)
+
+
+def _clip(s: str, n: int) -> str:
+    return s if len(s) <= n else s[: n - 1] + "…"
 
 
 def _title(r: Row) -> str:

@@ -300,7 +300,7 @@ def _remote_row(
         where="remote",
         kind=r.handle.kind,
         session_id=r.session_id,
-        title=None,
+        title=r.title,
         updated_at=r.pushed_at,
         status=status,
         label=r.label,
@@ -313,6 +313,24 @@ def _remote_row(
         cost=cost,
         detail=detail,
     )
+
+
+def display_name(row: Row) -> str:
+    """What the list calls a pushed conversation: its title, after the
+    label you gave it (`--as`), if you gave one."""
+    label = row.label if row.label and row.label != row.short else None
+    title = (row.title or "").strip().replace("\n", " ")
+    return " · ".join(p for p in (label, title) if p) or row.short
+
+
+def titled(remote: list[Row], here: list[Row]) -> list[Row]:
+    """Remote rows with a title: their own, or — pushed before afk kept
+    one — the title of the conversation here they came from."""
+    titles = {r.session_id: r.title for r in here}
+    for r in remote:
+        if not r.title and r.from_id:
+            r.title = titles.get(r.from_id)
+    return remote
 
 
 def turn_finished(messages: list[Any], asked: str | None = None) -> bool:

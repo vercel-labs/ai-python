@@ -156,6 +156,7 @@ async def push(
                 handle=session.handle,
                 from_id=row.session_id,
                 pushed_at=st.now(),
+                title=row.title,
                 asked=asked,
                 git=git,
             )
@@ -185,6 +186,7 @@ async def push(
             handle=tui.handle,
             from_id=row.session_id,
             pushed_at=st.now(),
+            title=row.title,
             git=git,
         )
         _remember(remote)

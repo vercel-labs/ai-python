@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 from afk import cli
 from afk import state as st
-from afk.rows import Row
+from afk.rows import Row, display_name, titled
 
 from ai.harnesses.experimental import Handle
 from ai.workspaces.experimental import WorkspaceCoords
@@ -81,3 +81,27 @@ async def test_wait_with_nothing_running_says_so(
 
     monkeypatch.setattr(cli, "remote_rows", remote_rows)
     assert await cli.waiting(tmp_path, None, None, every=0) == 1
+
+
+def test_a_pushed_conversation_is_listed_by_its_title() -> None:
+    plain = _row("abcd1234", "running")
+    plain.label, plain.title = "abcd", "migrate the billing tests"
+    assert display_name(plain) == "migrate the billing tests"
+    named = plain.model_copy(update={"label": "billing"})
+    assert display_name(named) == "billing · migrate the billing tests"
+    untitled = _row("ef567890", "running")
+    untitled.label = "ef56"
+    assert display_name(untitled) == "ef56", "nothing else to call it by"
+
+
+def test_one_pushed_before_titles_were_kept_borrows_its_sources() -> None:
+    old = _row("remote01", "finished")
+    old.from_id = "local001"
+    here = Row(
+        where="here",
+        kind="claude-code",
+        session_id="local001",
+        status="idle",
+        title="add rate limiting",
+    )
+    assert titled([old], [here])[0].title == "add rate limiting"
