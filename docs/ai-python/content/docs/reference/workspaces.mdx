@@ -138,7 +138,11 @@ Methods:
   keeps its state there, under `~/.ai-python/` (session locks, named ptys).
 - `await reachable_url(port)`: A URL the agent can reach for a port.
 - `contains(candidate)`: Whether an absolute path is inside `path`. Pure-path
-  check; relative paths return `False`.
+  check; relative paths return `False`. A symlink inside that points out
+  still looks inside: pair it with `resolve()`.
+- `await resolve(path)`: The real path `path` names on the workspace's
+  machine: relative to `path`, symlinks followed, `..` folded. A path that
+  does not exist yet resolves as far as it exists.
 - `injects_credentials_for(host)`: Whether requests to `host` get the
   credential at egress.
 - `workspace / "path"`: Build a `WorkspacePath`.

@@ -224,6 +224,10 @@ class Local(_base.Workspace):
     async def exists(self, path: str) -> bool:
         return await asyncio.to_thread(self._resolve(path).exists)
 
+    async def resolve(self, path: str) -> str:
+        joined = os.path.join(self.path, path)
+        return str(await asyncio.to_thread(os.path.realpath, joined))
+
     async def home(self) -> str:
         return str(Path.home())
 

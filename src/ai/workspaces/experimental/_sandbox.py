@@ -68,8 +68,16 @@ PTY_SOCKET_WAIT = 10.0
 # the terminal yet and be lost. Measured — it fails roughly every time
 # without an arbitrary sleep after the marker. Here the process that will
 # do the copying is the one that says it is ready.
+#
+# The pump also WAITS for the FIFO: `spawn()` returns as soon as the
+# supervisor shell is started, before it has run `mkfifo`, so the first
+# write can get here first. Measured: an intermittent FileNotFoundError on
+# `open()`, surfacing as "the input conduit exited before it was ready".
 _PUMP = (
-    "import os, sys\n"
+    "import os, sys, time\n"
+    "end = time.monotonic() + 10\n"
+    "while not os.path.exists(sys.argv[1]) and time.monotonic() < end:\n"
+    "    time.sleep(0.02)\n"
     "fd = os.open(sys.argv[1], os.O_WRONLY)\n"
     # The marker arrives as an ARGUMENT, never as a literal in this source.
     # Embedded, a SyntaxError traceback would echo the line containing it
@@ -270,6 +278,15 @@ class SandboxProcess(_base.Process):
                         # the first write then failed as a bare
                         # ClosedResourceError that named nothing.
                         said = seen.decode(errors="replace").strip()
+                        # The FIFO also vanishes when the PROGRAM has
+                        # already ended: its supervisor removes it. Then
+                        # the program's own exit and stderr are the news.
+                        ended = await self._ended_note()
+                        if ended:
+                            raise errors_.WorkspaceError(
+                                f"the program exited before it read its "
+                                f"input: {ended}"
+                            ) from None
                         raise errors_.WorkspaceError(
                             "the sandbox input conduit exited before it was "
                             f"ready ({said or 'no output'}); it runs python3 "
@@ -280,6 +297,19 @@ class SandboxProcess(_base.Process):
             raise errors_.WorkspaceError(
                 "the sandbox input conduit never became ready"
             ) from exc
+
+    async def _ended_note(self) -> str:
+        """Describe how the program ended, or "" if it is still running."""
+        try:
+            async with asyncio.timeout(2):
+                code = await self.wait()
+        except Exception:
+            return ""
+        tail = ""
+        with contextlib.suppress(Exception):
+            async with asyncio.timeout(2):
+                tail = (await self.read_stderr()).strip()[-800:]
+        return f"exit code {code}; stderr: {tail or '(empty)'}"
 
     @property
     def id(self) -> str:

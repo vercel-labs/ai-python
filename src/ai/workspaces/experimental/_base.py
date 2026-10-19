@@ -28,7 +28,7 @@ from typing import TYPE_CHECKING, Any, Protocol, Self
 
 from pydantic import BaseModel
 
-from . import _gateway, _gitignore, _pty
+from . import _gateway, _gitignore, _pty, errors
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Mapping, Sequence
@@ -107,6 +107,12 @@ def copy_tree(
         shutil.copyfile(local, target)
         count += 1
     return count
+
+
+_REALPATH = (
+    "import os, sys\n"
+    "print(os.path.realpath(os.path.join(sys.argv[1], sys.argv[2])))\n"
+)
 
 
 @dataclass(frozen=True)
@@ -387,7 +393,30 @@ class Workspace(ABC):
         """
 
     def contains(self, candidate: str) -> bool:
+        """Whether an absolute path is inside the workspace, by its spelling.
+
+        Pure-path: no filesystem access, so a symlink inside the workspace
+        that points out of it still looks inside. Where that matters (an
+        approval hook), check `contains(await resolve(path))`.
+        """
         return contains(self.path, candidate)
+
+    async def resolve(self, path: str) -> str:
+        """Return the real path `path` names, on the workspace's machine.
+
+        Relative to the workspace, symlinks followed, `..` folded. A path
+        that does not exist yet (a file about to be written) resolves as far
+        as it exists. One command in the workspace.
+        """
+        result = await self.exec(
+            ["python3", "-c", _REALPATH, self.path, path], timeout=30
+        )
+        if result.exit_code != 0:
+            raise errors.WorkspaceError(
+                f"could not resolve {path!r} in the workspace: "
+                + (result.stderr.strip()[-300:] or f"exit {result.exit_code}")
+            )
+        return result.stdout.strip()
 
     def __truediv__(self, path: str) -> WorkspacePath:
         return WorkspacePath(self, path)

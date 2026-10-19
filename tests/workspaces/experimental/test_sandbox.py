@@ -200,3 +200,42 @@ async def test_a_conduit_that_exits_before_ready_names_python3() -> None:
     process = SandboxProcess(cast("Any", None), cast("Any", sandbox), "/f")
     with pytest.raises(WorkspaceError, match=r"python3: not found\).*python3"):
         await process.write("x")
+
+
+async def test_the_conduit_waits_for_a_fifo_the_supervisor_has_not_made_yet(
+    tmp_path: Any,
+) -> None:
+    """`spawn()` returns before the supervisor shell has run `mkfifo`, so the
+    first write can start the pump first. Measured in a sandbox: the pump's
+    `open()` raised FileNotFoundError and a fork failed with "the sandbox
+    input conduit exited before it was ready". The pump waits for it."""
+    import asyncio
+    import os
+    import sys
+
+    from ai.workspaces.experimental import _sandbox
+
+    fifo = str(tmp_path / "late.in")
+    pump = await asyncio.create_subprocess_exec(
+        sys.executable,
+        "-c",
+        _sandbox._PUMP,
+        fifo,
+        "READY",
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    await asyncio.sleep(0.3)  # the supervisor is slow to start
+    os.mkfifo(fifo)
+    reader = os.open(fifo, os.O_RDONLY | os.O_NONBLOCK)
+    assert pump.stdout is not None and pump.stdin is not None
+    line = await asyncio.wait_for(pump.stdout.readline(), 5)
+    assert line == b"READY\n"
+    pump.stdin.write(b"hello")
+    await pump.stdin.drain()
+    pump.stdin.close()
+    await asyncio.wait_for(pump.wait(), 5)
+    os.set_blocking(reader, True)
+    assert os.read(reader, 100) == b"hello"
+    os.close(reader)
