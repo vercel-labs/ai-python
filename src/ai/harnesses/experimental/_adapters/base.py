@@ -11,7 +11,9 @@ the only reason the same adapter drives a CLI here or inside a microVM.
 
 from __future__ import annotations
 
+import contextlib
 import posixpath
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -41,12 +43,25 @@ async def provision(
     probe = await workspace.exec([executable, "--version"], timeout=60)
     if workspace.owner != "provider":
         return probe
+    # When npm was last asked, in the VM: asking costs ~0.6-1s, and every
+    # reconnect asked (measured: most of a listing's time). The answer
+    # holds for CHECK_EVERY.
+    marker = f"{await workspace.home()}/.ai-python/checked/" + package.replace(
+        "/", "_"
+    )
     if probe.exit_code == 0:
+        with contextlib.suppress(FileNotFoundError, ValueError):
+            if time.time() - float(await workspace.read_text(marker)) < (
+                CHECK_EVERY
+            ):
+                return probe
         latest = await workspace.exec(
             ["npm", "view", package, "version"], timeout=120
         )
         newest = latest.stdout.strip() if latest.exit_code == 0 else ""
         if not newest or newest in probe.stdout.split():
+            if newest:
+                await workspace.write_text(marker, str(time.time()))
             return probe
         for process in (await _cli_processes.processes(workspace)).values():
             if any(
@@ -54,10 +69,27 @@ async def provision(
                 for arg in process.argv[:2]
             ):
                 return probe
-    await workspace.exec(
-        ["npm", "install", "-g", f"{package}@latest"], timeout=600
-    )
-    return await workspace.exec([executable, "--version"], timeout=60)
+    for attempt in range(2):
+        try:
+            await workspace.exec(
+                ["npm", "install", "-g", f"{package}@latest"], timeout=600
+            )
+        except Exception:
+            # The answer was lost, not necessarily the install (measured: a
+            # sandbox's response stream cut off mid-install under load). It
+            # is idempotent: look, and try once more if it is not there.
+            if attempt == 1:
+                raise
+        probe = await workspace.exec([executable, "--version"], timeout=60)
+        if probe.exit_code == 0:
+            break
+    if probe.exit_code == 0:
+        await workspace.write_text(marker, str(time.time()))
+    return probe
+
+
+CHECK_EVERY = 12 * 3600.0
+"""Seconds a sandbox's "this CLI is the latest" answer is trusted."""
 
 
 class Adapter(Protocol):

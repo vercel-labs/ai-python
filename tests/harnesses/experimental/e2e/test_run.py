@@ -101,12 +101,14 @@ async def test_timeout_settles_as_cancelled_rather_than_raising(
     The prompt has to genuinely outlive the deadline: asking a model to
     "count slowly" does not — it delegates to a shell command and answers in
     six seconds. Emitting thousands of tokens directly is what actually
-    holds a turn open.
+    holds a turn open. Measured: a current claude typed 1 to 2000 inside
+    10s, and codex declines 20000 outright ("I can't fit all 20,000
+    numbers"), so the deadline is what shrinks.
     """
     result = await any_harness.run(
         "Write the numbers 1 through 2000 separated by newlines, "
         + "typing them out yourself. Output nothing else.",
-        timeout=10,
+        timeout=4,
     )
 
     assert result.finish_reason == "cancelled"

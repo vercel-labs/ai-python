@@ -28,6 +28,7 @@ class Machine(fakes.FakeWorkspace):
         self.latest = latest
         self.running = running or []
         self.commands: list[list[str]] = []
+        self.files: dict[str, str] = {}
 
     async def exec(
         self, argv: Any, *, env: Any = None, timeout: float | None = None
@@ -52,6 +53,21 @@ class Machine(fakes.FakeWorkspace):
             ]
             return ExecResult(exit_code=0, stdout="\n".join(lines))
         raise AssertionError(argv)
+
+    async def home(self) -> str:
+        return "/home/u"
+
+    async def read_text(self, path: str) -> str:
+        if path not in self.files:
+            raise FileNotFoundError(path)
+        return self.files[path]
+
+    async def write_text(self, path: str, data: str) -> None:
+        self.files[path] = data
+
+    @property
+    def asked_npm(self) -> int:
+        return sum(1 for c in self.commands if c[:2] == ["npm", "view"])
 
     @property
     def installs(self) -> list[list[str]]:
@@ -99,3 +115,35 @@ async def test_no_registry_answer_keeps_what_is_there() -> None:
     machine = Machine(owner="provider", installed="1.9.0", latest=None)
     await _provision(machine)
     assert machine.installs == []
+
+
+async def test_a_recent_check_is_not_asked_again() -> None:
+    """Every reconnect asked npm for the latest release: measured ~0.6-1s of
+    each, and a listing reconnects to every running sandbox."""
+    machine = Machine(owner="provider", installed="2.0.0", latest="2.0.0")
+    await _provision(machine)
+    await _provision(machine)
+    assert machine.asked_npm == 1
+
+
+async def test_a_stale_check_is_asked_again(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    machine = Machine(owner="provider", installed="2.0.0", latest="2.0.0")
+    await _provision(machine)
+    monkeypatch.setattr(base, "CHECK_EVERY", 0.0)
+    await _provision(machine)
+    assert machine.asked_npm == 2
+
+
+async def test_a_skipped_upgrade_is_not_remembered_as_checked() -> None:
+    machine = Machine(
+        owner="provider",
+        installed="1.9.0",
+        latest="2.0.0",
+        running=["/usr/local/bin/claude --resume abc"],
+    )
+    await _provision(machine)
+    machine.running = []
+    await _provision(machine)
+    assert machine.installs, "upgraded once nothing was running"
