@@ -19,8 +19,8 @@ $ afk
   01a0  codex   audit the auth middleware               idle 3h
 
   remote
-  c2d1  claude  billing · migrate the billing tests…  running   $0.031 · $0.085/h   ← from a3f5 · amber-fox
-  9e07  claude  add rate limiting to the webhook      finished  $0.012 · $0.085/h   ← new, was running · ← from b81c · teal-owl
+  c2d1  claude  billing · migrate the billing tests…  running   $0.031 ($0.085/h)   ← from a3f5 · amber-fox
+  9e07  claude  add rate limiting to the webhook      finished  $0.012 ($0.085/h)   ← new, was running · ← from b81c · teal-owl
   4b2a  codex   audit the auth middleware             expired   $0.054              snapshot 1.1 GB, kept to Nov 18 · ← from 01a0 · red-elk
   /h: memory, every hour it runs; CPU adds while it computes
 
@@ -191,7 +191,7 @@ what the platform measured: active CPU (time actually computing; waiting on
 the model does not count), memory by the minute it ran, data it sent,
 and, once stopped, its snapshot's storage — at the region's rates from
 [Vercel's pricing](https://vercel.com/docs/vercel-sandbox/pricing). A
-running sandbox also shows what it costs per hour, `$0.031 · $0.085/h`:
+running sandbox also shows what it costs per hour, `$0.031 ($0.085/h)`:
 its memory, billed every hour it is up, busy or not. CPU adds while it
 computes; the platform reports CPU and data sent when it stops, and the
 total then includes them. `stop` and `rm` say what it cost. These are list prices: a

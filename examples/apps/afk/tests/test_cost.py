@@ -76,7 +76,7 @@ def test_a_running_session_counts_its_memory_so_far_and_says_more_comes() -> (
     assert c.pending and c.cpu == 0
     assert c.memory == pytest.approx(4 * 0.5 * 0.0212)
     assert c.per_hour == pytest.approx(4 * 0.0212)
-    assert cost.label(c) == "$0.042 · $0.085/h"
+    assert cost.label(c) == "$0.042 ($0.085/h)"
     assert cost.spent(c) == "$0.042 so far"
 
 

@@ -155,11 +155,11 @@ def money(value: float) -> str:
 
 
 def label(cost: Cost) -> str:
-    """The list's cost: "$0.012", or "$0.012 · $0.085/h" while running."""
+    """The list's cost: "$0.012", or "$0.012 ($0.085/h)" while running."""
     if cost.unpriced:
         return f"? ({cost.unpriced})"
     if cost.pending and cost.per_hour:
-        return f"{money(cost.total)} · {money(cost.per_hour)}/h"
+        return f"{money(cost.total)} ({money(cost.per_hour)}/h)"
     return money(cost.total)
 
 
