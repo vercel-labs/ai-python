@@ -45,6 +45,9 @@ KIND = "codex"
 CRASHED = "__crashed__"
 PACKAGE = "@openai/codex"
 INSTALL = f"npm install -g {PACKAGE}"
+LIST_PAGE_SIZE = 100
+LIST_PAGES = 50
+"""`sessions()` reads at most this many pages of a directory's threads."""
 VERIFIED_VERSION = "0.160.1"
 """The CLI the live suite last passed against. Older ones get a warning."""
 THREAD_ID = re.compile(r"[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}")
@@ -622,9 +625,25 @@ class CodexAdapter:
     async def list_sessions(self) -> list[_session.SessionInfo]:
         await self._ensure_running()
         assert self._workspace is not None
-        result = await self._rpc().call("thread/list", {})
-        threads = (result or {}).get("data") or []
+        # Asked for THIS directory, page by page: the store is the whole
+        # machine's, and one unfiltered page of it (measured: 3159 threads)
+        # missed conversations that happened here.
         here = self._workspace.path
+        threads: list[dict[str, Any]] = []
+        cursor: str | None = None
+        for _ in range(LIST_PAGES):
+            page = await self._rpc().call(
+                "thread/list",
+                {
+                    "cwd": here,
+                    "limit": LIST_PAGE_SIZE,
+                    **({"cursor": cursor} if cursor else {}),
+                },
+            )
+            threads += (page or {}).get("data") or []
+            cursor = (page or {}).get("nextCursor")
+            if not cursor:
+                break
         return [
             _session.SessionInfo(
                 kind=KIND,
@@ -1074,9 +1093,7 @@ def _completed_events(
         result = messages_.ToolResultPart(
             tool_call_id=item_id,
             tool_name=call.tool_name,
-            result=item.get("output")
-            or item.get("changes")
-            or item.get("result"),
+            result=_item_result(item),
             result_kind="error" if item.get("status") == "failed" else "json",
         )
         out.append(
@@ -1086,6 +1103,19 @@ def _completed_events(
             )
         )
     return out
+
+
+def _item_result(item: dict[str, Any]) -> Any:
+    """Return what a tool item produced, under whichever name codex uses.
+
+    A command's output is `aggregatedOutput` (codex 0.160; reading only
+    `output` made every command result None), a file change's `changes`, an
+    MCP call's `result`.
+    """
+    for key in ("aggregatedOutput", "output", "changes", "result"):
+        if item.get(key) is not None:
+            return item[key]
+    return None
 
 
 def _reasoning_text(item: dict[str, Any]) -> str:
@@ -1159,7 +1189,7 @@ def _item_to_messages(
         result = messages_.ToolResultPart(
             tool_call_id=item.get("id", ""),
             tool_name=call.tool_name,
-            result=item.get("output") or item.get("changes"),
+            result=_item_result(item),
             result_kind="error" if item.get("status") == "failed" else "json",
         )
         return [

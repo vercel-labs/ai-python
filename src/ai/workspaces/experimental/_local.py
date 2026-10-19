@@ -18,6 +18,12 @@ if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
 _TERM_GRACE = 3.0
+LINE_LIMIT = 256 * 1024 * 1024
+"""Longest line a spawned process may write. The harness protocols are
+line-delimited JSON and one line can be megabytes — a codex `thread/read`
+of a long thread, a `thread/list` page on a machine with thousands. With
+asyncio's default (64 KiB) such a line failed as "Separator is found, but
+chunk is longer than limit", reported as the CLI crashing."""
 
 
 class LocalProcess(_base.Process):
@@ -132,6 +138,8 @@ class Local(_base.Workspace):
                 stderr=asyncio.subprocess.PIPE,
                 # Own the whole tree, so teardown reaches grandchildren too.
                 start_new_session=True,
+                # One protocol line can be megabytes (see LINE_LIMIT).
+                limit=LINE_LIMIT,
             )
         except OSError as exc:
             # A program that never started is not a process to stream from.

@@ -105,6 +105,8 @@ def copy_tree(
         target = dest / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(local, target)
+        # The permission bits travel too: a script must still run.
+        shutil.copymode(local, target)
         count += 1
     return count
 

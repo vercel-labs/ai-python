@@ -59,6 +59,39 @@ async def test_copy_preserves_bytes(
     )
 
 
+async def test_copy_keeps_the_executable_bit_both_ways(
+    any_workspace: Workspace, tmp_path: Path
+) -> None:
+    """A script copied in runs there, and one made there runs here. Measured:
+    both came across as -rw-r--r--, so a pushed project's `./scripts/x.sh`
+    could not run in the sandbox, and a script the agent wrote came home
+    unrunnable."""
+    import stat
+
+    source = tmp_path / "src"
+    source.mkdir()
+    (source / "run.sh").write_text("#!/bin/sh\necho in\n")
+    (source / "run.sh").chmod(0o755)
+    (source / "plain.txt").write_text("text\n")
+
+    await copy(source, any_workspace / "proj")
+    ran = await any_workspace.exec(["./proj/run.sh"])
+    assert ran.stdout.strip() == "in", ran
+    await any_workspace.exec(
+        [
+            "sh",
+            "-c",
+            "printf '#!/bin/sh\\necho out\\n' > proj/made.sh && "
+            "chmod +x proj/made.sh",
+        ]
+    )
+    back = tmp_path / "back"
+    await copy(any_workspace / "proj", back)
+    for name in ("run.sh", "made.sh"):
+        assert (back / name).stat().st_mode & stat.S_IXUSR, name
+    assert not (back / "plain.txt").stat().st_mode & stat.S_IXUSR
+
+
 async def test_copy_skips_the_usual_noise(
     any_workspace: Workspace, tmp_path: Path
 ) -> None:

@@ -17,6 +17,7 @@ import json
 import os
 import secrets
 import shlex
+import stat
 import subprocess
 import tarfile
 import tempfile
@@ -1178,7 +1179,7 @@ class VercelSandbox(_base.Workspace):
         """
         root, patterns = source, tuple(ignore)
         fs = self._live().fs
-        pending: list[tuple[str, bytes]] = []
+        pending: list[tuple[str, bytes, int]] = []
         staged = 0
         count = 0
 
@@ -1187,15 +1188,20 @@ class VercelSandbox(_base.Workspace):
             if not pending:
                 return
             async with fs.batch() as batch:
-                for path, payload in pending:
-                    batch.write_bytes(path, payload)
+                for path, payload, mode in pending:
+                    batch.write_bytes(path, payload, mode=mode)
             pending, staged = [], 0
 
         for local, relative in _base.walk_uploadable(
             root, patterns, gitignore=gitignore
         ):
             payload = local.read_bytes()
-            pending.append((f"{self._workdir}/{dest}/{relative}", payload))
+            # The permission bits travel too: measured, without them every
+            # file landed -rw-r--r-- and a copied-in script could not run.
+            mode = stat.S_IMODE(local.stat().st_mode)
+            pending.append(
+                (f"{self._workdir}/{dest}/{relative}", payload, mode)
+            )
             staged += len(payload)
             count += 1
             # Bound each request so one large tree does not become one

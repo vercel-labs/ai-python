@@ -187,3 +187,59 @@ async def test_an_unsupported_decision_fails_only_its_own_turn() -> None:
         async for _ in a:
             pass
     await _close(adapter)
+
+
+def test_a_command_result_is_its_aggregated_output() -> None:
+    """codex 0.160 reports a command's output as `aggregatedOutput`; reading
+    `output` made every command result None, in the live turn and in
+    history alike (the agent itself saw the output)."""
+    item = {
+        "type": "commandExecution",
+        "id": "c1",
+        "command": "/bin/zsh -lc 'cat secret.txt'",
+        "aggregatedOutput": "the word is HERON\n",
+        "exitCode": 0,
+        "status": "completed",
+    }
+    live = [
+        e
+        for e in codex._completed_events(item, set(), [], {}, [])
+        if isinstance(e, events.ToolCallResult)
+    ]
+    assert live[0].results[0].result == "the word is HERON\n"
+    stored = codex._item_to_messages(item, replay=True)
+    result = stored[1].parts[0]
+    assert isinstance(result, m.ToolResultPart)
+    assert result.result == "the word is HERON\n"
+
+
+async def test_listing_asks_for_this_directory_and_reads_every_page() -> None:
+    """`thread/list` is paged, and it was called once with no filter: with
+    thousands of threads on the machine, the first page of everyone's
+    threads, filtered here, missed conversations in this directory."""
+    asked: list[dict[str, Any]] = []
+    pages = {
+        None: ({"id": "t1", "cwd": "/fake"}, "p2"),
+        "p2": ({"id": "t2", "cwd": "/fake"}, None),
+    }
+
+    def answer(message: dict[str, Any]) -> Any:
+        if message.get("method") != "thread/list":
+            return {} if "id" in message and "method" in message else None
+        params = message["params"]
+        asked.append(params)
+        thread, cursor = pages[params.get("cursor")]
+        return {"data": [thread], "nextCursor": cursor}
+
+    process = fakes.FakeProcess(answer)
+    adapter = codex.CodexAdapter()
+    peer = jsonrpc.JsonRpcPeer(process, harness="codex")
+    adapter._workspace = fakes.FakeWorkspace()
+    adapter._process = process
+    adapter._peer = peer
+    peer.start(adapter._on_notify, adapter._on_request)
+    infos = await adapter.list_sessions()
+    assert [i.session_id for i in infos] == ["t1", "t2"]
+    assert all(p["cwd"] == "/fake" for p in asked)
+    assert [p.get("cursor") for p in asked] == [None, "p2"]
+    await _close(adapter)

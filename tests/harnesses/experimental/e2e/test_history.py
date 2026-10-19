@@ -237,3 +237,29 @@ async def test_a_loaded_conversation_streams_like_a_new_one(
             "user",
             "assistant",
         ]
+
+
+async def test_a_tool_result_carries_what_the_tool_returned(
+    any_harness: Harness,
+) -> None:
+    """Measured on codex 0.160: every command result was None, live and in
+    history, because its output moved to `aggregatedOutput`. The agent saw
+    the output; anything reading the transcript (a UI, a handoff) did not."""
+    from ai.types.messages import ToolResultPart
+
+    await any_harness.workspace.write_text("note.txt", "the word is HERON\n")
+    session = any_harness.session()
+    result = await session.run(
+        "Use a tool to read note.txt, then reply with the word it contains."
+    )
+
+    def outputs(messages: list[Message]) -> str:
+        return " ".join(
+            str(p.result)
+            for m in messages
+            for p in m.parts
+            if isinstance(p, ToolResultPart)
+        )
+
+    assert "HERON" in outputs(result.messages)
+    assert "HERON" in outputs(await any_harness.history(session.session_id))
