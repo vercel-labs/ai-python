@@ -19,7 +19,12 @@ from ._base import (
 from ._gateway import Gateway, vercel_ai_gateway
 from ._local import Local
 from ._pty import Pty, PtyInfo
-from ._sandbox import VercelSandbox
+from ._sandbox import (
+    SandboxInfo,
+    SandboxSession,
+    SandboxSnapshot,
+    VercelSandbox,
+)
 
 __all__ = [
     "ExecResult",
@@ -28,6 +33,9 @@ __all__ = [
     "Process",
     "Pty",
     "PtyInfo",
+    "SandboxInfo",
+    "SandboxSession",
+    "SandboxSnapshot",
     "VercelSandbox",
     "Workspace",
     "WorkspaceCoords",

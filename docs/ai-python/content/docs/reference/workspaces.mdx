@@ -73,7 +73,7 @@ support, and raises `ai.errors.InstallationError` when it is missing.
 | `execution_time_limit` | VM lifetime in seconds. | `None`: the platform's default |
 | `ports` | Ports to expose when the VM is created. | `None` |
 | `name` | Reconnect to an existing sandbox instead of creating one. | `None`: create one |
-| `keep` | Whether `close()` leaves the VM running. | `None`: `False` for a sandbox you created, `True` for one you reconnected to |
+| `keep` | Whether `close()` leaves the VM running. Not kept, `close()` destroys the sandbox and its snapshots. | `None`: `False` for a sandbox you created, `True` for one you reconnected to |
 | `gateway` | Upstream model provider LLM Gateway, as a `Gateway`. Locks outbound traffic to an allowlist and injects the credential at the firewall; see [Workspaces](/docs/basics/workspaces#reach-a-model-through-ai-gateway). | `None` |
 | `allow_hosts` | Extra hosts the VM may reach when `gateway` is set. | `()` |
 
@@ -87,6 +87,21 @@ the platform reports for the VM (`"vercel/sandbox/node@sha256:..."` for
 or missing, `WorkspaceError` when it cannot be reached or was created without
 credential injection for the requested gateway, and `NotAuthenticatedError`
 when the Vercel credentials are rejected.
+
+
+`VercelSandbox` methods beyond `Workspace`:
+
+- `await stop()`: Stop the VM now and keep its files as a snapshot. Closes
+  this client. `VercelSandbox(name=...)` resumes it later.
+- `await info()`: Return a `SandboxInfo` without resuming the sandbox:
+  `name`, `status`, `region`, `vcpus`, `memory_mb`, `created_at`,
+  `snapshot` (a `SandboxSnapshot`: `id`, `size_bytes`, `created_at`,
+  `expires_at`), `sessions` (a list of `SandboxSession`: `id`, `status`,
+  `started_at`, `stopped_at`, `duration_ms`, `active_cpu_ms`,
+  `egress_bytes`, `ingress_bytes`, `vcpus`, `memory_mb`, `region`), and
+  `resumable`. Usage is reported once a session stops. Raises
+  `WorkspaceGoneError` when the sandbox no longer exists.
+- Opening by `name` a sandbox that stopped resumes it from its snapshot.
 
 ## Workspace
 

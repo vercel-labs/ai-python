@@ -88,21 +88,18 @@ async def test_resume_handle_reattaches_a_live_sandbox(
         pass
 
 
-async def test_reconnect_to_a_stopped_sandbox_is_refused_with_a_reason() -> (
-    None
-):
+async def test_reconnect_to_a_closed_sandbox_is_refused_with_a_reason() -> None:
+    """Closed and not kept means destroyed: gone, and the refusal says what
+    to do instead. (A STOPPED sandbox resumes: see test_sandbox_lifecycle.)"""
+    from ai.workspaces.experimental.errors import WorkspaceGoneError
+
     creds = _creds_or_skip()
-    async with VercelSandbox(
-        **creds, execution_time_limit=300
-    ) as ws:  # keep defaults False → stopped on close
+    async with VercelSandbox(**creds, execution_time_limit=300) as ws:
         name = ws.name
-    with pytest.raises(Exception) as caught:
+    with pytest.raises(WorkspaceGoneError) as caught:
         async with VercelSandbox(name=name):
             pass
-    assert (
-        "stopped" in str(caught.value).lower()
-        or "not running" in str(caught.value).lower()
-    )
+    assert "exists" in str(caught.value) and "resume" in str(caught.value)
 
 
 async def test_two_harnesses_in_one_vm_each_list_their_own_sessions(

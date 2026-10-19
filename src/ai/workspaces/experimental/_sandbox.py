@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+import datetime
 import inspect
 import io
 import json
@@ -25,6 +26,8 @@ import time
 from importlib.resources import files
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+
+from pydantic import BaseModel
 
 from ... import errors as ai_errors
 from ...providers import _optional
@@ -126,8 +129,19 @@ BATCH_FILES = 400
 
 
 def _gone(exc: BaseException) -> bool:
-    """Whether this error means the sandbox itself is no longer there."""
-    return "sandbox_stopped" in str(exc) or "no longer available" in str(exc)
+    """Whether this error means the sandbox itself is no longer there.
+
+    Stopped, it answers 410 (`sandbox_stopped`); destroyed — which is what
+    `close()` does to a sandbox it does not keep — 404 (`not_found`).
+    """
+    text = str(exc)
+    return (
+        "sandbox_stopped" in text
+        or "no longer available" in text
+        or getattr(exc, "status_code", None) == 404
+        or getattr(exc, "code", None) == "not_found"
+        or "Sandbox not found" in text
+    )
 
 
 class SandboxProcess(_base.Process):
@@ -454,6 +468,75 @@ class SandboxProcess(_base.Process):
             ) from exc
 
 
+RESUMABLE = ("stopped", "stopping", "snapshotting")
+"""Statuses a sandbox resumes from: it stopped, and its files were kept."""
+
+
+class SandboxSnapshot(BaseModel):
+    """The snapshot a stopped sandbox resumes from."""
+
+    id: str
+    size_bytes: int = 0
+    created_at: int | None = None
+    """Epoch milliseconds."""
+    expires_at: int | None = None
+    """Epoch milliseconds; the platform deletes it then."""
+
+
+class SandboxSession(BaseModel):
+    """One run of a sandbox's VM, and what it used: what it is billed on.
+
+    The platform reports usage when a session STOPS: a running one has
+    `started_at` and nothing else yet.
+    """
+
+    id: str
+    status: str | None = None
+    region: str | None = None
+    vcpus: int | None = None
+    memory_mb: int | None = None
+    started_at: int | None = None
+    """Epoch milliseconds."""
+    stopped_at: int | None = None
+    duration_ms: int | None = None
+    active_cpu_ms: int | None = None
+    """CPU time actually used; waiting on I/O (a model call) does not count."""
+    egress_bytes: int | None = None
+    """Data the sandbox sent. What sandbox network is billed on."""
+    ingress_bytes: int | None = None
+
+
+class SandboxInfo(BaseModel):
+    """A sandbox as the platform describes it, asked without resuming it."""
+
+    name: str
+    status: str
+    region: str | None = None
+    vcpus: int | None = None
+    memory_mb: int | None = None
+    created_at: int | None = None
+    execution_time_limit: float | None = None
+    """Seconds each session may run before the platform stops it."""
+    snapshot: SandboxSnapshot | None = None
+    sessions: list[SandboxSession] = []
+
+    @property
+    def resumable(self) -> bool:
+        return self.status in RESUMABLE and self.snapshot is not None
+
+    @property
+    def expired(self) -> bool:
+        """Whether it stopped because its last session ran out of time."""
+        if self.status not in RESUMABLE or not self.sessions:
+            return False
+        last = max(self.sessions, key=lambda s: s.started_at or 0)
+        return (
+            self.execution_time_limit is not None
+            and last.duration_ms is not None
+            and last.duration_ms >= self.execution_time_limit * 1000 - 60_000
+        )
+
+
 class VercelSandbox(_base.Workspace):
     kind = "sandbox"
     # Ephemeral and ours: installing a harness here modifies nothing the
@@ -666,20 +749,38 @@ class VercelSandbox(_base.Workspace):
                 ):
                     # The platform's own answer, not a failure to reach it.
                     raise errors_.WorkspaceGoneError(
-                        f"no sandbox named {self._name!r} exists: {exc}"
+                        f"no sandbox named {self._name!r} exists ({exc}). "
+                        "Open a new workspace and resume the conversation "
+                        "there."
                     ) from exc
                 raise errors_.WorkspaceError(
                     f"no sandbox named {self._name!r} is reachable: {exc}"
                 ) from exc
-            status = getattr(self._sandbox, "status", "") or ""
-            status = str(getattr(status, "value", status))
-            if status and status not in ("running", "pending"):
+            status = _status(self._sandbox)
+            if status in RESUMABLE:
+                # Stopped — by stop(), or by its time limit — but its files
+                # were kept as a snapshot: a new VM resumes from it, files
+                # intact, processes not (measured: ~2s).
+                if not getattr(self._sandbox, "current_snapshot_id", None):
+                    self._sandbox = None
+                    raise errors_.WorkspaceGoneError(
+                        f"sandbox {self._name!r} is {status} and kept no "
+                        "snapshot to resume from; its files are gone"
+                    )
+                try:
+                    await self._sandbox.session()
+                except Exception as exc:
+                    self._sandbox = None
+                    raise errors_.WorkspaceError(
+                        f"sandbox {self._name!r} is {status} and could not "
+                        f"be resumed from its snapshot: {exc}"
+                    ) from exc
+            elif status and status not in ("running", "pending"):
                 self._sandbox = None
                 raise errors_.WorkspaceGoneError(
-                    f"sandbox {self._name!r} is {status}, not running; its "
-                    "files and "
-                    + "processes are gone. Open a new workspace and resume the "
-                    "session there."
+                    f"sandbox {self._name!r} is {status}; it cannot be "
+                    "resumed. Open a new workspace and resume the "
+                    "conversation there."
                 )
             # Egress was decided when the VM was made; read back what it is.
             self._brokered_hosts = await self._read_egress_record()
@@ -766,19 +867,133 @@ class VercelSandbox(_base.Workspace):
             self._forget_vm()
             await self._close_client()
             return
-        # Stopping the VM ends every process in it at once, so there is no
-        # reason to climb the per-process ladder here: just let go of our
-        # conduits and readers, then stop.
+        # Not kept: DESTROYED, its snapshots with it. Stopping is not
+        # ending: a sandbox is persistent, so a stopped one stays, with a
+        # snapshot kept 30 days and billed as storage (measured: 1,324
+        # snapshots, 1,309 GB, left by closed sandboxes). It ends every
+        # process at once, so there is no per-process ladder to climb.
         await self._release_ptys()
         for child in list(self._children):
             with contextlib.suppress(Exception):
                 await child.detach()
         self._children.clear()
         with contextlib.suppress(Exception):
-            async with asyncio.timeout(60):
-                await self._sandbox.stop()
+            async with asyncio.timeout(120):
+                await self._sandbox.destroy(delete_orphan_snapshots=True)
         self._forget_vm()
         await self._close_client()
+
+    async def stop(self) -> None:
+        """Stop the VM now and keep its files, to resume later.
+
+        The platform snapshots the sandbox as it stops; `VercelSandbox(
+        name=...)` resumes it from that snapshot, files intact. Every
+        process in it ends. The snapshot is kept (and billed as storage)
+        until it expires — 30 days by default — or the sandbox is
+        destroyed. This client is closed.
+        """
+        sandbox = self._live()
+        await self._release_ptys()
+        for child in list(self._children):
+            with contextlib.suppress(Exception):
+                await child.detach()
+        self._children.clear()
+        try:
+            async with asyncio.timeout(120):
+                await sandbox.stop()
+        finally:
+            self._forget_vm()
+            await self._close_client()
+
+    async def info(self) -> SandboxInfo:
+        """Describe the sandbox WITHOUT resuming it, open or not.
+
+        Its status, size, region, the snapshot it would resume from, and
+        what each of its sessions used — the numbers it is billed on. A
+        listing can ask this of a stopped sandbox and leave it stopped.
+        Raises WorkspaceGoneError when the sandbox no longer exists.
+        """
+        name = self.name
+        if name is None:
+            raise errors_.WorkspaceError("this sandbox has no name yet")
+        api = self._api()
+        try:
+            sandbox = await api.get_sandbox(name=name)
+        except Exception as exc:
+            if _looks_like_auth_failure(exc):
+                raise errors_.NotAuthenticatedError(
+                    "vercel-sandbox", str(exc)[:200], _auth_hint()
+                ) from exc
+            if (
+                getattr(exc, "status_code", None) == 404
+                or getattr(exc, "code", None) == "not_found"
+            ):
+                raise errors_.WorkspaceGoneError(
+                    f"no sandbox named {name!r} exists: {exc}"
+                ) from exc
+            raise errors_.WorkspaceError(
+                f"no sandbox named {name!r} is reachable: {exc}"
+            ) from exc
+        snapshot = None
+        snapshot_id = getattr(sandbox, "current_snapshot_id", None)
+        if snapshot_id:
+            with contextlib.suppress(Exception):
+                found = await api.get_snapshot(snapshot_id=snapshot_id)
+                snapshot = SandboxSnapshot(
+                    id=snapshot_id,
+                    size_bytes=int(getattr(found, "size_bytes", 0) or 0),
+                    created_at=getattr(found, "created_at", None),
+                    expires_at=getattr(found, "expires_at", None),
+                )
+        limit = getattr(sandbox, "execution_time_limit", None)
+        return SandboxInfo(
+            name=name,
+            status=_status(sandbox),
+            region=getattr(sandbox, "region", None),
+            vcpus=getattr(sandbox, "vcpus", None),
+            memory_mb=getattr(sandbox, "memory", None),
+            created_at=getattr(sandbox, "created_at", None),
+            execution_time_limit=(
+                limit.total_seconds()
+                if isinstance(limit, datetime.timedelta)
+                else limit
+            ),
+            snapshot=snapshot,
+            sessions=await _sessions(sandbox, name),
+        )
+
+    async def destroy(self) -> None:
+        """Delete the sandbox and its snapshots, open or not.
+
+        Never resumes it first. What a running one was doing ends; nothing
+        is kept.
+        """
+        name = self.name
+        if name is None:
+            raise errors_.WorkspaceError("this sandbox has no name yet")
+        sandbox = self._sandbox
+        if sandbox is None:
+            try:
+                sandbox = await self._api().get_sandbox(name=name)
+            except Exception as exc:
+                if (
+                    getattr(exc, "status_code", None) == 404
+                    or getattr(exc, "code", None) == "not_found"
+                ):
+                    raise errors_.WorkspaceGoneError(
+                        f"no sandbox named {name!r} exists: {exc}"
+                    ) from exc
+                raise errors_.WorkspaceError(
+                    f"no sandbox named {name!r} is reachable: {exc}"
+                ) from exc
+        await self._release_ptys()
+        self._children.clear()
+        try:
+            async with asyncio.timeout(120):
+                await sandbox.destroy(delete_orphan_snapshots=True)
+        finally:
+            self._forget_vm()
+            await self._close_client()
 
     @property
     def image(self) -> str | None:
@@ -1463,3 +1678,59 @@ def _auth_hint() -> str:
         "VERCEL_TOKEN + VERCEL_TEAM_ID + VERCEL_PROJECT_ID, with access to the "
         "team."
     )
+
+
+def _status(sandbox: Any) -> str:
+    status = getattr(sandbox, "status", "") or ""
+    return str(getattr(status, "value", status))
+
+
+async def _sessions(sandbox: Any, name: str) -> list[SandboxSession]:
+    """Every session of a sandbox, with the usage the platform reports.
+
+    vercel-sandbox's models drop the usage fields (`activeCpuDurationMs`,
+    `networkTransfer`, `duration`) that the API returns, so this one call
+    reads the API's own answer through the same client. If that ever stops
+    working, the sessions come back without usage rather than wrong.
+    """
+    try:
+        client = sandbox._service.api_client
+        credentials = await client._credentials_factory()
+        sessions: list[SandboxSession] = []
+        cursor: str | None = None
+        for _ in range(20):
+            params = {
+                "project": sandbox.project_id or credentials.project_id,
+                "name": name,
+                "limit": 50,  # the API's most
+                **({"cursor": cursor} if cursor else {}),
+            }
+            data = await client._request_json(
+                "GET",
+                "v2/sandboxes/sessions",
+                credentials=credentials,
+                params=params,
+            )
+            for raw in data.get("sessions") or []:
+                transfer = raw.get("networkTransfer") or {}
+                sessions.append(
+                    SandboxSession(
+                        id=str(raw.get("id")),
+                        status=raw.get("status"),
+                        region=raw.get("region"),
+                        vcpus=raw.get("vcpus"),
+                        memory_mb=raw.get("memory"),
+                        started_at=raw.get("startedAt"),
+                        stopped_at=raw.get("stoppedAt"),
+                        duration_ms=raw.get("duration"),
+                        active_cpu_ms=raw.get("activeCpuDurationMs"),
+                        egress_bytes=transfer.get("egress"),
+                        ingress_bytes=transfer.get("ingress"),
+                    )
+                )
+            cursor = (data.get("pagination") or {}).get("next")
+            if not cursor:
+                break
+        return sessions
+    except Exception:
+        return []

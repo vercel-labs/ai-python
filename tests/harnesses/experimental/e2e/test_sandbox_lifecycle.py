@@ -8,6 +8,7 @@ again may be a different VM: nothing learned about the first may leak.
 
 from __future__ import annotations
 
+import contextlib
 import uuid
 
 import pytest
@@ -34,12 +35,50 @@ async def test_a_sandbox_that_does_not_exist_is_gone(creds: None) -> None:
         await VercelSandbox(name=f"ai-no-such-{uuid.uuid4().hex[:10]}").open()
 
 
-async def test_a_stopped_sandbox_is_gone(creds: None) -> None:
+async def test_a_closed_sandbox_is_gone_and_leaves_nothing_billed(
+    creds: None,
+) -> None:
+    """Closing a sandbox you did not keep destroys it, snapshot and all.
+    It used to STOP it: a persistent sandbox then stayed, with a snapshot
+    kept 30 days and billed (measured: 1,324 left by closed sandboxes)."""
+    from vercel import sandbox as vercel_sandbox
+
     async with VercelSandbox(keep=False) as ws:
         name = ws.name
+        await ws.write_text("note.txt", "x")
     assert name
     with pytest.raises(WorkspaceGoneError):
         await VercelSandbox(name=name).open()
+    left = [
+        s
+        async for s in vercel_sandbox.query_snapshots(name=name)
+        if getattr(s, "status", "") != "deleted"
+    ]
+    assert left == [], "a destroyed sandbox keeps no snapshot"
+
+
+async def test_a_stopped_sandbox_resumes_with_its_files(creds: None) -> None:
+    """stop() keeps the files; asking about it leaves it stopped; opening it
+    again resumes it from its snapshot."""
+    ws = VercelSandbox(keep=True)
+    await ws.open()
+    name = str(ws.name)
+    try:
+        await ws.write_text("note.txt", "KEPT")
+        await ws.stop()
+        info = await VercelSandbox(name=name).info()
+        assert info.status == "stopped" and info.resumable, info
+        assert info.snapshot is not None and info.snapshot.size_bytes > 0
+        stopped = [s for s in info.sessions if s.status == "stopped"]
+        assert stopped and stopped[0].duration_ms, info.sessions
+        assert (await VercelSandbox(name=name).info()).status == "stopped"
+        async with VercelSandbox(name=name, keep=False) as again:
+            assert await again.read_text("note.txt") == "KEPT"
+    finally:
+        # keep=False above destroyed it; make sure, if a step failed.
+        with contextlib.suppress(Exception):
+            async with VercelSandbox(name=name, keep=False):
+                pass
 
 
 async def test_a_sandbox_that_cannot_be_reached_is_not_gone() -> None:

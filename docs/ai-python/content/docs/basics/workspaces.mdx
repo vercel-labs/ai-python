@@ -110,7 +110,7 @@ harness factory; it wins over the workspace's.
 |---|---|---|
 | `execution_time_limit` | How long the VM lives, in seconds. The platform default is short, so set it for long work. | `None`: the platform's default |
 | `image` | The image a new VM boots from: a [Vercel Container Registry](https://vercel.com/docs/sandbox/concepts/images) reference such as `"vercel/sandbox/python:3.14"` or your own `"my-repo:v1"`. Not with `name` or `snapshot`. Harnesses need `python3` in the image, and `npm` to install their CLI; the default image has both. | `None`: the platform's default image |
-| `keep` | Whether `close()` leaves the VM running. | `None`: `False` for a sandbox you created, `True` for one you reconnected to |
+| `keep` | Whether `close()` leaves the VM running. Not kept, `close()` destroys the sandbox and its snapshots. | `None`: `False` for a sandbox you created, `True` for one you reconnected to |
 | `name` | Reconnect to an existing sandbox instead of creating one. `sandbox.name` is set once the VM exists. | `None`: create one |
 | `ports` | Ports to expose. Get a URL with `await sandbox.reachable_url(port)`. | `None` |
 | `snapshot` | Start from a sandbox snapshot. | `None` |
@@ -137,6 +137,32 @@ async with workspaces.VercelSandbox(name=name, gateway=gateway) as sandbox:
   waits at its next tool call until a client reconnects.
 - Outbound rules are fixed when the VM is created. Reconnecting with
   `gateway=` to a sandbox made without one raises `WorkspaceError`.
+
+### Stop, resume, and what it costs
+
+A sandbox keeps its files when its VM stops:
+
+```python
+await sandbox.stop()  # the VM stops; its files are kept as a snapshot
+
+info = await workspaces.VercelSandbox(name=name).info()
+print(info.status, info.snapshot.size_bytes)  # "stopped", without resuming
+
+async with workspaces.VercelSandbox(name=name) as sandbox:
+    ...  # resumed from the snapshot: files back, processes not
+```
+
+- A sandbox stops on `stop()` and when its `execution_time_limit` runs out.
+  Either way it is kept with a snapshot, and reconnecting resumes it. A
+  snapshot is billed as storage until it expires (30 days by default).
+- `close()` on a sandbox you do not keep destroys it, snapshots included,
+  so nothing is left to pay for.
+- `info()` describes a sandbox without resuming it: `status`, `region`,
+  `vcpus`, `memory_mb`, its `snapshot`, and its `sessions`. Each stopped
+  session reports what it is billed on: `duration_ms`, `active_cpu_ms`,
+  `egress_bytes`. A running session reports these when it stops.
+- `WorkspaceGoneError` means the sandbox no longer exists, or stopped with
+  no snapshot to resume from.
 
 ## Copy files
 
