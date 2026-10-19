@@ -11,10 +11,11 @@ the only reason the same adapter drives a CLI here or inside a microVM.
 
 from __future__ import annotations
 
+import posixpath
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import TYPE_CHECKING, Any, Protocol
 
-from .. import _approval, _capabilities
+from .. import _approval, _capabilities, _cli_processes, _input
 
 if TYPE_CHECKING:
     from ....types import events, messages
@@ -25,11 +26,48 @@ ApprovalHook = Callable[
 ]
 
 
+async def provision(
+    workspace: _base.Workspace, executable: str, package: str
+) -> _base.ExecResult:
+    """Probe the CLI; on a provider-owned workspace, make it the latest.
+
+    Returns the final `<executable> --version` result. On your own machine
+    this only probes: the SDK never installs software there. In a sandbox it
+    installs the CLI when it is missing, and upgrades it when npm has a
+    newer release — unless a copy of the CLI is running there (an agent
+    left running for a later reconnect), which an upgrade must not pull the
+    files out from under.
+    """
+    probe = await workspace.exec([executable, "--version"], timeout=60)
+    if workspace.owner != "provider":
+        return probe
+    if probe.exit_code == 0:
+        latest = await workspace.exec(
+            ["npm", "view", package, "version"], timeout=120
+        )
+        newest = latest.stdout.strip() if latest.exit_code == 0 else ""
+        if not newest or newest in probe.stdout.split():
+            return probe
+        for process in (await _cli_processes.processes(workspace)).values():
+            if any(
+                posixpath.basename(arg) == executable or package in arg
+                for arg in process.argv[:2]
+            ):
+                return probe
+    await workspace.exec(
+        ["npm", "install", "-g", f"{package}@latest"], timeout=600
+    )
+    return await workspace.exec([executable, "--version"], timeout=60)
+
+
 class Adapter(Protocol):
     """One harness, driven natively."""
 
     kind: str
     capabilities: _capabilities.Capabilities
+    verified_version: str | None
+    """The CLI version the live suite last passed against; an older CLI
+    gets a warning when the harness opens."""
 
     @property
     def version(self) -> str | None:
@@ -87,9 +125,13 @@ class Adapter(Protocol):
     async def close_session(self, session_id: str) -> None: ...
 
     def turn(
-        self, session_id: str, prompt: str
+        self, session_id: str, prompt: list[_input.Part]
     ) -> AsyncIterator[events.AgentEvent]:
-        """Drive one turn, yielding AI SDK events and ending with StreamEnd."""
+        """Drive one turn, yielding AI SDK events and ending with StreamEnd.
+
+        `prompt` holds text and the files the harness's capabilities admit;
+        the session has already checked them (`_input.check`).
+        """
         ...
 
     async def prepare_tui(self) -> None:
@@ -149,6 +191,8 @@ class Adapter(Protocol):
     approve: ApprovalHook | None
     approval_timeout: float
     on_approval_error: Any
+    """Set by the harness: `on_approval_error(session_id, detail)` records a
+    hook that raised or timed out, for that session's turn to report."""
 
     live_history: Any
     """Set by the harness: the live transcript of a session, for the approval

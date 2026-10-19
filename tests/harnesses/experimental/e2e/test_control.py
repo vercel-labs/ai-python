@@ -14,9 +14,9 @@ from typing import Any
 import pytest
 
 from ai.harnesses.experimental import Allow, Harness
-from ai.types.events import TextDelta, ToolStart
+from ai.types.events import StreamEnd, TextDelta, ToolStart
 from ai.workspaces.experimental import Workspace
-from tests.harnesses.experimental.conftest import requires
+from tests.harnesses.experimental.conftest import exact, requires
 
 
 async def allow_everything(ctx: Any) -> Allow:
@@ -168,3 +168,84 @@ async def test_external_cancellation_still_propagates(
                 "Write the numbers 1 through 2000 separated by newlines, "
                 + "typing them out yourself. Output nothing else."
             )
+
+
+COUNT = (
+    "Write the numbers 1 through 2000 separated by newlines, typing them "
+    + "out yourself. Output nothing else."
+)
+
+
+async def test_stop_from_another_task_settles_the_turn(
+    any_harness: Harness,
+) -> None:
+    """A Stop button: the task reading the turn is not the one stopping it."""
+    requires(any_harness, "stop")
+    session = any_harness.session()
+    turn = session.stream(COUNT)
+    said = asyncio.Event()
+
+    async def read() -> None:
+        async for event in turn:
+            if isinstance(event, TextDelta):
+                said.set()
+
+    reader = asyncio.create_task(read())
+    await asyncio.wait_for(said.wait(), 120)
+    await session.stop()
+    assert turn.settled, "stop() returns once the turn has settled"
+    assert turn.result.cancelled
+    await asyncio.wait_for(reader, 30)
+    exact((await session.run("Reply with exactly: OK")).text, "OK")
+
+
+async def test_walking_away_from_a_turn_does_not_leak_into_the_next(
+    any_harness: Harness,
+) -> None:
+    """`break` ends the agent's turn too; the next answer is the next one."""
+    session = any_harness.session()
+    async for event in session.stream(COUNT):
+        if isinstance(event, TextDelta) and event.chunk.strip():
+            break
+    result = await session.run("Reply with exactly: OK")
+    exact(result.text, "OK")
+    assert not result.cancelled
+
+
+async def test_a_late_steer_is_refused_and_turns_stay_in_step(
+    any_harness: Harness,
+) -> None:
+    """A steer once the agent has finished is not guidance but a new turn
+    nobody reads; measured on claude, every later answer was one behind."""
+    requires(any_harness, "steer")
+    session = any_harness.session()
+    turn = session.stream("Reply with exactly: ONE")
+    async for event in turn:
+        if isinstance(event, StreamEnd):
+            with pytest.raises(RuntimeError, match="no active turn"):
+                await session.steer("Reply with exactly: LATE")
+    exact(turn.result.text, "ONE")
+    exact((await session.run("Reply with exactly: TWO")).text, "TWO")
+    exact((await session.run("Reply with exactly: THREE")).text, "THREE")
+
+
+async def test_a_steered_turn_leaves_later_turns_in_step(
+    any_make_harness: Callable[..., Any],
+) -> None:
+    async with any_make_harness(
+        approve=allow_everything, writable=True
+    ) as any_harness:
+        requires(any_harness, "steer")
+        session = any_harness.session()
+        turn = session.stream(
+            "Create a.txt, b.txt and c.txt one at a time, each containing its "
+            + "own name. Then reply DONE."
+        )
+        steered = False
+        async for event in turn:
+            if isinstance(event, ToolStart) and not steered:
+                await session.steer("Also create zebra.txt containing ZEBRA.")
+                steered = True
+        assert steered
+        exact((await session.run("Reply with exactly: ALPHA")).text, "ALPHA")
+        exact((await session.run("Reply with exactly: BETA")).text, "BETA")

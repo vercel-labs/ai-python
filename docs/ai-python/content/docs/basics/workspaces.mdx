@@ -50,7 +50,9 @@ async with workspaces.VercelSandbox(gateway=gateway) as sandbox:
     await workspaces.copy(sandbox / "project", "./out")
 ```
 
-- The SDK installs the CLI into the sandbox, which is yours to provision.
+- The SDK installs the latest release of the CLI into the sandbox when a
+  harness opens, and upgrades an older one, unless a copy of it is running
+  there. See [Harnesses](/docs/basics/harnesses#harnesses).
 - The VM is the isolation boundary, so Codex runs there with full access. See
   [Codex](/docs/basics/harnesses#codex).
 - A harness opens its workspace but never closes it. Open the sandbox with

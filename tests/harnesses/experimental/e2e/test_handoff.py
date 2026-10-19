@@ -15,7 +15,13 @@ import pytest
 
 from ai.harnesses.experimental import Harness
 from ai.types.events import ToolEnd
-from ai.types.messages import Message, ReasoningPart, TextPart, ToolCallPart
+from ai.types.messages import (
+    Message,
+    ReasoningPart,
+    TextPart,
+    ToolCallPart,
+    ToolResultPart,
+)
 from ai.workspaces.experimental import Local, Workspace
 from tests.harnesses.experimental.conftest import SPECS, exact
 
@@ -27,17 +33,10 @@ OTHER = {"claude": "codex", "codex": "claude"}
 async def _source_history(
     kind: str, project: Path, prompt: str
 ) -> list[Message]:
-    """A real conversation on THIS machine, read back as messages.
-
-    Codex may write here: in its default read-only mode it declines a write
-    without attempting one, and the history would carry no action at all.
-    """
-    options: dict[str, Any] = (
-        {"sandbox": "workspace-write"} if kind == "codex" else {}
-    )
+    """A real conversation on THIS machine, read back as messages."""
     async with (
         Local(project) as ws,
-        SPECS[kind](workspace=ws, **options) as harness,
+        SPECS[kind](workspace=ws) as harness,
     ):
         session = harness.session()
         await session.run(prompt)
@@ -225,6 +224,49 @@ async def test_reasoning_travels_where_the_destination_allows_it(
         ), "claude must not have received the reasoning"
         assert warned, "omitting context silently is not allowed"
         assert "1 reasoning part" in str(warned[0].message)
+
+
+async def test_a_tool_turn_result_hands_off_as_is(
+    harness_kind: str, project: Path
+) -> None:
+    """`history=result.messages` from a turn that used a tool, into the other
+    harness: the transcript reads call, then result, so it is accepted."""
+    async with (
+        Local(project) as ws,
+        SPECS[harness_kind](workspace=ws) as source,
+    ):
+        session = source.session()
+        result = await session.run(
+            "Use a tool to write the word OTTER into animal.txt, then reply "
+            + "with exactly: DONE"
+        )
+        stored = await source.history(session.session_id)
+    # Live and stored tell the turn's tool use in the same order: each call,
+    # then its result.
+    assert _tool_order(result.messages), "the prompt is meant to use a tool"
+    assert _tool_order(result.messages) == _tool_order(stored)
+
+    other = OTHER[harness_kind]
+    async with (
+        Local(project) as ws,
+        SPECS[other](workspace=ws) as destination,
+    ):
+        answer = await destination.run(
+            "Which word did you write into animal.txt? Reply with the word "
+            + "only.",
+            history=result.messages,
+        )
+    exact(answer.text, "OTTER")
+
+
+def _tool_order(messages: list[Message]) -> list[tuple[str, str]]:
+    """Every tool call and result, in transcript order, by call id."""
+    return [
+        (p.kind, p.tool_call_id)
+        for m in messages
+        for p in m.parts
+        if isinstance(p, ToolCallPart | ToolResultPart)
+    ]
 
 
 def _text(m: Message) -> str:

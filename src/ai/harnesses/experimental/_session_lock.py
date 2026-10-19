@@ -2,26 +2,36 @@
 
 Codex refuses a second writer on a live thread itself. Claude does not, so
 two clients can silently write one transcript. This lock gives every
-harness codex's behaviour, using nothing but the workspace's own primitives
-— a harness acquires it for the conversations it opens, and a returning
-client that finds it held gets `SessionBusyError` instead of a corrupted
-transcript.
+harness codex's behaviour, using nothing but the workspace — a harness
+acquires it for the conversations it opens, and a returning client that
+finds it held gets `SessionBusyError` instead of a corrupted transcript.
 
 Layout, per harness kind, under the workspace machine's HOME:
 
     ~/.ai-python/locks/<kind>/<session_id>/holder.json
+    ~/.ai-python/locks/<kind>/.mutex
 
-A lock is a DIRECTORY because `mkdir` is atomic on every POSIX filesystem:
-two clients racing for the same conversation cannot both succeed. The
-holder file records the pid that owns it, so a lock whose process is gone
-is recognised as stale and reclaimed rather than blocking forever. A lock
-recorded before its process existed (the pid is filled in after launch) is
-trusted only briefly: past `STALE_AFTER` it is a launch that never finished.
+Every operation is ONE command in the workspace: a small stdlib Python
+helper (`HELPER`) that does the whole check-and-set there, so a sandbox
+costs one round trip per operation, not one per file. Correctness rests on
+three things the helper does:
 
-Everything here goes through the workspace's own primitives — `home()`,
-`write_text`, `read_text`, `exists` — and falls back to a plain argv `exec`
-only for what has no primitive: an exclusive `mkdir` (the atomic step),
-removal, listing, and a process-liveness probe. Never a shell string.
+- **A mutex for the check-and-set.** Acquire, reclaim, claim and release
+  run under an exclusive `flock` on `.mutex`, held only for the duration of
+  that one command. Two clients judging the same stale lock can no longer
+  both delete it and both take it: the second one in finds the first one's
+  fresh, live lock and is told busy.
+- **A lock never exists without its record.** It is built in a temp dir and
+  renamed into place, so a reader never sees a directory with no holder in
+  it and mistakes a launch in progress for an abandoned one.
+- **A token per holder.** Only the client that took a lock may fill in its
+  pid or release it; anyone else's release is a no-op.
+
+A holder is live while its pid exists — a process we may not signal still
+exists — and is the process that was recorded (same start time, so a pid
+the OS reused for a later process holds nothing). A holder recorded before
+its process existed (the pid is filled in after launch) is trusted only
+briefly: past `STALE_AFTER` it is a launch that never finished.
 
 The harness that acquires a lock keeps it across `detach()` — the process
 is still running and still the writer — and releases it on `close()`, once
@@ -31,9 +41,9 @@ the process is confirmed gone.
 from __future__ import annotations
 
 import json
-import time
+import uuid
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from . import errors
 
@@ -43,7 +53,128 @@ if TYPE_CHECKING:
 STALE_AFTER = 120.0
 """Seconds a pid-less lock is honoured before it counts as abandoned."""
 
-_LIVENESS = "import os, sys\nos.kill(int(sys.argv[1]), 0)\n"
+HELPER = r"""
+import fcntl, json, os, shutil, subprocess, sys, time
+
+op, root, args = sys.argv[1], sys.argv[2], json.loads(sys.argv[3])
+STALE = float(args.get("stale_after", 120))
+
+
+def started(pid):
+    try:
+        out = subprocess.run(
+            ["ps", "-o", "lstart=", "-p", str(pid)],
+            capture_output=True, text=True, timeout=10,
+            env={**os.environ, "TZ": "UTC", "LC_ALL": "C"},
+        )
+    except Exception:
+        return None
+    return out.stdout.strip() or None
+
+
+def alive(rec):
+    pid = rec.get("pid")
+    if not isinstance(pid, int):
+        return time.time() - (rec.get("since") or 0) < STALE
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        pass  # it exists; it is just not ours to signal
+    except OSError:
+        return False
+    want = rec.get("started")
+    if want:
+        now = started(pid)
+        if now is not None and now != want:
+            return False  # the pid now names a later process
+    return True
+
+
+def read(sid):
+    d = os.path.join(root, sid)
+    try:
+        with open(os.path.join(d, "holder.json")) as f:
+            rec = json.load(f)
+        return rec if isinstance(rec, dict) else {"pid": None, "since": 0}
+    except FileNotFoundError:
+        return {"pid": None, "since": 0} if os.path.isdir(d) else None
+    except ValueError:
+        return {"pid": None, "since": 0}
+
+
+def record(pid, client, token, since=None):
+    return {
+        "pid": pid,
+        "started": started(pid) if isinstance(pid, int) else None,
+        "since": since or int(time.time()),
+        "client": client,
+        "token": token,
+    }
+
+
+def write(path, rec):
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(rec, f)
+    os.replace(tmp, path)
+
+
+def live(sid):
+    rec = read(sid)
+    return rec if rec is not None and alive(rec) else None
+
+
+os.makedirs(root, exist_ok=True)
+out = None
+if op == "holders":
+    out = {}
+    for sid in os.listdir(root):
+        if not sid.startswith("."):
+            rec = live(sid)
+            if rec is not None:
+                out[sid] = rec.get("pid")
+elif op == "holder":
+    out = live(args["sid"])
+else:
+    with open(os.path.join(root, ".mutex"), "a") as mutex:
+        fcntl.flock(mutex, fcntl.LOCK_EX)
+        sid, token = args["sid"], args["token"]
+        d = os.path.join(root, sid)
+        rec = read(sid)
+        if op == "acquire":
+            if rec is not None and alive(rec):
+                out = {"busy": True, "pid": rec.get("pid")}
+            else:
+                if rec is not None:
+                    shutil.rmtree(d, ignore_errors=True)
+                tmp = os.path.join(root, "." + sid + "." + token)
+                os.makedirs(tmp, exist_ok=True)
+                write(
+                    os.path.join(tmp, "holder.json"),
+                    record(args.get("pid"), args.get("client", ""), token),
+                )
+                os.rename(tmp, d)
+                out = {"busy": False}
+        elif op == "claim":
+            if rec is not None and rec.get("token") == token:
+                write(
+                    os.path.join(d, "holder.json"),
+                    record(
+                        args["pid"], args.get("client", ""), token,
+                        since=rec.get("since"),
+                    ),
+                )
+                out = True
+            else:
+                out = False
+        elif op == "release":
+            out = rec is not None and rec.get("token") == token
+            if out:
+                shutil.rmtree(d, ignore_errors=True)
+print(json.dumps(out))
+"""
 
 
 @dataclass(frozen=True)
@@ -61,6 +192,9 @@ class SessionLock:
         self._workspace = workspace
         self._kind = kind
         self._root: str | None = None
+        # The token of every lock THIS client took: what lets it, and only
+        # it, fill in the pid and release.
+        self._tokens: dict[str, str] = {}
 
     async def root(self) -> str:
         if self._root is None:
@@ -74,102 +208,70 @@ class SessionLock:
         """Take the lock, or raise SessionBusyError naming the live holder.
 
         A stale lock — its pid gone, or pid-less and older than STALE_AFTER
-        — is reclaimed. Two clients reclaiming at once still cannot both
-        win: the second `mkdir` fails and that client is told busy.
+        — is reclaimed.
         """
-        directory = f"{await self.root()}/{session_id}"
-        await self._workspace.exec(
-            ["mkdir", "-p", await self.root()], timeout=30
+        token = uuid.uuid4().hex
+        out = await self._run(
+            "acquire",
+            sid=session_id,
+            token=token,
+            pid=pid,
+            client=client,
+            stale_after=STALE_AFTER,
         )
-        if await self._mkdir(directory):
-            await self._record(directory, pid, client)
-            return
-        holder = await self._read(session_id, directory)
-        if holder is not None and await self._live(holder):
-            raise errors.SessionBusyError(session_id, holder.pid)
-        await self._workspace.exec(["rm", "-rf", directory], timeout=30)
-        if not await self._mkdir(directory):
-            raise errors.SessionBusyError(
-                session_id, None, "contested while reclaiming a stale lock"
-            )
-        await self._record(directory, pid, client)
+        if out.get("busy"):
+            raise errors.SessionBusyError(session_id, out.get("pid"))
+        self._tokens[session_id] = token
 
     async def claim_pid(
         self, session_id: str, pid: int | None, client: str = ""
     ) -> None:
-        """Fill in the pid once the process exists."""
-        if pid is None:
+        """Fill in the pid once the process exists. Only on our own lock."""
+        token = self._tokens.get(session_id)
+        if pid is None or token is None:
             return
-        await self._record(f"{await self.root()}/{session_id}", pid, client)
+        await self._run(
+            "claim", sid=session_id, token=token, pid=pid, client=client
+        )
 
     async def release(self, session_id: str) -> None:
-        await self._workspace.exec(
-            ["rm", "-rf", f"{await self.root()}/{session_id}"], timeout=30
-        )
+        """Release a lock this client took; anyone else's is left alone."""
+        token = self._tokens.pop(session_id, None)
+        if token is None:
+            return
+        await self._run("release", sid=session_id, token=token)
 
     async def holder(self, session_id: str) -> Holder | None:
         """Return the live holder of a conversation, or None when it is free."""
-        holder = await self._read(
-            session_id, f"{await self.root()}/{session_id}"
-        )
-        if holder is None or not await self._live(holder):
+        rec = await self._run("holder", sid=session_id, stale_after=STALE_AFTER)
+        if not isinstance(rec, dict):
             return None
-        return holder
+        pid = rec.get("pid")
+        return Holder(
+            session_id,
+            pid if isinstance(pid, int) else None,
+            int(rec.get("since") or 0),
+            str(rec.get("client") or ""),
+        )
 
     async def holders(self) -> dict[str, int | None]:
         """Every conversation with a live holder, and its pid, in one pass."""
-        root = await self.root()
-        listing = await self._workspace.exec(["ls", root], timeout=30)
-        live: dict[str, int | None] = {}
-        for session_id in (
-            listing.stdout.split() if listing.exit_code == 0 else []
-        ):
-            holder = await self.holder(session_id)
-            if holder is not None:
-                live[session_id] = holder.pid
-        return live
+        out = await self._run("holders", stale_after=STALE_AFTER)
+        return {
+            str(sid): pid if isinstance(pid, int) else None
+            for sid, pid in (out or {}).items()
+        }
 
-    # -- plumbing ---------------------------------------------------------
-
-    async def _mkdir(self, directory: str) -> bool:
-        return (
-            await self._workspace.exec(["mkdir", directory], timeout=30)
-        ).exit_code == 0
-
-    async def _record(
-        self, directory: str, pid: int | None, client: str
-    ) -> None:
-        info = json.dumps(
-            {"pid": pid, "since": int(time.time()), "client": client}
+    async def _run(self, op: str, **args: Any) -> Any:
+        result = await self._workspace.exec(
+            ["python3", "-c", HELPER, op, await self.root(), json.dumps(args)],
+            timeout=30,
         )
-        await self._workspace.write_text(f"{directory}/holder.json", info)
-
-    async def _read(self, session_id: str, directory: str) -> Holder | None:
-        try:
-            raw = json.loads(
-                await self._workspace.read_text(f"{directory}/holder.json")
+        if result.exit_code != 0:
+            raise errors.HarnessError(
+                f"the session lock could not {op} in the workspace "
+                f"(exit {result.exit_code}): "
+                + (result.stderr.strip()[-300:] or "no output")
+                + ". Harnesses need python3 where the CLI runs."
             )
-        except (FileNotFoundError, ValueError):
-            if await self._exists(directory):
-                # A directory without a record: a launch that died between
-                # mkdir and the write. Nothing can own it.
-                return Holder(session_id, None, 0, "")
-            return None
-        pid = raw.get("pid")
-        return Holder(
-            session_id,
-            int(pid) if isinstance(pid, int) else None,
-            int(raw.get("since") or 0),
-            str(raw.get("client") or ""),
-        )
-
-    async def _exists(self, directory: str) -> bool:
-        return await self._workspace.exists(directory)
-
-    async def _live(self, holder: Holder) -> bool:
-        if holder.pid is None:
-            return (time.time() - holder.since) < STALE_AFTER
-        probe = await self._workspace.exec(
-            ["python3", "-c", _LIVENESS, str(holder.pid)], timeout=30
-        )
-        return probe.exit_code == 0
+        return json.loads(result.stdout.strip().splitlines()[-1])

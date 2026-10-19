@@ -189,8 +189,37 @@ async def test_deny_with_stop_ends_the_turn(
     assert result.finish_reason == "cancelled"
     # And promptly. This passed at 121.77s: the interrupt was awaited before
     # the approval was answered, which codex will not process, so the
-    # decline waited out a 120s RPC timeout. Right outcome, two minutes late.
-    assert took < 60, f"Deny(stop=True) took {took:.0f}s to end the turn"
+    # decline waited out a 120s RPC timeout. Then it passed at ~30s: the
+    # interrupt was sent from the JSON-RPC reader itself, which could not
+    # read its reply until the call timed out. Right outcome, late each time.
+    assert took < 20, f"Deny(stop=True) took {took:.0f}s to end the turn"
+
+
+async def test_hook_can_ask_the_harness_while_it_decides(
+    any_make_harness: Callable[..., Any],
+) -> None:
+    """A hook that reads the stored conversation to decide. On codex that is
+    a call over the same connection the approval arrived on, which waited
+    for the hook to finish: a deadlock until `approval_timeout`."""
+    opened: list[Any] = []
+    asked: list[int] = []
+
+    async def approve(ctx: ApprovalContext) -> Decision:
+        asked.append(len(await opened[0].sessions()))
+        return Allow()
+
+    async with any_make_harness(
+        approve=approve, writable=True, approval_timeout=60
+    ) as harness:
+        opened.append(harness)
+        requires(harness, "approve")
+        async with asyncio.timeout(120):
+            result = await harness.run(
+                "Write the word HI into hi.txt, then reply with exactly: DONE"
+            )
+        assert await harness.workspace.exists("hi.txt")
+    assert asked, "the write went through the hook"
+    assert result.approval_errors == []
 
 
 async def test_hook_can_use_the_workspace_to_decide(
@@ -310,15 +339,14 @@ async def test_hook_has_no_control_verbs(
     assert probed and all(found == [] for found in probed)
 
 
-async def test_a_gate_is_not_an_audit_log(
+async def test_what_the_hook_sees_matches_what_is_claimed(
     any_make_harness: Callable[..., Any], any_workspace: Workspace
 ) -> None:
-    """A hook sees what the any_harness asks about — not everything that runs.
+    """`capabilities.approval` says which calls reach the hook.
 
-    Claude never routes read-only tools through its permission callback, so
-    a Read can happen without the hook hearing about it. The EVENT STREAM
-    sees it. Anyone treating approvals as an audit trail would be wrong, and
-    `capabilities.approval == "policy"` is the SDK saying so out loud.
+    "all" (claude): every call that ran, a Read included. "policy" (codex):
+    only what the CLI's own policy asks about, so never MORE than ran — the
+    event stream is the audit log there, not the hook.
     """
     from ai.types.events import ToolStart
 
@@ -330,15 +358,18 @@ async def test_a_gate_is_not_an_audit_log(
 
     async with any_make_harness(approve=approve) as any_harness:
         requires(any_harness, "approve")
-        assert any_harness.capabilities.approval == "policy"
+        coverage = any_harness.capabilities.approval
         session = any_harness.session()
         turn = session.stream("Read util.py and reply with the function name.")
         streamed = [e.tool_name async for e in turn if isinstance(e, ToolStart)]
 
-    assert len(seen_by_hook) <= len(streamed), (
-        "the hook can never see MORE calls than actually ran; approvals are "
-        + "a subset of what the event stream observes, never a superset"
-    )
+    if coverage == "all":
+        assert streamed and sorted(seen_by_hook) == sorted(streamed)
+    else:
+        assert coverage == "policy"
+        assert len(seen_by_hook) <= len(
+            streamed
+        ), "the hook can never see MORE calls than actually ran"
 
 
 @requires_claude

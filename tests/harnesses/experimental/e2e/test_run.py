@@ -9,7 +9,7 @@ import pytest
 from pydantic import BaseModel
 
 from ai.harnesses.experimental import Harness
-from ai.types.messages import Message, TextPart, ToolCallPart
+from ai.types.messages import Message, TextPart, ToolCallPart, ToolResultPart
 from tests.harnesses.experimental.conftest import exact
 
 pytestmark = pytest.mark.live
@@ -160,21 +160,29 @@ async def test_text_is_the_final_message_not_the_narration(
             + "Then reply with exactly: DONE"
         )
 
-    final = result.messages[-1]
+    turn = result.messages[1:]  # everything after the prompt
     assert any(
-        isinstance(p, ToolCallPart) for p in final.parts
+        isinstance(p, ToolCallPart) for m in turn for p in m.parts
     ), "the prompt is meant to make the agent use a tool"
     assert result.text.strip() == "DONE", result.text
     # The invariant, stated directly: nothing said BEFORE the last tool call
     # is in `.text`. Whether that narration is kept in the transcript is the
-    # any_harness's business — claude keeps it, codex labels it `commentary`
-    # and the adapter drops it — and `.text` must be the same either way.
+    # any_harness's business, and `.text` must be the same either way.
+    parts = [p for m in turn if m.role == "assistant" for p in m.parts]
     last_call = max(
-        i for i, p in enumerate(final.parts) if isinstance(p, ToolCallPart)
+        i for i, p in enumerate(parts) if isinstance(p, ToolCallPart)
     )
-    for narration in final.parts[:last_call]:
+    for narration in parts[:last_call]:
         if isinstance(narration, TextPart) and narration.text.strip():
             assert narration.text.strip() not in result.text, narration.text
+    # And the transcript reads in order: every result after its call.
+    called: set[str] = set()
+    for m in turn:
+        for p in m.parts:
+            if isinstance(p, ToolCallPart):
+                called.add(p.tool_call_id)
+            elif isinstance(p, ToolResultPart):
+                assert p.tool_call_id in called, "a result before its call"
 
 
 @pytest.mark.parametrize("effort", ["low", "max"])
@@ -189,3 +197,12 @@ async def test_effort_is_accepted_on_both_harnesses(
         exact(result.text, "READY")
         assert result.finish_reason == "stop"
         assert session.handle.options["effort"] == effort
+
+
+async def test_every_harness_can_write_by_default(any_harness: Harness) -> None:
+    """Full access unless restricted, on every harness and location: a
+    program drives it, and nobody is there to widen a narrow default."""
+    await any_harness.run(
+        "Write the word WRITTEN into default.txt, then reply DONE."
+    )
+    assert "WRITTEN" in await any_harness.workspace.read_text("default.txt")

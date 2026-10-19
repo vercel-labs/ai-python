@@ -32,6 +32,11 @@ Each factory returns a `Harness`. They share these arguments:
 | `gateway` | Upstream model provider LLM Gateway, as a `Gateway`. Overrides the workspace's gateway. | `None`: the workspace's gateway |
 | `effort` | `"low"`, `"medium"`, `"high"`, or `"max"`. | `None`: the CLI's default |
 | `executable` | CLI name or path. | `"claude"` or `"codex"` |
+| `instructions` | Text added to the CLI's own system prompt. | `None` |
+| `mcp_servers` | MCP servers: `{"name": {"command": ..., "args": [...], "env": {...}}}` or `{"name": {"url": ...}}`. Not stored in a `Handle`. | `None` |
+
+Every harness runs with full access unless an approval hook or its own
+options restrict it.
 
 ### claude_code
 
@@ -45,12 +50,23 @@ harnesses.claude_code(
     gateway=None,
     effort=None,
     executable="claude",
+    instructions=None,
+    mcp_servers=None,
+    tools=None,
+    disallowed_tools=None,
+    max_turns=None,
 )
 ```
 
 Claude Code. Needs the `claude-code` extra, and raises
-`ai.errors.InstallationError` when it is missing. Takes only the shared
-arguments.
+`ai.errors.InstallationError` when it is missing. Takes the shared
+arguments, plus:
+
+| Argument | Description | Default |
+|---|---|---|
+| `tools` | The built-in tools the agent has. `[]` for none. | `None`: all |
+| `disallowed_tools` | Tools taken away. | `None` |
+| `max_turns` | Most agent steps in one turn; hitting it settles as `"length"`. | `None` |
 
 ### codex
 
@@ -66,6 +82,11 @@ harnesses.codex(
     gateway=None,
     effort=None,
     executable="codex",
+    instructions=None,
+    mcp_servers=None,
+    tools=None,
+    disallowed_tools=None,
+    max_turns=None,
 )
 ```
 
@@ -74,8 +95,12 @@ arguments, plus:
 
 | Argument | Description | Default |
 |---|---|---|
-| `sandbox` | Codex's own sandbox mode: `"read-only"`, `"workspace-write"`, or `"danger-full-access"`. On a provider-owned workspace, other values raise `UnsupportedError` on open. | `"read-only"` on `Local`, `"danger-full-access"` on a provider-owned workspace |
-| `config` | Codex config overrides. Wins over values derived from `gateway` and `effort`, key by key. | `None` |
+| `sandbox` | Codex's own sandbox mode: `"read-only"`, `"workspace-write"`, or `"danger-full-access"`. On a provider-owned workspace, other values raise `UnsupportedError` on open. | `"danger-full-access"` |
+| `config` | Codex config overrides. Wins over values derived from `gateway`, `effort`, and `mcp_servers`, key by key. | `None` |
+
+`instructions` become Codex's developer instructions. It also takes
+`tools`, `disallowed_tools`, and `max_turns`, and raises `UnsupportedError`
+when one is set.
 
 `effort="max"` is sent to Codex as `"xhigh"`.
 
@@ -113,8 +138,11 @@ Methods:
 - `await sessions()`: List the CLI's conversations in this workspace as
   `SessionInfo` values, including ones started outside the SDK.
 - `await history(session_id, *, limit=None, offset=0)`: Return a stored
-  transcript as `ai.messages.Message` values, tool calls included.
-- `await resume(session_id)`: Continue an existing conversation. Raises
+  transcript as `ai.messages.Message` values, tool calls and files
+  included. `limit` and `offset` count those messages.
+- `await resume(session_id)`: Continue an existing conversation. The
+  returned `Session`'s `messages` hold its past; run or stream on it as on
+  a new one. Raises
   `SessionBusyError` when another client holds it, and `ResumeFailedError`
   when it does not exist.
 - `await fork(session_id)`: Start a new conversation with the same past. The
@@ -144,10 +172,17 @@ Methods:
 - `await run(prompt, *, output_type=None, retries=1, timeout=None)`: Send a
   prompt and wait for the turn to settle. Returns a `Result`.
 - `stream(prompt)`: Send a prompt and return a `Turn`.
+
+`prompt` is a `str`, or a list of `str`, `TextPart`, and `FilePart`. A
+file the harness cannot take (see `images` and `documents` in
+`Capabilities`) raises `UnsupportedError` before anything runs. Text files
+are sent as text on every harness. A URL is downloaded on this machine.
 - `await steer(text)`: Send guidance to the running turn. Raises
   `RuntimeError` when no turn is running.
-- `await stop()`: End the running turn. It settles as `"cancelled"`.
-- `await reclaim()`: Settle a turn whose consumer stopped iterating.
+- `await stop()`: End the running turn. It settles as `"cancelled"`. Safe
+  from any task; returns once the turn has settled. No-op when no turn runs.
+- `await reclaim()`: Settle a turn whose consumer stopped iterating. `run()`
+  and `stream()` already do this, so you rarely need it.
 - `await close()`: Release the conversation so another client can resume it.
 
 - `output_type`: The SDK adds the type's JSON schema to the prompt,
@@ -182,7 +217,7 @@ One settled turn.
 |---|---|
 | `finish_reason` | `"stop"`, `"cancelled"`, or `"length"` (Claude Code hit its turn limit). |
 | `text` | The agent's final message, after its last tool call. |
-| `messages` | The conversation as of settling. |
+| `messages` | The conversation as of settling: each tool call in an assistant message, then its result in a `"tool"` message. |
 | `usage` | [`ai.types.usage.Usage`](/docs/reference/types). Claude Code reports cost in `usage.raw["cost_usd"]`. |
 | `output` | The validated value when the turn ran with `output_type`. |
 | `prompt_sent` | Exactly what the agent received. |
@@ -334,11 +369,12 @@ What a harness can do, declared before anything runs. Read it from
 | `resume` | Continue a conversation this process did not create: `resume()`, `harness_from()`. | yes | yes |
 | `fork` | Branch a conversation into a new one with the same past: `fork()`. | yes | yes |
 | `history` | Read stored transcripts in full, tool calls included: `history()`, `sessions()`. | yes | yes |
-| `images` | The CLI accepts image input. `run()` and `stream()` send text only today. | yes | yes |
+| `images` | Images in a prompt. | yes | yes |
+| `documents` | PDFs in a prompt. | yes | no |
 | `rewrite_tool_input` | Rewrite a call's arguments before it runs: `Allow(input={...})`. | yes | no |
 | `deny_reason` | The reason in `Deny(reason)` reaches the agent. Without it the call is still denied, but the reason is dropped. | yes | no |
 | `remember_decisions` | Keep an approval for the rest of the session: `Allow(remember=True)`. | no | no |
-| `approval` | Which tool calls reach the hook. `"policy"`: the CLI's own policy decides, so not every call does. | `"policy"` | `"policy"` |
+| `approval` | Which tool calls reach the hook. `"all"`: every call, reads included. `"policy"`: the CLI's own policy decides, so not every call may. | `"all"` | `"policy"` |
 
 `approval` is an `ApprovalCoverage`:
 

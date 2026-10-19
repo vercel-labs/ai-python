@@ -11,6 +11,7 @@ comments record what was MEASURED, not what the API suggested.
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import json
 import uuid
@@ -27,8 +28,8 @@ from ....workspaces.experimental import errors as workspace_errors
 from .. import (
     _approval,
     _capabilities,
-    _cli_processes,
     _handoff,
+    _input,
     _session,
     _session_lock,
     errors,
@@ -39,12 +40,14 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
 KIND = "claude-code"
-INSTALL = "npm install -g @anthropic-ai/claude-code"
+PACKAGE = "@anthropic-ai/claude-code"
+INSTALL = f"npm install -g {PACKAGE}"
+VERIFIED_VERSION = "2.1.289"
+"""The CLI the live suite last passed against. Older ones get a warning."""
 
-# Claude routes permission-worthy tool calls through can_use_tool. Read-only
-# tools never reach it — verified by running with setting_sources=[] so no
-# user config was loaded, and Read still did not appear. That is the CLI's
-# own policy, so coverage is "policy", not "all".
+# The approval hook runs as a PreToolUse hook, which sees every tool call,
+# read-only ones included (measured). The permission callback alone
+# (`can_use_tool`) never saw Read: that was "policy" coverage.
 CAPABILITIES = _capabilities.Capabilities(
     steer=True,
     stop=True,
@@ -54,13 +57,15 @@ CAPABILITIES = _capabilities.Capabilities(
     rewrite_tool_input=True,
     deny_reason=True,
     images=True,
-    approval="policy",
+    documents=True,
+    approval="all",
 )
 
 
 class ClaudeAdapter:
     kind = KIND
     capabilities = CAPABILITIES
+    verified_version: str | None = VERIFIED_VERSION
 
     def __init__(
         self,
@@ -68,9 +73,19 @@ class ClaudeAdapter:
         model: str | None = None,
         gateway: _gateway.Gateway | None = None,
         effort: str | None = None,
+        instructions: str | None = None,
+        mcp_servers: dict[str, Any] | None = None,
+        tools: list[str] | None = None,
+        disallowed_tools: list[str] | None = None,
+        max_turns: int | None = None,
     ) -> None:
         self._executable = executable
         self._model = model
+        self._instructions = instructions
+        self._mcp_servers = dict(mcp_servers or {})
+        self._tools = tools
+        self._disallowed_tools = list(disallowed_tools or [])
+        self._max_turns = max_turns
         self._gateway = gateway
         self._gateway_env: dict[str, str] = gateway_env(gateway)
         self._effort = effort
@@ -89,9 +104,14 @@ class ClaudeAdapter:
         # result after an interrupt, and a stop the caller asked for must
         # settle as cancelled rather than raise as a failure.
         self._interrupted: set[str] = set()
+        # Sessions whose CLI turn is running: prompted, no ResultMessage yet.
+        # A steer outside one would start a turn of its own (measured).
+        self._running: set[str] = set()
         # See codex: an error raised inside the permission callback cannot
-        # reach the caller, so it is parked and re-raised on the turn.
-        self._pending_error: BaseException | None = None
+        # reach the caller, so it is parked and re-raised on the turn — the
+        # turn of THAT session, keyed by it, so another session's turn
+        # neither clears it nor raises it.
+        self._pending_error: dict[str, BaseException] = {}
         self.approve: base.ApprovalHook | None = None
         self.approval_timeout: float = 300.0
         self.on_approval_error: Any = None
@@ -147,11 +167,7 @@ class ClaudeAdapter:
             gateway = gateway.brokered()
         self._gateway = gateway
         self._gateway_env = gateway_env(gateway)
-        probe = await self._probe(workspace)
-        if probe.exit_code != 0 and workspace.owner == "provider":
-            # Ours to provision. Never on a user's own machine.
-            await workspace.exec(["sh", "-c", INSTALL], timeout=600)
-            probe = await self._probe(workspace)
+        probe = await base.provision(workspace, self._executable, PACKAGE)
         self._config_dir = await claude_store.config_dir(workspace)
         if workspace.kind != "local":
             self._store = await claude_store.WorkspaceSessionStore.discover(
@@ -162,9 +178,6 @@ class ClaudeAdapter:
         self._version = probe.stdout.strip().splitlines()[0] or None
         self._workspace = workspace
         self._lock = _session_lock.SessionLock(workspace, KIND)
-
-    async def _probe(self, workspace: _base.Workspace) -> _base.ExecResult:
-        return await workspace.exec([self._executable, "--version"], timeout=60)
 
     async def close(self) -> None:
         for session_id in list(self._clients):
@@ -204,6 +217,7 @@ class ClaudeAdapter:
         """
         assert self._workspace is not None
         session_id = str(uuid.uuid4())
+        _handoff.warn_unsupported_files(history, KIND)
         dropped = _handoff.reasoning_count(history)
         if dropped:
             warnings.warn(
@@ -328,6 +342,18 @@ class ClaudeAdapter:
             config = json.loads(await self._workspace.read_text(path))
         except (FileNotFoundError, ValueError):
             config = {}
+        if not isinstance(config, dict) or not isinstance(
+            config.get("projects", {}), dict
+        ):
+            # A shape this SDK was not verified against (see
+            # VERIFIED_VERSION): leave the CLI's file alone rather than
+            # rewrite it; the TUI may open on a setup screen.
+            warnings.warn(
+                f"{path} is not in the shape claude {VERIFIED_VERSION} "
+                + "writes; first-run setup was skipped",
+                stacklevel=2,
+            )
+            return
         # Two gates: the global onboarding walk, and a PER-PROJECT trust
         # dialog ("do you trust the files in this folder?") that appears the
         # first time the TUI opens in a directory. Both must be marked done,
@@ -378,6 +404,17 @@ class ClaudeAdapter:
         )
         if self._model:
             argv += ["--model", self._model]
+        if self._instructions:
+            argv += ["--append-system-prompt", self._instructions]
+        if self._mcp_servers:
+            argv += [
+                "--mcp-config",
+                json.dumps({"mcpServers": self._mcp_servers}),
+            ]
+        if self._tools is not None:
+            argv += ["--tools", ",".join(self._tools)]
+        if self._disallowed_tools:
+            argv += ["--disallowedTools", ",".join(self._disallowed_tools)]
         # DISABLE_AUTOUPDATER: measured, the TUI otherwise updates itself in
         # the background and announces "Restart to apply" mid-session.
         env = {
@@ -419,34 +456,27 @@ class ClaudeAdapter:
         The CLI records each of its processes in <config>/sessions/<pid>.json,
         with the conversation it is on and when it started (`procStart`, in
         UTC, as `ps` prints it). A record whose process is gone, or whose pid
-        now names a later process, is left behind, not a holder.
+        now names a later process, is left behind, not a holder. All of it
+        is read in ONE command in the workspace: a sandbox listing several
+        sessions used to cost a round trip per record.
         """
         assert self._workspace is not None and self._config_dir is not None
-        directory = f"{self._config_dir}/sessions"
-        listing = await self._workspace.exec(["ls", directory], timeout=30)
-        names = [
-            name
-            for name in listing.stdout.split()
-            if listing.exit_code == 0 and name.endswith(".json")
-        ]
-        if not names:
+        result = await self._workspace.exec(
+            ["python3", "-c", _CLI_SESSIONS, f"{self._config_dir}/sessions"],
+            env={"TZ": "UTC", "LC_ALL": "C"},
+            timeout=30,
+        )
+        if result.exit_code != 0:
             return {}
-        running = await _cli_processes.processes(self._workspace)
-        held: dict[str, int] = {}
-        for name in names:
-            try:
-                record = json.loads(
-                    await self._workspace.read_text(f"{directory}/{name}")
-                )
-                pid, session_id = int(record["pid"]), str(record["sessionId"])
-            except (FileNotFoundError, ValueError, KeyError, TypeError):
-                continue
-            process = running.get(pid)
-            if process is not None and process.started == record.get(
-                "procStart"
-            ):
-                held[session_id] = pid
-        return held
+        try:
+            found = json.loads(result.stdout.strip().splitlines()[-1])
+        except (ValueError, IndexError):
+            return {}
+        return {
+            str(sid): int(pid)
+            for sid, pid in found.items()
+            if isinstance(pid, int)
+        }
 
     async def close_session(self, session_id: str) -> None:
         client = self._clients.pop(session_id, None)
@@ -478,6 +508,21 @@ class ClaudeAdapter:
             options["env"] = env
         if self._model:
             options["model"] = self._model
+        if self._instructions:
+            # Added to Claude Code's own system prompt, never replacing it.
+            options["system_prompt"] = {
+                "type": "preset",
+                "preset": "claude_code",
+                "append": self._instructions,
+            }
+        if self._mcp_servers:
+            options["mcp_servers"] = self._mcp_servers
+        if self._tools is not None:
+            options["tools"] = self._tools
+        if self._disallowed_tools:
+            options["disallowed_tools"] = self._disallowed_tools
+        if self._max_turns is not None:
+            options["max_turns"] = self._max_turns
         if self._effort:
             # Reasoning effort, with adaptive thinking so the budget follows
             # it. The CLI's own default applies when none is asked for.
@@ -493,6 +538,18 @@ class ClaudeAdapter:
         # working when nobody is. `approve=` is how you restrict it — and it
         # means the controller must stay alive to answer.
         if self.approve is not None:
+            options["hooks"] = {
+                "PreToolUse": [
+                    claude_agent_sdk.HookMatcher(
+                        matcher=None,
+                        hooks=[self._make_pre_tool_use(session_id)],
+                        # The CLI's own hook deadline (60s by default) must
+                        # not cut a slow approval short: ours, which denies,
+                        # comes first.
+                        timeout=self.approval_timeout + 30,
+                    )
+                ]
+            }
             options["can_use_tool"] = self._make_can_use_tool(session_id)
         else:
             options["permission_mode"] = "bypassPermissions"
@@ -517,6 +574,53 @@ class ClaudeAdapter:
         return client
 
     # -- approval -------------------------------------------------------------
+    #
+    # The hook is installed as a PreToolUse hook: measured (claude 2.1.289),
+    # it sees EVERY tool call — Read, a read-only Bash, Write — where the
+    # permission callback (`can_use_tool`) only sees the ones the CLI's own
+    # policy asks about (Write). Its decisions map one to one: "allow",
+    # "allow" with `updatedInput`, "deny" with a reason the agent reads, and
+    # `continue: false` to end the turn. A hook that allows a call is the
+    # permission, so the CLI does not ask again; `can_use_tool` stays
+    # installed only as a safety net that applies the same judgment.
+
+    def _make_pre_tool_use(self, session_id: str) -> Any:
+        async def pre_tool_use(
+            data: Any, tool_use_id: str | None, ctx: Any
+        ) -> Any:
+            try:
+                decision = await self._judge(
+                    session_id,
+                    str(data.get("tool_name") or ""),
+                    dict(data.get("tool_input") or {}),
+                    tool_use_id=tool_use_id or data.get("tool_use_id"),
+                    agent_id=data.get("agent_id") or None,
+                    hints={},
+                )
+            except Exception as exc:
+                self._record_error(session_id, f"{type(exc).__name__}: {exc}")
+                decision = _approval.Deny("approval failed; denied")
+            output: dict[str, Any] = {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": (
+                    "allow" if isinstance(decision, _approval.Allow) else "deny"
+                ),
+            }
+            if isinstance(decision, _approval.Deny):
+                output["permissionDecisionReason"] = (
+                    decision.reason or "denied by policy"
+                )
+                if decision.stop:
+                    return {
+                        "continue_": False,
+                        "stopReason": decision.reason or "denied by policy",
+                        "hookSpecificOutput": output,
+                    }
+            elif decision.input is not None:
+                output["updatedInput"] = decision.input
+            return {"hookSpecificOutput": output}
+
+        return pre_tool_use
 
     def _make_can_use_tool(
         self, session_id: str
@@ -530,35 +634,58 @@ class ClaudeAdapter:
             # ours must deny and be reported, never vanish into the agent as
             # an opaque internal error.
             try:
-                return await self._decide(session_id, name, tool_input, ctx)
+                decision = await self._judge(
+                    session_id,
+                    name,
+                    dict(tool_input),
+                    tool_use_id=getattr(ctx, "tool_use_id", None),
+                    agent_id=getattr(ctx, "agent_id", None),
+                    hints={"blocked_path": getattr(ctx, "blocked_path", None)},
+                )
             except Exception as exc:
-                self._record_error(f"{type(exc).__name__}: {exc}")
+                self._record_error(session_id, f"{type(exc).__name__}: {exc}")
                 return claude_agent_sdk.PermissionResultDeny(
                     message="approval failed; denied"
                 )
+            if isinstance(decision, _approval.Deny):
+                return claude_agent_sdk.PermissionResultDeny(
+                    message=decision.reason or "denied by policy",
+                    interrupt=decision.stop,
+                )
+            return claude_agent_sdk.PermissionResultAllow(
+                updated_input=decision.input
+            )
 
         return can_use_tool
 
-    async def _decide(
+    async def _judge(
         self,
         session_id: str,
         name: str,
         tool_input: dict[str, Any],
-        ctx: claude_agent_sdk.ToolPermissionContext,
-    ) -> claude_agent_sdk.PermissionResult:
+        *,
+        tool_use_id: str | None,
+        agent_id: str | None,
+        hints: dict[str, Any],
+    ) -> _approval.Decision:
+        """Ask the hook about one call; always come back with a decision.
+
+        A hook that fails or runs out of time denies (a gate that fails open
+        is not a gate) and is reported. A decision this harness cannot honor
+        denies and is parked to raise on the turn.
+        """
         assert (
             self.approve is not None
         ), "the gate is only installed with a hook"
         assert self._workspace is not None
         call = _approval.ToolCall(
-            id=getattr(ctx, "tool_use_id", None)
-            or f"call-{uuid.uuid4().hex[:12]}",
-            # The VERIFIED native name, from the SDK's own callback —
+            id=tool_use_id or f"call-{uuid.uuid4().hex[:12]}",
+            # The VERIFIED native name, from the CLI's own callback —
             # never display text an agent can influence.
             name=name,
-            input=dict(tool_input),
-            agent_id=getattr(ctx, "agent_id", None),
-            hints={"blocked_path": getattr(ctx, "blocked_path", None)},
+            input=tool_input,
+            agent_id=agent_id,
+            hints=hints,
             raw={"tool_name": name, "input": tool_input},
         )
         request = _approval.ApprovalContext(
@@ -569,56 +696,43 @@ class ClaudeAdapter:
             session_id=session_id,
             prompt=self._contexts.get(session_id, {}).get("prompt"),
         )
-        assert self.approve is not None
         try:
             async with asyncio.timeout(self.approval_timeout):
                 decision = await self.approve(request)
         except (Exception, TimeoutError) as exc:
-            # An approval gate that fails open is not a gate.
-            self._record_error(f"{type(exc).__name__}: {exc}")
-            return claude_agent_sdk.PermissionResultDeny(
-                message="approval hook failed; denied"
-            )
+            self._record_error(session_id, f"{type(exc).__name__}: {exc}")
+            return _approval.Deny("approval hook failed; denied")
         if isinstance(decision, _approval.Deny):
             if decision.stop:
-                # We are ending this turn on purpose. The CLI reports an
-                # error result after an interrupt, so remember that we asked
-                # for it and settle as cancelled instead of raising.
+                # We are ending this turn on purpose. Remember that we asked
+                # for it, so it settles as cancelled rather than as a
+                # failure or a normal stop.
                 self._interrupted.add(session_id)
-            return claude_agent_sdk.PermissionResultDeny(
-                message=decision.reason or "denied by policy",
-                interrupt=decision.stop,
-            )
+            return decision
         if isinstance(decision, _approval.Allow):
             if decision.remember:
                 # Parked and re-raised on the turn: an unsupported request
                 # must reach the CALLER, and an exception thrown inside the
-                # harness's permission callback does not.
-                self._pending_error = errors.UnsupportedError(
+                # CLI's callback does not.
+                self._pending_error[session_id] = errors.UnsupportedError(
                     KIND,
                     "remember",
                     "session-scoped permission rules do not suppress the next "
                     + "identical request, and the alternative would silently "
                     + "widen authority to all edits",
                 )
-                return claude_agent_sdk.PermissionResultDeny(
-                    message="remember is unsupported here"
-                )
-            return claude_agent_sdk.PermissionResultAllow(
-                updated_input=decision.input
-            )
-        return claude_agent_sdk.PermissionResultDeny(
-            message="approval hook returned no decision"
-        )
+                return _approval.Deny("remember is unsupported here")
+            return decision
+        return _approval.Deny("approval hook returned no decision")
 
-    def _record_error(self, detail: str) -> None:
+    def _record_error(self, session_id: str, detail: str) -> None:
         if callable(self.on_approval_error):
-            self.on_approval_error(detail)
+            self.on_approval_error(session_id, detail)
 
     # -- turns ----------------------------------------------------------------
 
     async def turn(
-        self, session_id: str, prompt: str
+        self, session_id: str, prompt: list[_input.Part]
     ) -> AsyncIterator[events_.AgentEvent]:
         client = self._client(session_id)
         turn_session_id = session_id
@@ -628,103 +742,120 @@ class ClaudeAdapter:
         # previous turn's ending.
         await self._drain_interrupted(session_id)
         state = self._contexts.setdefault(session_id, {"prompt": None})
-        state["prompt"] = prompt
+        state["prompt"] = _input.text(prompt)
+        content = await _content(prompt)
 
         parts: list[Any] = []
         names: dict[str, str] = {}
         open_blocks: dict[int, str] = {}
         text_so_far: list[str] = []
-        self._pending_error = None
+        self._pending_error.pop(session_id, None)
         try:
-            await client.query(prompt)
+            if isinstance(content, str):
+                await client.query(content)
+            else:
+                await client.query(_one_message(content))
         except claude_agent_sdk.ClaudeSDKError as exc:
             raise _translate(exc) from exc
-        # StreamStart only once the CLI has answered for this turn — its
-        # first message is proof it READ the prompt. "Written to the
-        # transport" is not: in a sandbox the prompt travels through an
-        # interactive session into the CLI's stdin, and a detach right after
-        # the write closed that session with the prompt still in transit
-        # (measured: an unattended push whose agent never saw its prompt).
-        # A consumer may act on the first event; it must mean the turn is live.
-        started = False
-        async for message in _guard(client.receive_response()):
-            if not started:
-                started = True
-                yield events_.StreamStart()
-            if isinstance(message, claude_agent_sdk.StreamEvent):
-                # Text and reasoning stream here, token by token. The
-                # complete AssistantMessage that follows repeats them, so
-                # only tool calls are taken from it.
-                for event in _stream_events(message.event, open_blocks):
-                    if isinstance(event, events_.TextDelta):
-                        text_so_far.append(event.chunk)
-                    yield event
-            elif isinstance(message, claude_agent_sdk.AssistantMessage):
-                for block in message.content:
-                    if (
-                        isinstance(block, claude_agent_sdk.TextBlock)
-                        and block.text
+        self._running.add(session_id)
+        try:
+            # StreamStart only once the CLI has answered for this turn — its
+            # first message is proof it READ the prompt. "Written to the
+            # transport" is not: in a sandbox the prompt travels through an
+            # interactive session into the CLI's stdin, and a detach right
+            # after the write closed that session with the prompt still in
+            # transit (measured: an unattended push whose agent never saw its
+            # prompt). A consumer may act on the first event; it must mean
+            # the turn is live.
+            started = False
+            async for message in _guard(client.receive_response()):
+                if not started:
+                    started = True
+                    yield events_.StreamStart()
+                if isinstance(message, claude_agent_sdk.StreamEvent):
+                    # Text and reasoning stream here, token by token. The
+                    # complete AssistantMessage that follows repeats them, so
+                    # only tool calls are taken from it.
+                    for event in _stream_events(message.event, open_blocks):
+                        if isinstance(event, events_.TextDelta):
+                            text_so_far.append(event.chunk)
+                        yield event
+                elif isinstance(message, claude_agent_sdk.AssistantMessage):
+                    for block in message.content:
+                        if (
+                            isinstance(block, claude_agent_sdk.TextBlock)
+                            and block.text
+                        ):
+                            parts.append(messages_.TextPart(text=block.text))
+                        elif isinstance(block, claude_agent_sdk.ToolUseBlock):
+                            # tool_args is a JSON STRING in the AI SDK's model,
+                            # not a mapping.
+                            call = messages_.ToolCallPart(
+                                tool_call_id=block.id,
+                                tool_name=block.name,
+                                tool_args=json.dumps(block.input),
+                            )
+                            names[block.id] = block.name
+                            parts.append(call)
+                            yield events_.ToolStart(
+                                tool_call_id=block.id, tool_name=block.name
+                            )
+                            # claude-agent-sdk hands over a complete block, so
+                            # the call's arguments are final the moment it
+                            # arrives — but they still travel as a delta. The
+                            # hydrator builds a call's arguments ONLY from
+                            # ToolDeltas and then replaces ToolEnd.tool_call
+                            # with its own copy, so without this one chunk every
+                            # consumer, and the session's own history, saw
+                            # tool_args="".
+                            yield events_.ToolDelta(
+                                tool_call_id=block.id, chunk=call.tool_args
+                            )
+                            yield events_.ToolEnd(
+                                tool_call_id=block.id, tool_call=call
+                            )
+                elif isinstance(message, claude_agent_sdk.UserMessage):
+                    for block in (
+                        message.content
+                        if isinstance(message.content, list)
+                        else []
                     ):
-                        parts.append(messages_.TextPart(text=block.text))
-                    elif isinstance(block, claude_agent_sdk.ToolUseBlock):
-                        # tool_args is a JSON STRING in the AI SDK's model,
-                        # not a mapping.
-                        call = messages_.ToolCallPart(
-                            tool_call_id=block.id,
-                            tool_name=block.name,
-                            tool_args=json.dumps(block.input),
-                        )
-                        names[block.id] = block.name
-                        parts.append(call)
-                        yield events_.ToolStart(
-                            tool_call_id=block.id, tool_name=block.name
-                        )
-                        # claude-agent-sdk hands over a complete block, so the
-                        # call's arguments are final the moment it arrives —
-                        # but they still travel as a delta. The hydrator
-                        # builds a call's arguments ONLY from ToolDeltas and
-                        # then replaces ToolEnd.tool_call with its own copy,
-                        # so without this one chunk every consumer, and the
-                        # session's own history, saw tool_args="".
-                        yield events_.ToolDelta(
-                            tool_call_id=block.id, chunk=call.tool_args
-                        )
-                        yield events_.ToolEnd(
-                            tool_call_id=block.id, tool_call=call
-                        )
-            elif isinstance(message, claude_agent_sdk.UserMessage):
-                for block in (
-                    message.content if isinstance(message.content, list) else []
-                ):
-                    if isinstance(block, claude_agent_sdk.ToolResultBlock):
-                        result = messages_.ToolResultPart(
-                            tool_call_id=block.tool_use_id,
-                            tool_name=names.get(block.tool_use_id, ""),
-                            result=block.content,
-                            result_kind="error" if block.is_error else "json",
-                        )
-                        # Tool results are their own message in the AI SDK's
-                        # model (role "tool"), not parts of the assistant's.
-                        yield events_.ToolCallResult(
-                            message=messages_.Message(
-                                role="tool", parts=[result]
-                            ),
-                            results=[result],
-                        )
-            elif isinstance(message, claude_agent_sdk.ResultMessage):
-                assistant = messages_.Message(role="assistant", parts=parts)
-                if self._pending_error is not None:
-                    error, self._pending_error = self._pending_error, None
-                    raise error
-                interrupted = turn_session_id in self._interrupted
-                self._interrupted.discard(turn_session_id)
-                yield events_.StreamEnd(
-                    message=assistant,
-                    usage=_usage(message),
-                    finish_reason=_finish_reason(
-                        message, interrupted=interrupted, hint=self._auth_hint()
-                    ),
-                )
+                        if isinstance(block, claude_agent_sdk.ToolResultBlock):
+                            result = messages_.ToolResultPart(
+                                tool_call_id=block.tool_use_id,
+                                tool_name=names.get(block.tool_use_id, ""),
+                                result=block.content,
+                                result_kind="error"
+                                if block.is_error
+                                else "json",
+                            )
+                            # Tool results are their own message in the AI SDK's
+                            # model (role "tool"), not parts of the assistant's.
+                            yield events_.ToolCallResult(
+                                message=messages_.Message(
+                                    role="tool", parts=[result]
+                                ),
+                                results=[result],
+                            )
+                elif isinstance(message, claude_agent_sdk.ResultMessage):
+                    self._running.discard(session_id)
+                    assistant = messages_.Message(role="assistant", parts=parts)
+                    error = self._pending_error.pop(session_id, None)
+                    if error is not None:
+                        raise error
+                    interrupted = turn_session_id in self._interrupted
+                    self._interrupted.discard(turn_session_id)
+                    yield events_.StreamEnd(
+                        message=assistant,
+                        usage=_usage(message),
+                        finish_reason=_finish_reason(
+                            message,
+                            interrupted=interrupted,
+                            hint=self._auth_hint(),
+                        ),
+                    )
+        finally:
+            self._running.discard(session_id)
 
     # -- stored conversations -------------------------------------------------
 
@@ -831,12 +962,93 @@ class ClaudeAdapter:
         """
         if not self.capabilities.steer:
             raise errors.UnsupportedError(KIND, "steer")
+        if session_id not in self._running:
+            raise RuntimeError("no active turn to steer")
         await self._client(session_id).query(text)
 
     async def stop(self, session_id: str) -> None:
         self._interrupted.add(session_id)
         with contextlib.suppress(Exception):
             await self._client(session_id).interrupt()
+
+
+_CLI_SESSIONS = r"""
+import json, os, subprocess, sys
+
+directory, held = sys.argv[1], {}
+try:
+    names = [n for n in os.listdir(directory) if n.endswith(".json")]
+except OSError:
+    names = []
+for name in names:
+    try:
+        with open(os.path.join(directory, name)) as f:
+            record = json.load(f)
+        pid, sid = int(record["pid"]), str(record["sessionId"])
+    except Exception:
+        continue
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        continue
+    except PermissionError:
+        pass
+    except OSError:
+        continue
+    ps = subprocess.run(
+        ["ps", "-o", "lstart=", "-p", str(pid)],
+        capture_output=True, text=True,
+    )
+    if ps.stdout.strip() == record.get("procStart"):
+        held[sid] = pid
+print(json.dumps(held))
+"""
+
+
+async def _content(prompt: list[_input.Part]) -> str | list[dict[str, Any]]:
+    """Return a prompt as the CLI takes it: a string, or content blocks.
+
+    Images and PDFs travel as base64 blocks (measured: both read correctly;
+    an image given by URL is dropped by the CLI without a word, which is why
+    `_input.data` downloads URLs first).
+    """
+    if len(prompt) == 1 and isinstance(prompt[0], messages_.TextPart):
+        return prompt[0].text
+    blocks: list[dict[str, Any]] = []
+    for part in prompt:
+        if isinstance(part, messages_.TextPart):
+            blocks.append({"type": "text", "text": part.text})
+        elif part.media_type.startswith("text/"):
+            blocks.append({"type": "text", "text": await _input.as_text(part)})
+        else:
+            kind = (
+                "image" if part.media_type.startswith("image/") else "document"
+            )
+            blocks.append(
+                {
+                    "type": kind,
+                    "source": {
+                        "type": "base64",
+                        "media_type": part.media_type,
+                        "data": base64.b64encode(
+                            await _input.data(part)
+                        ).decode("ascii"),
+                    },
+                }
+            )
+    return blocks
+
+
+async def _one_message(
+    content: list[dict[str, Any]],
+) -> AsyncIterator[dict[str, Any]]:
+    """Yield one stream-json user message, the way `query()` sends a str."""
+    yield {
+        "type": "user",
+        "message": {"role": "user", "content": content},
+        "parent_tool_use_id": None,
+        "session_id": "default",
+    }
 
 
 def _usage(message: Any) -> Any:
@@ -1012,6 +1224,19 @@ def _stored_to_messages(record: Any) -> list[messages_.Message]:
         kind = block.get("type")
         if kind == "text" and block.get("text"):
             parts.append(messages_.TextPart(text=block["text"]))
+        elif kind in ("image", "document"):
+            found = block.get("source")
+            source: dict[str, Any] = found if isinstance(found, dict) else {}
+            if source.get("type") == "base64" and source.get("data"):
+                fallback = "image/png" if kind == "image" else "application/pdf"
+                parts.append(
+                    messages_.FilePart(
+                        data=str(source["data"]),
+                        media_type=str(source.get("media_type") or fallback),
+                    )
+                )
+            elif source.get("type") == "url" and source.get("url"):
+                parts.append(messages_.FilePart.from_url(str(source["url"])))
         elif kind == "thinking" and block.get("thinking"):
             parts.append(messages_.ReasoningPart(text=block["thinking"]))
         elif kind == "tool_use":

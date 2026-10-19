@@ -51,8 +51,17 @@ agent = harnesses.codex(workspace=workspaces.Local("."), effort="high")
 | `effort` | `"low"`, `"medium"`, `"high"`, or `"max"`. | `None`: the CLI's default |
 | `gateway` | Upstream model provider LLM Gateway. See [Workspaces](/docs/basics/workspaces#reach-a-model-through-ai-gateway). | `None`: the workspace's gateway |
 | `executable` | CLI name or path. | `"claude"` or `"codex"` |
+| `instructions` | Text added to the CLI's own system prompt, for every turn. | `None` |
+| `mcp_servers` | MCP servers to connect: `{"name": {"command": ..., "args": [...], "env": {...}}}`, or `{"name": {"url": ...}}` for a remote one. | `None` |
 
 Each harness adds its own arguments; see [Harnesses](#harnesses).
+
+Every harness runs with full access by default: it may run any command and
+edit any file the workspace lets it. Nobody is at a terminal to answer a
+permission prompt, so there is no narrower default to fall back on. Restrict
+it with an [approval hook](#approve-tool-calls), with each harness's own
+options below, or by running it in a
+[Vercel Sandbox](/docs/basics/workspaces#vercel-sandbox).
 
 `run()` returns a `Result`:
 
@@ -60,7 +69,7 @@ Each harness adds its own arguments; see [Harnesses](#harnesses).
 |---|---|
 | `text` | The agent's final message, after its last tool call. |
 | `finish_reason` | `"stop"`, `"cancelled"`, or `"length"` (Claude Code hit its turn limit). |
-| `messages` | The conversation so far, as `ai.messages.Message` values. |
+| `messages` | The conversation so far, as `ai.messages.Message` values, in order: each tool call, then its result. |
 | `usage` | Token usage. |
 | `output` | The validated value when you pass `output_type`. |
 | `prompt_sent` | Exactly what the agent received. |
@@ -72,6 +81,17 @@ A missing extra raises `ai.errors.InstallationError` when you call the
 factory. A missing CLI raises `ExecutableMissingError` when the harness
 opens.
 
+Each harness was verified against one CLI version: `claude` 2.1.289 and
+`codex` 0.160.1. An older CLI warns when the harness opens. A harness error
+carries the CLI version in its notes, so a failure on a newer CLI says so.
+
+On your own machine the SDK uses whatever CLI you installed and never
+installs or updates one. In a [Vercel Sandbox](/docs/basics/workspaces#vercel-sandbox)
+it installs the latest release from npm when the harness opens, and
+upgrades an older one, so a sandbox always runs the newest CLI. It does
+not upgrade while a copy of the CLI is running there, such as an agent you
+detached from and came back to.
+
 ### Claude Code
 
 `harnesses.claude_code()` drives the `claude` CLI through
@@ -81,7 +101,13 @@ opens.
 uv add "ai[claude-code]"
 ```
 
-It takes only the [shared arguments](#run-a-prompt).
+It takes the [shared arguments](#run-a-prompt), plus:
+
+| Argument | Description | Default |
+|---|---|---|
+| `tools` | The built-in tools the agent has, such as `["Read", "Grep"]`. `[]` for none. | `None`: all of them |
+| `disallowed_tools` | Tools taken away, such as `["Bash"]`. | `None` |
+| `max_turns` | Most agent steps in one turn. A turn that hits it settles with `finish_reason="length"`. | `None`: no cap |
 
 - Tool names are Claude Code's own, such as `Bash`, `Write`, and `Edit`.
 - `result.usage.raw["cost_usd"]` reports the turn's cost.
@@ -95,11 +121,15 @@ It takes the [shared arguments](#run-a-prompt), plus:
 
 | Argument | Description | Default |
 |---|---|---|
-| `sandbox` | Codex's own sandbox mode: `"read-only"`, `"workspace-write"`, or `"danger-full-access"`. | `"read-only"` on `Local`, `"danger-full-access"` in a sandbox |
-| `config` | Codex `-c` config overrides. Wins over values derived from `gateway` and `effort`, key by key. | `None` |
+| `sandbox` | Codex's own sandbox mode: `"read-only"`, `"workspace-write"`, or `"danger-full-access"`. | `"danger-full-access"` |
+| `config` | Codex `-c` config overrides. Wins over values derived from `gateway`, `effort`, and `mcp_servers`, key by key. | `None` |
 
-- In `"read-only"` mode Codex declines writes. Pass
-  `sandbox="workspace-write"` when it must edit files.
+- On `Local`, pass `sandbox="read-only"` or `"workspace-write"` to restrict
+  Codex with its own sandbox. In `"read-only"` mode it declines writes.
+- `instructions` become Codex's developer instructions.
+- `codex()` also accepts Claude Code's `tools`, `disallowed_tools`, and
+  `max_turns`, so swapping the two factories stays a one-word edit, but
+  raises `UnsupportedError` when one is set: Codex has no equivalent.
 - In a Vercel Sandbox, leave `sandbox` unset. Codex's own sandbox cannot
   start inside the VM, so any other mode raises `UnsupportedError` when the
   harness opens.
@@ -120,6 +150,33 @@ result = await session.run("Which function is the slowest?")
 
 The CLI creates the conversation on the first turn, so `session.session_id`
 is empty until then. Read `session.handle` after a turn, not before.
+
+## Send files
+
+A prompt is a string, or a list of strings and parts. Add images, PDFs, or
+text files as `FilePart`s:
+
+```python
+import ai
+
+result = await session.run(
+    ["What is wrong in this screenshot?", ai.file_part(png_bytes)]
+)
+```
+
+| File | Claude Code | Codex |
+|---|---|---|
+| Images (`image/*`) | yes | yes |
+| PDFs (`application/pdf`) | yes | no |
+| Text files (`text/*`) | yes, as text | yes, as text |
+
+- A file the harness cannot take raises `UnsupportedError` when you call
+  `run()` or `stream()`, before anything runs. Check
+  `agent.capabilities.images` and `agent.capabilities.documents`.
+- A file given as a URL is downloaded on your machine and sent as data, so
+  it works in a sandbox whose outbound traffic is locked down.
+- The file stays in the conversation: `result.messages` and `history()`
+  hold it as a `FilePart`.
 
 ## Stream events
 
@@ -162,23 +219,37 @@ async for event in turn:
   before the turn ends. The steer is added to the transcript as a user
   message.
 - `stop()` ends the turn. It settles as `finish_reason == "cancelled"`, keeps
-  what was streamed, and the session stays usable.
+  what was streamed, and the session stays usable. Call it from the loop
+  body or from another task, such as a Stop button. It returns once the
+  turn has settled, so `turn.result` is ready right after.
 - `run(..., timeout=seconds)` stops the turn at the deadline and returns a
   cancelled `Result`. It does not raise, except with `output_type` (see
   [Structured output](#structured-output)).
 
-A bare `break` leaves the turn running. The next `session.run()` settles it.
-Call `await session.reclaim()` before another `session.stream()`.
+A bare `break` ends the turn too: the agent is stopped, and the turn
+settles as cancelled with what was streamed. The next `run()` or `stream()`
+starts cleanly. Only one turn runs at a time; a second `run()` from another
+task waits for the first.
 
 ## Approve tool calls
 
 Pass `approve=` to decide which tool calls run:
 
 ```python
+SHELL = {"Bash", "commandExecution"}  # Claude Code's and Codex's shell tools
+
+
 async def approve(ctx: harnesses.ApprovalContext) -> harnesses.Decision:
-    target = ctx.call.input.get("file_path", "")
-    if target and not ctx.workspace.contains(target):
-        return harnesses.Deny("stay inside the workspace")
+    if ctx.call.name in SHELL:
+        command = str(ctx.call.input.get("command", ""))
+        if "git push" in command or "rm -rf" in command:
+            return harnesses.Deny("not that command")
+        return harnesses.Allow()
+    target = ctx.call.input.get("file_path")
+    if target:
+        real = await ctx.workspace.resolve(target)  # follows symlinks
+        if not ctx.workspace.contains(real):
+            return harnesses.Deny("stay inside the workspace")
     return harnesses.Allow()
 
 
@@ -216,9 +287,14 @@ It returns a decision:
   `UnsupportedError` from the turn.
 - A hook that raises or runs past `approval_timeout` denies the call. The
   failure is listed in `result.approval_errors`.
-- The hook is a gate, not an audit log. The CLI decides which calls to ask
-  about, and read-only tools never reach it. Read the event stream to see
-  every call.
+- On Claude Code every tool call reaches the hook, reads included. On
+  Codex the CLI's policy decides which calls to ask about; shell commands
+  and file changes do. See `approval` in [Capabilities](#capabilities).
+- A shell command is a string the agent wrote. Matching on it, as above, is
+  a speed bump, not isolation. For isolation, run the harness in a
+  [Vercel Sandbox](/docs/basics/workspaces#vercel-sandbox).
+- `workspace.contains(path)` checks the spelling of a path only. Use
+  `contains(await workspace.resolve(path))` so a symlink cannot lead out.
 
 ## Capabilities
 
@@ -235,11 +311,12 @@ the one exception is `deny_reason`, whose absence only drops the reason.
 | `resume` | Continue a conversation this process did not create: `resume()`, `harness_from()`. | yes | yes |
 | `fork` | Branch a conversation into a new one with the same past: `fork()`. | yes | yes |
 | `history` | Read stored transcripts in full, tool calls included: `history()`, `sessions()`. | yes | yes |
-| `images` | The CLI accepts image input. `run()` and `stream()` send text only today. | yes | yes |
+| `images` | Images in a prompt. See [Send files](#send-files). | yes | yes |
+| `documents` | PDFs in a prompt. | yes | no |
 | `rewrite_tool_input` | Rewrite a call's arguments before it runs: `Allow(input={...})`. | yes | no |
 | `deny_reason` | The reason in `Deny(reason)` reaches the agent. Without it the call is still denied, but the reason is dropped. | yes | no |
 | `remember_decisions` | Keep an approval for the rest of the session: `Allow(remember=True)`. | no | no |
-| `approval` | Which tool calls reach the hook. `"policy"`: the CLI's own policy decides, so not every call does. | `"policy"` | `"policy"` |
+| `approval` | Which tool calls reach the hook. `"all"`: every call, reads included. `"policy"`: the CLI's own policy decides, so not every call may. | `"all"` | `"policy"` |
 
 ## Resume and fork
 
@@ -255,8 +332,8 @@ async with harnesses.harness_from(handle, approve=approve) as session:
 ```
 
 A handle holds the harness kind, the CLI's own session id, the workspace, and
-the options. It never holds a hook or a key, so pass `approve=` and `gateway=`
-again. The SDK keeps no registry of conversations. Store handles in your own
+the options. It never holds a hook, a key, or MCP servers (their `env` often
+holds tokens), so pass `approve=`, `gateway=`, and `mcp_servers=` again. The SDK keeps no registry of conversations. Store handles in your own
 database.
 
 A harness can also read its CLI's store, including conversations a person
@@ -269,6 +346,11 @@ branch = await agent.fork(infos[0].session_id)
 same = await agent.resume(infos[0].session_id)
 ```
 
+- `resume()` and `fork()` return a `Session` whose `messages` already hold
+  the past. Run or stream on it exactly as on a new session; the new turns
+  follow that past.
+- `history(session_id, limit=, offset=)` pages through a stored
+  conversation. `limit` and `offset` count the messages it returns.
 - `fork()` starts a new conversation with the same past. The original is
   never written.
 - `resume()` continues the original. Only one client may write a

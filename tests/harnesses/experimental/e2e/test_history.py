@@ -180,3 +180,60 @@ async def test_history_pages_with_limit_and_offset(
     assert shape(first_two) == shape(everything[:2])
     assert shape(next_two) == shape(everything[2:4])
     assert shape(first_two) != shape(next_two)
+
+
+async def test_pages_count_messages_when_tools_were_used(
+    any_harness: Harness,
+) -> None:
+    """`limit`/`offset` count the MESSAGES `history()` returns, whatever the
+    store keeps underneath: a stored tool turn becomes an assistant message
+    and a tool message, and a page must not land between them by accident
+    of a different count."""
+    session = any_harness.session()
+    await session.run(
+        "Use a tool to write the word ONE into one.txt, then reply DONE."
+    )
+    await session.run("Reply with exactly: TWO")
+    everything = await any_harness.history(session.session_id)
+    assert any(m.role == "tool" for m in everything)
+
+    def shape(ms: list[Message]) -> list[tuple[str, list[str]]]:
+        return [(m.role, [p.kind for p in m.parts]) for m in ms]
+
+    for offset in range(len(everything)):
+        page = await any_harness.history(
+            session.session_id, limit=2, offset=offset
+        )
+        assert shape(page) == shape(everything[offset : offset + 2]), offset
+
+
+async def test_a_loaded_conversation_streams_like_a_new_one(
+    any_make_harness: Callable[..., Any],
+) -> None:
+    """No separate "follow" API: load a conversation with `resume()`, and its
+    past is `session.messages`; stream on it exactly as on a new session,
+    and the new turn lands after that past, in order."""
+    from ai.types.events import TextDelta
+
+    async with any_make_harness() as first:
+        original = first.session()
+        await original.run(
+            "Use a tool to write PLUM into fruit.txt, then reply DONE."
+        )
+        sid = original.session_id
+    async with any_make_harness() as second:
+        session = await second.resume(sid)
+        past = session.messages
+        stored = await second.history(sid)
+        assert [m.role for m in past] == [m.role for m in stored]
+        turn = session.stream(
+            "Which fruit did you write? Reply with the word only."
+        )
+        chunks = [e.chunk async for e in turn if isinstance(e, TextDelta)]
+        assert "PLUM" in "".join(chunks).upper()
+        messages = turn.result.messages
+        assert [m.role for m in messages[: len(past)]] == [m.role for m in past]
+        assert [m.role for m in messages[len(past) :]] == [
+            "user",
+            "assistant",
+        ]

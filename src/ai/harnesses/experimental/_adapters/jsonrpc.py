@@ -31,6 +31,12 @@ class JsonRpcPeer:
         self._pump: asyncio.Task[None] | None = None
         self._closed = False
         self._on_crash: Callable[[BaseException], None] | None = None
+        # Server requests being answered. Each runs as its own task: an
+        # answer can take minutes (a person approving a tool call), and the
+        # reader must keep reading meanwhile — notifications for every
+        # session, and the responses to calls made while answering.
+        self._requests: set[asyncio.Task[None]] = set()
+        self._answered: set[Any] = set()
 
     def start(
         self,
@@ -53,6 +59,12 @@ class JsonRpcPeer:
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await self._pump
             self._pump = None
+        for task in list(self._requests):
+            task.cancel()
+        for task in list(self._requests):
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await task
+        self._requests.clear()
         # Nobody is coming with an answer; wake every caller rather than
         # leaving them awaiting a future that can never resolve. A close is
         # not a crash: the owner is shutting down on purpose and still holds
@@ -110,7 +122,33 @@ class JsonRpcPeer:
         )
 
     async def respond(self, request_id: Any, result: Any) -> None:
+        self._answered.add(request_id)
         await self._send({"jsonrpc": "2.0", "id": request_id, "result": result})
+
+    async def _answer(
+        self,
+        on_request: RequestHandler,
+        request_id: Any,
+        method: str,
+        params: dict[str, Any],
+    ) -> None:
+        """Run one request handler; never leave the server without a reply."""
+        try:
+            await on_request(request_id, method, params)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            if request_id not in self._answered:
+                with contextlib.suppress(Exception):
+                    await self._send(
+                        {
+                            "jsonrpc": "2.0",
+                            "id": request_id,
+                            "error": {"code": -32603, "message": str(exc)},
+                        }
+                    )
+        finally:
+            self._answered.discard(request_id)
 
     async def _send(self, message: dict[str, Any]) -> None:
         try:
@@ -139,15 +177,22 @@ class JsonRpcPeer:
                 except json.JSONDecodeError:
                     continue  # a stray non-JSON line is noise, not a failure
                 if "method" in message and "id" not in message:
+                    # Inline, so notifications are handled in the order sent.
                     await on_notify(
                         message["method"], message.get("params") or {}
                     )
                 elif "method" in message:
-                    await on_request(
-                        message["id"],
-                        message["method"],
-                        message.get("params") or {},
+                    # Off the reader: see `_requests`.
+                    task = asyncio.create_task(
+                        self._answer(
+                            on_request,
+                            message["id"],
+                            message["method"],
+                            message.get("params") or {},
+                        )
                     )
+                    self._requests.add(task)
+                    task.add_done_callback(self._requests.discard)
                 else:
                     self._resolve(message)
         except asyncio.CancelledError:

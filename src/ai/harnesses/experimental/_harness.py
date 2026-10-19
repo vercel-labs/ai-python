@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import contextlib
+import re
+import warnings
 from typing import TYPE_CHECKING, Any, Self, TypeVar
 
-from . import _capabilities, _result, _session
+from . import _capabilities, _input, _result, _session
 from . import errors as errors_
 
 if TYPE_CHECKING:
@@ -38,7 +40,8 @@ class Harness:
         self.approval_timeout = approval_timeout
         self.options = dict(options or {})
         self._open = False
-        self._approval_errors: list[str] = []
+        # Approval-hook failures, per session: each turn reports its own.
+        self._approval_errors: dict[str, list[str]] = {}
         # Adapters do not keep their own transcript: they borrow the
         # session's, so the approval hook and the caller see one history.
         self._sessions: dict[str, Any] = {}
@@ -94,6 +97,25 @@ class Harness:
             await self._unwind()
             raise
         self._open = True
+        self._check_version()
+
+    def _check_version(self) -> None:
+        """Warn when the CLI is older than the one this SDK was measured on.
+
+        The adapters lean on CLI behaviour that is measured, not documented
+        (dialogs, session records, lock files); an older CLI may lack it. A
+        newer one is not warned about: the version rides on every harness
+        error instead, which is where it is needed.
+        """
+        verified = getattr(self.adapter, "verified_version", None)
+        have, want = _version(self.version), _version(verified)
+        if have is not None and want is not None and have < want:
+            warnings.warn(
+                f"{self.name} {self.version} is older than {verified}, the "
+                + "version this SDK was verified with; update it if "
+                + "something misbehaves",
+                stacklevel=3,
+            )
 
     async def _unwind(self) -> None:
         with contextlib.suppress(Exception):
@@ -150,7 +172,7 @@ class Harness:
 
     async def run(
         self,
-        prompt: str,
+        prompt: _input.Prompt,
         *,
         history: list[messages.Message] | None = None,
         output_type: type[T] | None = None,
@@ -325,17 +347,26 @@ class Harness:
     def _register(self, session: Any) -> None:
         self._sessions[session.session_id] = session
 
+    def _forget(self, session_id: str) -> None:
+        self._sessions.pop(session_id, None)
+        self._approval_errors.pop(session_id, None)
+
     def _history_of(self, session_id: str) -> list[Any]:
         session = self._sessions.get(session_id)
         return session.messages if session is not None else []
 
-    def _record_approval_error(self, detail: str) -> None:
-        self._approval_errors.append(detail)
+    def _record_approval_error(self, session_id: str, detail: str) -> None:
+        self._approval_errors.setdefault(session_id, []).append(detail)
 
-    def _take_approval_errors(self) -> list[str]:
-        errors, self._approval_errors = self._approval_errors, []
-        return errors
+    def _take_approval_errors(self, session_id: str) -> list[str]:
+        return self._approval_errors.pop(session_id, [])
 
     def __repr__(self) -> str:
         state = "open" if self._open else "closed"
         return f"<Harness {self.name} ({state}) on {self.workspace.kind}>"
+
+
+def _version(text: str | None) -> tuple[int, ...] | None:
+    """Return the first dotted version number in `text`, as a tuple."""
+    found = re.search(r"\d+(?:\.\d+)+", text or "")
+    return tuple(int(n) for n in found.group(0).split(".")) if found else None

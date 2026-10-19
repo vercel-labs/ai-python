@@ -23,6 +23,10 @@ the context, and the rule for what becomes what is the same everywhere:
   hand-written notes passed, genuine Opus thinking was refused. So the
   Claude renderer omits reasoning, and the adapter warns with the count,
   because dropping context silently is the one thing this SDK never does.
+- files: images go to both, as the image input each takes; PDFs to Claude
+  as documents. Anything else (a PDF into codex, a text file) is left out
+  and counted (`unsupported_files`), and the adapter warns, like it does
+  for reasoning into Claude.
 """
 
 from __future__ import annotations
@@ -30,8 +34,10 @@ from __future__ import annotations
 import datetime
 import json
 import uuid
+import warnings
 from typing import Any
 
+from ...types import media
 from ...types import messages as messages_
 
 NOTE_PREFIX = "[Handoff from a previous session — earlier reasoning: "
@@ -44,6 +50,49 @@ def _text(value: Any) -> str:
 def _note(reasoning: list[str]) -> str:
     return (
         NOTE_PREFIX + " ".join(r.strip() for r in reasoning if r.strip()) + "]"
+    )
+
+
+def _image_url(part: messages_.FilePart) -> str:
+    """Return an http(s) URL as it is, anything else as a data URL."""
+    return media.data_to_data_url(part.data, part.media_type)
+
+
+def _source(part: messages_.FilePart) -> dict[str, Any]:
+    """Return an Anthropic content-block source for a file."""
+    if isinstance(part.data, str) and media.is_downloadable_url(part.data):
+        return {"type": "url", "url": part.data}
+    return {
+        "type": "base64",
+        "media_type": part.media_type,
+        "data": media.data_to_base64(part.data),
+    }
+
+
+def warn_unsupported_files(
+    messages: list[messages_.Message], kind: str
+) -> None:
+    """Say how many files a history held that `kind` was not given."""
+    left = unsupported_files(messages, kind)
+    if left:
+        warnings.warn(
+            f"{left} file(s) in the history were not carried into {kind}: "
+            + "it takes images"
+            + (" and PDFs" if kind == "claude-code" else "")
+            + " from a history. Text, tool calls and images were carried.",
+            stacklevel=3,
+        )
+
+
+def unsupported_files(messages: list[messages_.Message], kind: str) -> int:
+    """Count files a history holds that `kind` cannot take as input."""
+    return sum(
+        1
+        for m in messages
+        for p in m.parts
+        if isinstance(p, messages_.FilePart)
+        and not p.media_type.startswith("image/")
+        and not (kind == "claude-code" and p.media_type == "application/pdf")
     )
 
 
@@ -60,6 +109,20 @@ def to_codex_items(messages: list[messages_.Message]) -> list[dict[str, Any]]:
                         "type": "message",
                         "role": m.role,
                         "content": [{"type": ctype, "text": p.text}],
+                    }
+                )
+            elif (
+                isinstance(p, messages_.FilePart)
+                and m.role == "user"
+                and p.media_type.startswith("image/")
+            ):
+                items.append(
+                    {
+                        "type": "message",
+                        "role": "user",
+                        "content": [
+                            {"type": "input_image", "image_url": _image_url(p)}
+                        ],
                     }
                 )
             elif isinstance(p, messages_.ToolCallPart):
@@ -143,6 +206,11 @@ def to_claude_records(
         for p in m.parts:
             if isinstance(p, messages_.TextPart) and p.text.strip():
                 blocks.append({"type": "text", "text": p.text})
+            elif isinstance(p, messages_.FilePart) and m.role == "user":
+                if p.media_type.startswith("image/"):
+                    blocks.append({"type": "image", "source": _source(p)})
+                elif p.media_type == "application/pdf":
+                    blocks.append({"type": "document", "source": _source(p)})
             elif isinstance(p, messages_.ToolCallPart):
                 try:
                     args = json.loads(p.tool_args) if p.tool_args else {}

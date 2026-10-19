@@ -39,7 +39,10 @@ sandbox_credentials = workspaces.sandbox_credentials
 
 HARNESS_CLI = {"claude": "claude", "codex": "codex"}
 
-SPECS = {"claude": claude_code, "codex": codex}
+SPECS: dict[str, Callable[..., Harness]] = {
+    "claude": claude_code,
+    "codex": codex,
+}
 
 
 def _cli_missing(kind: str) -> bool:
@@ -196,19 +199,9 @@ def make_harness(harness_kind: str, workspace: Workspace) -> Callable[..., Any]:
     ) -> AsyncIterator[Harness]:
         """`writable=True` means "this test needs the agent to change files".
 
-        The harnesses spell authority differently — Claude gates per call,
-        Codex picks a sandbox mode — so the translation lives here rather
-        than in every test. A test that hardcoded `sandbox=` would silently
-        become a Codex-only test.
+        Every harness has full access by default, so it needs no
+        translation any more; it stays as documentation of the test's intent.
         """
-        # Codex picks a mode only on your own machine: in a sandbox its own
-        # sandbox cannot start, and the default already lets it write.
-        if (
-            writable
-            and harness_kind == "codex"
-            and workspace.owner != "provider"
-        ):
-            options.setdefault("sandbox", "workspace-write")
         async with SPECS[harness_kind](
             workspace=workspace, **options
         ) as harness:
@@ -221,18 +214,12 @@ def make_harness(harness_kind: str, workspace: Workspace) -> Callable[..., Any]:
 def any_make_harness(
     harness_kind: str, any_workspace: Workspace
 ) -> Callable[..., Any]:
-    """`make_harness`, over both locations. Same translation of `writable`."""
+    """`make_harness`, over both locations."""
 
     @asynccontextmanager
     async def _make(
         *, writable: bool = False, **options: Any
     ) -> AsyncIterator[Harness]:
-        if (
-            writable
-            and harness_kind == "codex"
-            and any_workspace.owner != "provider"
-        ):
-            options.setdefault("sandbox", "workspace-write")
         async with SPECS[harness_kind](
             workspace=any_workspace, **options
         ) as harness:

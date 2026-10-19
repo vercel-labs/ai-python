@@ -47,9 +47,7 @@ async def main() -> None:
 
             # 2. Codex picks it up — same directory, other harness. It knows
             #    what was said AND what was done, and acts with its own tools.
-            async with harnesses.codex(
-                workspace=workspace, sandbox="workspace-write"
-            ) as agent:
+            async with harnesses.codex(workspace=workspace) as agent:
                 result = await agent.run(
                     "What is the deadline, and what did we put in notes.txt? "
                     "Then append " + "'bread' to notes.txt. Reply in one line.",

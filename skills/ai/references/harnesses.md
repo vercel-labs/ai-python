@@ -21,11 +21,17 @@ brings its own tools, login, and session store.
   `ai.errors.InstallationError` at construction. `codex()` needs only the
   `codex` binary.
 - On `Local`, a missing CLI raises `ExecutableMissingError`. The SDK installs
-  CLIs only into a sandbox.
-- Locally codex defaults to `sandbox="read-only"`, and in that mode it
-  declines writes without trying. Pass `sandbox="workspace-write"` when it
-  must edit files. In a sandbox leave it unset: other modes raise
-  `UnsupportedError`, because codex's own sandbox cannot start in the VM.
+  CLIs only into a sandbox, and there it installs or upgrades to the latest
+  npm release on open (not while a copy of the CLI is running there).
+- Every harness has full access by default (claude: no permission prompts;
+  codex: `sandbox="danger-full-access"`). Restrict with `approve=`, codex's
+  `sandbox=` (on `Local` only; other modes raise `UnsupportedError` in a
+  sandbox), claude's `tools=`/`disallowed_tools=`, or a `VercelSandbox`.
+- Shared options: `instructions=` (added to the CLI's system prompt) and
+  `mcp_servers=` (claude's shape: `{"name": {"command", "args", "env"}}` or
+  `{"name": {"url"}}`). Claude only: `tools=`, `disallowed_tools=`,
+  `max_turns=`. A `Handle` never stores `mcp_servers`: pass them again to
+  `harness_from`.
 - Open one harness per workspace and reuse it for many sessions. The CLI
   processes live as long as the `async with`.
 - A harness opens its workspace but never closes it. Use `async with` on the
@@ -43,9 +49,17 @@ brings its own tools, login, and session store.
   `finish_reason == "cancelled"`. They do not raise, except that with
   `output_type=` a cancelled reply that does not validate raises
   `ValidationError`.
-- To end a stream early, `await session.stop()` then `break`. A bare `break`
-  leaves the turn running; the next `session.run()` settles it, but a new
-  `session.stream()` waits until you call `await session.reclaim()`.
+- To end a stream early, `break` or `await session.stop()`. Both stop the
+  agent and settle the turn as cancelled. `stop()` works from any task (a
+  Stop button) and returns once the turn has settled.
+- `result.messages` reads in order: assistant message with the tool call,
+  then a `"tool"` message with its result. Safe to pass as `history=`.
+- A prompt can be a list: `[ "describe this", ai.file_part(png) ]`. Images
+  on both, PDFs on claude only (`capabilities.documents`), `text/*` files on
+  both as text. Anything else raises `UnsupportedError` before the turn.
+- To continue a stored conversation, `resume(id)` (its past is in
+  `session.messages`) and run or stream as usual. There is no separate
+  follow API; `history(id, limit=, offset=)` pages by message.
 - `steer` and `stop` live on the session, never the turn. Whether a steer
   interrupts work already in flight depends on the CLI; only rely on it being
   obeyed before the turn ends.
@@ -57,15 +71,17 @@ brings its own tools, login, and session store.
 
 - No `approve=` hook means every tool call is allowed, not "ask the user".
   Pass a hook to restrict.
-- The hook is a gate, not an audit log (`capabilities.approval ==
-  "policy"`). Read-only tools never reach it. Read the event stream to see
-  every call.
+- Claude Code's hook sees every call, reads included
+  (`capabilities.approval == "all"`). Codex's sees what its policy asks
+  about (`"policy"`): shell commands and file changes. Read the event
+  stream to see every call on any harness.
 - `ctx.call.name` and `ctx.call.input` are native. Claude uses `Bash`,
   `Write`, `Edit` with `file_path`. Codex uses `commandExecution` (the
   command is a string, often wrapped in `/bin/bash -lc`) and `fileChange`.
   In a sandbox codex often writes files through the shell. A hook for both
   harnesses must handle both dialects. Do not parse shell to judge
-  containment; use `ctx.workspace.contains(path)` on absolute paths.
+  containment; use `ctx.workspace.contains(await ctx.workspace.resolve(p))`
+  so a symlink cannot lead out. For real isolation use a `VercelSandbox`.
 - `harnesses.Deny("reason")` and `Deny(reason="reason")` are the same.
 - On codex (`deny_reason=False`) the reason never reaches the agent.
   `Allow(input=...)` works only on Claude. `Allow(remember=True)` works on

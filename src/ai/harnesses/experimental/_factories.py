@@ -6,6 +6,7 @@ in sync.
 
 from __future__ import annotations
 
+import inspect
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -17,7 +18,7 @@ from ._adapters import base
 from ._adapters import codex as codex_
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 
 Effort = Literal["low", "medium", "high", "max"]
 
@@ -31,6 +32,11 @@ def claude_code(
     gateway: _gateway.Gateway | None = None,
     effort: Effort | None = None,
     executable: str = "claude",
+    instructions: str | None = None,
+    mcp_servers: Mapping[str, Mapping[str, Any]] | None = None,
+    tools: Sequence[str] | None = None,
+    disallowed_tools: Sequence[str] | None = None,
+    max_turns: int | None = None,
 ) -> _harness.Harness:
     """Claude Code, driving your own installation and login.
 
@@ -44,6 +50,13 @@ def claude_code(
 
     `effort` is how hard the model thinks — "low" to "max" — the same scale
     on both harnesses. Unset, the CLI's own default applies.
+
+    `instructions` are added to Claude Code's system prompt. `mcp_servers`
+    connects MCP servers: `{"name": {"command": ..., "args": [...]}}` or
+    `{"name": {"type": "http", "url": ...}}`. `tools` limits the built-in
+    tools the agent has (`["Read", "Grep"]`; `[]` for none);
+    `disallowed_tools` takes tools away. `max_turns` caps the agent's steps
+    in one turn; a turn that hits it settles with `finish_reason="length"`.
     """
     _optional.import_optional_sdk(
         "claude_agent_sdk",
@@ -55,12 +68,28 @@ def claude_code(
 
     return _harness.Harness(
         claude.ClaudeAdapter(
-            executable=executable, model=model, gateway=gateway, effort=effort
+            executable=executable,
+            model=model,
+            gateway=gateway,
+            effort=effort,
+            instructions=instructions,
+            mcp_servers={k: dict(v) for k, v in (mcp_servers or {}).items()},
+            tools=list(tools) if tools is not None else None,
+            disallowed_tools=list(disallowed_tools or []),
+            max_turns=max_turns,
         ),
         workspace=workspace,
         approve=approve,
         approval_timeout=approval_timeout,
-        options={"model": model, "executable": executable, "effort": effort},
+        options={
+            "model": model,
+            "executable": executable,
+            "effort": effort,
+            "instructions": instructions,
+            "tools": list(tools) if tools is not None else None,
+            "disallowed_tools": list(disallowed_tools or []) or None,
+            "max_turns": max_turns,
+        },
     )
 
 
@@ -75,6 +104,11 @@ def codex(
     gateway: _gateway.Gateway | None = None,
     effort: Effort | None = None,
     executable: str = "codex",
+    instructions: str | None = None,
+    mcp_servers: Mapping[str, Mapping[str, Any]] | None = None,
+    tools: Sequence[str] | None = None,
+    disallowed_tools: Sequence[str] | None = None,
+    max_turns: int | None = None,
 ) -> _harness.Harness:
     """Codex over `codex app-server`.
 
@@ -87,14 +121,30 @@ def codex(
     "max" scale claude takes; codex spells the top "xhigh", and that is
     translated here so the caller never learns the difference.
 
-    `sandbox` defaults to "read-only" on your own machine and
-    "danger-full-access" on a provider-owned workspace, where the microVM
-    is already the isolation boundary and codex's own sandbox cannot start
-    nested inside it. On your own machine, pass a value to decide for
-    yourself; on a provider-owned workspace any other value raises
-    UnsupportedError when the harness opens, because every command would
-    fail.
+    `sandbox` defaults to "danger-full-access" everywhere: every harness
+    runs with full access unless you restrict it (an approval hook, or here
+    an explicit mode). On your own machine you may pass "read-only" or
+    "workspace-write"; on a provider-owned workspace any other value raises
+    UnsupportedError when the harness opens, because codex's own sandbox
+    cannot start nested inside the microVM and every command would fail.
+
+    `instructions` are codex's developer instructions for every thread.
+    `mcp_servers` takes the same shape as on `claude_code()`.
+
+    `tools`, `disallowed_tools` and `max_turns` are accepted so that every
+    `claude_code()` argument is a `codex()` argument — swapping one for the
+    other is a one-word edit, and a dict of both factories keeps its type —
+    but codex has no equivalent: passing one raises UnsupportedError.
     """
+    for name, value in (
+        ("tools", tools),
+        ("disallowed_tools", disallowed_tools),
+        ("max_turns", max_turns),
+    ):
+        if value is not None:
+            raise errors.UnsupportedError(
+                codex_.KIND, name, "codex has no such option; it is claude's"
+            )
     if effort is not None:
         config = {
             "model_reasoning_effort": "xhigh" if effort == "max" else effort,
@@ -107,6 +157,8 @@ def codex(
             sandbox=sandbox,
             config=config,
             gateway=gateway,
+            instructions=instructions,
+            mcp_servers={k: dict(v) for k, v in (mcp_servers or {}).items()},
         ),
         workspace=workspace,
         approve=approve,
@@ -116,11 +168,18 @@ def codex(
             "executable": executable,
             "sandbox": sandbox,
             "effort": effort,
+            "instructions": instructions,
         },
     )
 
 
-BUILDERS = {"claude-code": claude_code, "codex": codex}
+BUILDERS: dict[str, Callable[..., _harness.Harness]] = {
+    "claude-code": claude_code,
+    "codex": codex,
+}
+RUNTIME_ONLY = frozenset(
+    {"workspace", "approve", "approval_timeout", "gateway", "mcp_servers"}
+)
 
 
 def workspace_from(coords: _base.WorkspaceCoords) -> _base.Workspace:
@@ -153,6 +212,7 @@ async def harness_from(
     approve: base.ApprovalHook | None = None,
     approval_timeout: float = _harness.DEFAULT_APPROVAL_TIMEOUT,
     gateway: _gateway.Gateway | None = None,
+    mcp_servers: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> AsyncIterator[_session.Session]:
     """Rebuild the harness a handle names and continue its conversation.
 
@@ -174,14 +234,19 @@ async def harness_from(
         raise errors.ResumeFailedError(
             handle.session_id, f"no adapter for harness kind {handle.kind!r}"
         )
-    options = {
+    # What the handle recorded, for the options this harness takes. MCP
+    # servers are never recorded — their env often holds tokens — so like
+    # the hook and the gateway they are passed again.
+    accepted = inspect.signature(builder).parameters
+    kwargs: dict[str, Any] = {
         k: v
         for k, v in handle.options.items()
-        if k in ("model", "executable", "sandbox", "effort")
+        if k in accepted and k not in RUNTIME_ONLY and v is not None
     }
-    kwargs: dict[str, Any] = {k: v for k, v in options.items() if v is not None}
     if gateway is not None:
         kwargs["gateway"] = gateway
+    if mcp_servers is not None:
+        kwargs["mcp_servers"] = mcp_servers
     harness = builder(
         workspace=workspace_from(handle.workspace),
         approve=approve,

@@ -12,6 +12,7 @@ what it sent, not from the schema alone.
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import importlib.metadata
 import json
@@ -29,6 +30,7 @@ from .. import (
     _capabilities,
     _cli_processes,
     _handoff,
+    _input,
     _session,
     _session_lock,
     errors,
@@ -41,7 +43,10 @@ if TYPE_CHECKING:
 KIND = "codex"
 # Internal marker delivered on a turn queue when the process dies.
 CRASHED = "__crashed__"
-INSTALL = "npm install -g @openai/codex"
+PACKAGE = "@openai/codex"
+INSTALL = f"npm install -g {PACKAGE}"
+VERIFIED_VERSION = "0.160.1"
+"""The CLI the live suite last passed against. Older ones get a warning."""
 THREAD_ID = re.compile(r"[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}")
 
 # Codex asks only when its own policy escalates — sandbox escapes, blocked
@@ -83,6 +88,7 @@ TOOL_ITEMS = (
 class CodexAdapter:
     kind = KIND
     capabilities = CAPABILITIES
+    verified_version: str | None = VERIFIED_VERSION
 
     def __init__(
         self,
@@ -91,7 +97,10 @@ class CodexAdapter:
         sandbox: str | None = None,
         config: dict[str, Any] | None = None,
         gateway: _gateway.Gateway | None = None,
+        instructions: str | None = None,
+        mcp_servers: dict[str, Any] | None = None,
     ) -> None:
+        self._instructions = instructions
         self._executable = executable
         self._model = model
         self._sandbox = sandbox
@@ -101,7 +110,10 @@ class CodexAdapter:
         # codex CLI takes. This is how you point it at a model provider
         # without writing ~/.codex/config.toml on the far side. A gateway
         # supplies the provider table; an explicit config= wins over it.
-        self._explicit_config = dict(config or {})
+        self._explicit_config = {
+            **mcp_config(mcp_servers),
+            **dict(config or {}),
+        }
         self._config = {**gateway_config(gateway), **self._explicit_config}
         self._gateway_env: dict[str, str] = gateway_env(gateway)
         self._version: str | None = None
@@ -120,7 +132,7 @@ class CodexAdapter:
         # An error raised while answering an approval cannot propagate out
         # of the JSON-RPC pump — nobody is awaiting it there. It is parked
         # and re-raised on the turn that caused it.
-        self._pending_error: BaseException | None = None
+        self._pending_error: dict[str, BaseException] = {}
         self.approve: base.ApprovalHook | None = None
         self.approval_timeout: float = 300.0
         self.on_approval_error: Any = None
@@ -180,25 +192,18 @@ class CodexAdapter:
                 "command would fail; leave `sandbox` unset there (the VM "
                 "is the isolation boundary)",
             )
-        probe = await self._probe(workspace)
-        if probe.exit_code != 0 and workspace.owner == "provider":
-            # Ours to provision. Never on a user's own machine.
-            await workspace.exec(["sh", "-c", INSTALL], timeout=600)
-            probe = await self._probe(workspace)
+        probe = await base.provision(workspace, self._executable, PACKAGE)
         if probe.exit_code != 0:
             raise errors.ExecutableMissingError(KIND, self._executable, INSTALL)
         self._version = probe.stdout.strip().splitlines()[0] or None
         self._workspace = workspace
         if not self._sandbox_explicit:
-            # On a provider-owned microVM the VM *is* the isolation
-            # boundary, and codex's own sandbox cannot start nested inside
-            # it (see above). On the user's own machine, read-only stays
-            # the safe default.
-            self._sandbox = (
-                "danger-full-access"
-                if workspace.owner == "provider"
-                else "read-only"
-            )
+            # Full access by default, everywhere, like claude without a
+            # hook: a harness is driven by a program, nobody is there to
+            # widen a narrow default, and a mode that silently refuses
+            # writes reads as an agent that did nothing. Restrict with an
+            # approval hook, an explicit `sandbox=`, or a VercelSandbox.
+            self._sandbox = "danger-full-access"
         self._lock = _session_lock.SessionLock(workspace, KIND)
         await self._launch(workspace)
 
@@ -255,9 +260,6 @@ class CodexAdapter:
         ):
             await self._launch(self._workspace)
 
-    async def _probe(self, workspace: _base.Workspace) -> _base.ExecResult:
-        return await workspace.exec([self._executable, "--version"], timeout=60)
-
     async def close(self) -> None:
         self._closed = True
         if self._peer is not None:
@@ -291,6 +293,28 @@ class CodexAdapter:
         self._threads.clear()
         self._queues.clear()
 
+    def _thread_params(self) -> dict[str, Any]:
+        """How this harness runs a thread: on start, resume and fork alike.
+
+        A resumed or forked thread otherwise keeps the policy it was created
+        with — a person's TUI asking for approvals nobody here answers.
+        """
+        return {
+            "sandbox": self._sandbox,
+            # With a hook: ask about everything the policy can ask about,
+            # and the hook decides. Without one there is no policy to
+            # consult, so the server never asks — a request that must
+            # round-trip to this process would freeze an agent whose
+            # controller is gone (measured).
+            "approvalPolicy": "untrusted" if self.approve else "never",
+            **({"model": self._model} if self._model else {}),
+            **(
+                {"developerInstructions": self._instructions}
+                if self._instructions
+                else {}
+            ),
+        }
+
     def _rpc(self) -> jsonrpc.JsonRpcPeer:
         if self._peer is None:
             raise errors.AgentCrashedError(KIND, "app-server is not running")
@@ -305,17 +329,7 @@ class CodexAdapter:
         await self._ensure_running()
         result = await self._rpc().call(
             "thread/start",
-            {
-                "cwd": self._workspace.path,
-                "sandbox": self._sandbox,
-                # With a hook: ask about everything the policy can ask
-                # about, and the hook decides. Without one there is no
-                # policy to consult, so the server never asks — a request
-                # that must round-trip to this process would freeze an
-                # agent whose controller is gone (measured).
-                "approvalPolicy": "untrusted" if self.approve else "never",
-                **({"model": self._model} if self._model else {}),
-            },
+            {"cwd": self._workspace.path, **self._thread_params()},
         )
         thread_id = str((result or {}).get("thread", {}).get("id") or "")
         if not thread_id:
@@ -326,6 +340,7 @@ class CodexAdapter:
         await self._acquire(thread_id)
         if history:
             # The thread's model-visible history, before the first turn.
+            _handoff.warn_unsupported_files(history, KIND)
             await self._rpc().call(
                 "thread/inject_items",
                 {
@@ -340,7 +355,10 @@ class CodexAdapter:
         await self._require_here(session_id)
         await self._acquire(session_id)
         try:
-            await self._rpc().call("thread/resume", {"threadId": session_id})
+            await self._rpc().call(
+                "thread/resume",
+                {"threadId": session_id, **self._thread_params()},
+            )
         except jsonrpc.JsonRpcError as exc:
             await self._release(session_id)
             if "active writer" in str(exc):
@@ -399,13 +417,13 @@ class CodexAdapter:
                 await self._lock.release(session_id)
 
     async def prepare_tui(self) -> None:
-        """On a sandbox that is ours, make sure codex is current.
+        """On a sandbox that is ours, let the TUI open on its prompt.
 
-        The TUI opens on an "Update now / Skip" dialog when a newer release
-        exists, its default runs an installer, and the first keystrokes meant
-        for the prompt pick it (measured — once on a user's own machine,
-        which is exactly why this never touches one). The provider itself
-        needs no seeding: it comes from the same -c overrides headless uses.
+        The CLI is already the latest release (`base.provision`, at start),
+        and `--disable in_app_updates` keeps the "Update now" dialog away
+        regardless. What remains is the per-folder trust dialog. The provider
+        itself needs no seeding: it comes from the same -c overrides headless
+        uses.
         """
         if self._workspace is None or self._workspace.owner != "provider":
             return
@@ -423,18 +441,6 @@ class CodexAdapter:
         if f'[projects."{workdir}"]' not in config:
             trust = f'\n[projects."{workdir}"]\ntrust_level = "trusted"\n'
             await self._workspace.write_text(config_path, config + trust)
-        have = (
-            await self._workspace.exec(
-                [self._executable, "--version"], timeout=60
-            )
-        ).stdout.split()
-        want = (
-            await self._workspace.exec(
-                ["npm", "view", "@openai/codex", "version"], timeout=120
-            )
-        ).stdout.strip()
-        if want and have and have[-1] != want:
-            await self._workspace.exec(["sh", "-c", INSTALL], timeout=600)
 
     def tui_launch(
         self, session_id: str | None
@@ -452,6 +458,8 @@ class CodexAdapter:
         ]
         if self._model:
             argv += ["--model", self._model]
+        if self._instructions:
+            argv += _config_args({"developer_instructions": self._instructions})
         env = {
             "TERM": "xterm-256color",
             **dict(self._workspace.env),
@@ -536,18 +544,14 @@ class CodexAdapter:
         await self._ensure_running()
         result = await self._rpc().call(
             "thread/start",
-            {
-                "cwd": self._workspace.path,
-                "sandbox": self._sandbox,
-                "approvalPolicy": "untrusted" if self.approve else "never",
-                **({"model": self._model} if self._model else {}),
-            },
+            {"cwd": self._workspace.path, **self._thread_params()},
         )
         thread_id = str((result or {}).get("thread", {}).get("id") or "")
         if not thread_id:
             raise errors.AgentCrashedError(
                 KIND, f"thread/start returned no id: {result}"
             )
+        _handoff.warn_unsupported_files(history, KIND)
         await self._rpc().call(
             "thread/inject_items",
             {"threadId": thread_id, "items": _handoff.to_codex_items(history)},
@@ -672,7 +676,8 @@ class CodexAdapter:
         await self._require_here(session_id)
         try:
             result = await self._rpc().call(
-                "thread/fork", {"threadId": session_id}
+                "thread/fork",
+                {"threadId": session_id, **self._thread_params()},
             )
         except jsonrpc.JsonRpcError as exc:
             raise errors.ResumeFailedError(
@@ -735,8 +740,10 @@ class CodexAdapter:
         # Only NOW interrupt. codex will not process turn/interrupt while
         # this approval is unanswered, so awaiting it inside _decide stalled
         # for the full 120s RPC timeout before the decline even went out —
-        # measured 123s to settle a Deny(stop=True). The outcome was right
-        # and two minutes late, and a test asserting only the outcome passed.
+        # measured 123s to settle a Deny(stop=True). And this handler must
+        # not run on the peer's reader, or the interrupt's own reply is never
+        # read (measured: a 30s stall, the call's timeout); the peer answers
+        # each request in a task of its own.
         pending = self._pending_interrupt.pop(
             params.get("threadId") or "", None
         )
@@ -773,12 +780,16 @@ class CodexAdapter:
             async with asyncio.timeout(self.approval_timeout):
                 decision = await self.approve(request)
         except Exception as exc:
-            self._record_error(f"{type(exc).__name__}: {exc}")
+            self._record_error(thread_id, f"{type(exc).__name__}: {exc}")
             return "decline"
         if isinstance(decision, _approval.Deny):
             if decision.stop and thread_id:
                 self._interrupted.add(thread_id)
-                turn_id = self._active_turn.get(thread_id)
+                # The request names its turn; the id from turn/start may
+                # not have reached this adapter yet when it asks.
+                turn_id = params.get("turnId") or self._active_turn.get(
+                    thread_id
+                )
                 if turn_id:
                     # Deferred to _on_request, after the decline is answered.
                     self._pending_interrupt[thread_id] = {
@@ -788,14 +799,14 @@ class CodexAdapter:
             return "decline"
         if isinstance(decision, _approval.Allow):
             if decision.input is not None:
-                self._pending_error = errors.UnsupportedError(
+                self._pending_error[thread_id] = errors.UnsupportedError(
                     KIND,
                     "rewrite_tool_input",
                     "app-server approvals are accept/acceptForSession/decline",
                 )
                 return "decline"
             if decision.remember:
-                self._pending_error = errors.UnsupportedError(
+                self._pending_error[thread_id] = errors.UnsupportedError(
                     KIND,
                     "remember",
                     "acceptForSession did not suppress the next identical "
@@ -805,14 +816,14 @@ class CodexAdapter:
             return "accept"
         return "decline"
 
-    def _record_error(self, detail: str) -> None:
+    def _record_error(self, session_id: str, detail: str) -> None:
         if callable(self.on_approval_error):
-            self.on_approval_error(detail)
+            self.on_approval_error(session_id, detail)
 
     # -- turns ----------------------------------------------------------------
 
     async def turn(
-        self, session_id: str, prompt: str
+        self, session_id: str, prompt: list[_input.Part]
     ) -> AsyncIterator[events_.AgentEvent]:
         queue: asyncio.Queue[Any] = asyncio.Queue()
         self._queues[session_id] = queue
@@ -824,7 +835,7 @@ class CodexAdapter:
         preamble: list[Any] = []
         open_text: set[str] = set()
         names: dict[str, str] = {}
-        self._pending_error = None
+        self._pending_error.pop(session_id, None)
         # The last transport error codex reported while retrying. If the
         # turn then fails without a message of its own, this is the only
         # explanation anyone gets.
@@ -832,10 +843,7 @@ class CodexAdapter:
         try:
             started = await self._rpc().call(
                 "turn/start",
-                {
-                    "threadId": session_id,
-                    "input": [{"type": "text", "text": prompt}],
-                },
+                {"threadId": session_id, "input": await _input_items(prompt)},
             )
         except jsonrpc.JsonRpcError as exc:
             raise errors.TurnFailedError(KIND, str(exc)) from exc
@@ -895,8 +903,8 @@ class CodexAdapter:
                     yield event
             elif method == "turn/completed":
                 self._active_turn.pop(session_id, None)
-                if self._pending_error is not None:
-                    error, self._pending_error = self._pending_error, None
+                error = self._pending_error.pop(session_id, None)
+                if error is not None:
                     self._queues.pop(session_id, None)
                     raise error
                 usage = self._usage.get(session_id, usage_.Usage())
@@ -962,6 +970,29 @@ class CodexAdapter:
             await self._rpc().call(
                 "turn/interrupt", {"threadId": session_id, "turnId": turn_id}
             )
+
+
+async def _input_items(prompt: list[_input.Part]) -> list[dict[str, Any]]:
+    """Return a prompt as app-server's `UserInput` items.
+
+    An image travels as a data URL, built here from its bytes: a URL handed
+    to codex would be fetched from inside a sandbox whose egress is locked.
+    """
+    items: list[dict[str, Any]] = []
+    for part in prompt:
+        if isinstance(part, messages_.TextPart):
+            items.append({"type": "text", "text": part.text})
+        elif part.media_type.startswith("text/"):
+            items.append({"type": "text", "text": await _input.as_text(part)})
+        else:
+            encoded = base64.b64encode(await _input.data(part)).decode("ascii")
+            items.append(
+                {
+                    "type": "image",
+                    "url": f"data:{part.media_type};base64,{encoded}",
+                }
+            )
+    return items
 
 
 def _tool_name(item: dict[str, Any]) -> str:
@@ -1083,18 +1114,23 @@ def _item_to_messages(
 ) -> list[messages_.Message]:
     kind = item.get("type")
     if kind == "userMessage":
-        # A user item carries `content` blocks, not a flat `text`.
+        # A user item carries `content` blocks — its `UserInput`s — not a
+        # flat `text`. Images come back as the files they were sent as.
         text = item.get("text")
+        parts: list[Any] = []
         if not isinstance(text, str):
-            text = "".join(
-                block.get("text", "")
-                for block in item.get("content") or []
-                if isinstance(block, dict)
-            )
+            blocks = [
+                b for b in item.get("content") or [] if isinstance(b, dict)
+            ]
+            text = "".join(b.get("text", "") for b in blocks)
+            for block in blocks:
+                url = block.get("url")
+                if block.get("type") == "image" and isinstance(url, str):
+                    parts.append(messages_.FilePart.from_url(url))
         return [
             messages_.Message(
                 role="user",
-                parts=[messages_.TextPart(text=text)],
+                parts=[messages_.TextPart(text=text), *parts],
                 replay=replay,
             )
         ]
@@ -1203,6 +1239,23 @@ def gateway_config(gateway: _gateway.Gateway | None) -> dict[str, str]:
         # Required: codex no longer speaks Chat Completions.
         "model_providers.vercel.wire_api": "responses",
     }
+
+
+def mcp_config(servers: dict[str, Any] | None) -> dict[str, Any]:
+    """MCP servers, in the shape claude takes, as codex `-c` overrides.
+
+    `{"name": {"command": ..., "args": [...], "env": {...}}}` for a local
+    server, `{"name": {"url": ...}}` for a remote one.
+    """
+    out: dict[str, Any] = {}
+    for name, server in (servers or {}).items():
+        prefix = f"mcp_servers.{name}"
+        for key in ("command", "args", "url"):
+            if server.get(key) is not None:
+                out[f"{prefix}.{key}"] = server[key]
+        for var, value in (server.get("env") or {}).items():
+            out[f"{prefix}.env.{var}"] = value
+    return out
 
 
 def gateway_env(gateway: _gateway.Gateway | None) -> dict[str, str]:

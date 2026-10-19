@@ -48,20 +48,25 @@ class Capabilities(BaseModel):
     raises rather than doing nothing.
     """
     images: bool = False
+    """Images (`FilePart` with an `image/*` type) in a prompt."""
+    documents: bool = False
+    """PDFs (`FilePart` with `application/pdf`) in a prompt. Text files
+    (`text/*`) are taken by every harness, as text."""
 
     approval: ApprovalCoverage = "none"
     """What the hook actually sees:
 
-    - ``all`` — every tool call is offered. No harness does this today.
+    - ``all`` — every tool call is offered, read-only ones included.
+      Claude Code: the hook runs as a PreToolUse hook (measured: Read, a
+      read-only Bash and Write all reach it).
     - ``policy`` — the HARNESS's own policy decides which calls need
-      approval, and only those reach the hook. Measured, not assumed:
-      Claude Code never routes read-only tools through its permission
-      callback (verified with settings loading disabled, so it is the
-      CLI's policy, not the user's config), and Codex asks only when its
-      sandbox policy escalates.
+      approval, and only those reach the hook. Codex: under its strictest
+      policy (`untrusted`), every shell command and file change was asked
+      about when measured, `cat` and `ls` included, but its other item kinds
+      (MCP tools, web search) are not verified, so it does not claim all.
     - ``none`` — no approval channel exists.
 
-    An approval hook is therefore a GATE, not an audit log. To observe
+    Below ``all``, an approval hook is a GATE, not an audit log. To observe
     every tool call, read the event stream (`ToolStart`/`ToolEnd`), which
     sees all of them.
     """

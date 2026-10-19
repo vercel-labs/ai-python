@@ -75,13 +75,30 @@ async def test_input_rewriting_is_refused_where_unsupported(
             await harness.run("Write the word ORIGINAL into rewritten.txt.")
 
 
-async def test_no_harness_claims_to_offer_every_tool_call(
-    harness: Harness,
+async def test_a_harness_claiming_every_call_shows_its_hook_every_call(
+    make_harness: Callable[..., Any],
 ) -> None:
-    """Neither harness routes read-only tools through its approval channel,
-    so neither may advertise "all". Claiming it would be the old lie in new
-    clothes: a caller would believe a gate covers calls it never sees."""
-    assert harness.capabilities.approval != "all"
+    """`approval="all"` is a promise: every call that runs reached the hook,
+    read-only ones included. Claimed without it, it would be the old lie in
+    new clothes: a caller would believe a gate covers calls it never sees."""
+    from ai.types.events import ToolStart
+
+    seen: list[str] = []
+
+    async def approve(ctx: ApprovalContext) -> Decision:
+        seen.append(ctx.call.id)
+        return Allow()
+
+    async with make_harness(approve=approve) as harness:
+        if harness.capabilities.approval != "all":
+            pytest.skip(f"{harness.name} does not claim every call")
+        turn = harness.session().stream(
+            "Read util.py with your file-reading tool and reply with the "
+            + "function name."
+        )
+        ran = [e.tool_call_id async for e in turn if isinstance(e, ToolStart)]
+    assert ran, "the prompt is meant to make the agent read a file"
+    assert set(ran) <= set(seen), "a call ran that the hook never saw"
 
 
 async def test_capabilities_do_not_change_after_open(harness: Harness) -> None:
