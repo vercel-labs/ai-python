@@ -78,6 +78,25 @@ Live: load `.env.local` first (`set -a; . ./.env.local; set +a`); the
   - Final: sandbox matrix 225 passed; local live 221 passed / 6 skipped;
     offline 1145; afk 116 (live included); deepysec 67 (live, fixture);
     all checks pass.
+- Session 3 (cleanup, user approved):
+  - Test project: destroyed 1,322 stopped sandboxes (0 failed, 111s) and
+    the one orphan snapshot left by an experiment: 0 sandboxes, 0
+    snapshots (was 1,309 GB, ~$105/month).
+  - afk's own project: 52 stopped sandboxes, 52 snapshots, 45.2 GB
+    (~$3.60/month) — none created by this work (scratch runs used the test
+    project via `.env.local`); 2 back the user's real afk conversations.
+    Left untouched; the user's to decide.
+  - Local: removed 699 claude project dirs and 693 codex rollouts for temp
+    directories that no longer exist (since 2026-10-09); a stale SDK lock;
+    `/tmp/hx` (incl. the two `.env.local` backups).
+  - Found an SDK leak while cleaning: 8 pty holders still running codex
+    TUIs from local e2e runs, alive since Oct 9. Cause: runs under `nohup`
+    ignore SIGHUP, the child inherits that across exec, and the holder
+    ended programs with SIGHUP only. The holder now restores default
+    signal handling before exec, and follows a hangup with SIGTERM, then
+    SIGKILL. It also removes its private socket directory (239 empty
+    `harness-pty-*` dirs were left). Verified: the same nohup run leaves 0
+    holders, 0 dirs.
 
 ---
 
