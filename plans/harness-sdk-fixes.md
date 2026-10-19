@@ -153,6 +153,40 @@ Newest last. One entry per session.
   UnsupportedError when set (every claude_code() argument is a codex()
   argument again); offline + e2e (both × both workspaces) tests.
   Lesson: read check-examples' exit code, not its last line.
+  - Pushed 6e8b734..71300f7 (SSH key not SAML-authorized for vercel-labs;
+    pushed over HTTPS with the gh login, for that command only).
+  - Then afk and deepysec were run for real (not only their tests), which
+    found four SDK bugs, all older than this plan, and two app bugs:
+    - codex 0.160 puts command output in `aggregatedOutput`; the adapter
+      read `output`, so every codex command result was None in
+      `result.messages`, `history()`, handoffs and afk peek (the agent
+      itself saw the output). `_item_result`; offline + e2e tests.
+    - `Local` spawned with asyncio's 64 KiB line limit; one codex
+      `thread/list` reply on a machine with 3159 threads overflowed it
+      ("codex crashed: Separator is found, but chunk is longer than
+      limit"), so afk listed no codex conversations. `LINE_LIMIT`; test
+      with a 5 MiB line.
+    - codex `list_sessions()` fetched ONE unfiltered page of the machine's
+      threads and filtered it here: conversations in this directory past
+      that page were missing. Now `cwd`-filtered and paged.
+    - `copy()` dropped the executable bit both ways (upload had no mode;
+      `copy_tree` used copyfile): a pushed script could not run in the VM,
+      one the agent made came home unrunnable. Modes now travel; e2e test.
+    - afk `pull --files` also used copyfile; now copymode (not copy2: the
+      sandbox's 1970 file times are not this tree's).
+    - deepysec's sandboxes had the platform's 5-minute lifetime, shorter
+      than one `all` run: the VM stopped under a revalidation turn
+      (finish=cancelled, empty reply → "no valid reply after 3 attempts").
+      `SANDBOX_LIFETIME` = 45 min. Measured: the CLI upgrade on a fresh
+      sandbox costs 5.5s (0.7s when current), not the cause.
+    - Not bugs: codex finds 0 deepysec findings on the fixture, same on
+      the pre-plan code (model judgement); afk's live test 401 was this
+      shell's stale credentials, same on the pre-plan code.
+  - afk flows exercised on a pty: list (both CLIs), push --bg + peek,
+    attach + instruct + detach, pull --files, codex TUI push + detach +
+    peek + pull --files, stop. deepysec: all stages with claude locally,
+    codex locally, claude in a sandbox (8.5 min run, after the lifetime
+    fix).
   - Parallel sandbox runs use `uv run --with pytest-xdist ... -n 4` (no
     project dependency added).
 
