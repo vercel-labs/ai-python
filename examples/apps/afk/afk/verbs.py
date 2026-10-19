@@ -597,6 +597,9 @@ async def _pull_files(
             else:
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(Path(staging) / c.path, target)
+                # Its permission bits too: a script the agent made must run.
+                # Not copy2: the sandbox's file times are not this tree's.
+                shutil.copymode(Path(staging) / c.path, target)
         kept = len(changes) - len(chosen)
         print(
             f"afk: wrote {len(chosen)} file{'s' * (len(chosen) != 1)}"

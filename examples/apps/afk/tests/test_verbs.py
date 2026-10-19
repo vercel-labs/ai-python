@@ -7,6 +7,7 @@ import asyncio
 import contextlib
 import os
 import signal
+import stat
 import subprocess
 import sys
 from types import SimpleNamespace
@@ -20,7 +21,7 @@ from afk.rows import CONTINUE, Row
 from ai.harnesses.experimental import Handle, SessionInfo
 from ai.harnesses.experimental.errors import HarnessError
 from ai.types.messages import Message, TextPart, ToolCallPart
-from ai.workspaces.experimental import WorkspaceCoords, tty
+from ai.workspaces.experimental import Local, WorkspaceCoords, tty
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -457,3 +458,19 @@ async def test_attach_says_when_the_agent_will_not_exit(
     with pytest.raises(HarnessError, match=r"did not exit within 0\.1s"):
         await verbs.attach(row, None)
     assert not agent.opened
+
+
+async def test_pull_files_keeps_a_scripts_executable_bit(
+    tmp_path: Path,
+) -> None:
+    """Measured: a script the agent made came home -rw-r--r-- and would not
+    run. The sandbox side is a `Local` here: same `copy()` either way."""
+    there, here = tmp_path / "there", tmp_path / "here"
+    there.mkdir()
+    here.mkdir()
+    (there / "run.sh").write_text("#!/bin/sh\necho hi\n")
+    (there / "run.sh").chmod(0o755)
+    async with Local(there) as ws:
+        sandbox: Any = ws
+        await verbs._pull_files(here, sandbox, {}, lambda prompt: "y")
+    assert stat.S_IMODE((here / "run.sh").stat().st_mode) & stat.S_IXUSR

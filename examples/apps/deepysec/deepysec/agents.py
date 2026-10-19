@@ -104,13 +104,20 @@ def shell_text(command: str) -> str:
     return inner
 
 
+#: How long a worker's sandbox lives, in seconds. The platform's default is
+#: five minutes, shorter than one `all` run: measured, the VM stopped under
+#: a revalidation turn, which settled cancelled with no reply. 45 minutes is
+#: the most a Hobby plan allows.
+SANDBOX_LIFETIME = 45 * 60
+
+
 async def static_analysis_only(ctx: ApprovalContext) -> Decision:
     """The agent is a security researcher with a read-only shell.
 
-    Claude never routes Read/Glob/Grep through the hook — its own policy
-    treats them as safe — so what arrives from it is Bash and anything that
-    writes. Codex routes its `commandExecution` here, under that name, with
-    the command in the same `command` field. The SDK hands over each
+    Every claude call arrives here, its read-only tools (Read/Glob/Grep/LS)
+    included, so those are allowed by name and anything unknown is denied.
+    Codex routes its `commandExecution` here, under that name, with the
+    command in the same `command` field. The SDK hands over each
     harness's own tool call untranslated, so the hook has to know both
     dialects; a denial's reason is delivered to the agent as guidance.
     """
@@ -254,7 +261,10 @@ async def open_workers(
             # way out, and the harness below is handed a placeholder. deepsec's
             # credential brokering (§9.2), as one constructor argument.
             workspace = await stack.enter_async_context(
-                VercelSandbox(gateway=gateway)
+                VercelSandbox(
+                    gateway=gateway,
+                    execution_time_limit=SANDBOX_LIFETIME,
+                )
             )
             # The tree, minus what .gitignore excludes and minus our own store:
             # the agent gets the code, never its predecessors' findings.
