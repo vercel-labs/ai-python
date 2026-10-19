@@ -88,13 +88,8 @@ async def push(
         )
     current = st.load()
     if not current.told_billing:
-        print(
-            "afk: a sandbox is billed for what it uses (CPU, memory, data it "
-            "sends; once stopped, its snapshot as storage) — `afk` shows what "
-            "each has cost. The agent in it reaches its model through AI "
-            "Gateway, billed per token, not through your claude or ChatGPT "
-            "subscription. (Said once.)"
-        )
+        print("afk: sandboxes bill by use; `afk` shows each one's cost")
+        print("afk: the model runs via AI Gateway, billed per token")
         current.told_billing = True
         st.save(current)
     # 1. The past, from the harness's own store here.
