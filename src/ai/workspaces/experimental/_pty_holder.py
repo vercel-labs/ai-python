@@ -40,6 +40,8 @@ Long enough for a sandbox client: polling for the socket, then opening the
 interactive session that carries the frames, takes several seconds there."""
 
 SCROLLBACK = 256 * 1024
+END_GRACE = 3.0
+"""Seconds a program gets to end on a hangup before SIGTERM, then SIGKILL."""
 
 LINGER = 10.0
 """Seconds a holder keeps reading from its client after the exit frame."""
@@ -120,6 +122,19 @@ def main() -> int:
 
     pid, master = pty.fork()
     if pid == 0:
+        # An ignored signal stays ignored across exec. Whoever launched us
+        # may ignore some — `nohup` ignores SIGHUP, Python ignores SIGPIPE —
+        # and then the hangup that ends the program never reached it
+        # (measured: every TUI opened under nohup outlived its close, for
+        # days). The program gets a terminal's defaults.
+        for sig in (
+            signal.SIGHUP,
+            signal.SIGINT,
+            signal.SIGQUIT,
+            signal.SIGTERM,
+            signal.SIGPIPE,
+        ):
+            signal.signal(sig, signal.SIG_DFL)
         os.execvp(program[0], program)
     set_size(master, cols, rows)
     with open(sock_path + ".pid", "w") as f:
@@ -161,9 +176,31 @@ def main() -> int:
         if transient:
             end_program()
 
+    ending: list[float] = []
+    """When the program was asked to end, if it was."""
+
     def end_program() -> None:
+        # A hangup, as a terminal closing sends. A program may ignore it, so
+        # the loop below follows up (see `escalate`).
+        if not ending:
+            ending.append(time.monotonic())
         with contextlib.suppress(ProcessLookupError):
             os.kill(pid, signal.SIGHUP)
+
+    def escalate() -> None:
+        if not ending:
+            return
+        waited = time.monotonic() - ending[0]
+        sig = (
+            signal.SIGKILL
+            if waited > 2 * END_GRACE
+            else signal.SIGTERM
+            if waited > END_GRACE
+            else None
+        )
+        if sig is not None:
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(pid, sig)
 
     def drain_master() -> None:
         # Whatever the program wrote last may still sit in the master when
@@ -196,6 +233,11 @@ def main() -> int:
         send(frame(b"x", str(status).encode()))
         server.close()
         _unlink(sock_path, sock_path + ".pid", sock_path + ".client")
+        if transient:
+            # Its directory was made for this socket alone (measured: every
+            # unnamed pty left an empty harness-pty-* directory behind).
+            with contextlib.suppress(OSError):
+                os.rmdir(os.path.dirname(sock_path))
         if client is not None:
             # Linger: a client may still be sending (the first resize of a
             # program that already ended). Its write to a closed socket
@@ -262,6 +304,7 @@ def main() -> int:
             done, raw = 0, 0
         if done:
             return finish(raw)
+        escalate()
 
 
 if __name__ == "__main__":
