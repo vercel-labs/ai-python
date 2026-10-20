@@ -168,8 +168,8 @@ as an agent:
 from ai.harnesses import experimental as harnesses
 from ai.workspaces import experimental as workspaces
 
-async with harnesses.claude_code(workspace=workspaces.Local(".")) as agent:
-    result = await agent.run("What does this repo do?")
+async with harnesses.claude_code(workspace=workspaces.Local(".")) as harness:
+    result = await harness.run("What does this repo do?")
 ```
 
 This API is experimental and may change or be removed. See

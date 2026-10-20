@@ -27,16 +27,16 @@ async def main() -> None:
             "util.py", "def add(a, b):\n    return a + b\n"
         )
 
-        async with harnesses.claude_code(workspace=workspace) as agent:
-            print("running", agent.version, "in the sandbox")
-            result = await agent.run(
+        async with harnesses.claude_code(workspace=workspace) as harness:
+            print("running", harness.version, "in the sandbox")
+            result = await harness.run(
                 "Read util.py and describe the code in one line."
             )
             print(result.text.strip())
 
-        async with harnesses.codex(workspace=workspace) as agent:
-            print("running", agent.version, "in the sandbox")
-            result = await agent.run(
+        async with harnesses.codex(workspace=workspace) as harness:
+            print("running", harness.version, "in the sandbox")
+            result = await harness.run(
                 "Read util.py and describe the code in one line."
             )
             print(result.text.strip())

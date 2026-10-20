@@ -61,15 +61,15 @@ async def main() -> None:
         return
 
     async with workspaces.VercelSandbox(keep=True, gateway=gw) as workspace:
-        agent = HARNESSES[kind](workspace=workspace)
-        await agent.open()
+        harness = HARNESSES[kind](workspace=workspace)
+        await harness.open()
         history = None
         if os.environ.get("PUSH_FROM"):
             # A conversation from THIS directory, continued in the sandbox TUI:
             # `history` means the same on tui() as on session().
             async with HARNESSES[kind](workspace=workspaces.Local(".")) as here:
                 history = await here.history(os.environ["PUSH_FROM"])
-        tui = await agent.tui(
+        tui = await harness.tui(
             history=history, name=NAME
         )  # in the harness's own TUI
         print(
@@ -82,14 +82,14 @@ async def main() -> None:
         if status is None:
             # Let go of the harness too, leaving it running: its reader stops
             # here instead of holding the workspace's close for its timeouts.
-            await agent.detach()
+            await harness.detach()
             print(
                 f"[*] detached. Come back with:  python {sys.argv[0]} {kind} "
                 f"{workspace.name}"
             )
         else:
             await tui.close()
-            await agent.close()
+            await harness.close()
             print(f"[*] the TUI exited with {status}; stopping the sandbox")
             async with workspaces.VercelSandbox(
                 name=workspace.name, keep=False

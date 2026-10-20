@@ -7,8 +7,10 @@ from ai.workspaces import experimental as workspaces
 
 
 async def main() -> None:
-    async with harnesses.claude_code(workspace=workspaces.Local(".")) as agent:
-        result = await agent.run("Reply with exactly: READY")
+    async with harnesses.claude_code(
+        workspace=workspaces.Local(".")
+    ) as harness:
+        result = await harness.run("Reply with exactly: READY")
 
         print(result.text)
         print(f"finish: {result.finish_reason}")

@@ -41,14 +41,14 @@ async def main() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         async with harnesses.claude_code(
             workspace=workspaces.Local(tmp), approve=approve
-        ) as agent:
-            result = await agent.run(
+        ) as harness:
+            result = await harness.run(
                 "Write the word HELLO into greeting.txt, then reply DONE."
             )
             print(result.text)
             print(
                 "greeting.txt says:",
-                await agent.workspace.read_text("greeting.txt"),
+                await harness.workspace.read_text("greeting.txt"),
             )
 
 

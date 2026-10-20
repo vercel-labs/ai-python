@@ -34,8 +34,8 @@ async def main() -> None:
 
             async with harnesses.claude_code(
                 workspace=workspace, approve=approve
-            ) as agent:
-                await agent.run(
+            ) as harness:
+                await harness.run(
                     "Read src/ai/harnesses/experimental/errors.py and write a "
                     "one-paragraph "
                     + "summary to notes/errors.md. Then reply DONE."

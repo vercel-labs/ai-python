@@ -11,8 +11,8 @@ async def main() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         async with harnesses.claude_code(
             workspace=workspaces.Local(tmp)
-        ) as agent:
-            session = agent.session()
+        ) as harness:
+            session = harness.session()
             await session.run("Remember this codeword: PLATYPUS. Reply OK.")
             saved = (
                 session.handle.model_dump_json()

@@ -14,21 +14,23 @@ from ai.workspaces import experimental as workspaces
 
 
 async def main() -> None:
-    async with harnesses.claude_code(workspace=workspaces.Local(".")) as agent:
-        for info in (await agent.sessions())[:5]:
+    async with harnesses.claude_code(
+        workspace=workspaces.Local(".")
+    ) as harness:
+        for info in (await harness.sessions())[:5]:
             print(f"{info.session_id}  {info.title or ''}"[:90])
 
-        sessions = await agent.sessions()
+        sessions = await harness.sessions()
         if not sessions:
             print("no conversations in this directory yet")
             return
 
         # Read one without touching it.
-        messages = await agent.history(sessions[0].session_id)
+        messages = await harness.history(sessions[0].session_id)
         print(f"\n{len(messages)} messages in the most recent conversation")
 
         # Branch it, so whoever else has it open is unaffected.
-        branch = await agent.fork(sessions[0].session_id)
+        branch = await harness.fork(sessions[0].session_id)
         answer = await branch.run("In one sentence: what were we doing?")
         print(answer.text)
 

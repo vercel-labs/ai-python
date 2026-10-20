@@ -20,8 +20,8 @@ This API is experimental and may change or be removed.
 from ai.harnesses import experimental as harnesses
 from ai.workspaces import experimental as workspaces
 
-async with harnesses.codex(workspace=workspaces.Local("./project")) as agent:
-    await agent.run("Summarize the README.")
+async with harnesses.codex(workspace=workspaces.Local("./project")) as harness:
+    await harness.run("Summarize the README.")
 ```
 
 On your own machine a missing CLI raises `ExecutableMissingError`. The SDK
@@ -45,8 +45,8 @@ gateway = workspaces.vercel_ai_gateway()  # AI_GATEWAY_API_KEY
 
 async with workspaces.VercelSandbox(gateway=gateway) as sandbox:
     await workspaces.copy("./my-project", sandbox / "project")
-    async with harnesses.codex(workspace=sandbox) as agent:
-        await agent.run("Fix the failing test in project/.")
+    async with harnesses.codex(workspace=sandbox) as harness:
+        await harness.run("Fix the failing test in project/.")
     await workspaces.copy(sandbox / "project", "./out")
 ```
 
@@ -118,12 +118,12 @@ harness factory; it wins over the workspace's.
 
 ```python
 async with workspaces.VercelSandbox(keep=True, gateway=gateway) as sandbox:
-    agent = harnesses.claude_code(workspace=sandbox)
-    await agent.open()
-    session = agent.session()
+    harness = harnesses.claude_code(workspace=sandbox)
+    await harness.open()
+    session = harness.session()
     await session.run("Start the migration.")
     saved = session.handle.model_dump_json()
-    await agent.detach()  # the CLI keeps running in the VM
+    await harness.detach()  # the CLI keeps running in the VM
     name = sandbox.name
 
 # later, anywhere:
@@ -131,8 +131,8 @@ async with workspaces.VercelSandbox(name=name, gateway=gateway) as sandbox:
     ...
 ```
 
-- `agent.detach()` releases your client and leaves the CLI running.
-  `agent.close()` ends it.
+- `harness.detach()` releases your client and leaves the CLI running.
+  `harness.close()` ends it.
 - Without an approval hook, a detached agent runs to completion. With one, it
   waits at its next tool call until a client reconnects.
 - Outbound rules are fixed when the VM is created. Reconnecting with

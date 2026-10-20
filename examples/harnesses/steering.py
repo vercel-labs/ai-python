@@ -23,8 +23,8 @@ async def main() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         async with harnesses.claude_code(
             workspace=workspaces.Local(tmp), approve=approve
-        ) as agent:
-            session = agent.session()
+        ) as harness:
+            session = harness.session()
             turn = session.stream(
                 "Create files step1.txt through step40.txt, one at a time, "
                 + "each containing its own number."
@@ -45,7 +45,7 @@ async def main() -> None:
             # It took the new instruction. How much of the original plan it
             # finished first depends on where its next step boundary fell.
             print(
-                "steered.txt:", await agent.workspace.read_text("steered.txt")
+                "steered.txt:", await harness.workspace.read_text("steered.txt")
             )
 
 

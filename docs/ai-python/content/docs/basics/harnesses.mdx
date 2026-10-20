@@ -24,8 +24,8 @@ from ai.workspaces import experimental as workspaces
 
 
 async def main() -> None:
-    async with harnesses.claude_code(workspace=workspaces.Local(".")) as agent:
-        result = await agent.run("What does this repo do? One sentence.")
+    async with harnesses.claude_code(workspace=workspaces.Local(".")) as harness:
+        result = await harness.run("What does this repo do? One sentence.")
 
     print(result.text)
     print(result.finish_reason, result.usage.output_tokens)
@@ -39,7 +39,7 @@ if __name__ == "__main__":
 so swapping one for the other is a one-word edit:
 
 ```python
-agent = harnesses.codex(workspace=workspaces.Local("."), effort="high")
+harness = harnesses.codex(workspace=workspaces.Local("."), effort="high")
 ```
 
 | Argument | Description | Default |
@@ -71,7 +71,7 @@ options below, or by running it in a
 | `finish_reason` | `"stop"`, `"cancelled"`, or `"length"` (Claude Code hit its turn limit). |
 | `messages` | The conversation so far, as `ai.messages.Message` values, in order: each tool call, then its result. |
 | `usage` | Token usage. |
-| `output` | The validated value when you pass `output_type`. |
+| `output` | The validated value when you pass `output_type`; otherwise the same as `text`. |
 | `prompt_sent` | Exactly what the agent received. |
 | `approval_errors` | Approval hooks that raised or timed out. |
 
@@ -139,17 +139,28 @@ It takes the [shared arguments](#run-a-prompt), plus:
 
 ## Keep a conversation
 
-`agent.run()` uses a throwaway conversation. Use a session for several turns
+`harness.run()` uses a throwaway conversation. Use a session for several turns
 that share context:
 
 ```python
-session = agent.session()
+session = harness.session()
 await session.run("Read utils.py.")
 result = await session.run("Which function is the slowest?")
 ```
 
 The CLI creates the conversation on the first turn, so `session.session_id`
 is empty until then. Read `session.handle` after a turn, not before.
+
+`harness.run()` also takes a whole conversation, the way `Agent.run()` does.
+The last message must be a user message; it becomes the prompt, and the
+messages before it become the conversation's history:
+
+```python
+result = await harness.run([*earlier_messages, ai.user_message("Now add tests.")])
+```
+
+A session turn takes one prompt: a string, a list of strings and parts, or
+one `ai.user_message(...)`.
 
 ## Send files
 
@@ -172,7 +183,7 @@ result = await session.run(
 
 - A file the harness cannot take raises `UnsupportedError` when you call
   `run()` or `stream()`, before anything runs. Check
-  `agent.capabilities.images` and `agent.capabilities.documents`.
+  `harness.capabilities.images` and `harness.capabilities.documents`.
 - A file given as a URL is downloaded on your machine and sent as data, so
   it works in a sandbox whose outbound traffic is locked down.
 - The file stays in the conversation: `result.messages` and `history()`
@@ -180,27 +191,40 @@ result = await session.run(
 
 ## Stream events
 
-`session.stream()` returns a `Turn`. Iterate it for events, then read
-`turn.result`:
+`session.stream()` returns a `Turn`. Use it like `agent.run()`: iterate it
+for events, then read the result:
 
 ```python
 import ai
 
-turn = session.stream("Refactor utils.py into a package.")
-async for event in turn:
-    if isinstance(event, ai.events.TextDelta):
-        print(event.chunk, end="", flush=True)
-    elif isinstance(event, ai.events.ToolEnd):
-        print(event.tool_call.tool_name, event.tool_call.tool_args)
-    elif isinstance(event, ai.events.ToolCallResult):
-        print(event.results[0].result)
+async with session.stream("Refactor utils.py into a package.") as turn:
+    async for event in turn:
+        if isinstance(event, ai.events.TextDelta):
+            print(event.chunk, end="", flush=True)
+        elif isinstance(event, ai.events.ToolEnd):
+            print(event.tool_call.tool_name, event.tool_call.tool_args)
+        elif isinstance(event, ai.events.ToolCallResult):
+            print(event.results[0].result)
 
-result = turn.result
+print(turn.output)
 ```
 
+Leaving the `async with` block settles the turn, and stops the agent if it
+is still working. `async with` is optional: a bare `async for` works too.
+
+| Attribute | Description |
+|---|---|
+| `messages` | The conversation so far. Updated while the turn runs. |
+| `blocked` | `True` while the agent waits on your approval hook. |
+| `deferred_hooks` | The approvals it is waiting on. |
+| `result` | The `Result`, once the turn has settled. |
+| `output`, `usage` | Shortcuts for `result.output` and `result.usage`. |
+
 A turn yields `ai.events.AgentEvent` values: model events plus
-`ToolCallResult`. The same consumers you use with `ai.Agent` streams work
-here. Every event carries `.message`, the assistant message so far.
+`ToolCallResult`. Every event carries `.message`, the assistant message so
+far. Consumers of `ai.Agent` streams, such as
+[AI SDK UI](/docs/basics/ai-sdk-ui), work here too. The events are coarser,
+though; see [Harnesses and agents](#harnesses-and-agents).
 
 ## Steer and stop
 
@@ -255,7 +279,7 @@ async def approve(ctx: harnesses.ApprovalContext) -> harnesses.Decision:
 
 async with harnesses.claude_code(
     workspace=workspaces.Local("."), approve=approve
-) as agent:
+) as harness:
     ...
 ```
 
@@ -295,10 +319,19 @@ It returns a decision:
   [Vercel Sandbox](/docs/basics/workspaces#vercel-sandbox).
 - `workspace.contains(path)` checks the spelling of a path only. Use
   `contains(await workspace.resolve(path))` so a symlink cannot lead out.
+- The hook runs in the context of the turn it decides for, so contextvars
+  that the turn's caller set are visible inside it.
+
+While the hook decides, the turn's stream reports it: a `HookEvent` with
+status `"pending"`, then `RunBlocked`. When the hook returns, a `HookEvent`
+follows with status `"resolved"` and the decision as its `resolution`, or
+`"cancelled"` if the hook failed. `turn.blocked` follows these events. Their
+`hook_type` is `harnesses.APPROVAL_HOOK_TYPE`. Your hook answers them, not
+`ai.resolve_hook()`, so AI SDK UI does not show approval buttons for them.
 
 ## Capabilities
 
-Each harness declares what it can do in `agent.capabilities`, before
+Each harness declares what it can do in `harness.capabilities`, before
 anything runs. Using a capability a harness lacks raises `UnsupportedError`;
 the one exception is `deny_reason`, whose absence only drops the reason.
 
@@ -340,10 +373,10 @@ A harness can also read its CLI's store, including conversations a person
 started in a terminal:
 
 ```python
-infos = await agent.sessions()
-messages = await agent.history(infos[0].session_id)
-branch = await agent.fork(infos[0].session_id)
-same = await agent.resume(infos[0].session_id)
+infos = await harness.sessions()
+messages = await harness.history(infos[0].session_id)
+branch = await harness.fork(infos[0].session_id)
+same = await harness.resume(infos[0].session_id)
 ```
 
 - `resume()` and `fork()` return a `Session` whose `messages` already hold
@@ -354,7 +387,7 @@ same = await agent.resume(infos[0].session_id)
 - `fork()` starts a new conversation with the same past. The original is
   never written.
 - `resume()` continues the original. Only one client may write a
-  conversation. If another SDK client or an `agent.tui()` holds it,
+  conversation. If another SDK client or a `harness.tui()` holds it,
   `resume()` raises `SessionBusyError`, and `SessionInfo.running` is `True`.
 - A `claude` or `codex` that a person started in a terminal holds no claim,
   so `resume()` does not refuse it. `sessions()` still shows it as
@@ -384,13 +417,13 @@ calls keep their original names. Two limits:
 
 ## Open the CLI's TUI
 
-`agent.tui()` opens the CLI's own interactive UI on a pseudo-terminal in the
+`harness.tui()` opens the CLI's own interactive UI on a pseudo-terminal in the
 workspace. Attach your terminal with `tty.bridge`:
 
 ```python
 from ai.workspaces.experimental import tty
 
-tui = await agent.tui(session_id, name="work")
+tui = await harness.tui(session_id, name="work")
 await tty.bridge(tui.pty)  # Ctrl-] detaches
 
 await tty.bridge(await workspace.attach("work"))  # later, from any process
@@ -448,6 +481,161 @@ is shared with workspaces and subclasses `WorkspaceError`.
 
 A refusal or a cancelled turn is a normal `Result`, not an error.
 
+## Harnesses and agents
+
+A harness is an agent, not a model. The CLI runs its own loop and tools, so a
+harness turn is like a whole `agent.run()`, not one model call. You get fewer
+controls and coarser events than with `ai.Agent`. You also get some controls
+that `ai.Agent` does not have.
+
+| You want to | `ai.Agent` | Harness |
+|---|---|---|
+| Change the loop | Override `loop()`. | No. |
+| Run or gate each tool | Your tools, `require_approval`. | `approve=`, for the calls the CLI asks about. |
+| Change the model or params per step | Yes. | No. |
+| Approve while nobody is connected | Defer the hook and run again later. | No: the CLI waits for the answer. |
+| Stop a run | Leave the `async with` block, or cancel. | `stop()` from any task, `break`, `timeout=`. |
+| Add guidance mid-run | No. | `steer()`. |
+| Continue later | Pass the messages again. | `resume()`, `fork()`, a `Handle`, or `history=`. |
+| Let a person drive it | No. | `tui()`. |
+
+What the event stream holds:
+
+| Event detail | `ai.Agent` | Claude Code | Codex |
+|---|---|---|---|
+| Text deltas | yes | yes | yes |
+| Tool calls and their results | yes | yes | yes |
+| Tool arguments while they stream | yes | no: sent whole | no: sent whole |
+| One `StreamStart`/`StreamEnd` per model call | yes | no: one per turn | no: one per turn |
+| Usage per model call | yes | no: per turn, with cost | no: per turn |
+
+Code that reads events should not need more than this: text, tool calls and
+results, the final `StreamEnd`, and `messages`. The SDK does not invent
+detail the CLI did not report.
+
+### Use a harness as a tool
+
+A harness fits where a sub-agent does. Give an `ai.Agent` a tool that yields
+the turn's events:
+
+```python
+session = harness.session()
+
+
+@ai.tool
+async def code(task: str) -> ai.SubAgentTool:
+    """Do a coding task in the project; returns what was done."""
+    async with session.stream(task) as turn:
+        async for event in turn:
+            yield event
+
+
+async with ai.Agent(tools=[code]).run(model, messages) as stream:
+    async for event in stream:
+        ...
+```
+
+- The harness's events reach the agent's stream as `PartialToolCallResult`
+  values.
+- The agent's model sees the harness's final answer as the tool result.
+- Closing the agent's run stops the harness's turn.
+- The tool calls inside the harness were run by the CLI, not by the agent.
+  Do not run them again from a custom loop.
+
+### Combine and customize
+
+A turn is an async iterable of `ai` events, so the tools you use with agent
+streams work on it.
+
+**Run turns side by side.** A session runs one turn at a time, so use one
+session per task. `ai.util.merge` interleaves their events. Tag each stream
+if you need to know where an event came from:
+
+```python
+async def tagged(label, turn):
+    async with turn:
+        async for event in turn:
+            yield label, event
+
+
+poem = harness.session().stream("Write a poem into poem.txt.")
+limerick = harness.session().stream("Write a limerick into limerick.txt.")
+async for label, event in ai.util.merge(
+    tagged("poem", poem), tagged("limerick", limerick)
+):
+    ...
+```
+
+Inside an agent loop, `ai.yield_from` does the same with labels: each event
+reaches the consumer as a `PartialToolCallResult` whose `label` names its
+source.
+
+```python
+class FanOut(ai.Agent):
+    async def loop(self, context):
+        left, right = harness.session(), harness.session()
+        async with left.stream("Fix the parser.") as a, right.stream("Write the docs.") as b:
+            fixed, documented = await asyncio.gather(
+                ai.yield_from(a, aggregator=ai.agents.MessageAggregator, label="parser"),
+                ai.yield_from(b, aggregator=ai.agents.MessageAggregator, label="docs"),
+            )
+        context.add(ai.assistant_message(f"{fixed}\n\n{documented}"))
+        return
+        yield
+```
+
+**Make a turn one step of your own agent loop.** Override `Agent.loop()`
+and yield the turn's events. You decide which events to pass on, what joins
+the agent's context, and what runs next:
+
+```python
+class CodeThenReview(ai.Agent):
+    async def loop(self, context):
+        async with harness.session().stream(context.messages[-1].text) as turn:
+            async for event in turn:
+                if not isinstance(event, ai.events.ReasoningDelta):
+                    yield event                     # pass on, drop, or rewrite
+        context.add(ai.assistant_message(turn.output))
+        context.add(ai.user_message("Review that. Start with YES or NO."))
+        async with ai.stream(context=context) as review:   # then a model call
+            async for event in review:
+                yield event
+        context.add(review.message)
+```
+
+Add the harness's answer to the context, not its whole transcript: its tool
+calls name tools the agent's model does not have.
+
+**Loop around turns in plain Python.** Run a turn, check the result, and
+prompt again. An async generator can pass the turn's events on and add
+events of its own:
+
+```python
+async def until_passes(harness, task):
+    session = harness.session()
+    prompt = task
+    for attempt in range(3):
+        async with session.stream(prompt) as turn:
+            async for event in turn:
+                yield event
+        run = await harness.workspace.exec(["python3", "-m", "pytest", "-q"])
+        yield Checked(attempt, run.exit_code == 0)  # an event type of your own
+        if run.exit_code == 0:
+            return
+        prompt = f"The tests fail:\n{run.stdout}\nFix them."
+```
+
+What you cannot change: the harness runs its own loop, so its events report
+what already happened. Rewriting an event changes what your consumers see,
+not what the agent did. To change what the agent does, use the controls the
+CLI offers:
+
+| When | How |
+|---|---|
+| Before a tool call runs | `approve=`: allow, deny, deny and stop, or `Allow(input=...)` on Claude Code. |
+| While a turn runs | `session.steer(text)`; `session.stop()`, `break`, or leaving the `async with` block. |
+| Between turns | Your own loop: the next prompt, the history, or another harness. |
+
 ## How it works
 
 - **Layering.** Caller, then `Harness`, then one adapter per CLI, then the
@@ -468,6 +656,14 @@ One runnable file per feature:
   one prompt.
 - [`examples/harnesses/streaming.py`](https://github.com/vercel-labs/ai-python/blob/main/examples/harnesses/streaming.py):
   events as they arrive.
+- [`examples/harnesses/as_tool.py`](https://github.com/vercel-labs/ai-python/blob/main/examples/harnesses/as_tool.py):
+  a harness as a tool of an `ai.Agent`.
+- [`examples/harnesses/combine.py`](https://github.com/vercel-labs/ai-python/blob/main/examples/harnesses/combine.py):
+  two turns at once, merged into one stream.
+- [`examples/harnesses/custom_loop.py`](https://github.com/vercel-labs/ai-python/blob/main/examples/harnesses/custom_loop.py):
+  a harness turn as one step of your own `Agent.loop()`.
+- [`examples/harnesses/until_done.py`](https://github.com/vercel-labs/ai-python/blob/main/examples/harnesses/until_done.py):
+  your own loop around turns: prompt, check, prompt again.
 - [`examples/harnesses/steering.py`](https://github.com/vercel-labs/ai-python/blob/main/examples/harnesses/steering.py):
   redirect a running turn.
 - [`examples/harnesses/tool_approval.py`](https://github.com/vercel-labs/ai-python/blob/main/examples/harnesses/tool_approval.py):

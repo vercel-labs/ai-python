@@ -29,14 +29,14 @@ async def main() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         async with workspaces.Local(tmp, gateway=gw) as workspace:
             # 1. A conversation with Claude, on this machine. It does real work.
-            async with harnesses.claude_code(workspace=workspace) as agent:
-                session = agent.session()
+            async with harnesses.claude_code(workspace=workspace) as harness:
+                session = harness.session()
                 await session.run(
                     "Create notes.txt containing exactly: milk, eggs. "
                     + "Also remember: the deadline is FRIDAY. Reply with "
                     "exactly: OK"
                 )
-                history = await agent.history(session.session_id)
+                history = await harness.history(session.session_id)
             calls = sum(
                 1 for m in history for p in m.parts if p.kind == "tool_call"
             )
@@ -47,8 +47,8 @@ async def main() -> None:
 
             # 2. Codex picks it up — same directory, other harness. It knows
             #    what was said AND what was done, and acts with its own tools.
-            async with harnesses.codex(workspace=workspace) as agent:
-                result = await agent.run(
+            async with harnesses.codex(workspace=workspace) as harness:
+                result = await harness.run(
                     "What is the deadline, and what did we put in notes.txt? "
                     "Then append " + "'bread' to notes.txt. Reply in one line.",
                     history=history,
@@ -65,8 +65,8 @@ async def main() -> None:
         #    workspace changes.
         if os.environ.get("VERCEL_OIDC_TOKEN") and gw is not None:
             async with workspaces.VercelSandbox(gateway=gw) as remote:
-                async with harnesses.claude_code(workspace=remote) as agent:
-                    session = agent.session(history=history)
+                async with harnesses.claude_code(workspace=remote) as harness:
+                    session = harness.session(history=history)
                     result = await session.run(
                         "What is the deadline? Reply with the day only."
                     )

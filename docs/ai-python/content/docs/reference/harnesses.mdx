@@ -15,8 +15,8 @@ This API is experimental and may change or be removed.
 from ai.harnesses import experimental as harnesses
 from ai.workspaces import experimental as workspaces
 
-async with harnesses.claude_code(workspace=workspaces.Local(".")) as agent:
-    result = await agent.run("What does this repo do?")
+async with harnesses.claude_code(workspace=workspaces.Local(".")) as harness:
+    result = await harness.run("What does this repo do?")
 ```
 
 ## Harnesses
@@ -111,16 +111,16 @@ One configured CLI, open on one workspace. Build it with `claude_code()` or
 `close()`.
 
 ```python
-agent.kind              # "claude-code" or "codex"
-agent.name              # same as kind
-agent.version           # what the CLI reported, or None
-agent.capabilities
-agent.workspace
-agent.options           # model, executable, sandbox, effort
-agent.approve           # the hook, or None
-agent.approval_timeout
-agent.is_open
-agent.process_ids       # local pids; empty in a sandbox
+harness.kind            # "claude-code" or "codex"
+harness.name            # same as kind
+harness.version         # what the CLI reported, or None
+harness.capabilities
+harness.workspace
+harness.options         # model, executable, sandbox, effort
+harness.approve         # the hook, or None
+harness.approval_timeout
+harness.is_open
+harness.process_ids     # local pids; empty in a sandbox
 ```
 
 Methods:
@@ -134,7 +134,10 @@ Methods:
   begins with that past.
 - `await run(prompt, *, history=None, output_type=None, retries=1,
   timeout=None)`: Run one prompt in a throwaway conversation. Returns a
-  `Result`.
+  `Result`. `prompt` may also be a whole conversation, `list[Message]`,
+  as `Agent.run()` takes it: the last message must be a user message and
+  becomes the prompt; the rest becomes `history`. Passing a conversation
+  and `history` together raises `ValueError`.
 - `await sessions()`: List the CLI's conversations in this workspace as
   `SessionInfo` values, including ones started outside the SDK.
 - `await history(session_id, *, limit=None, offset=0)`: Return a stored
@@ -173,8 +176,10 @@ Methods:
   prompt and wait for the turn to settle. Returns a `Result`.
 - `stream(prompt)`: Send a prompt and return a `Turn`.
 
-`prompt` is a `str`, or a list of `str`, `TextPart`, and `FilePart`. A
-file the harness cannot take (see `images` and `documents` in
+`prompt` is a `str`, a user `Message` (`ai.user_message(...)`), or a list
+of `str`, `TextPart`, and `FilePart`. A conversation (`list[Message]`)
+raises `TypeError` here; pass it to `Harness.run()` or as
+`Harness.session(history=...)`. A file the harness cannot take (see `images` and `documents` in
 `Capabilities`) raises `UnsupportedError` before anything runs. Text files
 are sent as text on every harness. A URL is downloaded on this machine.
 - `await steer(text)`: Send guidance to the running turn. Raises
@@ -194,20 +199,45 @@ are sent as text on every harness. A URL is downloaded on this machine.
 
 ## Turn
 
-A running turn. Iterate it for `ai.events.AgentEvent` values: model events
-plus `ToolCallResult`.
+A running turn, the harness's peer of `ai.AgentStream`. Iterate it for
+`ai.events.AgentEvent` values: model events, `ToolCallResult`, and the
+approval events below.
 
 ```python
-turn = session.stream(prompt)
-async for event in turn:
-    ...
+async with session.stream(prompt) as turn:
+    async for event in turn:
+        ...
 turn.result
 turn.settled
+turn.output             # result.output
+turn.usage              # result.usage
+turn.messages           # live while it runs
+turn.blocked
+turn.deferred_hooks
 await turn.aclose()
 ```
 
-`result` raises `RuntimeError` until the turn settles. A turn can be iterated
-once.
+Leaving the `async with` block calls `aclose()`: the turn settles, and the
+agent is stopped if it is still working. `result`, `output`, and `usage`
+raise `RuntimeError` until the turn settles. A turn can be iterated once.
+
+The whole turn is one `StreamStart` ... `StreamEnd`, with tool calls and
+their results inside: the CLI runs the loop and does not report each model
+call.
+
+Approval events, when the harness has an `approve` hook:
+
+- `HookEvent`, status `"pending"`, when the CLI asks about a call. Its
+  `hook_id` is `"approve_<call id>"`, its `tool_call_id` the call's id, its
+  `metadata` `{"tool": name, "kwargs": input}`, and its `hook_type`
+  `APPROVAL_HOOK_TYPE`.
+- `RunBlocked`, when the first pending approval starts. `blocked` is `True`
+  until no approval is pending.
+- `HookEvent`, status `"resolved"` with the decision as its `resolution`, or
+  `"cancelled"` when the hook raised or timed out.
+
+These are answered by the hook, not by `ai.resolve_hook()`, and are not part
+of `messages`.
 
 ## Result
 
@@ -219,7 +249,7 @@ One settled turn.
 | `text` | The agent's final message, after its last tool call. |
 | `messages` | The conversation as of settling: each tool call in an assistant message, then its result in a `"tool"` message. |
 | `usage` | [`ai.types.usage.Usage`](/docs/reference/types). Claude Code reports cost in `usage.raw["cost_usd"]`. |
-| `output` | The validated value when the turn ran with `output_type`. |
+| `output` | The validated value when the turn ran with `output_type`; otherwise `text`. |
 | `prompt_sent` | Exactly what the agent received. |
 | `approval_errors` | Approval hooks that raised or timed out. Those calls were denied. |
 | `cancelled` | `True` when `finish_reason` is `"cancelled"`. |
@@ -253,7 +283,7 @@ One conversation in the CLI's store.
 | `title` | The conversation's title or first prompt, or `None`. |
 | `cwd` | The directory it ran in, or `None`. |
 | `updated_at`, `created_at` | Timestamps as the CLI reports them, or `None`. |
-| `running` | `True` when a process has the conversation open. An SDK client or `agent.tui()` holds it, so `resume()` would raise `SessionBusyError`. A CLI started in a terminal shows as running too: any `claude`, and a `codex` started as `codex resume <id>`. `resume()` does not check for those. |
+| `running` | `True` when a process has the conversation open. An SDK client or `harness.tui()` holds it, so `resume()` would raise `SessionBusyError`. A CLI started in a terminal shows as running too: any `claude`, and a `codex` started as `codex resume <id>`. `resume()` does not check for those. |
 | `pid` | The process that has it open, in the workspace, or `None`. |
 
 ## Handle
@@ -355,10 +385,18 @@ the turn.
 
 `Allow | Deny`.
 
+### APPROVAL_HOOK_TYPE
+
+`"harness_approval"`: the `hook_type` of the approval events a `Turn`
+reports. Not `ToolApproval`, so AI SDK UI does not offer to answer them.
+
+The hook runs in a copy of the context of the turn it decides for, so
+contextvars the turn's caller set are visible inside it.
+
 ## Capabilities
 
 What a harness can do, declared before anything runs. Read it from
-`agent.capabilities`.
+`harness.capabilities`.
 
 | Capability | Description | Claude Code | Codex |
 |---|---|---|---|

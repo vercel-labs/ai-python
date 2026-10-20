@@ -51,14 +51,14 @@ async def push() -> None:
                 "Remember the codeword BETA. Reply with exactly: OK",
             ),
         ):
-            agent = harness_factory(workspace=workspace)
-            await agent.open()
-            session = agent.session()
+            harness = harness_factory(workspace=workspace)
+            await harness.open()
+            session = harness.session()
             await session.run(task)
             # A Handle is the portable pointer: harness kind + session id +
             # how to reopen the workspace. Save it under YOUR label.
             saved[label] = session.handle.model_dump_json()
-            await agent.detach()  # release cleanly; the harness keeps running
+            await harness.detach()  # release cleanly; the harness keeps running
 
         STATE.write_text(json.dumps(saved, indent=2))
         print(
@@ -103,9 +103,9 @@ async def come_back() -> None:
         name=saved["sandbox"], gateway=gw
     ) as workspace:
         reviewer = harnesses.Handle.model_validate_json(saved["reviewer"])
-        agent = harnesses.codex(workspace=workspace)
-        await agent.open()
-        listed = await agent.sessions()  # codex finds ITS sessions in the VM
+        harness = harnesses.codex(workspace=workspace)
+        await harness.open()
+        listed = await harness.sessions()  # codex finds ITS sessions in the VM
         print(f"[*] codex reports {len(listed)} session(s) in this sandbox")
         mine = next(i for i in listed if i.session_id == reviewer.session_id)
         # The harness you detached from is still ALIVE in the VM and holds
@@ -113,12 +113,12 @@ async def come_back() -> None:
         # raise SessionBusyError — on both harnesses, the same way. From a fresh
         # client, FORK: same history, your own conversation. Reattaching to
         # the live process is the follow-up.
-        picked = await agent.fork(mine.session_id)
+        picked = await harness.fork(mine.session_id)
         result = await picked.run(
             "What is the codeword? Reply with the single word only."
         )
         print("[*] reviewer picked up (forked):", result.text.strip())
-        await agent.detach()
+        await harness.detach()
 
     # (c) Done for real: stop the VM. Everything in it ends with it.
     async with workspaces.VercelSandbox(name=saved["sandbox"], keep=False):

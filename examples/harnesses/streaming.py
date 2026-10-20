@@ -19,8 +19,8 @@ async def main() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         async with harnesses.claude_code(
             workspace=workspaces.Local(tmp)
-        ) as agent:
-            session = agent.session()
+        ) as harness:
+            session = harness.session()
             turn = session.stream(
                 "Write the word HELLO into greeting.txt, then read it back "
                 + "and reply with what it contains."
