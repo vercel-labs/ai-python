@@ -8,13 +8,14 @@ bugs show up in milliseconds, not in a sandbox an hour later.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import itertools
 import json
 from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
 from typing import Any, cast
 
-from ai.harnesses.experimental import _capabilities, _harness
+from ai.harnesses.experimental import _approval, _capabilities, _harness
 from ai.types import events
 from ai.types import messages as m
 from ai.workspaces.experimental import Local, _base
@@ -114,6 +115,7 @@ class FakeAdapter:
         self.closed_sessions: list[str] = []
         self.turns_started: list[str] = []
         self.prompts: list[list[Any]] = []
+        self.histories: list[list[m.Message] | None] = []
         self.turns_finalized: list[str] = []
         self._stopped: dict[str, asyncio.Event] = {}
         self._ids = itertools.count(1)
@@ -128,6 +130,7 @@ class FakeAdapter:
         pass
 
     async def new_session(self, history: list[m.Message] | None = None) -> str:
+        self.histories.append(history)
         return f"s{next(self._ids)}"
 
     async def close_session(self, session_id: str) -> None:
@@ -189,6 +192,74 @@ class FakeAdapter:
             )
         finally:
             self.turns_finalized.append(prompt)
+
+
+class AskingAdapter(FakeAdapter):
+    """A `FakeAdapter` that asks for approval the way the real clients do.
+
+    From tasks spawned by a reader started when the harness OPENED (codex's
+    JSON-RPC pump; claude's read loop is started at connect), so the hook
+    runs with whatever context that reader had unless the harness fixes it.
+    `ask(name)` is a script step that asks and waits for the decision;
+    decisions land in `decisions`.
+    """
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.decisions: list[_approval.Decision] = []
+        self._asks: asyncio.Queue[
+            tuple[_approval.ApprovalContext, asyncio.Future[Any]]
+        ] = asyncio.Queue()
+        self._reader: asyncio.Task[None] | None = None
+        self._answers: set[asyncio.Task[None]] = set()
+        self._workspace: Any = None
+        self._session_id = ""
+
+    async def start(self, workspace: Any, options: dict[str, Any]) -> None:
+        self._workspace = workspace
+        self._reader = asyncio.create_task(self._read())
+
+    async def close(self) -> None:
+        if self._reader is not None:
+            self._reader.cancel()
+
+    async def _read(self) -> None:
+        while True:
+            request, answer = await self._asks.get()
+            task = asyncio.create_task(self._answer(request, answer))
+            self._answers.add(task)
+            task.add_done_callback(self._answers.discard)
+
+    async def _answer(
+        self, request: _approval.ApprovalContext, answer: asyncio.Future[Any]
+    ) -> None:
+        try:
+            answer.set_result(await self.approve(request))
+        except BaseException as exc:
+            answer.set_exception(exc)
+
+    def ask(self, name: str = "Bash", call_id: str = "c1") -> Run:
+        async def asking() -> None:
+            answer: asyncio.Future[Any] = (
+                asyncio.get_running_loop().create_future()
+            )
+            request = _approval.ApprovalContext(
+                call=_approval.ToolCall(id=call_id, name=name),
+                workspace=self._workspace,
+                harness=self.kind,
+                session_id=self._session_id,
+            )
+            await self._asks.put((request, answer))
+            with contextlib.suppress(Exception):
+                self.decisions.append(await answer)
+
+        return Run(asking)
+
+    def turn(
+        self, session_id: str, given: list[Any]
+    ) -> AsyncIterator[events.AgentEvent]:
+        self._session_id = session_id
+        return super().turn(session_id, given)
 
 
 class FakeWorkspace(_base.Workspace):

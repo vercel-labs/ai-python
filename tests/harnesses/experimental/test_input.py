@@ -109,3 +109,62 @@ async def test_claude_gets_base64_blocks() -> None:
     assert [b["type"] for b in blocks] == ["text", "image", "document"]
     assert blocks[1]["source"]["data"] == base64.b64encode(PNG).decode()
     assert blocks[2]["source"]["media_type"] == "application/pdf"
+
+
+# -- messages in, like the rest of `ai` ---------------------------------------
+
+
+async def test_a_user_message_is_a_prompt() -> None:
+    harness, adapter = await fakes.open_harness()
+    result = await harness.session().run(
+        m.Message(role="user", parts=[m.TextPart(text="hi"), IMAGE])
+    )
+    assert [type(p) for p in adapter.prompts[0]] == [m.TextPart, m.FilePart]
+    assert result.text == "hi"
+
+
+async def test_a_prompt_message_must_be_a_user_message() -> None:
+    harness, _ = await fakes.open_harness()
+    assistant = m.Message(role="assistant", parts=[m.TextPart(text="hi")])
+    with pytest.raises(ValueError, match="user message"):
+        harness.session().stream(assistant)
+
+
+async def test_harness_run_takes_a_conversation_like_agent_run() -> None:
+    harness, adapter = await fakes.open_harness()
+    earlier = [
+        m.Message(role="user", parts=[m.TextPart(text="one")]),
+        m.Message(role="assistant", parts=[m.TextPart(text="one")]),
+    ]
+    prompt = m.Message(role="user", parts=[m.TextPart(text="two")])
+    result = await harness.run([*earlier, prompt])
+    assert adapter.histories == [earlier], "the past became the history"
+    assert result.text == "two"
+    assert [msg.role for msg in result.messages] == [
+        "user",
+        "assistant",
+        "user",
+        "assistant",
+    ]
+
+
+async def test_a_conversation_must_end_with_a_user_message() -> None:
+    harness, _ = await fakes.open_harness()
+    with pytest.raises(ValueError, match="end with a user message"):
+        await harness.run(
+            [m.Message(role="assistant", parts=[m.TextPart(text="hi")])]
+        )
+
+
+async def test_a_conversation_and_history_together_are_refused() -> None:
+    harness, _ = await fakes.open_harness()
+    prompt = m.Message(role="user", parts=[m.TextPart(text="hi")])
+    with pytest.raises(ValueError, match="not both"):
+        await harness.run([prompt], history=[prompt])
+
+
+async def test_a_session_turn_does_not_take_a_conversation() -> None:
+    harness, _ = await fakes.open_harness()
+    prompt = m.Message(role="user", parts=[m.TextPart(text="hi")])
+    with pytest.raises(TypeError, match=r"Harness\.run"):
+        harness.session().stream([prompt])  # type: ignore[list-item]  # ty: ignore[invalid-argument-type]

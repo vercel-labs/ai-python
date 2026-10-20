@@ -844,6 +844,10 @@ class CodexAdapter:
     async def turn(
         self, session_id: str, prompt: list[_input.Part]
     ) -> AsyncIterator[events_.AgentEvent]:
+        # Unbounded on purpose: the reader fills it inline, in arrival order,
+        # for every session on one process, so it must never wait on a slow
+        # consumer of one turn. A turn's notifications are small and end with
+        # the turn, so what it can hold is bounded by the turn itself.
         queue: asyncio.Queue[Any] = asyncio.Queue()
         self._queues[session_id] = queue
         self._interrupted.discard(session_id)

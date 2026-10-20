@@ -10,7 +10,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from typing import TYPE_CHECKING, Any, TypeVar
+import contextvars
+from typing import TYPE_CHECKING, Any, Self, TypeVar
 
 from pydantic import BaseModel
 
@@ -21,12 +22,20 @@ from . import _handle, _input, _result, errors
 from . import _structured as _structured_
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncIterator, Awaitable, Callable
 
     from ...workspaces.experimental import _pty
-    from . import _harness
+    from . import _approval, _harness
 
 T = TypeVar("T")
+
+APPROVAL_HOOK_TYPE = "harness_approval"
+"""`HookPart.hook_type` of the approvals a turn reports.
+
+Not `ToolApproval`: these are answered by the `approve=` hook, not by
+`ai.resolve_hook`, so UIs must not offer to answer them."""
+
+_END = object()
 
 
 class SessionInfo(BaseModel):
@@ -48,7 +57,7 @@ class SessionInfo(BaseModel):
     created_at: int | None = None
     running: bool = False
     """Whether a process has this conversation open. A client of this SDK or
-    an `agent.tui()` holds it, and `resume` refuses with SessionBusyError;
+    a `harness.tui()` holds it, and `resume` refuses with SessionBusyError;
     the CLI started in a terminal is seen too (any `claude`, a `codex` only
     as `codex resume <id>`) but holds nothing `resume` checks. `fork` it
     instead."""
@@ -63,7 +72,26 @@ caller of `stop()` must not hang on it."""
 
 
 class Turn:
-    """A settling turn: iterate it for events, then read `result`."""
+    """A settling turn: iterate it for events, then read `result`.
+
+    The harness-level peer of `ai.AgentStream`: a whole agent run, as much
+    of it as the CLI reports. Use it bare (`async for event in turn`) or as
+    a context manager, the way `ai.Agent.run()` is used::
+
+        async with session.stream("...") as turn:
+            async for event in turn:
+                ...
+        print(turn.output)
+
+    Leaving the block settles the turn (stopping the agent if it is still
+    working), exactly like `aclose()`.
+
+    Iterating is not `__anext__` on the turn itself, on purpose: each
+    `async for` gets its own generator, so a bare `break` drops the last
+    reference to it and Python closes it right away — that close is what
+    stops an agent nobody is reading. A turn that was its own iterator
+    would stay referenced by the caller and keep the agent working.
+    """
 
     def __init__(
         self, session: Session, prompt: list[_input.Part], sent: str
@@ -80,6 +108,10 @@ class Turn:
         # closing an async generator while another close of it is still
         # running raises, so a second caller waits on the first.
         self._closer: asyncio.Future[None] | None = None
+        # Approvals the agent is waiting on, folded from delivered events
+        # (like `AgentStream`), so `blocked` matches what the consumer saw.
+        self._blocked = False
+        self._deferred: dict[str, messages_.HookPart[Any]] = {}
 
     @property
     def result(self) -> _result.Result:
@@ -93,6 +125,54 @@ class Turn:
     def settled(self) -> bool:
         return self._result is not None
 
+    @property
+    def messages(self) -> list[messages_.Message]:
+        """The conversation so far: live while the turn runs, final after."""
+        if self._result is not None:
+            return list(self._result.messages)
+        return self._session.messages
+
+    @property
+    def output(self) -> Any:
+        """`result.output`: the final text, or the parsed value."""
+        return self.result.output
+
+    @property
+    def usage(self) -> usage_.Usage:
+        return self.result.usage
+
+    @property
+    def blocked(self) -> bool:
+        """Whether the agent is waiting on the approval hook right now.
+
+        Set by a delivered `RunBlocked`, cleared once no approval is
+        pending. Unlike `AgentStream.blocked`, a turn never ENDS blocked: the
+        CLI waits for the hook's answer, so the turn cannot settle without it.
+        """
+        return self._blocked
+
+    @property
+    def deferred_hooks(self) -> list[messages_.HookPart[Any]]:
+        """Approvals pending as of the last delivered event."""
+        return list(self._deferred.values())
+
+    def _track(self, event: events.AgentEvent) -> events.AgentEvent:
+        if isinstance(event, events.RunBlocked):
+            self._blocked = True
+        elif isinstance(event, events.HookEvent):
+            if event.hook.status == "pending":
+                self._deferred[event.hook.hook_id] = event.hook
+            else:
+                self._deferred.pop(event.hook.hook_id, None)
+                self._blocked = bool(self._deferred)
+        return event
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> None:
+        await self.aclose()
+
     async def __aiter__(self) -> AsyncIterator[events.AgentEvent]:
         if self._consumed:
             # A consumed stream is exhausted, never silently replayed.
@@ -101,7 +181,7 @@ class Turn:
         self._inner = self._session._drive(self)
         try:
             async for event in self._inner:
-                yield event
+                yield self._track(event)
         finally:
             # Reached on `break` too: Python closes this generator once the
             # loop that dropped it is gone, and that close is what ends a
@@ -132,6 +212,10 @@ class Turn:
         if inner is None or self._done.is_set():
             return
         if self._closer is None and not inner.ag_running:
+            # A bare future, not a TaskGroup task: whoever asks first starts
+            # the close, everyone else (another `stop()`, `__aexit__`) awaits
+            # the same one, and it must survive any one caller's cancellation
+            # (hence the shield). There is no scope that owns all callers.
             self._closer = asyncio.ensure_future(inner.aclose())
         if self._closer is not None:
             await asyncio.shield(self._closer)
@@ -220,6 +304,12 @@ class Session:
         # hydrator that builds it; see `_drive`.
         self._segment = messages_.Message(role="assistant", parts=[])
         self._hydrator = events.MessageHydrator()
+        # While a turn runs: the consumer's context, which the approval hook
+        # runs in (see `_approve`); the queue its approval events travel
+        # on; and the approvals pending.
+        self._context: contextvars.Context | None = None
+        self._notices: asyncio.Queue[events.AgentEvent] | None = None
+        self._approvals: dict[str, messages_.HookPart[Any]] = {}
 
     @property
     def session_id(self) -> str:
@@ -309,6 +399,7 @@ class Session:
                 return _result.Result(
                     finish_reason="cancelled",
                     messages=self.messages,
+                    output="",
                     prompt_sent=turn._sent,
                 )
             return turn.result.model_copy(update={"finish_reason": "cancelled"})
@@ -383,6 +474,17 @@ class Session:
         self._active = turn
         self._stopped = False
         self._ended = False
+        # The approval hook is called from tasks the CLI's client started
+        # long ago (codex: at open; claude: at the first turn's connect), so
+        # it would see THEIR contextvars, not this turn's. It runs in a copy
+        # of this one instead: the consumer's context, as of the turn start.
+        self._context = contextvars.copy_context()
+        # Approval events come from those tasks too, while the adapter's
+        # stream is silent (the CLI is waiting on the answer), so they travel
+        # on their own queue and are raced against the adapter below.
+        notices: asyncio.Queue[events.AgentEvent] = asyncio.Queue()
+        self._notices = notices
+        self._approvals = {}
         settled: events.StreamEnd | None = None
         abandoned = False
         # The AI SDK reconstructs messages from the event stream, so a turn
@@ -407,8 +509,33 @@ class Session:
         self._hydrator = hydrator
         appended: set[str] = set()
         inner = self._harness.adapter.turn(self._session_id, turn._prompt)
+
+        async def advance() -> Any:
+            return await anext(inner, _END)
+
+        # One step of the adapter's stream and one notice, each awaited in
+        # its own task so either can arrive first. The adapter still only
+        # moves when the consumer asks: one step is ever in flight.
+        step: asyncio.Future[Any] | None = None
+        notice: asyncio.Future[events.AgentEvent] | None = None
         try:
-            async for raw in inner:
+            while True:
+                if step is None:
+                    step = asyncio.ensure_future(advance())
+                if notice is None:
+                    notice = asyncio.ensure_future(notices.get())
+                await asyncio.wait(
+                    {step, notice}, return_when=asyncio.FIRST_COMPLETED
+                )
+                if notice.done():
+                    pending_notice = notice.result()
+                    notice = None
+                    yield pending_notice
+                    continue
+                raw = step.result()
+                step = None
+                if raw is _END:
+                    break
                 fed = raw
                 if isinstance(raw, events.ModelEvent):
                     fed = raw.model_copy(
@@ -460,6 +587,17 @@ class Session:
                     self._stopped = True
                     with contextlib.suppress(Exception):
                         await self._harness.adapter.stop(self._session_id)
+                # A step still in flight is the adapter's stream, running:
+                # cancel it (that ends the stream, as an inline await being
+                # cancelled did) before closing what is left of it.
+                for waiting in (step, notice):
+                    if waiting is None:
+                        continue
+                    waiting.cancel()
+                    await asyncio.wait({waiting})
+                    if not waiting.cancelled():
+                        # Retrieved, so asyncio does not log it as lost.
+                        waiting.exception()
                 # Close the adapter's turn too: walking away from it is not
                 # enough to run its cleanup.
                 aclose = getattr(inner, "aclose", None)
@@ -468,6 +606,8 @@ class Session:
                         await aclose()
             finally:
                 self._active = None
+                self._context = None
+                self._notices = None
                 approval_errors = self._harness._take_approval_errors(
                     self._session_id
                 )
@@ -521,6 +661,7 @@ class Session:
         return _result.Result(
             finish_reason=finish or "stop",
             text=text,
+            output=text,
             messages=self.messages,
             usage=(
                 end.usage if end is not None and end.usage else usage_.Usage()
@@ -528,6 +669,62 @@ class Session:
             prompt_sent=turn._sent,
             approval_errors=approval_errors,
         )
+
+    # -- approval -------------------------------------------------------------
+
+    async def _approve(
+        self,
+        hook: Callable[
+            [_approval.ApprovalContext], Awaitable[_approval.Decision]
+        ],
+        request: _approval.ApprovalContext,
+    ) -> _approval.Decision:
+        """Ask the caller's hook about one call, from inside the turn.
+
+        The hook runs in a copy of the turn's context (one copy per call,
+        so concurrent calls do not share contextvar writes), and the turn's
+        stream reports the wait: a pending `HookEvent`, `RunBlocked` when it
+        is the first one, and the hook's outcome. The harness KNOWS it is
+        blocked here — the CLI is waiting on this answer — so nothing has to
+        infer it from the stream.
+        """
+        context, notices = self._context, self._notices
+        if context is None or notices is None:
+            # No turn is running here: nothing to report it on.
+            return await hook(request)
+        pending: messages_.HookPart[Any] = messages_.HookPart(
+            hook_id=f"approve_{request.call.id}",
+            hook_type=APPROVAL_HOOK_TYPE,
+            status="pending",
+            metadata={"tool": request.call.name, "kwargs": request.call.input},
+            tool_call_id=request.call.id,
+        )
+        first = not self._approvals
+        self._approvals[pending.hook_id] = pending
+        notices.put_nowait(_hook_event(pending))
+        if first:
+            notices.put_nowait(
+                events.RunBlocked(hooks=tuple(self._approvals.values()))
+            )
+        outcome = pending.model_copy(update={"status": "cancelled"})
+
+        async def ask() -> _approval.Decision:
+            return await hook(request)
+
+        try:
+            # Awaiting the task passes a cancellation (the approval timeout)
+            # on to it.
+            decision = await asyncio.create_task(ask(), context=context.copy())
+            outcome = pending.model_copy(
+                update={
+                    "status": "resolved",
+                    "resolution": decision.model_dump(),
+                }
+            )
+            return decision
+        finally:
+            self._approvals.pop(pending.hook_id, None)
+            notices.put_nowait(_hook_event(outcome))
 
     # -- control --------------------------------------------------------------
 
@@ -578,6 +775,12 @@ class Session:
 
     def __repr__(self) -> str:
         return f"<Session {self._session_id} on {self._harness.name}>"
+
+
+def _hook_event(hook: messages_.HookPart[Any]) -> events.HookEvent:
+    """Wrap a hook part the way `ai.hook()` reports one."""
+    message = messages_.Message(role="internal", parts=[hook])
+    return events.HookEvent(message=message, hook=hook)
 
 
 def _text_of(message: messages_.Message | None) -> str:

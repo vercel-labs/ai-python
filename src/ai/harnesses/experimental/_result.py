@@ -31,7 +31,8 @@ class Result(BaseModel):
     usage: usage_.Usage = Field(default_factory=usage_.Usage)
 
     output: Any | None = None
-    """The validated value when the turn ran with `output_type=`."""
+    """The turn's output: the validated value when it ran with
+    `output_type=`, else `text` — as `stream.output` is in `ai`."""
 
     prompt_sent: str = ""
     """Exactly what the agent received — including any schema annotation the

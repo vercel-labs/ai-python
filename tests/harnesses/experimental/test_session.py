@@ -7,12 +7,13 @@ without a CLI. The e2e suite proves the same contract against real agents.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import warnings
 from typing import Any
 
 import pytest
 
-from ai.harnesses.experimental import _session, errors
+from ai.harnesses.experimental import _approval, _session, errors
 from ai.types import events
 from ai.types import messages as m
 
@@ -483,3 +484,157 @@ async def test_a_failed_turn_says_which_cli_version_failed() -> None:
     with pytest.raises(errors.TurnFailedError) as info:
         await harness.session().run("go")
     assert "fake 1.0" in "\n".join(getattr(info.value, "__notes__", []))
+
+
+# -- the approval hook runs inside its turn ----------------------------------
+
+_who: contextvars.ContextVar[str] = contextvars.ContextVar("who", default="?")
+
+
+def _asking(adapter: fakes.AskingAdapter) -> Any:
+    def script(prompt: str) -> list[fakes.Step]:
+        return [events.StreamStart(), adapter.ask(), *fakes.text(prompt)]
+
+    return script
+
+
+async def test_the_approval_hook_sees_its_turns_context() -> None:
+    """Not the context of whoever started the CLI client's reader."""
+    seen: list[str] = []
+
+    async def approve(ctx: _approval.ApprovalContext) -> _approval.Decision:
+        seen.append(_who.get())
+        return _approval.Allow()
+
+    adapter = fakes.AskingAdapter()
+    adapter.script = _asking(adapter)
+    _who.set("open")
+    harness, _ = await fakes.open_harness(adapter, approve=approve)
+    session = harness.session()
+    _who.set("turn 1")
+    await session.run("one")
+    _who.set("turn 2")
+    await session.run("two")
+    assert seen == ["turn 1", "turn 2"]
+    assert adapter.decisions == [_approval.Allow(), _approval.Allow()]
+
+
+async def test_concurrent_approvals_do_not_share_contextvar_writes() -> None:
+    seen: list[str] = []
+    both = asyncio.Barrier(2)
+
+    async def approve(ctx: _approval.ApprovalContext) -> _approval.Decision:
+        _who.set(ctx.call.id)
+        await both.wait()
+        seen.append(_who.get())
+        return _approval.Allow()
+
+    adapter = fakes.AskingAdapter()
+
+    def script(prompt: str) -> list[fakes.Step]:
+        first, second = adapter.ask(call_id="a"), adapter.ask(call_id="b")
+
+        async def ask_both() -> None:
+            await asyncio.gather(first.fn(), second.fn())
+
+        return [events.StreamStart(), fakes.Run(ask_both), *fakes.text("ok")]
+
+    adapter.script = script
+    harness, _ = await fakes.open_harness(adapter, approve=approve)
+    await harness.session().run("go")
+    assert sorted(seen) == ["a", "b"]
+
+
+async def test_no_hook_installs_no_gate() -> None:
+    _, adapter = await fakes.open_harness()
+    assert adapter.approve is None
+
+
+# -- the turn reports the approval it waits on --------------------------------
+
+
+async def test_a_turn_reports_the_approval_it_is_blocked_on() -> None:
+    release = asyncio.Event()
+
+    async def approve(ctx: _approval.ApprovalContext) -> _approval.Decision:
+        await release.wait()
+        return _approval.Deny("not that")
+
+    adapter = fakes.AskingAdapter()
+    adapter.script = _asking(adapter)
+    harness, _ = await fakes.open_harness(adapter, approve=approve)
+    seen: list[str] = []
+    async with harness.session().stream("go") as turn:
+        async for event in turn:
+            seen.append(type(event).__name__)
+            if isinstance(event, events.RunBlocked):
+                # Delivered while the hook is still deciding: the CLI's own
+                # stream is silent meanwhile.
+                assert turn.blocked
+                assert [h.tool_call_id for h in event.hooks] == ["c1"]
+                assert [h.hook_id for h in turn.deferred_hooks] == [
+                    "approve_c1"
+                ]
+                release.set()
+            elif isinstance(event, events.HookEvent):
+                assert event.hook.hook_type == _session.APPROVAL_HOOK_TYPE
+                assert event.hook.metadata == {"tool": "Bash", "kwargs": {}}
+                if event.hook.status == "resolved":
+                    assert event.hook.resolution is not None
+                    assert event.hook.resolution["decision"] == "deny"
+                    assert not turn.blocked
+    assert seen[:4] == ["StreamStart", "HookEvent", "RunBlocked", "HookEvent"]
+    assert not turn.blocked
+    assert turn.output == "go"
+    assert roles(turn.messages) == [
+        "user",
+        "assistant",
+    ], "approval notices are not part of the transcript"
+
+
+async def test_a_failed_approval_is_reported_cancelled() -> None:
+    async def approve(ctx: _approval.ApprovalContext) -> _approval.Decision:
+        raise RuntimeError("policy service down")
+
+    adapter = fakes.AskingAdapter()
+    adapter.script = _asking(adapter)
+    harness, _ = await fakes.open_harness(adapter, approve=approve)
+    turn = harness.session().stream("go")
+    hooks = [e.hook async for e in turn if isinstance(e, events.HookEvent)]
+    assert [h.status for h in hooks] == ["pending", "cancelled"]
+    assert not turn.blocked
+
+
+# -- the turn, shaped like `AgentStream` --------------------------------------
+
+
+async def test_a_turn_is_a_context_manager_that_settles_on_exit() -> None:
+    pause = fakes.Pause()
+    harness, adapter = await fakes.open_harness(
+        fakes.FakeAdapter(_paused(pause))
+    )
+    session = harness.session()
+    async with session.stream("go") as turn:
+        async for event in turn:
+            if isinstance(event, events.TextDelta):
+                assert roles(turn.messages) == ["user", "assistant"], "live"
+                break
+    assert turn.settled
+    assert turn.result.cancelled
+    assert adapter.stops == [session.session_id]
+
+
+async def test_output_defaults_to_the_final_text() -> None:
+    harness, _ = await fakes.open_harness(fakes.FakeAdapter(_tool_turn))
+    async with harness.session().stream("go") as turn:
+        async for _ in turn:
+            pass
+    assert turn.output == turn.result.text == "done"
+    assert turn.usage == turn.result.usage
+
+
+async def test_output_is_unavailable_until_the_turn_settles() -> None:
+    harness, _ = await fakes.open_harness()
+    turn = harness.session().stream("go")
+    with pytest.raises(RuntimeError, match="not settled"):
+        _ = turn.output

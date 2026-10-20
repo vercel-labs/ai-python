@@ -13,6 +13,7 @@ from . import errors as errors_
 if TYPE_CHECKING:
     from ...types import messages
     from ...workspaces.experimental import _base
+    from . import _approval
     from ._adapters import base
 
 T = TypeVar("T")
@@ -44,7 +45,7 @@ class Harness:
         self._approval_errors: dict[str, list[str]] = {}
         # Adapters do not keep their own transcript: they borrow the
         # session's, so the approval hook and the caller see one history.
-        self._sessions: dict[str, Any] = {}
+        self._sessions: dict[str, _session.Session] = {}
 
     # -- identity -------------------------------------------------------------
 
@@ -84,8 +85,10 @@ class Harness:
             return
         await self.workspace.open()
         # The hook and its failure sink belong to the harness; the adapter
-        # only needs to call them.
-        self.adapter.approve = self.approve
+        # only needs to call them. The adapter gets a wrapper that runs the
+        # hook inside the session's turn (see `_approve`); None still means
+        # "no gate".
+        self.adapter.approve = self._approve if self.approve else None
         self.adapter.approval_timeout = self.approval_timeout
         self.adapter.on_approval_error = self._record_approval_error
         # NB: named `live_history`, not `history` — the adapter's own
@@ -172,7 +175,7 @@ class Harness:
 
     async def run(
         self,
-        prompt: _input.Prompt,
+        prompt: _input.Conversation,
         *,
         history: list[messages.Message] | None = None,
         output_type: type[T] | None = None,
@@ -184,11 +187,23 @@ class Harness:
         `history` starts that conversation from an earlier one — any
         `history()` or `Result.messages`, from either harness, from any
         machine. Sugar over `session(history=...).run(...)`.
+
+        `prompt` may also be the whole conversation, the way `Agent.run`
+        takes it: `harness.run([*earlier, ai.user_message("...")])`. Its last
+        message is the prompt and the rest is `history`.
         """
         if not self._open:
             raise errors_.HarnessClosedError(
                 "harness is not open; call open() or use `async with`"
             )
+        prompt, past = _input.split(prompt)
+        if past is not None:
+            if history is not None:
+                raise ValueError(
+                    "run(): pass the conversation as the prompt or as "
+                    + "history=, not both"
+                )
+            history = past or None
         session = await self._new_session(history=history)
         try:
             return await session.run(
@@ -344,7 +359,7 @@ class Harness:
 
     # -- approval plumbing ----------------------------------------------------
 
-    def _register(self, session: Any) -> None:
+    def _register(self, session: _session.Session) -> None:
         self._sessions[session.session_id] = session
 
     def _forget(self, session_id: str) -> None:
@@ -354,6 +369,22 @@ class Harness:
     def _history_of(self, session_id: str) -> list[Any]:
         session = self._sessions.get(session_id)
         return session.messages if session is not None else []
+
+    async def _approve(
+        self, request: _approval.ApprovalContext
+    ) -> _approval.Decision:
+        """Run the caller's hook in the turn it belongs to.
+
+        Adapters call this from the CLI client's own tasks, which carry the
+        contextvars of whoever started them (codex: `open()`; claude: the
+        first turn). The session runs the hook in its CURRENT turn's context
+        instead, and reports the wait on that turn's stream.
+        """
+        assert self.approve is not None
+        session = self._sessions.get(request.session_id)
+        if session is None:
+            return await self.approve(request)
+        return await session._approve(self.approve, request)
 
     def _record_approval_error(self, session_id: str, detail: str) -> None:
         self._approval_errors.setdefault(session_id, []).append(detail)

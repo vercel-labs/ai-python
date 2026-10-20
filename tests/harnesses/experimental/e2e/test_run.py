@@ -68,10 +68,11 @@ async def test_structured_output_returns_a_validated_instance(
 
 
 async def test_structured_output_is_opt_in(any_harness: Harness) -> None:
-    """Without output_type the plain path is untouched: no schema, no output."""
+    """Without output_type the plain path is untouched: no schema, and the
+    output is the text, as `stream.output` is in `ai`."""
     result = await any_harness.run("Reply with exactly: READY")
 
-    assert result.output is None
+    assert result.output == result.text
     assert (
         "schema" not in result.prompt_sent.lower()
     ), "the SDK must not edit a prompt it was not asked to annotate"
