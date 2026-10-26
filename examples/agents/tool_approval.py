@@ -26,10 +26,7 @@ async def live(messages: list[ai.messages.Message]) -> None:
         async for event in stream:
             if isinstance(event, ai.events.TextDelta):
                 print(event.chunk, end="", flush=True)
-            elif (
-                isinstance(event, ai.events.HookEvent)
-                and event.hook.status == "pending"
-            ):
+            elif isinstance(event, ai.events.PendingHookEvent):
                 print(f"\n[deferred] {event.hook.hook_id}")
                 ai.resolve_hook(
                     event.hook,
@@ -57,10 +54,7 @@ async def stateless(
             if isinstance(event, ai.events.TextDelta):
                 text.append(event.chunk)
                 print(event.chunk, end="", flush=True)
-            elif (
-                isinstance(event, ai.events.HookEvent)
-                and event.hook.status == "pending"
-            ):
+            elif isinstance(event, ai.events.PendingHookEvent):
                 deferred.append(event.hook)
                 print(f"\n[deferred] {event.hook.hook_id}")
                 ai.defer_hook(event.hook)

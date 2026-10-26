@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pydantic
 import pytest
 
@@ -220,7 +222,7 @@ def test_message_hydrator_tracks_multiple_messages() -> None:
         events.TextDelta(message=assistant_1, block_id="text-1", chunk="first"),
         events.StreamEnd(message=assistant_1),
         events.ToolCallResult(message=tool_message, results=[]),
-        events.HookEvent(
+        events.PendingHookEvent(
             message=hook_message,
             hook=messages.HookPart(
                 hook_id="hook", hook_type="test", status="pending"
@@ -265,7 +267,7 @@ def test_non_model_events_keep_message() -> None:
     )
     source: list[events.AgentEvent] = [
         events.ToolCallResult(message=tool_message, results=[]),
-        events.HookEvent(
+        events.PendingHookEvent(
             message=hook_message,
             hook=messages.HookPart(
                 hook_id="hook", hook_type="test", status="pending"
@@ -295,6 +297,19 @@ def test_omitted_model_event_validates_with_dummy_message() -> None:
     assert isinstance(restored, events.TextDelta)
     assert restored.message.id == event.message.id
     assert restored.message.parts == []
+
+
+@pytest.mark.parametrize("dump", [False, True])
+def test_hook_event_validation_dispatches_on_status(dump: bool) -> None:
+    message = messages.Message(id="hook-message", role="internal", parts=[])
+    hook: messages.HookPart[Any] = messages.HookPart(
+        hook_id="hook", hook_type="test", status="resolved"
+    )
+    data = {"message": message, "hook": hook.model_dump() if dump else hook}
+
+    restored = events.HookEvent.model_validate(data)
+
+    assert isinstance(restored, events.ResolvedHookEvent)
 
 
 def test_retry_round_trips_through_agent_event_union() -> None:

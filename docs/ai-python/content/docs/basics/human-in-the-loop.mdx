@@ -20,16 +20,13 @@ async def notify_mothership(message: str) -> str:
     return f"Sent: {message}"
 ```
 
-When the model calls the tool, the agent emits a hook event. Resolve it with
-`ai.resolve_hook`:
+When the model calls the tool, the agent emits a `PendingHookEvent`. Resolve
+it with `ai.resolve_hook`:
 
 ```python
 async with agent.run(model, messages) as stream:
     async for event in stream:
-        if (
-            isinstance(event, ai.events.HookEvent)
-            and event.hook.status == "pending"
-        ):
+        if isinstance(event, ai.events.PendingHookEvent):
             print(event.hook.hook_id, event.hook.metadata)
             ai.resolve_hook(
                 event.hook,
@@ -138,10 +135,7 @@ async with agent.run(model, messages) as stream:
         )
 
     async for event in stream:
-        if (
-            isinstance(event, ai.events.HookEvent)
-            and event.hook.status == "pending"
-        ):
+        if isinstance(event, ai.events.PendingHookEvent):
             # interrupt the loop
             ai.defer_hook(event.hook)
 
