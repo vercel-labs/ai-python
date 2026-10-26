@@ -170,6 +170,69 @@ async def test_tool_runner_discard_cancels_and_omits_task() -> None:
             await task
 
 
+def _bound_call(tool: ai.AgentTool, id: str) -> ai.ToolCall:
+    part = ai.messages.ToolCallPart(
+        tool_call_id=id, tool_name=tool.name, tool_args="{}"
+    )
+    return ai.agents.BoundToolCall(part=part, tool=tool)
+
+
+async def test_tool_runner_discard_drops_collected_result() -> None:
+    async def done() -> events_.ToolCallResult:
+        return ai.tool_result(tool_call_id="tc-done", result="unused")
+
+    async with ai.ToolRunner() as runner:
+        task = runner.schedule(done)
+        assert len([event async for event in runner.events()]) == 1
+        runner.discard(task)
+        assert runner.get_tool_message() is None
+
+
+async def test_tool_runner_schedule_dedupes_by_id() -> None:
+    calls = 0
+
+    @ai.tool
+    async def count() -> int:
+        """Count calls."""
+        nonlocal calls
+        calls += 1
+        return calls
+
+    async with ai.ToolRunner() as runner:
+        task = runner.schedule(_bound_call(count, "tc-1"))
+        assert runner.schedule(_bound_call(count, "tc-1")) is task
+        results = [event async for event in runner.events()]
+
+    assert calls == 1
+    assert len(results) == 1
+
+
+async def test_tool_runner_discard_all() -> None:
+    @ai.tool
+    async def wait() -> str:
+        """Wait."""
+        await asyncio.sleep(0)
+        return "done"
+
+    async def anonymous() -> events_.ToolCallResult:
+        await asyncio.Future()
+        raise AssertionError("unreachable")
+
+    async with ai.ToolRunner() as runner:
+        keep = _bound_call(wait, "tc-keep")
+        runner.schedule(keep)
+        dropped = runner.schedule(_bound_call(wait, "tc-drop"))
+        runner.schedule(anonymous)
+        runner.discard_all(except_=[keep])
+
+        results = [event async for event in runner.events()]
+        assert [r.results[0].tool_call_id for r in results] == ["tc-keep"]
+        assert dropped.cancelled()
+
+        # A discarded id can be scheduled again.
+        assert runner.schedule(_bound_call(wait, "tc-drop")) is not dropped
+
+
 async def test_tool_call_returns_tool_message() -> None:
     @ai.tool
     async def double(x: int) -> int:

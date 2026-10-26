@@ -15,6 +15,7 @@ from collections.abc import (
     AsyncIterator,
     Awaitable,
     Callable,
+    Collection,
     Coroutine,
     Sequence,
 )
@@ -952,11 +953,15 @@ class _RestartableToolStream:
 
 class ToolRunner:
     def __init__(self) -> None:
-        self._tool_results: list[events_.ToolCallResult] = []
+        self._tool_results: dict[
+            asyncio.Future[events_.ToolCallResult], events_.ToolCallResult
+        ] = {}
         self._tg_base = util.TaskGroup()
         self._waiter: util.MultiWaiter[events_.ToolCallResult] = (
             util.MultiWaiter()
         )
+        self._tasks: dict[asyncio.Task[events_.ToolCallResult], str | None] = {}
+        self._id_to_task: dict[str, asyncio.Task[events_.ToolCallResult]] = {}
 
     async def __aenter__(self) -> Self:
         self._tg = await self._tg_base.__aenter__()
@@ -980,10 +985,21 @@ class ToolRunner:
         in custom logic (e.g. an approval hook await) and still ride the
         runner's merge-and-iterate flow.
 
+        If ``tc`` has an ``id`` that was already scheduled (and not
+        discarded), the existing task is returned instead of running the
+        call again.
+
         Returns the task.
         """
+        id = getattr(tc, "id", None)
+        if id is not None and id in self._id_to_task:
+            return self._id_to_task[id]
+
         task = self._tg.create_task(tc())
         self._waiter.add(task)
+        self._tasks[task] = id
+        if id is not None:
+            self._id_to_task[id] = task
         return task
 
     def discard(self, task: asyncio.Task[events_.ToolCallResult]) -> None:
@@ -991,8 +1007,19 @@ class ToolRunner:
 
         Cancel the task and ignore its result.
         """
+        self._tool_results.pop(task, None)
+        id = self._tasks.pop(task, None)
+        if id is not None:
+            del self._id_to_task[id]
         self._waiter.discard(task)
         task.cancel("task discarded")
+
+    def discard_all(self, *, except_: Collection[ToolCall] = ()) -> None:
+        """Discard every scheduled task, except those for ``except_``."""
+        keep = {tc.id for tc in except_}
+        for task, id in list(self._tasks.items()):
+            if id not in keep:
+                self.discard(task)
 
     def add_result(self, res: events_.ToolCallResult) -> None:
         async def _feed() -> events_.ToolCallResult:
@@ -1003,7 +1030,7 @@ class ToolRunner:
     def get_tool_message(self) -> types.messages.Message | None:
         if self._tool_results:
             return builders.tool_message(
-                *[t.message for t in self._tool_results]
+                *[t.message for t in self._tool_results.values()]
             )
         return None
 
@@ -1017,7 +1044,7 @@ class ToolRunner:
                 continue
 
             assert res is not None
-            self._tool_results.append(res)
+            self._tool_results[t] = res
             yield res
 
 
