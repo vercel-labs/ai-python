@@ -153,17 +153,6 @@ class OrderedSet[T](MutableSet[T]):
         return len(self._items)
 
 
-class TaskGroupGenExit(GeneratorExit, BaseExceptionGroup[BaseException]):
-    """A ``BaseExceptionGroup`` that is *also* a ``GeneratorExit``.
-
-    Async generator ``aclose()`` only accepts a ``GeneratorExit`` (or
-    subclass) propagating out of the generator; a plain
-    ``BaseExceptionGroup`` makes it complain and leaves the exception
-    unretrieved. By being both, this lets the group satisfy the close
-    protocol while still being catchable as the group it really is.
-    """
-
-
 class TaskGroup(asyncio.TaskGroup):
     """TaskGroup that propagates GeneratorExit and has deterministic teardown.
 
@@ -172,12 +161,11 @@ class TaskGroup(asyncio.TaskGroup):
     thing when it bubbles out through an async generator's aclose().
 
     So if a GeneratorExit is raised inside the context and that is the
-    *only* exception reported, re-raise the group as a TaskGroupGenExit,
-    which is *also* a GeneratorExit so aclose() is happy.
+    *only* exception reported, re-raise the GeneratorExit itself.
 
-    If there are multiple exceptions, keep them packaged in the plain
-    group so as to not lose anything (a TaskGroupGenExit would be
-    swallowed by aclose(), silently dropping the other exceptions).
+    If there are multiple exceptions, keep them packaged in the group so
+    as to not lose anything (a bare GeneratorExit would be swallowed by
+    aclose(), silently dropping the other exceptions).
 
     On exceptional exit, tasks are cancelled in the order they were
     created.
@@ -202,9 +190,7 @@ class TaskGroup(asyncio.TaskGroup):
                 and len(eg.exceptions) == 1
                 and eg.exceptions[0] is exc
             ):
-                raise TaskGroupGenExit(
-                    eg.message, list(eg.exceptions)
-                ) from None
+                raise exc from None
             raise
 
 
