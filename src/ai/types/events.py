@@ -2,7 +2,13 @@ from __future__ import annotations
 
 import abc
 import contextvars
-from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
+from collections.abc import (
+    AsyncGenerator,
+    AsyncIterable,
+    Callable,
+    Mapping,
+    Sequence,
+)
 from typing import Annotated, Any, Literal, cast
 
 import pydantic
@@ -255,7 +261,7 @@ class MessageHydrator:
         self.messages_by_id: dict[str, messages.Message] = {}
         self._parts_by_message_id: dict[str, dict[str, messages.Part]] = {}
         self._streaming_index: int | None = None
-        self._retry_filter = RetryFilter()
+        self._retry_filter = _RetryFilter()
         self._message_selected = seed_message is not None
         self._seed_checked = False
         # A stream that exhausts without StreamEnd died mid-response.
@@ -746,7 +752,7 @@ AgentEvent = Annotated[
 ]
 
 
-class RetryFilter:
+class _RetryFilter:
     """Spot tool output for tool calls that a :class:`Retry` discarded.
 
     In a distributed setup, a tool scheduled for a response that later
@@ -792,6 +798,22 @@ class RetryFilter:
         return True
 
 
+async def drop_discarded[E: BaseEvent](
+    events: AsyncIterable[E],
+) -> AsyncGenerator[E]:
+    """Yield ``events`` minus late tool output for calls a ``Retry`` discarded.
+
+    In a distributed setup, a tool scheduled for a response that later
+    gets retried can still deliver its result (or a partial result, or
+    a hook event) after the ``Retry``.  A tool call id that the retried
+    response reuses counts as live again.
+    """
+    retry_filter = _RetryFilter()
+    async for event in events:
+        if retry_filter.feed(event):
+            yield event
+
+
 class RunStateTracker:
     """Fold an agent event stream into run state (blocked-on-hooks).
 
@@ -829,7 +851,7 @@ class RunStateTracker:
         self._streaming = 0
         self._stream_ended = False
         self._blocked = False
-        self._retry_filter = RetryFilter()
+        self._retry_filter = _RetryFilter()
 
     @property
     def blocked(self) -> bool:

@@ -234,7 +234,7 @@ class MessageAggregator(
         self._messages: list[types.messages.Message] = []
         self._index_by_id: dict[str, int] = {}
         self._streaming_index: int | None = None
-        self._retry_filter = events_.RetryFilter()
+        self._retry_filter = events_._RetryFilter()
 
     def feed(self, item: events_.AgentEvent) -> None:
         if not self._retry_filter.feed(item):
@@ -1602,7 +1602,7 @@ class Agent:
 
         async def _real(call: Context) -> AsyncGenerator[events_.AgentEvent]:
             tracker = events_.RunStateTracker()
-            retry_filter = events_.RetryFilter()
+            retry_filter = events_._RetryFilter()
             source = self.loop(call)
             async with contextlib.aclosing(runtime.run(source)) as events:
                 async for event in events:

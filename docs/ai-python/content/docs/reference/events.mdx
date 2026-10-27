@@ -88,24 +88,20 @@ Agent event union:
   `kind: "hook"`; validating against `HookEvent` dispatches to the
   per-status subclass from `hook.status`.
 
-## RetryFilter
+## drop_discarded
 
 A tool scheduled for a response that later gets retried can still produce
 output after the `Retry`, for example when the tool runs in a separate durable
-step. `RetryFilter` spots that leftover output.
+step. `drop_discarded` wraps an event stream and drops that leftover output.
 
 ```python
-retry_filter = ai.events.RetryFilter()
-async for event in events:
-    if not retry_filter.feed(event):
-        continue
+async for event in ai.events.drop_discarded(events):
     ...
 ```
 
-Feed it every event in order. `feed` returns `False` for a `ToolCallResult`,
-`PartialToolCallResult`, or `HookEvent` whose tool call belonged to a discarded
-response. If the retried response reuses a tool call id, output for that id is
-kept again.
+It drops a `ToolCallResult`, `PartialToolCallResult`, or `HookEvent` whose
+tool call belonged to a discarded response. If the retried response reuses a
+tool call id, output for that id is kept again.
 
 `Agent.run`, `MessageHydrator`, `RunStateTracker`, `MessageAggregator`, and
 the AI SDK UI adapter already filter this way, so only custom consumers of raw

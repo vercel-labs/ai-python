@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncGenerator
 from typing import Any
 
 import pydantic
@@ -541,7 +542,7 @@ class TestReplayMessageEvents:
         assert tool.provider_metadata == {"p": {"tc": 2}}
 
 
-def test_retry_filter_drops_leftover_tool_output() -> None:
+async def test_drop_discarded_drops_leftover_tool_output() -> None:
     def hook(tool_call_id: str) -> events.HookEvent:
         part: messages.HookPart[Any] = messages.HookPart(
             hook_id=f"h-{tool_call_id}",
@@ -549,8 +550,8 @@ def test_retry_filter_drops_leftover_tool_output() -> None:
             status="pending",
             tool_call_id=tool_call_id,
         )
-        return events.HookEvent(
-            message=messages.Message(role="internal", parts=[part]), hook=part
+        return events.HookEvent.for_hook(
+            messages.Message(role="internal", parts=[part]), part
         )
 
     def result(tool_call_id: str) -> events.ToolCallResult:
@@ -567,18 +568,21 @@ def test_retry_filter_drops_leftover_tool_output() -> None:
             tool_call_id=tool_call_id, value="p"
         )
 
-    f = events.RetryFilter()
-    assert f.feed(events.StreamStart())
-    assert f.feed(events.ToolStart(tool_call_id="tc1", tool_name="search"))
-    assert f.feed(events.ToolStart(tool_call_id="tc2", tool_name="search"))
-    assert f.feed(events.Retry())
-    assert f.feed(events.StreamStart())
-    assert f.feed(events.ToolStart(tool_call_id="tc2", tool_name="search"))
-
+    stream = [
+        events.StreamStart(),
+        events.ToolStart(tool_call_id="tc1", tool_name="search"),
+        events.ToolStart(tool_call_id="tc2", tool_name="search"),
+        events.Retry(),
+        events.StreamStart(),
+        events.ToolStart(tool_call_id="tc2", tool_name="search"),
+    ]
     # tc1 was discarded; tc2 came back in the retried response.
-    assert not f.feed(result("tc1"))
-    assert not f.feed(partial("tc1"))
-    assert not f.feed(hook("tc1"))
-    assert f.feed(result("tc2"))
-    assert f.feed(partial("tc2"))
-    assert f.feed(hook("tc2"))
+    dropped = [result("tc1"), partial("tc1"), hook("tc1")]
+    kept = [result("tc2"), partial("tc2"), hook("tc2")]
+
+    async def source() -> AsyncGenerator[events.BaseEvent]:
+        for event in [*stream, *dropped, *kept]:
+            yield event
+
+    out = [e async for e in events.drop_discarded(source())]
+    assert out == [*stream, *kept]

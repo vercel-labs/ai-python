@@ -640,7 +640,7 @@ async def to_stream(
     state = _StreamState()
     # The client drops a discarded step's tool parts on reset-step, so
     # any later output for those tool calls would make it error out.
-    retry_filter = events_.RetryFilter()
+    retry_filter = events_._RetryFilter()
 
     async for event in events:
         if not retry_filter.feed(event):

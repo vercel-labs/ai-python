@@ -805,9 +805,8 @@ async def test_retry_drops_late_approval_for_discarded_tool_call() -> None:
             events_.ToolStart(tool_call_id="tc1", tool_name="bash"),
             events_.Retry(),
             events_.StreamStart(),
-            events_.HookEvent(
-                message=messages_.Message(role="internal", parts=[hook]),
-                hook=hook,
+            events_.HookEvent.for_hook(
+                messages_.Message(role="internal", parts=[hook]), hook
             ),
             events_.StreamEnd(),
         ]
