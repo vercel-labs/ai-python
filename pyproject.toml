@@ -44,6 +44,9 @@ otel = [
 vercel = [
     "vercel-oidc>=0.8.0",
 ]
+typesafe = [
+    "typesafe-sdk>=0.7.2,<1",
+]
 
 [project.urls]
 Homepage = "https://ai-python.dev"
@@ -79,6 +82,7 @@ dev = [
     "vercel-oidc>=0.8.0",
     "opentelemetry-sdk>=1.43.0",
     "opentelemetry-exporter-otlp-proto-http>=1.43.0",
+    "typesafe-sdk>=0.7.2",
 ]
 
 [tool.uv]
