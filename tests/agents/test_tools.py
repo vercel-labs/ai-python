@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 from collections.abc import AsyncGenerator, Callable
 from typing import Any, cast
 
@@ -76,6 +77,28 @@ def test_complex_type_schema() -> None:
     assert props["recipients"]["items"]["type"] == "string"
 
 
+class _Wrapper:
+    def __init__(self, fn: Callable[..., Any]) -> None:
+        self.fn = fn
+        functools.update_wrapper(self, fn)
+
+    async def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        return await self.fn(*args, **kwargs)
+
+
+def test_wrapped_callable_schema() -> None:
+    # On 3.14, update_wrapper copies __annotate__ but not __annotations__.
+    @ai.tool
+    @_Wrapper
+    async def fetch(url: str, timeout: int | None = None) -> str:
+        """Fetch URL."""
+        return url
+
+    props = _schema(fetch)["properties"]
+    assert props["url"]["type"] == "string"
+    assert {"type": "integer"} in props["timeout"]["anyOf"]
+
+
 # -- Execution (ToolCall) --------------------------------------------------
 
 
@@ -145,6 +168,69 @@ async def test_tool_runner_discard_cancels_and_omits_task() -> None:
         assert runner.get_tool_message() is None
         with pytest.raises(asyncio.CancelledError):
             await task
+
+
+def _bound_call(tool: ai.AgentTool, id: str) -> ai.ToolCall:
+    part = ai.messages.ToolCallPart(
+        tool_call_id=id, tool_name=tool.name, tool_args="{}"
+    )
+    return ai.agents.BoundToolCall(part=part, tool=tool)
+
+
+async def test_tool_runner_discard_drops_collected_result() -> None:
+    async def done() -> events_.ToolCallResult:
+        return ai.tool_result(tool_call_id="tc-done", result="unused")
+
+    async with ai.ToolRunner() as runner:
+        task = runner.schedule(done)
+        assert len([event async for event in runner.events()]) == 1
+        runner.discard(task)
+        assert runner.get_tool_message() is None
+
+
+async def test_tool_runner_schedule_dedupes_by_id() -> None:
+    calls = 0
+
+    @ai.tool
+    async def count() -> int:
+        """Count calls."""
+        nonlocal calls
+        calls += 1
+        return calls
+
+    async with ai.ToolRunner() as runner:
+        task = runner.schedule(_bound_call(count, "tc-1"))
+        assert runner.schedule(_bound_call(count, "tc-1")) is task
+        results = [event async for event in runner.events()]
+
+    assert calls == 1
+    assert len(results) == 1
+
+
+async def test_tool_runner_discard_all() -> None:
+    @ai.tool
+    async def wait() -> str:
+        """Wait."""
+        await asyncio.sleep(0)
+        return "done"
+
+    async def anonymous() -> events_.ToolCallResult:
+        await asyncio.Future()
+        raise AssertionError("unreachable")
+
+    async with ai.ToolRunner() as runner:
+        keep = _bound_call(wait, "tc-keep")
+        runner.schedule(keep)
+        dropped = runner.schedule(_bound_call(wait, "tc-drop"))
+        runner.schedule(anonymous)
+        runner.discard_all(except_=[keep])
+
+        results = [event async for event in runner.events()]
+        assert [r.results[0].tool_call_id for r in results] == ["tc-keep"]
+        assert dropped.cancelled()
+
+        # A discarded id can be scheduled again.
+        assert runner.schedule(_bound_call(wait, "tc-drop")) is not dropped
 
 
 async def test_tool_call_returns_tool_message() -> None:

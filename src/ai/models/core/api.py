@@ -141,10 +141,13 @@ class Stream(Generic[StreamOutputT]):
         an async event stream (``ai.Stream``, ``ai.ToolRunner``, custom loops
         that mirror the default loop's shape, etc.)::
 
-            async with ai.Stream.replay_message(msg) as stream:
-                async with ai.ToolRunner() as tr:
-                    async for event in ai.util.merge(stream, tr.events()):
-                        ...
+            async with (
+                ai.Stream.replay_message(msg) as stream,
+                ai.ToolRunner() as tr,
+                ai.util.merge(stream, tr.events()) as events,
+            ):
+                async for event in events:
+                    ...
 
         Each part is emitted as the start/delta/end triple a streaming adapter
         would have produced, in part order, bracketed by ``StreamStart`` and

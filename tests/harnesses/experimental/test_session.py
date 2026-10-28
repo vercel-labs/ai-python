@@ -583,7 +583,12 @@ async def test_a_turn_reports_the_approval_it_is_blocked_on() -> None:
                     assert event.hook.resolution is not None
                     assert event.hook.resolution["decision"] == "deny"
                     assert not turn.blocked
-    assert seen[:4] == ["StreamStart", "HookEvent", "RunBlocked", "HookEvent"]
+    assert seen[:4] == [
+        "StreamStart",
+        "PendingHookEvent",
+        "RunBlocked",
+        "ResolvedHookEvent",
+    ]
     assert not turn.blocked
     assert turn.output == "go"
     assert roles(turn.messages) == [

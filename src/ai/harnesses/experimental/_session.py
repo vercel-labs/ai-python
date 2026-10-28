@@ -780,7 +780,7 @@ class Session:
 def _hook_event(hook: messages_.HookPart[Any]) -> events.HookEvent:
     """Wrap a hook part the way `ai.hook()` reports one."""
     message = messages_.Message(role="internal", parts=[hook])
-    return events.HookEvent(message=message, hook=hook)
+    return events.HookEvent.for_hook(message, hook)
 
 
 def _text_of(message: messages_.Message | None) -> str:

@@ -50,6 +50,9 @@ otel = [
 vercel = [
     "vercel-oidc>=0.8.0",
 ]
+typesafe = [
+    "typesafe-sdk>=0.7.2,<1",
+]
 
 [project.urls]
 Homepage = "https://ai-python.dev"
@@ -94,6 +97,7 @@ dev = [
     "vercel-internal-core @ git+https://github.com/vercel/vercel-py@main#subdirectory=src/vercel-internal-core",
     "vercel-oidc @ git+https://github.com/vercel/vercel-py@main#subdirectory=src/vercel-oidc",
     "pytest-timeout>=2.3",
+    "typesafe-sdk>=0.7.2",
 ]
 
 [tool.uv]
@@ -103,6 +107,7 @@ exclude-newer = "2 days"
 [tool.mypy]
 python_version = "3.12"
 strict = true
+enable_incomplete_feature = ["TypeForm"]
 plugins = ["pydantic.mypy"]
 files = ["src", "tests", "examples"]
 exclude = [
@@ -193,6 +198,7 @@ extend-ignore = [
     "PLW1514", # unspecified-encoding (UTF-8 is Python 3 default)
     "PLW2901", # redefined-loop-name (intentional pattern for line processing)
     "RUF029",  # async generators/protocol hooks may not need an await
+    "TC003",   # annoying and wrong if TYPE_CHECKING for stdlib imports
 ]
 
 [tool.ruff.lint.flake8-type-checking]
