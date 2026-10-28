@@ -5,7 +5,7 @@ type: reference
 summary: Reference for claude_code, codex, pi, Harness, Session, Turn, Tui, Result, Handle, approvals, capabilities, and harness errors.
 ---
 
-`ai.harnesses.experimental` drives coding-agent CLIs, Claude Code and Codex,
+`ai.harnesses.experimental` drives coding-agent CLIs, Claude Code, Codex and Pi,
 on a [workspace](/docs/reference/workspaces). See
 [Harnesses](/docs/basics/harnesses) for a guide.
 
@@ -315,7 +315,7 @@ One conversation in the CLI's store.
 | `title` | The conversation's title or first prompt, or `None`. |
 | `cwd` | The directory it ran in, or `None`. |
 | `updated_at`, `created_at` | Timestamps as the CLI reports them, or `None`. |
-| `running` | `True` when a process has the conversation open. An SDK client or `harness.tui()` holds it, so `resume()` would raise `SessionBusyError`. A CLI started in a terminal shows as running too: any `claude`, and a `codex` started as `codex resume <id>`. `resume()` does not check for those. |
+| `running` | `True` when a process has the conversation open. An SDK client or `harness.tui()` holds it, so `resume()` would raise `SessionBusyError`. A CLI started in a terminal shows as running too: any `claude`, and a `codex` started as `codex resume <id>`; a `pi` started in a terminal is never seen. `resume()` does not check for those. |
 | `pid` | The process that has it open, in the workspace, or `None`. |
 
 ## Handle
@@ -372,9 +372,9 @@ waiting on the decision.
 | `call` | The `ToolCall` being decided. |
 | `history` | The conversation so far. |
 | `workspace` | The workspace the CLI runs in. |
-| `harness` | `"claude-code"` or `"codex"`. |
+| `harness` | `"claude-code"`, `"codex"`, or `"pi"`. |
 | `session_id` | The conversation's id. |
-| `prompt` | The turn's prompt on Claude Code; `None` on Codex. |
+| `prompt` | The turn's prompt on Claude Code; `None` on Codex and Pi. |
 
 ### ToolCall
 
@@ -383,7 +383,7 @@ One tool call, as the CLI described it.
 | Field | Description |
 |---|---|
 | `id` | Call id. |
-| `name` | The CLI's native tool name, such as `Bash` or `fileChange`. Codex names shell calls `commandExecution`; the command is in `input`. |
+| `name` | The CLI's native tool name, such as `Bash`, `fileChange`, or `bash`. Codex names shell calls `commandExecution`; the command is in `input`. |
 | `input` | Native arguments. |
 | `title` | Display text. Do not key policy on it. |
 | `kind` | A hint the CLI supplied, or `None`. |
@@ -398,8 +398,8 @@ harnesses.Allow(input=None, remember=False)
 ```
 
 Lets the call run. `input` rewrites the arguments where
-`capabilities.rewrite_tool_input` is true (Claude Code only). `remember` is
-not supported on either harness. An unsupported option denies the call and
+`capabilities.rewrite_tool_input` is true (Claude Code and Pi). `remember`
+is not supported on any harness. An unsupported option denies the call and
 raises `UnsupportedError` from the turn.
 
 ### Deny
@@ -430,21 +430,21 @@ contextvars the turn's caller set are visible inside it.
 What a harness can do, declared before anything runs. Read it from
 `harness.capabilities`.
 
-| Capability | Description | Claude Code | Codex |
-|---|---|---|---|
-| `run` | Run a prompt and wait for the result: `run()`. | yes | yes |
-| `stream` | Iterate a turn's events as they arrive: `stream()`. | yes | yes |
-| `steer` | Send guidance to the turn that is running: `session.steer()`. | yes | yes |
-| `stop` | Interrupt the running turn; it settles as cancelled: `session.stop()`. | yes | yes |
-| `resume` | Continue a conversation this process did not create: `resume()`, `harness_from()`. | yes | yes |
-| `fork` | Branch a conversation into a new one with the same past: `fork()`. | yes | yes |
-| `history` | Read stored transcripts in full, tool calls included: `history()`, `sessions()`. | yes | yes |
-| `images` | Images in a prompt. | yes | yes |
-| `documents` | PDFs in a prompt. | yes | no |
-| `rewrite_tool_input` | Rewrite a call's arguments before it runs: `Allow(input={...})`. | yes | no |
-| `deny_reason` | The reason in `Deny(reason)` reaches the agent. Without it the call is still denied, but the reason is dropped. | yes | no |
-| `remember_decisions` | Keep an approval for the rest of the session: `Allow(remember=True)`. | no | no |
-| `approval` | Which tool calls reach the hook. `"all"`: every call, reads included. `"policy"`: the CLI's own policy decides, so not every call may. | `"all"` | `"policy"` |
+| Capability | Description | Claude Code | Codex | Pi |
+|---|---|---|---|---|
+| `run` | Run a prompt and wait for the result: `run()`. | yes | yes | yes |
+| `stream` | Iterate a turn's events as they arrive: `stream()`. | yes | yes | yes |
+| `steer` | Send guidance to the turn that is running: `session.steer()`. | yes | yes | yes |
+| `stop` | Interrupt the running turn; it settles as cancelled: `session.stop()`. | yes | yes | yes |
+| `resume` | Continue a conversation this process did not create: `resume()`, `harness_from()`. | yes | yes | yes |
+| `fork` | Branch a conversation into a new one with the same past: `fork()`. | yes | yes | yes |
+| `history` | Read stored transcripts in full, tool calls included: `history()`, `sessions()`. | yes | yes | yes |
+| `images` | Images in a prompt. | yes | yes | yes |
+| `documents` | PDFs in a prompt. | yes | no | no |
+| `rewrite_tool_input` | Rewrite a call's arguments before it runs: `Allow(input={...})`. | yes | no | yes |
+| `deny_reason` | The reason in `Deny(reason)` reaches the agent. Without it the call is still denied, but the reason is dropped. | yes | no | yes |
+| `remember_decisions` | Keep an approval for the rest of the session: `Allow(remember=True)`. | no | no | no |
+| `approval` | Which tool calls reach the hook. `"all"`: every call, reads included. `"policy"`: the CLI's own policy decides, so not every call may. | `"all"` | `"policy"` | `"all"` |
 
 `approval` is an `ApprovalCoverage`:
 

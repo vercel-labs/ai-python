@@ -11,7 +11,7 @@ ago is listed like any other.
 
 ```
 $ afk
-~/proj  ·  claude, codex
+~/proj  ·  claude, codex, pi
 
   here
   a3f5  claude  migrate the billing tests to pytest     active 2m
@@ -215,8 +215,8 @@ uv tool install "git+https://github.com/vercel-labs/ai-python@harnesses-experime
 ```
 
 Or from a checkout: `uv tool install ./examples/apps/afk`. Then run `afk`
-in any directory where you use `claude` or `codex`. afk keeps its own files
-in `~/.afk/` and writes into your project only on `afk pull --files`.
+in any directory where you use `claude`, `codex` or `pi`. afk keeps its own
+files in `~/.afk/` and writes into your project only on `afk pull --files`.
 
 ## Vercel, set up on first use
 

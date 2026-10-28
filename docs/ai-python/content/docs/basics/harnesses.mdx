@@ -535,13 +535,13 @@ that `ai.Agent` does not have.
 
 What the event stream holds:
 
-| Event detail | `ai.Agent` | Claude Code | Codex |
-|---|---|---|---|
-| Text deltas | yes | yes | yes |
-| Tool calls and their results | yes | yes | yes |
-| Tool arguments while they stream | yes | no: sent whole | no: sent whole |
-| One `StreamStart`/`StreamEnd` per model call | yes | no: one per turn | no: one per turn |
-| Usage per model call | yes | no: per turn, with cost | no: per turn |
+| Event detail | `ai.Agent` | Claude Code | Codex | Pi |
+|---|---|---|---|---|
+| Text deltas | yes | yes | yes | yes |
+| Tool calls and their results | yes | yes | yes | yes |
+| Tool arguments while they stream | yes | no: sent whole | no: sent whole | no: sent whole |
+| One `StreamStart`/`StreamEnd` per model call | yes | no: one per turn | no: one per turn | no: one per turn |
+| Usage per model call | yes | no: per turn, with cost | no: per turn | no: per turn, with cost |
 
 Code that reads events should not need more than this: text, tool calls and
 results, the final `StreamEnd`, and `messages`. The SDK does not invent

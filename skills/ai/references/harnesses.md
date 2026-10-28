@@ -24,9 +24,10 @@ brings its own tools, login, and session store.
   CLIs only into a sandbox, and there it installs or upgrades to the latest
   npm release on open (not while a copy of the CLI is running there).
 - Every harness has full access by default (claude: no permission prompts;
-  codex: `sandbox="danger-full-access"`). Restrict with `approve=`, codex's
-  `sandbox=` (on `Local` only; other modes raise `UnsupportedError` in a
-  sandbox), claude's `tools=`/`disallowed_tools=`, or a `VercelSandbox`.
+  codex: `sandbox="danger-full-access"`; pi has no permission prompt).
+  Restrict with `approve=`, codex's `sandbox=` (on `Local` only; other modes
+  raise `UnsupportedError` in a sandbox), claude's and pi's
+  `tools=`/`disallowed_tools=`, or a `VercelSandbox`.
 - Shared options: `instructions=` (added to the CLI's system prompt) and
   `mcp_servers=` (claude's shape: `{"name": {"command", "args", "env"}}` or
   `{"name": {"url"}}`). Claude and pi: `tools=`, `disallowed_tools=`.
@@ -55,8 +56,8 @@ brings its own tools, login, and session store.
 - `result.messages` reads in order: assistant message with the tool call,
   then a `"tool"` message with its result. Safe to pass as `history=`.
 - A prompt can be a list: `[ "describe this", ai.file_part(png) ]`. Images
-  on both, PDFs on claude only (`capabilities.documents`), `text/*` files on
-  both as text. Anything else raises `UnsupportedError` before the turn.
+  on every harness, PDFs on claude only (`capabilities.documents`), `text/*`
+  files everywhere as text. Anything else raises `UnsupportedError` before the turn.
 - To continue a stored conversation, `resume(id)` (its past is in
   `session.messages`) and run or stream as usual. There is no separate
   follow API; `history(id, limit=, offset=)` pages by message.
