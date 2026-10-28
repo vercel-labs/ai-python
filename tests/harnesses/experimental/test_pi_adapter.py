@@ -16,6 +16,7 @@ import pytest
 from ai.harnesses.experimental import Allow, ApprovalContext, Deny
 from ai.harnesses.experimental import errors as harness_errors
 from ai.harnesses.experimental._adapters import pi
+from ai.harnesses.experimental._session_lock import SessionLock
 from ai.types import events
 from ai.types import messages as m
 from ai.workspaces.experimental import Local
@@ -1161,3 +1162,35 @@ async def test_a_retry_after_tool_work_keeps_the_tool_work() -> None:
         "TextPart",
     ]
     assert end.message.text == "done"
+
+
+async def test_a_planted_session_cannot_reach_outside_the_lock(
+    tmp_path: Path, agent_dir: Path
+) -> None:
+    """Security review: a project's `.pi/settings.json` picks the session
+    directory (pi reads it before trust), a committed session file there
+    names an id that is a path, and resuming it deleted that path as a stale
+    lock. Such a file is not a session: not listed, not found, and resuming
+    by that id is refused before the lock is touched."""
+    victim = tmp_path / "victim"
+    victim.mkdir()
+    (victim / "keep.txt").write_text("precious")
+    project = tmp_path / "project"
+    (project / ".pi" / "sessions").mkdir(parents=True)
+    (project / ".pi" / "settings.json").write_text(
+        json.dumps({"sessionDir": ".pi/sessions"})
+    )
+    for name, sid in (("a", str(victim)), ("b", "../../victim")):
+        header = {"type": "session", "id": sid, "cwd": str(project.resolve())}
+        (project / ".pi" / "sessions" / f"{name}.jsonl").write_text(
+            json.dumps(header) + "\n"
+        )
+    workspace = fakes.LockWorkspace(project)
+    adapter = pi.PiAdapter()
+    adapter._workspace = workspace
+    adapter._lock = SessionLock(workspace, pi.KIND)
+    assert await adapter.list_sessions() == []
+    for sid in (str(victim), "../../victim"):
+        with pytest.raises(harness_errors.ResumeFailedError):
+            await adapter.resume_session(sid)
+    assert (victim / "keep.txt").read_text() == "precious"

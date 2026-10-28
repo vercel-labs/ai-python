@@ -18,6 +18,7 @@ import contextlib
 import datetime
 import json
 import pathlib
+import re
 import uuid
 import warnings
 from typing import TYPE_CHECKING, Any
@@ -48,6 +49,9 @@ VERIFIED_VERSION = "1.3.0"
 """The CLI the live suite last passed against. Older ones get a warning."""
 APPROVE = "ai-python:approve"
 """The dialog title the extension asks approvals under."""
+SESSION_ID = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9._-]{0,198}[A-Za-z0-9])?\Z")
+"""pi's rule for a session id (`--session-id`): letters, digits, `.`, `_`
+and `-`, starting and ending with a letter or digit. Never a path."""
 READY = "ai-python-ready"
 """The command the extension registers last: proof that it loaded."""
 CONFIG_VAR = "AI_PYTHON_PI"
@@ -398,6 +402,10 @@ class PiAdapter:
     async def _find(self, session_id: str) -> dict[str, Any]:
         """Return a conversation of THIS workspace, or raise ResumeFailed."""
         assert self._workspace is not None
+        if not SESSION_ID.match(session_id):
+            raise errors.ResumeFailedError(
+                session_id, "not a pi session id (see SESSION_ID)"
+            )
         found = await self._store("find", session_id)
         if not found:
             raise errors.ResumeFailedError(
@@ -1388,10 +1396,15 @@ def _turn_failure(detail: str, *, hint: str = AUTH_HINT) -> Exception:
 
 
 _STORE = r"""
-import json, os, sys
+import json, os, re, sys
 
 op, where, sid = sys.argv[1], sys.argv[2], sys.argv[3]
 cwd = os.path.realpath(where)
+# pi's own rule for a session id. A session file can come from anyone — a
+# project's settings choose the directory, before pi asks for trust — and
+# its id becomes a lock path and a CLI argument: one that breaks the rule
+# is not a session.
+ID = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9._-]{0,198}[A-Za-z0-9])?\Z")
 
 
 def settings(path):
@@ -1437,7 +1450,9 @@ def iso_ms(text):
 def describe(path, full):
     with open(path) as f:
         header = json.loads(f.readline() or "{}")
-        if header.get("type") != "session" or not header.get("id"):
+        if header.get("type") != "session" or not ID.match(
+            str(header.get("id") or "")
+        ):
             return None
         if header.get("cwd") not in (cwd, where):
             return None
