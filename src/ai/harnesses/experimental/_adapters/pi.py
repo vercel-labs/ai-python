@@ -482,6 +482,51 @@ class PiAdapter:
             }
         ]
         parent: str | None = None
+        # The model the conversation was on, as pi records a switch. pi
+        # restores a session's model from its last reply's author, which
+        # `to_pi_messages` keeps for replies pi wrote; this covers a past
+        # whose last reply is not one. Measured: without either, a pushed
+        # conversation ran on pi's default model, which the gateway refused.
+        # Only a conversation pi itself wrote says which; from another
+        # harness, pi's own choice applies.
+        written: dict[str, Any] = next(
+            (
+                found
+                for m in reversed(history)
+                if m.role == "assistant"
+                and isinstance(
+                    found := (m.provider_metadata or {}).get(KIND), dict
+                )
+            ),
+            {},
+        )
+        changes: list[dict[str, Any]] = []
+        if written.get("provider") and written.get("model"):
+            changes.append(
+                {
+                    "type": "model_change",
+                    "provider": written["provider"],
+                    "modelId": written["model"],
+                }
+            )
+        if written.get("thinkingLevel"):
+            changes.append(
+                {
+                    "type": "thinking_level_change",
+                    "thinkingLevel": written["thinkingLevel"],
+                }
+            )
+        for change in changes:
+            entry_id = uuid.uuid4().hex[:8]
+            lines.append(
+                {
+                    **change,
+                    "id": entry_id,
+                    "parentId": parent,
+                    "timestamp": stamp,
+                }
+            )
+            parent = entry_id
         for message in _handoff.to_pi_messages(
             history, timestamp=int(now.timestamp() * 1000)
         ):
@@ -761,7 +806,11 @@ class PiAdapter:
                 hint=self._auth_hint(),
             )
         yield events_.StreamEnd(
-            message=messages_.Message(role="assistant", parts=parts),
+            message=messages_.Message(
+                role="assistant",
+                parts=parts,
+                provider_metadata=_written_by(last),
+            ),
             # Cost has no home in Usage; pi's own number rides in `raw`.
             usage=usage.model_copy(update={"raw": {"cost_usd": cost}}),
             finish_reason=(
@@ -1225,7 +1274,14 @@ def _stored_to_messages(
     if role == "assistant":
         parts = _assistant_parts(message.get("content"))
         return (
-            [messages_.Message(role="assistant", parts=parts, replay=replay)]
+            [
+                messages_.Message(
+                    role="assistant",
+                    parts=parts,
+                    replay=replay,
+                    provider_metadata=_written_by(message),
+                )
+            ]
             if parts
             else []
         )
@@ -1238,6 +1294,22 @@ def _stored_to_messages(
         )
         return [messages_.Message(role="tool", parts=[result], replay=replay)]
     return []
+
+
+def _written_by(message: dict[str, Any]) -> dict[str, Any] | None:
+    """Which provider and model wrote an assistant message, as pi says.
+
+    Kept on the message (`provider_metadata["pi"]`) so a conversation
+    handed to another pi continues on the model it was on.
+    """
+    written = {
+        k: message[k]
+        for k in ("api", "provider", "model", "thinkingLevel")
+        if isinstance(message.get(k), str)
+    }
+    if not written or written.get("provider") == "ai-python":
+        return None
+    return {KIND: written}
 
 
 def _usage(raw: dict[str, Any]) -> usage_.Usage:

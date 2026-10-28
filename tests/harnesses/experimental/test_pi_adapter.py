@@ -955,3 +955,85 @@ async def test_two_resumes_at_once_start_one_pi_at_a_time(
         adapter.resume_session(SID), adapter.resume_session(SID)
     )
     assert most == 1
+
+
+async def test_a_handed_off_pi_conversation_stays_on_its_model(
+    tmp_path: Path, agent_dir: Path
+) -> None:
+    """Measured with afk: a pushed pi conversation ran on pi's default model
+    in the sandbox (refused by the gateway), not the one it was on. History
+    now says which model wrote each reply, and staging writes it back the
+    way pi records a switch, so pi restores it on open."""
+    project = tmp_path / "project"
+    project.mkdir()
+    workspace = Local(project, env={"PI_CODING_AGENT_DIR": str(agent_dir)})
+    adapter = pi.PiAdapter()
+    adapter._workspace = workspace
+    stored = {
+        "type": "message",
+        "message": {
+            **_assistant({"type": "text", "text": "hi"}),
+            "api": "anthropic-messages",
+            "provider": "vercel-ai-gateway",
+            "model": "anthropic/claude-haiku-4.5",
+            "thinkingLevel": "high",
+        },
+    }
+    history = [
+        m.Message(role="user", parts=[m.TextPart(text="hello")]),
+        *pi._stored_to_messages(stored),
+    ]
+    assert history[1].provider_metadata == {
+        "pi": {
+            "api": "anthropic-messages",
+            "provider": "vercel-ai-gateway",
+            "model": "anthropic/claude-haiku-4.5",
+            "thinkingLevel": "high",
+        }
+    }
+    session_id = await adapter.stage_history(history)
+    (written,) = agent_dir.glob(f"sessions/*/*_{session_id}.jsonl")
+    entries = [json.loads(line) for line in written.read_text().splitlines()]
+    assert [e["type"] for e in entries] == [
+        "session",
+        "model_change",
+        "thinking_level_change",
+        "message",
+        "message",
+    ]
+    assert (entries[1]["provider"], entries[1]["modelId"]) == (
+        "vercel-ai-gateway",
+        "anthropic/claude-haiku-4.5",
+    )
+    # pi restores the model from the last reply's author: it is the real one.
+    reply = entries[-1]["message"]
+    assert (reply["api"], reply["provider"], reply["model"]) == (
+        "anthropic-messages",
+        "vercel-ai-gateway",
+        "anthropic/claude-haiku-4.5",
+    )
+    # A chain, root first: pi reads it as one branch.
+    assert [e.get("parentId") for e in entries[1:]] == [
+        None,
+        *[e["id"] for e in entries[1:-1]],
+    ]
+
+
+async def test_without_pi_history_no_model_is_carried(
+    tmp_path: Path, agent_dir: Path
+) -> None:
+    """From another harness there is no pi model to name: pi chooses."""
+    project = tmp_path / "project"
+    project.mkdir()
+    adapter = pi.PiAdapter()
+    adapter._workspace = Local(
+        project, env={"PI_CODING_AGENT_DIR": str(agent_dir)}
+    )
+    session_id = await adapter.stage_history(
+        [
+            m.Message(role="user", parts=[m.TextPart(text="hello")]),
+            m.Message(role="assistant", parts=[m.TextPart(text="hi")]),
+        ]
+    )
+    (written,) = agent_dir.glob(f"sessions/*/*_{session_id}.jsonl")
+    assert "model_change" not in written.read_text()

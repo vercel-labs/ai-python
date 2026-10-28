@@ -44,6 +44,8 @@ from ...types import media
 from ...types import messages as messages_
 
 NOTE_PREFIX = "[Handoff from a previous session — earlier reasoning: "
+AUTHOR = ("api", "provider", "model")
+"""What names a reply's author in a pi session: its API and model."""
 SYSTEM_PREFIX = "[Handoff from a previous session — instructions it was given: "
 
 
@@ -255,10 +257,11 @@ def to_pi_messages(
 ) -> list[dict[str, Any]]:
     """Build pi `AgentMessage`s for a session file.
 
-    Assistant messages are attributed to a model that is not the one pi
-    runs (`ai-python/handoff`): pi then treats them as another model's —
-    it keeps their text and tool calls and normalizes the call ids for its
-    own provider. Consecutive assistant messages are merged, the way one
+    Assistant messages pi wrote keep their author (`provider_metadata["pi"]`):
+    pi restores a session's model from it. Any other is attributed to a
+    model pi does not run (`ai-python/handoff`), so pi treats it as another
+    model's — it keeps its text and tool calls and normalizes the call ids
+    for its own provider. Consecutive assistant messages are merged, the way one
     model response holds text and calls together. Reasoning is omitted: see
     the module docstring.
     """
@@ -349,13 +352,24 @@ def to_pi_messages(
         if out and out[-1]["role"] == "assistant":
             out[-1]["content"] += blocks
         else:
+            # A reply pi wrote keeps its author: pi restores a session's model
+            # from its last reply's, and a model it does not know (ours)
+            # put the conversation on pi's default one (measured).
+            author = (m.provider_metadata or {}).get("pi") or {}
+            known = all(isinstance(author.get(k), str) for k in AUTHOR)
             out.append(
                 {
                     "role": "assistant",
                     "content": blocks,
-                    "api": "ai-python",
-                    "provider": "ai-python",
-                    "model": "handoff",
+                    **(
+                        {k: author[k] for k in AUTHOR}
+                        if known
+                        else {
+                            "api": "ai-python",
+                            "provider": "ai-python",
+                            "model": "handoff",
+                        }
+                    ),
                     "usage": usage,
                     "stopReason": "stop",
                     "timestamp": timestamp,

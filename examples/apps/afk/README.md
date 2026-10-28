@@ -1,8 +1,8 @@
 # afk — step away; your agents don't
 
 A small CLI on `ai.harnesses` for one everyday situation: you have been working
-with `claude` or `codex` in a directory, and you need to leave. `afk` lists
-the conversations in that directory across both harnesses, opens one in the
+with `claude`, `codex` or `pi` in a directory, and you need to leave. `afk`
+lists the conversations in that directory across every harness, opens one in the
 harness's own TUI in a sandbox, lets you detach and close the laptop,
 pushes work to run unattended, and comes back later to attach, watch, bring
 home, or stop. Nothing has to be started "the afk way": it reads the
@@ -36,7 +36,7 @@ A key means the same thing on every row it appears on:
 
 | key | |
 |---|---|
-| Enter | into the conversation: one here resumes in its harness's own TUI (`claude --resume <id>` or `codex resume <id>`), a pushed one is attached. One here that is open in another terminal is taken over, after a y: that process ends first, then the TUI opens here (`afk stop <id> && claude --resume <id>`). Where afk cannot end what drives it, Enter peeks |
+| Enter | into the conversation: one here resumes in its harness's own TUI (`claude --resume <id>`, `codex resume <id>` or `pi --session <id>`), a pushed one is attached. One here that is open in another terminal is taken over, after a y: that process ends first, then the TUI opens here (`afk stop <id> && claude --resume <id>`). Where afk cannot end what drives it, Enter peeks |
 | `p` | peek |
 | `s` | stop: a pushed one's sandbox (its files are kept), or the process a conversation here is open in |
 | `r` | rm: delete a pushed one's sandbox and snapshot |
@@ -47,7 +47,8 @@ On a stopped or expired one, Enter resumes it. `stop` and `rm` ask first.
 
 A conversation here that is open in another terminal is `in use`. afk sees
 any `claude`, but a `codex` only when it was started as `codex resume <id>`:
-a fresh `codex` names no conversation afk can find.
+a fresh `codex` names no conversation afk can find. A `pi` started in a
+terminal is never seen: it shows no conversation in its process name.
 
 ## The verbs
 
