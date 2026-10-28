@@ -1037,3 +1037,127 @@ async def test_without_pi_history_no_model_is_carried(
     )
     (written,) = agent_dir.glob(f"sessions/*/*_{session_id}.jsonl")
     assert "model_change" not in written.read_text()
+
+
+async def test_an_extension_command_that_starts_a_run_is_followed() -> None:
+    """Vercel Agent review, then measured: `/ask` answered `handled`, and the
+    run the command started (`pi.sendUserMessage`) followed — pi was already
+    streaming. The turn ended empty and left that run unread."""
+    server = Pi(
+        [
+            {"type": "agent_start"},
+            {"type": "message_start", "message": {"role": "assistant"}},
+            {
+                "type": "message_end",
+                "message": _assistant({"type": "text", "text": "PONG"}),
+            },
+            {"type": "agent_settled", "aborted": False},
+        ]
+    )
+
+    def answer(message: dict[str, Any]) -> None:
+        if message.get("type") == "prompt":
+            server.respond(
+                message, success=True, data={"disposition": "handled"}
+            )
+            for record in server.turn:
+                server.says(record)
+        elif message.get("type") == "get_state":
+            server.respond(message, success=True, data={"isStreaming": True})
+        else:
+            Pi.answer(server, message)
+
+    server.process.answer = answer
+    seen = await _turn(_adapter(server), "/ask PONG")
+    end = seen[-1]
+    assert isinstance(end, events.StreamEnd)
+    assert end.message.text == "PONG"
+
+
+async def test_a_command_that_starts_nothing_ends_the_turn_empty() -> None:
+    server = Pi()
+
+    def answer(message: dict[str, Any]) -> None:
+        if message.get("type") == "prompt":
+            server.respond(
+                message, success=True, data={"disposition": "handled"}
+            )
+        elif message.get("type") == "get_state":
+            server.respond(message, success=True, data={"isStreaming": False})
+        else:
+            Pi.answer(server, message)
+
+    server.process.answer = answer
+    seen = await _turn(_adapter(server), "/noop")
+    assert [type(e).__name__ for e in seen] == ["StreamStart", "StreamEnd"]
+
+
+async def test_a_cut_off_answer_pi_retries_is_not_part_of_the_reply() -> None:
+    """Vercel Agent review: pi compacts and retries a final `length`
+    answer as a fresh run (its docs: "an early final stopReason: length can
+    select one compact-and-retry recovery attempt"); the cut-off text was
+    glued onto the retried reply."""
+    server = Pi(
+        [
+            {
+                "type": "message_end",
+                "message": _assistant(
+                    {"type": "text", "text": "Half an ans"}, stop="length"
+                ),
+            },
+            {"type": "agent_end", "messages": [], "willRetry": True},
+            {"type": "compaction_start", "reason": "overflow"},
+            {"type": "compaction_end", "reason": "overflow", "willRetry": True},
+            {"type": "agent_start"},
+            {
+                "type": "message_end",
+                "message": _assistant({"type": "text", "text": "The answer"}),
+            },
+            {"type": "agent_end", "messages": [], "willRetry": False},
+            {"type": "agent_settled", "aborted": False},
+        ]
+    )
+    seen = await _turn(_adapter(server))
+    end = seen[-1]
+    assert isinstance(end, events.StreamEnd)
+    assert end.message.text == "The answer"
+    assert end.finish_reason == "stop"
+
+
+async def test_a_retry_after_tool_work_keeps_the_tool_work() -> None:
+    """Only the abandoned response goes: calls made before it stay."""
+    server = Pi(
+        [
+            {
+                "type": "message_end",
+                "message": _assistant(CALL, stop="toolUse"),
+            },
+            {
+                "type": "tool_execution_end",
+                "toolCallId": "toolu_1",
+                "toolName": "bash",
+                "result": {"content": [{"type": "text", "text": "hi"}]},
+                "isError": False,
+            },
+            {
+                "type": "message_end",
+                "message": _assistant(
+                    {"type": "text", "text": "cut o"}, stop="length"
+                ),
+            },
+            {"type": "agent_end", "messages": [], "willRetry": True},
+            {
+                "type": "message_end",
+                "message": _assistant({"type": "text", "text": "done"}),
+            },
+            {"type": "agent_settled", "aborted": False},
+        ]
+    )
+    seen = await _turn(_adapter(server))
+    end = seen[-1]
+    assert isinstance(end, events.StreamEnd)
+    assert [type(p).__name__ for p in end.message.parts] == [
+        "ToolCallPart",
+        "TextPart",
+    ]
+    assert end.message.text == "done"

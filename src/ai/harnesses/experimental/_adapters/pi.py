@@ -712,16 +712,23 @@ class PiAdapter:
         except _CommandError as exc:
             raise _turn_failure(str(exc), hint=self._auth_hint()) from exc
         if (accepted or {}).get("disposition") == "handled":
-            # An extension command consumed it: no run starts.
-            yield events_.StreamStart()
-            yield events_.StreamEnd(
-                message=messages_.Message(role="assistant", parts=[]),
-                finish_reason="stop",
-            )
-            return
+            # An extension command consumed it. The command may start a run
+            # of its own (`pi.sendUserMessage`) — measured: then pi is
+            # already streaming when it answers, and that run is this turn's.
+            state = await agent.call({"type": "get_state"})
+            if not (state or {}).get("isStreaming"):
+                yield events_.StreamStart()
+                yield events_.StreamEnd(
+                    message=messages_.Message(role="assistant", parts=[]),
+                    finish_reason="stop",
+                )
+                return
         # Running BEFORE the first event: a consumer may steer on it.
         self._running.add(session_id)
         parts: list[Any] = []
+        # Where the latest assistant message's parts are in `parts`: pi may
+        # abandon that attempt and retry it (see `agent_end`).
+        attempt = (0, 0)
         usage = usage_.Usage()
         cost = 0.0
         started: set[str] = set()
@@ -760,11 +767,13 @@ class PiAdapter:
                     "assistant"
                 ):
                     last = message
+                    begun = len(parts)
                     if message.get("stopReason") != "error":
                         # A failed attempt is not the answer: pi retries it
                         # (or the turn raises below), and its partial text
                         # would be glued onto the reply that replaces it.
                         parts += _assistant_parts(message.get("content"))
+                    attempt = (begun, len(parts))
                     raw = message.get("usage") or {}
                     usage = usage + _usage(raw)
                     cost += float((raw.get("cost") or {}).get("total") or 0)
@@ -785,6 +794,13 @@ class PiAdapter:
                         message=messages_.Message(role="tool", parts=[result]),
                         results=[result],
                     )
+                elif kind == "agent_end" and event.get("willRetry"):
+                    # pi abandons the run's last response and retries it as
+                    # a fresh run — after a cut-off (`length`) answer, it
+                    # compacts first. That response is not the answer.
+                    if attempt[1] == len(parts):
+                        del parts[attempt[0] :]
+                    attempt = (len(parts), len(parts))
                 elif kind == "auto_retry_end" and not event.get("success"):
                     retry_error = str(event.get("finalError") or "")
                 elif kind == "agent_settled":
