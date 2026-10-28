@@ -115,3 +115,29 @@ async def test_listing_stored_sessions_is_a_fixed_number_of_round_trips(
         full = await claude_agent_sdk.list_sessions_from_store(slow, ws.path)
         assert len(quick) == 6
         assert shape(quick) == shape(full)
+
+
+async def test_the_remote_claude_store_keeps_its_paths_inside() -> None:
+    """A store key is names, never a path out of the store."""
+    from ai.harnesses.experimental._adapters import claude_store
+
+    store = await claude_store.WorkspaceSessionStore.discover(
+        fakes.FakeWorkspace(), "/c"
+    )
+    keys: list[Any] = [
+        {"project_key": "-fake", "session_id": "abc"},
+        {"project_key": "-fake", "session_id": "abc", "subpath": "a/b"},
+    ]
+    assert [store._path(k) for k in keys] == [
+        "/c/projects/-fake/abc.jsonl",
+        "/c/projects/-fake/abc/a/b.jsonl",
+    ]
+    bad: list[Any] = [
+        {"project_key": "-fake", "session_id": "../../etc/x"},
+        {"project_key": "-fake", "session_id": "/etc/x"},
+        {"project_key": "..", "session_id": "abc"},
+        {"project_key": "-fake", "session_id": "abc", "subpath": "../x"},
+    ]
+    for key in bad:
+        with pytest.raises(ValueError, match="not a store key"):
+            store._path(key)
