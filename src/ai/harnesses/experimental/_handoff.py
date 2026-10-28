@@ -1,4 +1,4 @@
-"""Starting a conversation FROM a history: one rendering rule, both harnesses.
+"""Starting a conversation FROM a history: one rendering rule, every harness.
 
 A conversation is a `list[Message]` — what `history()` returns and what
 `Result.messages` carries. To move one, read it as messages and start a new
@@ -23,10 +23,13 @@ the context, and the rule for what becomes what is the same everywhere:
   hand-written notes passed, genuine Opus thinking was refused. So the
   Claude renderer omits reasoning, and the adapter warns with the count,
   because dropping context silently is the one thing this SDK never does.
-- files: images go to both, as the image input each takes; PDFs to Claude
-  as documents. Anything else (a PDF into codex, a text file) is left out
-  and counted (`unsupported_files`), and the adapter warns, like it does
-  for reasoning into Claude.
+  Pi omits it too, for both reasons: pi drops thinking another model wrote,
+  and pi often runs Claude.
+- files: images go to every harness, as the image input each takes (pi
+  takes bytes, so an image known only by URL becomes a note naming it);
+  PDFs to Claude as documents. Anything else (a PDF into codex, a text
+  file) is left out and counted (`unsupported_files`), and the adapter
+  warns, like it does for reasoning into Claude.
 """
 
 from __future__ import annotations
@@ -41,6 +44,7 @@ from ...types import media
 from ...types import messages as messages_
 
 NOTE_PREFIX = "[Handoff from a previous session — earlier reasoning: "
+SYSTEM_PREFIX = "[Handoff from a previous session — instructions it was given: "
 
 
 def _text(value: Any) -> str:
@@ -244,3 +248,119 @@ def to_claude_records(
             # the CLI keeps them as user records with tool_result blocks.
             add("user" if m.role in ("user", "tool") else "assistant", blocks)
     return records
+
+
+def to_pi_messages(
+    messages: list[messages_.Message], *, timestamp: int
+) -> list[dict[str, Any]]:
+    """Build pi `AgentMessage`s for a session file.
+
+    Assistant messages are attributed to a model that is not the one pi
+    runs (`ai-python/handoff`): pi then treats them as another model's —
+    it keeps their text and tool calls and normalizes the call ids for its
+    own provider. Consecutive assistant messages are merged, the way one
+    model response holds text and calls together. Reasoning is omitted: see
+    the module docstring.
+    """
+    out: list[dict[str, Any]] = []
+    usage = {
+        "input": 0,
+        "output": 0,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "totalTokens": 0,
+        "cost": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "total": 0,
+        },
+    }
+    for m in messages:
+        if m.role == "tool":
+            for p in m.parts:
+                if isinstance(p, messages_.ToolResultPart):
+                    out.append(
+                        {
+                            "role": "toolResult",
+                            "toolCallId": p.tool_call_id,
+                            "toolName": p.tool_name,
+                            "content": [
+                                {"type": "text", "text": _text(p.result)}
+                            ],
+                            "isError": p.result_kind == "error",
+                            "timestamp": timestamp,
+                        }
+                    )
+            continue
+        blocks: list[dict[str, Any]] = []
+        for p in m.parts:
+            if isinstance(p, messages_.TextPart) and p.text.strip():
+                blocks.append({"type": "text", "text": p.text})
+            elif (
+                isinstance(p, messages_.FilePart)
+                and m.role == "user"
+                and p.media_type.startswith("image/")
+            ):
+                if isinstance(p.data, str) and media.is_downloadable_url(
+                    p.data
+                ):
+                    blocks.append(
+                        {"type": "text", "text": f"[image: {p.data}]"}
+                    )
+                else:
+                    blocks.append(
+                        {
+                            "type": "image",
+                            "data": media.data_to_base64(p.data),
+                            "mimeType": p.media_type,
+                        }
+                    )
+            elif (
+                isinstance(p, messages_.ToolCallPart) and m.role == "assistant"
+            ):
+                try:
+                    args = json.loads(p.tool_args) if p.tool_args else {}
+                except json.JSONDecodeError:
+                    args = {"raw": p.tool_args}
+                blocks.append(
+                    {
+                        "type": "toolCall",
+                        "id": p.tool_call_id or p.id,
+                        "name": p.tool_name,
+                        "arguments": args if isinstance(args, dict) else {},
+                    }
+                )
+        if not blocks:
+            continue
+        if m.role == "system":
+            # Measured (pi 1.3.0): a system message in a session file is
+            # pi's own prompt state, and replaying one REPLACED pi's system
+            # prompt and its tools. So instructions travel as what they are
+            # to the agent — the caller's words — never as its own output.
+            text = " ".join(b["text"] for b in blocks if b["type"] == "text")
+            blocks = [{"type": "text", "text": SYSTEM_PREFIX + text + "]"}]
+        if m.role in ("user", "system"):
+            out.append(
+                {"role": "user", "content": blocks, "timestamp": timestamp}
+            )
+            continue
+        if out and out[-1]["role"] == "assistant":
+            out[-1]["content"] += blocks
+        else:
+            out.append(
+                {
+                    "role": "assistant",
+                    "content": blocks,
+                    "api": "ai-python",
+                    "provider": "ai-python",
+                    "model": "handoff",
+                    "usage": usage,
+                    "stopReason": "stop",
+                    "timestamp": timestamp,
+                }
+            )
+        if any(b["type"] == "toolCall" for b in out[-1]["content"]):
+            out[-1]["stopReason"] = "toolUse"
+    return out

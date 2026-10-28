@@ -1,4 +1,4 @@
-"""Drive coding-agent CLIs you don't own: Claude Code and Codex.
+"""Drive coding-agent CLIs you don't own: Claude Code, Codex and Pi.
 
 Experimental: not part of the stable API, may change or be removed.
 
@@ -13,7 +13,7 @@ Experimental: not part of the stable API, may change or be removed.
 from . import errors
 from ._approval import Allow, ApprovalContext, Decision, Deny, ToolCall
 from ._capabilities import ApprovalCoverage, Capabilities
-from ._factories import claude_code, codex, harness_from, workspace_from
+from ._factories import claude_code, codex, harness_from, pi, workspace_from
 from ._handle import Handle
 from ._harness import Harness
 from ._result import Result
@@ -39,5 +39,6 @@ __all__ = [
     "codex",
     "errors",
     "harness_from",
+    "pi",
     "workspace_from",
 ]

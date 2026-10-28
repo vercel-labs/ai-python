@@ -2,7 +2,7 @@
 title: "ai.harnesses.experimental"
 description: Reference for driving coding-agent CLIs.
 type: reference
-summary: Reference for claude_code, codex, Harness, Session, Turn, Tui, Result, Handle, approvals, capabilities, and harness errors.
+summary: Reference for claude_code, codex, pi, Harness, Session, Turn, Tui, Result, Handle, approvals, capabilities, and harness errors.
 ---
 
 `ai.harnesses.experimental` drives coding-agent CLIs, Claude Code and Codex,
@@ -31,7 +31,7 @@ Each factory returns a `Harness`. They share these arguments:
 | `model` | Model name passed to the CLI. | `None`: the CLI's default |
 | `gateway` | Upstream model provider LLM Gateway, as a `Gateway`. Overrides the workspace's gateway. | `None`: the workspace's gateway |
 | `effort` | `"low"`, `"medium"`, `"high"`, or `"max"`. | `None`: the CLI's default |
-| `executable` | CLI name or path. | `"claude"` or `"codex"` |
+| `executable` | CLI name or path. | `"claude"`, `"codex"`, or `"pi"` |
 | `instructions` | Text added to the CLI's own system prompt. | `None` |
 | `mcp_servers` | MCP servers: `{"name": {"command": ..., "args": [...], "env": {...}}}` or `{"name": {"url": ...}}`. Not stored in a `Handle`. | `None` |
 
@@ -104,14 +104,46 @@ when one is set.
 
 `effort="max"` is sent to Codex as `"xhigh"`.
 
+### pi
+
+```python
+harnesses.pi(
+    *,
+    workspace,
+    approve=None,
+    approval_timeout=300.0,
+    model=None,
+    gateway=None,
+    effort=None,
+    executable="pi",
+    instructions=None,
+    mcp_servers=None,
+    tools=None,
+    disallowed_tools=None,
+    max_turns=None,
+)
+```
+
+Pi over `pi --mode rpc`. Needs only the `pi` CLI. Takes the shared
+arguments, plus:
+
+| Argument | Description | Default |
+|---|---|---|
+| `tools` | The tools the agent has. `[]` for none. | `None`: pi's defaults |
+| `disallowed_tools` | Tools taken away. | `None` |
+
+`effort` is pi's thinking level. `instructions` are appended to pi's system
+prompt. With a `gateway`, `model` names a gateway model. It also takes
+`max_turns`, and raises `UnsupportedError` when it is set.
+
 ## Harness
 
-One configured CLI, open on one workspace. Build it with `claude_code()` or
-`codex()`. Use it as an async context manager, or call `open()` and
+One configured CLI, open on one workspace. Build it with `claude_code()`,
+`codex()`, or `pi()`. Use it as an async context manager, or call `open()` and
 `close()`.
 
 ```python
-harness.kind            # "claude-code" or "codex"
+harness.kind            # "claude-code", "codex", or "pi"
 harness.name            # same as kind
 harness.version         # what the CLI reported, or None
 harness.capabilities
@@ -278,7 +310,7 @@ One conversation in the CLI's store.
 
 | Field | Description |
 |---|---|
-| `kind` | `"claude-code"` or `"codex"`. |
+| `kind` | `"claude-code"`, `"codex"`, or `"pi"`. |
 | `session_id` | The CLI's own id. |
 | `title` | The conversation's title or first prompt, or `None`. |
 | `cwd` | The directory it ran in, or `None`. |
@@ -292,7 +324,7 @@ A conversation as plain, serializable data.
 
 | Field | Description |
 |---|---|
-| `kind` | `"claude-code"` or `"codex"`. |
+| `kind` | `"claude-code"`, `"codex"`, or `"pi"`. |
 | `session_id` | The CLI's own id. |
 | `workspace` | `WorkspaceCoords`. |
 | `options` | Configuration the conversation was created with. |
