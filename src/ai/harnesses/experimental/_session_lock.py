@@ -41,6 +41,7 @@ the process is confirmed gone.
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -53,11 +54,39 @@ if TYPE_CHECKING:
 STALE_AFTER = 120.0
 """Seconds a pid-less lock is honoured before it counts as abandoned."""
 
+SESSION_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,199}\Z")
+"""What a lock accepts as a session id: a name, never a path.
+
+Every harness's ids fit (UUIDs, pi's letters, digits, `.`, `_`, `-`). An id
+can come from a file someone else wrote — a session store a repository
+points to — and the lock turns it into a directory it may delete.
+"""
+
 HELPER = r"""
-import fcntl, json, os, shutil, subprocess, sys, time
+import fcntl, json, os, re, shutil, subprocess, sys, time
 
 op, root, args = sys.argv[1], sys.argv[2], json.loads(sys.argv[3])
 STALE = float(args.get("stale_after", 120))
+SAFE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,199}\Z")
+
+
+# The lock directory of `sid`: one entry directly in the root, or none. An
+# id is a name, never a path: an absolute or `..` id would escape the root,
+# and a stale lock there is deleted. Checked again on disk, so a symlink
+# planted in the root cannot lead out either.
+def place(sid, strict=True):
+    d = os.path.join(root, sid) if isinstance(sid, str) else None
+    ok = (
+        d is not None
+        and SAFE.match(sid) is not None
+        and os.path.dirname(os.path.realpath(d)) == os.path.realpath(root)
+    )
+    if ok:
+        return d
+    if strict:
+        sys.stderr.write("not a session id: %r\n" % (sid,))
+        sys.exit(3)
+    return None
 
 
 def started(pid):
@@ -93,7 +122,7 @@ def alive(rec):
 
 
 def read(sid):
-    d = os.path.join(root, sid)
+    d = place(sid)
     try:
         with open(os.path.join(d, "holder.json")) as f:
             rec = json.load(f)
@@ -131,7 +160,7 @@ out = None
 if op == "holders":
     out = {}
     for sid in os.listdir(root):
-        if not sid.startswith("."):
+        if not sid.startswith(".") and place(sid, strict=False):
             rec = live(sid)
             if rec is not None:
                 out[sid] = rec.get("pid")
@@ -141,7 +170,7 @@ else:
     with open(os.path.join(root, ".mutex"), "a") as mutex:
         fcntl.flock(mutex, fcntl.LOCK_EX)
         sid, token = args["sid"], args["token"]
-        d = os.path.join(root, sid)
+        d = place(sid)
         rec = read(sid)
         if op == "acquire":
             if rec is not None and alive(rec):
@@ -263,6 +292,13 @@ class SessionLock:
         }
 
     async def _run(self, op: str, **args: Any) -> Any:
+        sid = args.get("sid")
+        if sid is not None and not SESSION_ID.match(str(sid)):
+            # Refused here, and again by the helper where the files are.
+            raise errors.HarnessError(
+                f"{sid!r} is not a session id: an id is a name of letters, "
+                + "digits, '.', '_' and '-', never a path"
+            )
         result = await self._workspace.exec(
             ["python3", "-c", HELPER, op, await self.root(), json.dumps(args)],
             timeout=30,

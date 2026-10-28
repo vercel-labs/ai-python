@@ -48,12 +48,13 @@ async def test_tools_limits_what_claude_can_do(
     any_make_harness: Callable[..., Any],
     any_workspace: Workspace,
 ) -> None:
-    if harness_kind != "claude":
+    read = {"claude": "Read", "pi": "read"}.get(harness_kind)
+    if read is None:
         with pytest.raises(UnsupportedError, match="tools"):
             async with any_make_harness(tools=["Read"]):
                 pass
         return
-    async with any_make_harness(tools=["Read"]) as harness:
+    async with any_make_harness(tools=[read]) as harness:
         await harness.run(
             "Write the word NOPE into nope.txt. If you cannot, reply CANNOT."
         )

@@ -28,6 +28,12 @@ def test_codex_needs_no_extra(monkeypatch: pytest.MonkeyPatch) -> None:
     assert harness.name == "codex"
 
 
+def test_pi_needs_no_extra(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(sys.modules, "claude_agent_sdk", None)
+    harness = harnesses.pi(workspace=workspaces.Local("."))
+    assert harness.name == "pi"
+
+
 def test_import_ai_loads_no_optional_harness_package() -> None:
     code = (
         "import sys, ai\n"
