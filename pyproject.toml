@@ -116,6 +116,10 @@ exclude = [
     "examples/apps/durable_agent_workflows/",
     # depends on slack-bolt, which is not part of this project's env
     "examples/apps/slack_agent/",
+    # own projects (afk also needs textual); both have tests/conftest.py,
+    # which mypy sees as one duplicate top-level `conftest` module
+    "examples/apps/afk/",
+    "examples/apps/deepysec/",
 ]
 
 [tool.ty.environment]
