@@ -771,6 +771,13 @@ class RunStateTracker:
     gating must pass ``tool_call_id=`` to ``ai.hook()`` — an
     unattributed hook while tools are in flight reads as "still busy"
     and suppresses the signal.
+
+    It is for loops that emit one stream per model call, like
+    ``Agent.run``.  A stream that wraps a whole run in one
+    ``StreamStart ... StreamEnd`` (a harness turn: the CLI runs the loop,
+    so step boundaries are not reported) cannot be folded this way; such
+    a source knows when it is blocked and emits :class:`RunBlocked`
+    itself.
     """
 
     def __init__(self) -> None:

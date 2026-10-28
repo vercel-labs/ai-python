@@ -25,6 +25,9 @@ dependencies = [
 anthropic = [
     { name = "anthropic" },
 ]
+claude-code = [
+    { name = "claude-agent-sdk" },
+]
 mcp = [
     { name = "mcp" },
 ]
@@ -34,6 +37,9 @@ openai = [
 otel = [
     { name = "opentelemetry-exporter-otlp-proto-http" },
     { name = "opentelemetry-sdk" },
+]
+sandbox = [
+    { name = "vercel-sandbox" },
 ]
 typesafe = [
     { name = "typesafe-sdk" },
@@ -46,6 +52,7 @@ vercel = [
 dev = [
     { name = "anthropic" },
     { name = "async-solipsism" },
+    { name = "claude-agent-sdk" },
     { name = "mcp" },
     { name = "mypy" },
     { name = "openai" },
@@ -53,17 +60,21 @@ dev = [
     { name = "opentelemetry-sdk" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
+    { name = "pytest-timeout" },
     { name = "python-dotenv" },
     { name = "rich" },
     { name = "ruff" },
     { name = "ty" },
     { name = "typesafe-sdk" },
+    { name = "vercel-internal-core" },
     { name = "vercel-oidc" },
+    { name = "vercel-sandbox" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "anthropic", marker = "extra == 'anthropic'", specifier = ">=0.83.0,<2.0.0" },
+    { name = "claude-agent-sdk", marker = "extra == 'claude-code'", specifier = ">=0.2.144,<0.3" },
     { name = "httpx2", specifier = ">=2.12.0" },
     { name = "mcp", marker = "extra == 'mcp'", specifier = ">=2.0.0,<3.0.0" },
     { name = "modelsdotdev", specifier = "==0.*" },
@@ -74,13 +85,15 @@ requires-dist = [
     { name = "typesafe-sdk", marker = "extra == 'typesafe'", specifier = ">=0.7.2,<1" },
     { name = "typing-extensions", specifier = ">=4.15.0" },
     { name = "vercel-oidc", marker = "extra == 'vercel'", specifier = ">=0.8.0" },
+    { name = "vercel-sandbox", marker = "extra == 'sandbox'" },
 ]
-provides-extras = ["anthropic", "mcp", "openai", "otel", "typesafe", "vercel"]
+provides-extras = ["anthropic", "claude-code", "mcp", "openai", "otel", "sandbox", "typesafe", "vercel"]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "anthropic", specifier = ">=0.83.0" },
     { name = "async-solipsism", specifier = ">=0.9" },
+    { name = "claude-agent-sdk", specifier = ">=0.2.144,<0.3" },
     { name = "mcp", specifier = ">=2.0.0,<3.0.0" },
     { name = "mypy", specifier = "~=2.1.0" },
     { name = "openai", specifier = ">=2.14.0" },
@@ -88,12 +101,16 @@ dev = [
     { name = "opentelemetry-sdk", specifier = ">=1.43.0" },
     { name = "pytest", specifier = ">=8.0" },
     { name = "pytest-asyncio", specifier = ">=0.24" },
+    { name = "pytest-timeout", specifier = ">=2.3" },
     { name = "python-dotenv", specifier = ">=1.2.1" },
     { name = "rich", specifier = ">=14.2.0" },
     { name = "ruff", specifier = "~=0.8.0" },
     { name = "ty", specifier = "~=0.0.37" },
     { name = "typesafe-sdk", specifier = ">=0.7.2" },
+    { name = "vercel-internal-core", git = "https://github.com/vercel/vercel-py?subdirectory=src%2Fvercel-internal-core&rev=main" },
     { name = "vercel-oidc", specifier = ">=0.8.0" },
+    { name = "vercel-oidc", git = "https://github.com/vercel/vercel-py?subdirectory=src%2Fvercel-oidc&rev=main" },
+    { name = "vercel-sandbox", git = "https://github.com/vercel/vercel-py?subdirectory=src%2Fvercel-sandbox&rev=main" },
 ]
 
 [[package]]
@@ -334,6 +351,24 @@ wheels = [
 ]
 
 [[package]]
+name = "claude-agent-sdk"
+version = "0.2.160"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "anyio" },
+    { name = "jsonschema" },
+    { name = "mcp" },
+    { name = "sniffio" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/bd/46/ff902a63d79b278fd8631ef420b9d6a6e85959f0c75e87c3ecc7a0397608/claude_agent_sdk-0.2.160.tar.gz", hash = "sha256:1107f7804c656e194cbf80d9e20b4b861803bc16c4067a04839a347c9d140f48", size = 365170, upload-time = "2026-09-25T22:31:19.672Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b4/c0/3ef94041ac8daf218e04d2047fa780643abeabbe9ca0495391f25078e169/claude_agent_sdk-0.2.160-py3-none-macosx_11_0_arm64.whl", hash = "sha256:547cb16c94c67b57873c1ac9b5ce83076941d5189d52601b9791032d13a21456", size = 93695006, upload-time = "2026-09-25T22:31:24.616Z" },
+    { url = "https://files.pythonhosted.org/packages/f2/6f/74ba55f294cc132ced13de24d8011e30f0073075fa829aa4aa09d66c1493/claude_agent_sdk-0.2.160-py3-none-macosx_11_0_x86_64.whl", hash = "sha256:cc77386858bd5e716914544a35a0620fe1586d130299d1c7b2e207bebd02ace4", size = 98113129, upload-time = "2026-09-25T22:31:30.278Z" },
+    { url = "https://files.pythonhosted.org/packages/17/bf/560d9c04d574484d6659ba325693e14f03d8aa2ca38781736ed08635b22d/claude_agent_sdk-0.2.160-py3-none-manylinux_2_17_aarch64.whl", hash = "sha256:59638c6acd0159da200eb9d8fbb282d6c8d2191e6fcdd02fa751857c014b7e40", size = 103152841, upload-time = "2026-09-25T22:31:35.62Z" },
+    { url = "https://files.pythonhosted.org/packages/9d/04/fcb6c6a77d5ee04cd6dc7c1e43e824e73ce57d2c59f1cdb80c0255bfc4ac/claude_agent_sdk-0.2.160-py3-none-manylinux_2_17_x86_64.whl", hash = "sha256:70d1dd4286b69ecdc334d66e7b9dae8532790803f7cd7e0bf269bd5e407f2259", size = 103518762, upload-time = "2026-09-25T22:31:41.303Z" },
+]
+
+[[package]]
 name = "click"
 version = "8.3.1"
 source = { registry = "https://pypi.org/simple" }
@@ -441,19 +476,6 @@ wheels = [
 ]
 
 [[package]]
-name = "httpcore"
-version = "1.0.9"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "certifi" },
-    { name = "h11" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/06/94/82699a10bca87a5556c9c59b5963f2d039dbd239f25bc2a63907a05a14cb/httpcore-1.0.9.tar.gz", hash = "sha256:6e34463af53fd2ab5d807f399a9b45ea31c3dfa2276f15a2c3f00afff6e176e8", size = 85484, upload-time = "2025-04-24T22:06:22.219Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/7e/f5/f66802a942d491edb555dd61e3a9961140fd64c90bce1eafd741609d334d/httpcore-1.0.9-py3-none-any.whl", hash = "sha256:2d400746a40668fc9dec9810239072b40b4484b640a8c38fd654a024c7a1bf55", size = 78784, upload-time = "2025-04-24T22:06:20.566Z" },
-]
-
-[[package]]
 name = "httpcore2"
 version = "2.12.0"
 source = { registry = "https://pypi.org/simple" }
@@ -464,21 +486,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/be/ad/f4f0e57345f1870f3e8cb624e058d7eca6e5a27d33bcc3311d9b618734cd/httpcore2-2.12.0.tar.gz", hash = "sha256:9293522bba0aa7c4c8e9e3f040c16575bd8868e155a77fa30c7a9085a5eae648", size = 67548, upload-time = "2026-08-18T13:22:08.211Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/d2/74/d370e55600d9bcfa0d9794b0166126d49291a3d2b20c268fc98c453a4948/httpcore2-2.12.0-py3-none-any.whl", hash = "sha256:7e04258ce01013d7d615e5b910a3b27fac937d7a95038227e79652b4ba3b4ceb", size = 83074, upload-time = "2026-08-18T13:22:05.854Z" },
-]
-
-[[package]]
-name = "httpx"
-version = "0.28.1"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "anyio" },
-    { name = "certifi" },
-    { name = "httpcore" },
-    { name = "idna" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/b1/df/48c586a5fe32a0f01324ee087459e112ebb7224f646c0b5023f5e79e9956/httpx-0.28.1.tar.gz", hash = "sha256:75e98c5f16b0f35b567856f597f06ff2270a374470a5c2392242528e3e3e42fc", size = 141406, upload-time = "2024-12-06T15:37:23.222Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/2a/39/e50c7c3a983047577ee07d2a9e53faf5a69493943ec3f6a384bdc792deb2/httpx-0.28.1-py3-none-any.whl", hash = "sha256:d909fcccc110f8c7faf814ca82a9a4d816bc5a6dbfea25d6591d6985b8ba59ad", size = 73517, upload-time = "2024-12-06T15:37:21.509Z" },
 ]
 
 [[package]]
@@ -496,6 +503,11 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/7f/f8/579a8b51e42e38ee32647df9f08aa25643ae788e275cc625b199829c4671/httpx2-2.12.0.tar.gz", hash = "sha256:7631fe9887a8a2275f4a2540e053aa670fcc50742864a9ae7c66e609fdcf12cf", size = 100040, upload-time = "2026-08-18T13:22:09.086Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c8/95/411ba65569158e862368917aaf56597f3e5fa3b91b0502919638465a08f3/httpx2-2.12.0-py3-none-any.whl", hash = "sha256:cc8b6eecb8661c146b8f89a60e97456ee086e91a784ed31ac450c3a9e613dd36", size = 95427, upload-time = "2026-08-18T13:22:06.834Z" },
+]
+
+[package.optional-dependencies]
+ws = [
+    { name = "wsproto" },
 ]
 
 [[package]]
@@ -1093,6 +1105,18 @@ wheels = [
 ]
 
 [[package]]
+name = "pytest-timeout"
+version = "2.4.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pytest" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ac/82/4c9ecabab13363e72d880f2fb504c5f750433b2b6f16e99f4ec21ada284c/pytest_timeout-2.4.0.tar.gz", hash = "sha256:7e68e90b01f9eff71332b25001f85c75495fc4e3a836701876183c4bcfd0540a", size = 17973, upload-time = "2025-05-05T19:44:34.99Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/fa/b6/3127540ecdf1464a00e5a01ee60a1b09175f6913f0644ac748494d9c4b21/pytest_timeout-2.4.0-py3-none-any.whl", hash = "sha256:c42667e5cdadb151aeb5b26d114aff6bdf5a907f176a007a30b940d3d865b5c2", size = 14382, upload-time = "2025-05-05T19:44:33.502Z" },
+]
+
+[[package]]
 name = "python-dotenv"
 version = "1.2.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1311,11 +1335,11 @@ wheels = [
 
 [[package]]
 name = "tenacity"
-version = "9.1.4"
+version = "9.2.1"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/47/c6/ee486fd809e357697ee8a44d3d69222b344920433d3b6666ccd9b374630c/tenacity-9.1.4.tar.gz", hash = "sha256:adb31d4c263f2bd041081ab33b498309a57c77f9acf2db65aadf0898179cf93a", size = 49413, upload-time = "2026-02-07T10:45:33.841Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/82/9e/497c1c8ebe5a5b5d1d4a7511aea22c0bb1a97e3170d98abdef0e1b34265a/tenacity-9.2.1.tar.gz", hash = "sha256:a606b5c808d0cded4a359d5b9932d867ff2a6a6b64d37350260fd01bbdf83839", size = 58261, upload-time = "2026-10-07T12:13:01.633Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/d7/c1/eb8f9debc45d3b7918a32ab756658a0904732f75e555402972246b0b8e71/tenacity-9.1.4-py3-none-any.whl", hash = "sha256:6095a360c919085f28c6527de529e76a06ad89b23659fa881ae0649b867a9d55", size = 28926, upload-time = "2026-02-07T10:45:32.24Z" },
+    { url = "https://files.pythonhosted.org/packages/d6/26/1ff2b0721ac66a3ec5b1402b333110b352ab0a8724052ac279a7b82d40c4/tenacity-9.2.1-py3-none-any.whl", hash = "sha256:9e56f17539296baab7beabb08b92f6ee3d7be92d8be72d763360677c2ad6580e", size = 32310, upload-time = "2026-10-07T12:13:00.102Z" },
 ]
 
 [[package]]
@@ -1354,18 +1378,21 @@ wheels = [
 
 [[package]]
 name = "typesafe-sdk"
-version = "0.7.2"
+version = "0.7.5"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
+    { name = "anyio" },
     { name = "httpx2" },
+    { name = "packaging" },
     { name = "pydantic" },
     { name = "pydantic-core" },
     { name = "tenacity" },
+    { name = "truststore", marker = "sys_platform != 'emscripten'" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/42/ac/8bad2c02c038b85039cdb198ba106650d54bade0c0c986c68dc6e9cef8c3/typesafe_sdk-0.7.2.tar.gz", hash = "sha256:2434f4af5cdfc45d6ab5ff27048e8b257207f786b60456e69995e345b32e77e1", size = 23169, upload-time = "2026-09-26T21:20:24.988Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/26/4d/383aa14f4cfe5fb41023ea1cab52d7f79cc31ab200ee7314317cf89db744/typesafe_sdk-0.7.5.tar.gz", hash = "sha256:1eeeb0dc80a7161d84896db42a5016dc0a7c8872fa16540b70163e5357b6d398", size = 34152, upload-time = "2026-10-14T21:21:42.837Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/99/5e/2b97ba9b0b77612e3a480ddb60c0c0325b4809ef57a7b565341d65ef7bec/typesafe_sdk-0.7.2-py3-none-any.whl", hash = "sha256:0a961148187d52e18276ed7f2d02617cfac48e3b97673cb631a8749397d43d1e", size = 36448, upload-time = "2026-09-26T21:20:23.511Z" },
+    { url = "https://files.pythonhosted.org/packages/1c/f6/bee4c3b49570c2d312057c9e37c1446cf37eb1b86bf5872f7a797e803326/typesafe_sdk-0.7.5-py3-none-any.whl", hash = "sha256:967a8b61494d536abb55ee3f3a2b10e81685cb6baad6ccdcab588bdc6c9b86d2", size = 49948, upload-time = "2026-10-14T21:21:41.337Z" },
 ]
 
 [[package]]
@@ -1413,23 +1440,52 @@ wheels = [
 
 [[package]]
 name = "vercel-headers"
-version = "0.7.1"
+version = "0.7.2"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/20/50/2fbe5563b1f710c5cec3076efe94df887dd89c7ce0f4238b81f169f5d733/vercel_headers-0.7.1.tar.gz", hash = "sha256:46e63a99a3095f3b4fa324c80e5aeee5886ca474ef5ecbfe6eabb5f2bd64928a", size = 5410, upload-time = "2026-07-16T14:23:35.768Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/e4/0c/241e47d351413c108f0b411df087feeb15cf32f422000414ce24d3791537/vercel_headers-0.7.2.tar.gz", hash = "sha256:f5255da014032b357a3f18769bd19ff675b0ee3e4fc355c6bbd574dfc674222d", size = 6148, upload-time = "2026-09-08T17:09:14.589Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/28/b8/5484e7ecf876c031831623efc547edcf94e2e33db4251d17c2d117c18cb0/vercel_headers-0.7.1-py3-none-any.whl", hash = "sha256:6ef65f0baffdf19775b693265d6118e125251456fb192324f4006dd341c77abc", size = 3907, upload-time = "2026-07-16T14:23:34.942Z" },
+    { url = "https://files.pythonhosted.org/packages/cd/64/12d53f70253dfd00f1a394bc930b5d55bad84ac17c9fc77b5ca0525ccd18/vercel_headers-0.7.2-py3-none-any.whl", hash = "sha256:26dcb0016b5c553e638385e532cb8557f071e247b46f2575d5737e48718dc8c6", size = 3922, upload-time = "2026-09-08T17:09:13.585Z" },
+]
+
+[[package]]
+name = "vercel-internal-core"
+version = "0.2.0"
+source = { git = "https://github.com/vercel/vercel-py?subdirectory=src%2Fvercel-internal-core&rev=main#a337e549acb8f69872c5537d91f981e5e9edac5e" }
+dependencies = [
+    { name = "anyio" },
+    { name = "httpx2" },
 ]
 
 [[package]]
 name = "vercel-oidc"
-version = "0.8.0"
-source = { registry = "https://pypi.org/simple" }
+version = "0.9.0"
+source = { git = "https://github.com/vercel/vercel-py?subdirectory=src%2Fvercel-oidc&rev=main#a337e549acb8f69872c5537d91f981e5e9edac5e" }
 dependencies = [
     { name = "anyio" },
-    { name = "httpx" },
+    { name = "httpx2" },
     { name = "vercel-headers" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/34/c5/fa8c0c298f86e9e144fb012b3f6d45490e9af240dd6d3319cd2e2441002b/vercel_oidc-0.8.0.tar.gz", hash = "sha256:dbcb1e19697c87f89ae25c5bfeb8018fdb3904d9d92290796cc290ae7eeef61e", size = 16117, upload-time = "2026-08-08T00:16:40.203Z" }
+
+[[package]]
+name = "vercel-sandbox"
+version = "0.7.0"
+source = { git = "https://github.com/vercel/vercel-py?subdirectory=src%2Fvercel-sandbox&rev=main#a337e549acb8f69872c5537d91f981e5e9edac5e" }
+dependencies = [
+    { name = "anyio" },
+    { name = "httpx2", extra = ["ws"] },
+    { name = "pydantic" },
+    { name = "vercel-internal-core" },
+    { name = "vercel-oidc" },
+]
+
+[[package]]
+name = "wsproto"
+version = "1.3.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "h11" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/c7/79/12135bdf8b9c9367b8701c2c19a14c913c120b882d50b014ca0d38083c2c/wsproto-1.3.2.tar.gz", hash = "sha256:b86885dcf294e15204919950f666e06ffc6c7c114ca900b060d6e16293528294", size = 50116, upload-time = "2025-11-20T18:18:01.871Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/1a/d6/c380d2d171840a67883a30f453b2edb3adabab3b5519941b445c312135c6/vercel_oidc-0.8.0-py3-none-any.whl", hash = "sha256:fb8bb715f20edf5539554951d0374b4956550688c8a8b7ccb69f8275ff464e22", size = 15996, upload-time = "2026-08-08T00:16:39.349Z" },
+    { url = "https://files.pythonhosted.org/packages/a4/f5/10b68b7b1544245097b2a1b8238f66f2fc6dcaeb24ba5d917f52bd2eed4f/wsproto-1.3.2-py3-none-any.whl", hash = "sha256:61eea322cdf56e8cc904bd3ad7573359a242ba65688716b0710a5eb12beab584", size = 24405, upload-time = "2025-11-20T18:18:00.454Z" },
 ]

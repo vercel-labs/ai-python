@@ -1,0 +1,50 @@
+[project]
+name = "afk"
+version = "0.1.0"
+description = "Step away; your agents don't. A CLI on ai.harnesses"
+requires-python = ">=3.12"
+dependencies = [
+    "ai[claude-code,sandbox]",
+    # direct, so the git sources below apply (see tool.uv.sources)
+    "vercel-sandbox",
+    "vercel-internal-core",
+    "vercel-oidc",
+    "textual>=8.2.8",
+]
+
+[project.scripts]
+afk = "afk.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["afk"]
+
+[tool.uv]
+exclude-newer = "2 days"
+
+[tool.uv.sources]
+# ai.harnesses is not released yet, so the app runs on this checkout.
+ai = { path = "../../..", editable = true }
+# vercel/vercel-py#415 (interactive PTY) is merged to main but not released;
+# uv.lock pins the commit. Drop these once the `sandbox` extra has a real
+# floor. The siblings come from the same main: vercel-sandbox there needs an
+# unreleased vercel-internal-core, and `uv tool install` does not read uv.lock.
+vercel-sandbox = { git = "https://github.com/vercel/vercel-py", branch = "main", subdirectory = "src/vercel-sandbox" }
+vercel-internal-core = { git = "https://github.com/vercel/vercel-py", branch = "main", subdirectory = "src/vercel-internal-core" }
+vercel-oidc = { git = "https://github.com/vercel/vercel-py", branch = "main", subdirectory = "src/vercel-oidc" }
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = [
+    "live: drives a real local harness installation (deselect with -m 'not live')",
+]

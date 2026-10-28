@@ -13,6 +13,8 @@
     "events",
     "errors",
     "mcp",
+    "harnesses",
+    "workspaces",
     "types",
     "util",
     "telemetry"

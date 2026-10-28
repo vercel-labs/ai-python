@@ -44,9 +44,11 @@ jobs:
           - sdk-versions: minimum
             openai: openai==2.34.0
             anthropic: anthropic==0.83.0
+            claude-agent-sdk: claude-agent-sdk==0.2.144
           - sdk-versions: latest
             openai: openai>=2.34.0,<4.0.0
             anthropic: anthropic>=0.83.0,<2.0.0
+            claude-agent-sdk: claude-agent-sdk>=0.2.144,<0.3
     name: Provider SDKs (${{ matrix.sdk-versions }})
     steps:
       - uses: actions/checkout@v4
@@ -64,6 +66,7 @@ jobs:
           uv pip install --upgrade
           '${{ matrix.openai }}'
           '${{ matrix.anthropic }}'
+          '${{ matrix.claude-agent-sdk }}'
 
       - run: uv run --no-sync mypy src tests
       - run: uv run --no-sync ty check
@@ -71,3 +74,27 @@ jobs:
           uv run --no-sync pytest
           tests/providers/openai
           tests/providers/anthropic
+          tests/harnesses
+
+  no-extras:
+    # `pip install ai` with no extras: the harness and sandbox pieces must
+    # import, and fail with InstallationError when built, not on first use.
+    runs-on: ubuntu-latest
+    name: Without optional extras
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: astral-sh/setup-uv@v5
+
+      - run: uv sync --no-default-groups
+
+      - run: uv pip install pytest
+
+      - run: >-
+          uv run --no-sync pytest
+          tests/harnesses/experimental/test_extras.py
+          tests/workspaces/experimental/test_extras.py
