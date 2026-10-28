@@ -7,8 +7,9 @@ Usage (from repo root):
     uv run examples/.test_scripts/run-examples.py --video  # also video samples
     uv run examples/.test_scripts/run-examples.py --e2e  # also e2e test scripts
     uv run examples/.test_scripts/run-examples.py --harnesses
-        # also harness samples: need logged-in `claude` and `codex` CLIs, and
-        # AI_GATEWAY_API_KEY plus Vercel credentials for the sandbox ones
+        # also harness samples: need logged-in `claude`, `codex` and `pi`
+        # CLIs, and AI_GATEWAY_API_KEY plus Vercel credentials for the
+        # sandbox ones
     uv run examples/.test_scripts/run-examples.py --all  # everything
     uv run examples/.test_scripts/run-examples.py --parallel  # in parallel
     uv run examples/.test_scripts/run-examples.py models/stream.py
@@ -88,6 +89,7 @@ HARNESS_SAMPLES: list[Sample] = [
     Sample("harnesses/until_done.py", timeout=600.0),
     Sample("harnesses/steering.py", timeout=300.0),
     Sample("harnesses/tool_approval.py", timeout=300.0),
+    Sample("harnesses/pi.py", timeout=300.0),
     Sample("harnesses/take_over.py", timeout=300.0),
     Sample("harnesses/resume.py", timeout=300.0),
     Sample("harnesses/handoff.py", timeout=600.0),
