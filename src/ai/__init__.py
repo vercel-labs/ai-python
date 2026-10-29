@@ -1,4 +1,5 @@
 from . import (
+    durable,
     errors,
     experimental_telemetry,
     models,
@@ -195,6 +196,7 @@ __all__ = [
     "current_tool_call",
     "defer_hook",
     "deferred_tool_result",
+    "durable",
     "errors",
     "events",
     "experimental_generate",
