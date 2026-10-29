@@ -666,3 +666,38 @@ def test_deferred_approval_hook_roundtrips_tool_call_id() -> None:
         assert hook.hook_id == hook_id
         assert hook.status == "pending"
         assert hook.tool_call_id == "tc-1"
+
+
+def test_bundle_to_wire_output_uses_wire_aliases() -> None:
+    bundle = messages_.MessageBundle(
+        messages=(
+            messages_.Message(
+                role="assistant",
+                parts=[
+                    messages_.ToolCallPart(
+                        tool_call_id="tc1", tool_name="bash", tool_args="{}"
+                    ),
+                    messages_.FilePart(data=b"png", media_type="image/png"),
+                ],
+            ),
+            messages_.Message(
+                role="tool",
+                parts=[
+                    messages_.ToolResultPart(
+                        tool_call_id="tc1",
+                        tool_name="bash",
+                        result="boom",
+                        result_kind="error",
+                    )
+                ],
+            ),
+        )
+    )
+
+    wire = outbound_messages.bundle_to_wire_output(bundle)
+
+    tool_part, file_part = wire["parts"]
+    assert tool_part["toolCallId"] == "tc1"
+    assert tool_part["errorText"] == "boom"
+    assert file_part["mediaType"] == "image/png"
+    assert "providerExecuted" not in tool_part

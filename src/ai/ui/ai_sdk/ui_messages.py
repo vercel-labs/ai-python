@@ -14,7 +14,9 @@ import pydantic
 
 from ...types import messages as messages_
 
-_UI_MODEL_CONFIG = pydantic.ConfigDict(populate_by_name=True, extra="allow")
+_UI_MODEL_CONFIG = pydantic.ConfigDict(
+    populate_by_name=True, extra="allow", serialize_by_alias=True
+)
 
 
 class UITextPart(pydantic.BaseModel):
@@ -330,6 +332,10 @@ class UIMessage(pydantic.BaseModel):
     """Message in AI SDK v6 format.
 
     Reference: https://ai-sdk.dev/docs/reference/ai-sdk-core/ui-message
+
+    To send one to an AI SDK client, dump it with
+    ``model_dump(mode="json", exclude_none=True)``: the TS schemas mark
+    optional fields ``.optional()``, which rejects ``null``.
     """
 
     model_config = _UI_MODEL_CONFIG

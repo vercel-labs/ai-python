@@ -118,7 +118,8 @@ def bundle_to_wire_output(bundle: messages_.MessageBundle) -> Any:
     The inbound side accepts either shape (see ``_build_result_part``).
     """
     dumped = [
-        m.model_dump(mode="json") for m in to_ui_messages(list(bundle.messages))
+        m.model_dump(mode="json", exclude_none=True)
+        for m in to_ui_messages(list(bundle.messages))
     ]
     if not dumped:
         return None
