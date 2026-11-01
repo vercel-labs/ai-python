@@ -32,7 +32,11 @@ Verbs = dict[str, tuple[str, list[Command]]]
 """key -> (what the footer calls it, the commands it runs, in order, each
 only if the one before it succeeded: `a && b`)."""
 
-RESUME = {"claude-code": ["claude", "--resume"], "codex": ["codex", "resume"]}
+RESUME = {
+    "claude-code": ["claude", "--resume"],
+    "codex": ["codex", "resume"],
+    "pi": ["pi", "--session"],
+}
 """Each harness's own command to reopen a conversation in its TUI here."""
 
 

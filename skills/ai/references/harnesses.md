@@ -9,7 +9,7 @@ from ai.harnesses import experimental as harnesses
 from ai.workspaces import experimental as workspaces
 ```
 
-A harness drives a CLI (`claude`, `codex`). It is not `ai.Agent`: there is no
+A harness drives a CLI (`claude`, `codex`, `pi`). It is not `ai.Agent`: there is no
 `ai.get_model`, and Python `@ai.tool` functions do not reach it. The CLI
 brings its own tools, login, and session store.
 
@@ -18,19 +18,20 @@ brings its own tools, login, and session store.
 - `claude_code()` needs `ai[claude-code]`; `VercelSandbox` needs
   `ai[sandbox]` with a `vercel-sandbox` build that has interactive PTY
   support (vercel/vercel-py#415, unreleased). Both raise
-  `ai.errors.InstallationError` at construction. `codex()` needs only the
-  `codex` binary.
+  `ai.errors.InstallationError` at construction. `codex()` and `pi()` need
+  only their binary.
 - On `Local`, a missing CLI raises `ExecutableMissingError`. The SDK installs
   CLIs only into a sandbox, and there it installs or upgrades to the latest
   npm release on open (not while a copy of the CLI is running there).
 - Every harness has full access by default (claude: no permission prompts;
-  codex: `sandbox="danger-full-access"`). Restrict with `approve=`, codex's
-  `sandbox=` (on `Local` only; other modes raise `UnsupportedError` in a
-  sandbox), claude's `tools=`/`disallowed_tools=`, or a `VercelSandbox`.
+  codex: `sandbox="danger-full-access"`; pi has no permission prompt).
+  Restrict with `approve=`, codex's `sandbox=` (on `Local` only; other modes
+  raise `UnsupportedError` in a sandbox), claude's and pi's
+  `tools=`/`disallowed_tools=`, or a `VercelSandbox`.
 - Shared options: `instructions=` (added to the CLI's system prompt) and
   `mcp_servers=` (claude's shape: `{"name": {"command", "args", "env"}}` or
-  `{"name": {"url"}}`). Claude only: `tools=`, `disallowed_tools=`,
-  `max_turns=`. A `Handle` never stores `mcp_servers`: pass them again to
+  `{"name": {"url"}}`). Claude and pi: `tools=`, `disallowed_tools=`.
+  Claude only: `max_turns=`. A `Handle` never stores `mcp_servers`: pass them again to
   `harness_from`.
 - Open one harness per workspace and reuse it for many sessions. The CLI
   processes live as long as the `async with`.
@@ -55,8 +56,8 @@ brings its own tools, login, and session store.
 - `result.messages` reads in order: assistant message with the tool call,
   then a `"tool"` message with its result. Safe to pass as `history=`.
 - A prompt can be a list: `[ "describe this", ai.file_part(png) ]`. Images
-  on both, PDFs on claude only (`capabilities.documents`), `text/*` files on
-  both as text. Anything else raises `UnsupportedError` before the turn.
+  on every harness, PDFs on claude only (`capabilities.documents`), `text/*`
+  files everywhere as text. Anything else raises `UnsupportedError` before the turn.
 - To continue a stored conversation, `resume(id)` (its past is in
   `session.messages`) and run or stream as usual. There is no separate
   follow API; `history(id, limit=, offset=)` pages by message.
@@ -71,21 +72,23 @@ brings its own tools, login, and session store.
 
 - No `approve=` hook means every tool call is allowed, not "ask the user".
   Pass a hook to restrict.
-- Claude Code's hook sees every call, reads included
-  (`capabilities.approval == "all"`). Codex's sees what its policy asks
+- Claude Code's and pi's hooks see every call, reads included
+  (`capabilities.approval == "all"`). Pi has no permission prompt: the SDK
+  loads an extension into it that asks the hook. Codex's sees what its policy asks
   about (`"policy"`): shell commands and file changes. Read the event
   stream to see every call on any harness.
 - `ctx.call.name` and `ctx.call.input` are native. Claude uses `Bash`,
   `Write`, `Edit` with `file_path`. Codex uses `commandExecution` (the
   command is a string, often wrapped in `/bin/bash -lc`) and `fileChange`.
-  In a sandbox codex often writes files through the shell. A hook for both
-  harnesses must handle both dialects. Do not parse shell to judge
+  In a sandbox codex often writes files through the shell. Pi uses `bash`,
+  `read`, `edit`, `write` with `path`. A hook for several harnesses must
+  handle each dialect. Do not parse shell to judge
   containment; use `ctx.workspace.contains(await ctx.workspace.resolve(p))`
   so a symlink cannot lead out. For real isolation use a `VercelSandbox`.
 - `harnesses.Deny("reason")` and `Deny(reason="reason")` are the same.
 - On codex (`deny_reason=False`) the reason never reaches the agent.
-  `Allow(input=...)` works only on Claude. `Allow(remember=True)` works on
-  neither. Unsupported options raise `UnsupportedError` from the turn.
+  `Allow(input=...)` works on Claude and pi. `Allow(remember=True)` works
+  nowhere. Unsupported options raise `UnsupportedError` from the turn.
 - A hook that raises or exceeds `approval_timeout` (300s) denies the call and
   is listed in `result.approval_errors`.
 - Never call session methods from inside the hook; the agent is blocked

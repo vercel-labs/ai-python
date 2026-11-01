@@ -7,7 +7,7 @@ import re
 import warnings
 from typing import TYPE_CHECKING, Any, Self, TypeVar
 
-from . import _capabilities, _input, _result, _session
+from . import _capabilities, _input, _result, _session, _session_lock
 from . import errors as errors_
 
 if TYPE_CHECKING:
@@ -251,6 +251,7 @@ class Harness:
         """
         self._require_open()
         self._require("history")
+        self._require_id(session_id)
         return await self.adapter.history(
             session_id, limit=limit, offset=offset
         )
@@ -269,6 +270,7 @@ class Harness:
         """
         self._require_open()
         self._require("resume")
+        self._require_id(session_id)
         await self.adapter.resume_session(session_id)
         session = _session.Session(self, session_id)
         session._seed(await self.adapter.history(session_id))
@@ -307,6 +309,8 @@ class Harness:
         existing one always.
         """
         self._require_open()
+        if session_id is not None:
+            self._require_id(session_id)
         if session_id is not None and history is not None:
             raise ValueError(
                 "tui(): pass session_id to continue a conversation, or history "
@@ -341,6 +345,7 @@ class Harness:
         """
         self._require_open()
         self._require("fork")
+        self._require_id(session_id)
         forked = await self.adapter.fork(session_id)
         session = _session.Session(self, forked)
         session._seed(await self.adapter.history(forked))
@@ -351,6 +356,21 @@ class Harness:
         if not self._open:
             raise errors_.HarnessClosedError(
                 "harness is not open; call open() or use `async with`"
+            )
+
+    def _require_id(self, session_id: str) -> None:
+        """Refuse an id that is not a plain name, on every harness.
+
+        An id arrives from a caller, a `Handle` out of a database, or a
+        session file someone else wrote, and adapters turn it into paths
+        (a lock directory, a transcript file) and CLI arguments. A path or
+        a `-flag` is never a conversation.
+        """
+        if not _session_lock.SESSION_ID.match(session_id):
+            raise errors_.ResumeFailedError(
+                session_id,
+                "not a session id: a name of letters, digits, '.', '_' and "
+                + "'-', never a path",
             )
 
     def _require(self, capability: str) -> None:

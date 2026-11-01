@@ -11,6 +11,7 @@ terminal attaches to. Run with a real terminal; the bridge needs one.
     python examples/harnesses/tui.py                  # claude, in a sandbox
     python examples/harnesses/tui.py codex            # codex, in a sandbox
     python examples/harnesses/tui.py codex <sandbox>  # reattach later
+    python examples/harnesses/tui.py pi               # pi, in a sandbox
     # push a conversation from this directory into it:
     PUSH_FROM=<local session id> python examples/harnesses/tui.py claude
 
@@ -32,7 +33,11 @@ from ai.workspaces import experimental as workspaces
 from ai.workspaces.experimental import tty
 
 NAME = "demo-tui"
-HARNESSES = {"claude": harnesses.claude_code, "codex": harnesses.codex}
+HARNESSES = {
+    "claude": harnesses.claude_code,
+    "codex": harnesses.codex,
+    "pi": harnesses.pi,
+}
 
 
 async def main() -> None:

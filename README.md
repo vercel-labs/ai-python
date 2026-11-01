@@ -161,7 +161,7 @@ ai.resolve_hook("approve_send_email", {"granted": True, "reason": "approved"})
 
 ## Harnesses (experimental)
 
-Harnesses drive coding-agent CLIs you already have, Claude Code and Codex,
+Harnesses drive coding-agent CLIs you already have, Claude Code, Codex and Pi,
 on this machine or in a Vercel Sandbox. A turn streams the same `ai.events`
 as an agent:
 
@@ -185,7 +185,7 @@ Focused samples live in category directories under `examples/`.
 - `examples/media/` - image, video, speech, transcription, embeddings,
   reranking, and multimodal input/output
 - `examples/models/` - streaming, structured output, and provider examples
-- `examples/harnesses/` - driving Claude Code and Codex, locally and in a
+- `examples/harnesses/` - driving Claude Code, Codex and Pi, locally and in a
   sandbox (experimental)
 - `examples/apps/` - end-to-end demos
 

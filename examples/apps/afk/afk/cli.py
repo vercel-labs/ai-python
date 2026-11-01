@@ -121,7 +121,8 @@ async def listing(
     if not here and away is None:
         print()
         print(
-            "  no conversations here yet — start one with `claude` or `codex`"
+            "  no conversations here yet — start one with `claude`, `codex` "
+            + "or `pi`"
         )
         print()
         return
@@ -214,8 +215,8 @@ async def picking(
         for note in notes:
             print(f"  {DIM}{note}{RESET}")
         print(
-            "\n  no conversations here yet — start one with `claude` or "
-            "`codex`\n"
+            "\n  no conversations here yet — start one with `claude`, "
+            "`codex` or `pi`\n"
         )
         return None
     shown = here if everything else here[:LIST_CAP]

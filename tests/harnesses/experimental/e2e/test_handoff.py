@@ -27,7 +27,7 @@ from tests.harnesses.experimental.conftest import SPECS, exact
 
 pytestmark = pytest.mark.live
 
-OTHER = {"claude": "codex", "codex": "claude"}
+OTHER = {"claude": "codex", "codex": "claude", "pi": "claude"}
 
 
 async def _source_history(

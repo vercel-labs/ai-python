@@ -643,3 +643,25 @@ async def test_output_is_unavailable_until_the_turn_settles() -> None:
     turn = harness.session().stream("go")
     with pytest.raises(RuntimeError, match="not settled"):
         _ = turn.output
+
+
+@pytest.mark.parametrize("bad", ["/etc", "../x", "a/b", "-rf", "", ".."])
+async def test_every_harness_refuses_a_session_id_that_is_a_path(
+    bad: str,
+) -> None:
+    """Security review: ids become lock directories, transcript paths and
+    CLI arguments in the adapters. Refused where they enter, on every
+    harness, before an adapter sees one."""
+    from ai.harnesses.experimental.errors import ResumeFailedError
+
+    harness, adapter = await fakes.open_harness()
+    calls = [
+        harness.resume(bad),
+        harness.fork(bad),
+        harness.history(bad),
+        harness.tui(bad),
+    ]
+    for call in calls:
+        with pytest.raises(ResumeFailedError, match="not a session id"):
+            await call
+    assert adapter.turns_started == []

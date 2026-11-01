@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel
 
-from ai.harnesses.experimental import Handle, claude_code, codex
+from ai.harnesses.experimental import Handle, claude_code, codex, pi
 from ai.harnesses.experimental.errors import HarnessError
 from ai.workspaces.experimental import Local, VercelSandbox
 from ai.workspaces.experimental.errors import (
@@ -34,8 +34,8 @@ if TYPE_CHECKING:
 
     from .state import Remote, State
 
-HARNESSES = {"claude-code": claude_code, "codex": codex}
-KIND_SHORT = {"claude-code": "claude", "codex": "codex"}
+HARNESSES = {"claude-code": claude_code, "codex": codex, "pi": pi}
+KIND_SHORT = {"claude-code": "claude", "codex": "codex", "pi": "pi"}
 
 CONTINUE = (
     CONTINUE_MARK
@@ -118,7 +118,7 @@ def age(ts: int | None) -> str:
 async def local_rows(
     cwd: Path, gateway: Gateway | None
 ) -> tuple[list[Row], list[str], list[str]]:
-    """This directory's conversations, both harnesses.
+    """This directory's conversations, every harness.
 
     Returns rows, notes (a harness that is not installed here is a note, not an
     error), and the harnesses that answered.
@@ -135,7 +135,7 @@ async def local_rows(
         except HarnessError as exc:
             return exc
 
-    # Both harnesses at once: neither waits on the other's store.
+    # Every harness at once: none waits on another's store.
     results = await asyncio.gather(*(ask(f) for f in HARNESSES.values()))
     for kind, infos in zip(HARNESSES, results, strict=True):
         if isinstance(infos, HarnessError):

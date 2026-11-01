@@ -168,7 +168,10 @@ async def test_a_hooked_harness_survives_and_blocks(harness_kind: str) -> None:
 
     creds, gw = _creds_or_skip(), vercel_ai_gateway()
     reached = asyncio.Event()
-    binary = {"claude": "claude", "codex": "codex"}[harness_kind]
+    # pi renames its process to `pi`: match the name, not a substring.
+    binary = {"claude": ["-f", "claude"], "codex": ["-f", "codex"]}.get(
+        harness_kind, ["-x", harness_kind]
+    )
 
     async def approve(ctx: ApprovalContext) -> None:
         reached.set()
@@ -196,7 +199,7 @@ async def test_a_hooked_harness_survives_and_blocks(harness_kind: str) -> None:
         try:
             await asyncio.wait_for(reached.wait(), 90)  # the gate was hit
             async with VercelSandbox(name=name) as back:
-                alive = await back.exec(["pgrep", "-f", binary])
+                alive = await back.exec(["pgrep", *binary])
                 assert (
                     alive.exit_code == 0
                 ), "the hooked harness must still be running"
@@ -220,10 +223,13 @@ async def test_close_ends_the_harness_and_detach_keeps_it(
     and leaves no FIFO or pid file behind. detach() leaves it running.
     """
     creds, gw = _creds_or_skip(), vercel_ai_gateway()
-    binary = {"claude": "claude", "codex": "codex"}[harness_kind]
+    # pi renames its process to `pi`: match the name, not a substring.
+    binary = {"claude": ["-f", "claude"], "codex": ["-f", "codex"]}.get(
+        harness_kind, ["-x", harness_kind]
+    )
 
     async def alive(ws: Workspace) -> bool:
-        return (await ws.exec(["pgrep", "-f", binary])).exit_code == 0
+        return (await ws.exec(["pgrep", *binary])).exit_code == 0
 
     async with VercelSandbox(
         **creds, keep=True, execution_time_limit=900
