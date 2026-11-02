@@ -2,7 +2,7 @@
 title: "ai.ops"
 description: Reference for dedicated model operations.
 type: reference
-summary: Reference for image, video, speech, embedding, transcription, reranking, and evaluation APIs.
+summary: Reference for image, video, speech, embedding, transcription, reranking, and decision APIs.
 ---
 
 `ai.ops` contains model operations that return standalone values instead of
@@ -239,13 +239,13 @@ provider.
 - `index`: Position of the document in the original input list.
 - `score`: Relevance score for the query.
 
-## experimental.evaluate
+## experimental.decide
 
-Evaluation questions, answers, `EvaluationInput`, and `EvaluationParams` live
+Decision questions, answers, `DecisionInput`, and `DecideParams` live
 under `ai.ops.experimental`.
 
 ```python
-await ai.ops.experimental.evaluate(
+await ai.ops.experimental.decide(
     model,
     state,
     questions,
@@ -257,25 +257,25 @@ await ai.ops.experimental.evaluate(
 
 Arguments:
 
-- `model`: Evaluation model.
+- `model`: Decision model.
 - `state`: Shared JSON-compatible string, object, or array.
 - `questions`: A nonempty Pydantic model or mapping whose fields contain
-  `ChoiceQuestion`, `ScoreQuestion`, or `NoulQuestion` values.
+  `ChoiceQuestion`, `ScoreQuestion`, or `PredicateQuestion` values.
 - `output_type`: Required with a Pydantic question model. It must be a Pydantic
   model class with the same fields and corresponding answer types. Omit it with
   mapped questions.
-- `params`: Optional `EvaluationParams`.
+- `params`: Optional `DecideParams`.
 
 Pydantic questions return `Item[Answers]`, whose value is an instance of
 `output_type`. Mapped questions return
-`Item[dict[str, ChoiceAnswer | ScoreAnswer | NoulAnswer]]`:
+`Item[dict[str, ChoiceAnswer | ScoreAnswer | PredicateAnswer]]`:
 
 ```python
-result = await ai.ops.experimental.evaluate(
+result = await ai.ops.experimental.decide(
     model,
     state,
     {
-        question_id: ai.ops.experimental.NoulQuestion(instructions=instructions)
+        question_id: ai.ops.experimental.PredicateQuestion(instructions=instructions)
         for question_id, instructions in dynamic_questions.items()
     },
 )
@@ -295,17 +295,21 @@ Question and answer types:
   index `0`. `ScoreAnswer` contains a fractional `score` and an optional complete
   `probabilities` distribution keyed by string indices. With a distribution,
   `score` is its probability-weighted mean.
-- `NoulQuestion`: Estimates whether its instructions are true. Its optional
-  `criteria` mapping can describe `"true"` and `"false"`. `NoulAnswer.noul`
+- `PredicateQuestion`: Estimates whether its instructions are true. Its optional
+  `criteria` mapping can describe `"true"` and `"false"`. `PredicateAnswer.probability`
   is the estimated probability of true, not confidence in either outcome.
 
 `ChoiceAnswer.confidence` and `ScoreAnswer.confidence` expose a value from 0 to 1
 when the provider supplies it, or `None` otherwise. For TypeSafe through AI Gateway,
 these values come from `provider_metadata["typesafe"]["confidence"]`, which is also
-preserved on the result. Noul answers have no separate confidence field.
+preserved on the result. Predicate answers have no separate confidence field.
 
 Instructions accept strings, JSON objects, or JSON arrays. Criteria descriptions
 accept the same values or `None`. Nested keys are model input and have no
 SDK-defined meaning.
 
-`EvaluationParams` contains `provider_options`, keyed by provider name.
+`DecideParams` contains `provider_options`, keyed by provider name.
+
+The old `evaluate`, `EvaluationInput`, `EvaluationParams`, and `Noul*` names,
+`type="noul"`, and `PredicateAnswer.noul` still work but emit a
+`DeprecationWarning`.

@@ -1,4 +1,4 @@
-"""Typed evaluation of shared state via dedicated evaluation models.
+"""Typed decisions about shared state via dedicated decision models.
 
 ::
 
@@ -6,16 +6,16 @@
     import pydantic
 
     class Questions(pydantic.BaseModel):
-        requests_refund: ai.ops.experimental.NoulQuestion
+        requests_refund: ai.ops.experimental.PredicateQuestion
 
     class Answers(pydantic.BaseModel):
-        requests_refund: ai.ops.experimental.NoulAnswer
+        requests_refund: ai.ops.experimental.PredicateAnswer
 
-    result = await ai.ops.experimental.evaluate(
+    result = await ai.ops.experimental.decide(
         ai.get_model("typesafe-ai/jev"),
         {"message": "Please refund the duplicate charge."},
         Questions(
-            requests_refund=ai.ops.experimental.NoulQuestion(
+            requests_refund=ai.ops.experimental.PredicateQuestion(
                 instructions="Is the customer requesting a refund?",
             ),
         ),
@@ -27,6 +27,7 @@
 from __future__ import annotations
 
 import dataclasses
+import warnings
 from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Annotated, Any, Literal, TypedDict, overload
 
@@ -39,16 +40,16 @@ if TYPE_CHECKING:
     from ...models.core import model as model_
 
 
-type EvaluationInput = (
+type DecisionInput = (
     str | dict[str, pydantic.JsonValue] | list[pydantic.JsonValue]
 )
 
 
-class NoulCriteria(TypedDict, total=False):
-    """Optional descriptions of when a Noul answer is true or false."""
+class PredicateCriteria(TypedDict, total=False):
+    """Optional descriptions of when a predicate answer is true or false."""
 
-    true: EvaluationInput | None
-    false: EvaluationInput | None
+    true: DecisionInput | None
+    false: DecisionInput | None
 
 
 _QUESTION_CONFIG = pydantic.ConfigDict(
@@ -62,9 +63,9 @@ _QUESTION_CONFIG = pydantic.ConfigDict(
 class ChoiceQuestion(pydantic.BaseModel):
     """Choose one key from a nonempty map of options."""
 
-    instructions: EvaluationInput
+    instructions: DecisionInput
     criteria: Annotated[
-        dict[str, EvaluationInput | None],
+        dict[str, DecisionInput | None],
         pydantic.Field(min_length=1),
     ]
     type: Literal["choice"] = "choice"
@@ -75,9 +76,9 @@ class ChoiceQuestion(pydantic.BaseModel):
 class ScoreQuestion(pydantic.BaseModel):
     """Score state against at least two ordered rubric levels."""
 
-    instructions: EvaluationInput
+    instructions: DecisionInput
     criteria: Annotated[
-        list[EvaluationInput | None],
+        list[DecisionInput | None],
         pydantic.Field(min_length=2),
     ]
     type: Literal["score"] = "score"
@@ -85,14 +86,27 @@ class ScoreQuestion(pydantic.BaseModel):
     model_config = _QUESTION_CONFIG
 
 
-class NoulQuestion(pydantic.BaseModel):
+class PredicateQuestion(pydantic.BaseModel):
     """Estimate the probability that a statement about state is true."""
 
-    instructions: EvaluationInput
-    criteria: NoulCriteria | None = None
-    type: Literal["noul"] = "noul"
+    instructions: DecisionInput
+    criteria: PredicateCriteria | None = None
+    type: Literal["predicate"] = "predicate"
 
     model_config = _QUESTION_CONFIG
+
+    @pydantic.model_validator(mode="before")
+    @classmethod
+    def _accept_noul(cls, data: Any) -> Any:
+        # Deprecated: accept the old "noul" type name.
+        if isinstance(data, dict) and data.get("type") == "noul":
+            warnings.warn(
+                'type="noul" is deprecated, use type="predicate"',
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            data = {**data, "type": "predicate"}
+        return data
 
 
 Probability = Annotated[
@@ -127,18 +141,48 @@ class ScoreAnswer(pydantic.BaseModel):
     model_config = pydantic.ConfigDict(frozen=True)
 
 
-class NoulAnswer(pydantic.BaseModel):
+class PredicateAnswer(pydantic.BaseModel):
     """Model-estimated probability that the answer is true."""
 
-    type: Literal["noul"] = "noul"
-    noul: Probability
+    type: Literal["predicate"] = "predicate"
+    probability: Probability
 
     model_config = pydantic.ConfigDict(frozen=True)
 
+    @pydantic.model_validator(mode="before")
+    @classmethod
+    def _accept_noul(cls, data: Any) -> Any:
+        # Deprecated: accept the old "noul" type name and answer field.
+        if isinstance(data, dict) and (
+            data.get("type") == "noul" or "noul" in data
+        ):
+            warnings.warn(
+                'type="noul" and the noul field are deprecated, '
+                'use type="predicate" and probability',
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            data = {**data}
+            if data.get("type") == "noul":
+                data["type"] = "predicate"
+            if "noul" in data:
+                data["probability"] = data.pop("noul")
+        return data
+
+    @property
+    def noul(self) -> float:
+        """Deprecated alias for :attr:`probability`."""
+        warnings.warn(
+            "PredicateAnswer.noul is deprecated, use probability",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.probability
+
 
 @dataclasses.dataclass(frozen=True, kw_only=True)
-class EvaluationParams:
-    """Parameters for evaluation."""
+class DecideParams:
+    """Parameters for decisions."""
 
     provider_options: Mapping[str, Any] = dataclasses.field(
         default_factory=dict
@@ -146,56 +190,56 @@ class EvaluationParams:
     """Provider-specific options, keyed by provider name."""
 
 
-type _Question = ChoiceQuestion | ScoreQuestion | NoulQuestion
-type _Answer = ChoiceAnswer | ScoreAnswer | NoulAnswer
+type _Question = ChoiceQuestion | ScoreQuestion | PredicateQuestion
+type _Answer = ChoiceAnswer | ScoreAnswer | PredicateAnswer
 
-_QUESTION_TYPES = (ChoiceQuestion, ScoreQuestion, NoulQuestion)
+_QUESTION_TYPES = (ChoiceQuestion, ScoreQuestion, PredicateQuestion)
 _ANSWER_TYPES: dict[type[_Question], type[pydantic.BaseModel]] = {
     ChoiceQuestion: ChoiceAnswer,
     ScoreQuestion: ScoreAnswer,
-    NoulQuestion: NoulAnswer,
+    PredicateQuestion: PredicateAnswer,
 }
-_INPUT_ADAPTER: pydantic.TypeAdapter[EvaluationInput] = pydantic.TypeAdapter(
-    EvaluationInput,
+_INPUT_ADAPTER: pydantic.TypeAdapter[DecisionInput] = pydantic.TypeAdapter(
+    DecisionInput,
     config=pydantic.ConfigDict(allow_inf_nan=False, strict=True),
 )
 
 
 @overload
-async def evaluate[AnswerT: pydantic.BaseModel](
+async def decide[AnswerT: pydantic.BaseModel](
     model: model_.Model,
-    state: EvaluationInput,
+    state: DecisionInput,
     questions: pydantic.BaseModel,
     *,
     output_type: type[AnswerT],
-    params: EvaluationParams | None = None,
+    params: DecideParams | None = None,
 ) -> items.Item[AnswerT]: ...
 
 
 @overload
-async def evaluate(
+async def decide(
     model: model_.Model,
-    state: EvaluationInput,
+    state: DecisionInput,
     questions: Mapping[str, pydantic.BaseModel],
     *,
     output_type: None = None,
-    params: EvaluationParams | None = None,
+    params: DecideParams | None = None,
 ) -> items.Item[dict[str, _Answer]]: ...
 
 
-async def evaluate(
+async def decide(
     model: model_.Model,
-    state: EvaluationInput,
+    state: DecisionInput,
     questions: pydantic.BaseModel | Mapping[str, pydantic.BaseModel],
     *,
     output_type: type[pydantic.BaseModel] | None = None,
-    params: EvaluationParams | None = None,
+    params: DecideParams | None = None,
 ) -> items.Item[Any]:
-    """Evaluate questions against one shared state.
+    """Decide questions about one shared state.
 
     Pass matching Pydantic question and output models for a statically typed
     value, or pass a question mapping to receive an answer mapping. Each choice,
-    score, or Noul question is validated against its corresponding answer.
+    score, or predicate question is validated against its corresponding answer.
 
     Experimental: not part of the stable API, may change or be removed.
     """
@@ -253,8 +297,8 @@ async def evaluate(
         normalized[name] = question
 
     # Start telemetry after local validation, immediately around provider work.
-    params = params or EvaluationParams()
-    data = telemetry.EvaluateSpanData(
+    params = params or DecideParams()
+    data = telemetry.DecideSpanData(
         model=model.id,
         provider=model.provider.name,
         question_count=len(normalized),
@@ -262,7 +306,7 @@ async def evaluate(
     async with telemetry.span(data) as sp:
         # Providers operate on one normalized question mapping and return raw
         # answer data.
-        raw_item = await model.provider.evaluate(
+        raw_item = await model.provider.decide(
             model,
             state,
             normalized,
@@ -289,7 +333,7 @@ async def evaluate(
                 elif isinstance(question, ScoreQuestion):
                     answers[name] = ScoreAnswer.model_validate(raw_answer)
                 else:
-                    answers[name] = NoulAnswer.model_validate(raw_answer)
+                    answers[name] = PredicateAnswer.model_validate(raw_answer)
             value = answers
 
         # Rewrap the validated value without dropping operation metadata.

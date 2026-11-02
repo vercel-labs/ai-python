@@ -1,11 +1,11 @@
-"""Evaluate plain text and structured data with Jev through AI Gateway.
+"""Ask decision questions about text and data with Jev through AI Gateway.
 
 Set ``AI_GATEWAY_API_KEY`` and run:
 
-    uv run python examples/models/gateway/evaluation.py
+    uv run python examples/models/gateway/decisions.py
 
 The two calls below are independent examples. The first asks one question about
-plain text. The second asks choice, score, and Noul questions about shared
+plain text. The second asks choice, score, and predicate questions about shared
 structured state in one request.
 """
 
@@ -17,23 +17,23 @@ import ai
 
 
 class RefundQuestions(pydantic.BaseModel):
-    requests_refund: ai.ops.experimental.NoulQuestion
+    requests_refund: ai.ops.experimental.PredicateQuestion
 
 
 class RefundAnswers(pydantic.BaseModel):
-    requests_refund: ai.ops.experimental.NoulAnswer
+    requests_refund: ai.ops.experimental.PredicateAnswer
 
 
 class TicketQuestions(pydantic.BaseModel):
     queue: ai.ops.experimental.ChoiceQuestion
     urgency: ai.ops.experimental.ScoreQuestion
-    refund_warranted: ai.ops.experimental.NoulQuestion
+    refund_warranted: ai.ops.experimental.PredicateQuestion
 
 
 class TicketAnswers(pydantic.BaseModel):
     queue: ai.ops.experimental.ChoiceAnswer
     urgency: ai.ops.experimental.ScoreAnswer
-    refund_warranted: ai.ops.experimental.NoulAnswer
+    refund_warranted: ai.ops.experimental.PredicateAnswer
 
 
 async def main() -> None:
@@ -42,13 +42,13 @@ async def main() -> None:
         print("Set AI_GATEWAY_API_KEY to run this example.")
         return
 
-    # Ask a single Noul question about plain text. Noul answers are
+    # Ask a single predicate question about plain text. Predicate answers are
     # probabilities rather than only true or false.
-    refund_result = await ai.ops.experimental.evaluate(
+    refund_result = await ai.ops.experimental.decide(
         model,
         "Please refund the duplicate charge on my account.",
         RefundQuestions(
-            requests_refund=ai.ops.experimental.NoulQuestion(
+            requests_refund=ai.ops.experimental.PredicateQuestion(
                 instructions="Is the customer asking for a refund?",
             )
         ),
@@ -57,12 +57,12 @@ async def main() -> None:
 
     print(
         "refund requested:",
-        f"{refund_result.value.requests_refund.noul:.0%}",
+        f"{refund_result.value.requests_refund.probability:.0%}",
     )
 
     # Ask several question types about the same structured state. This is useful
     # when related decisions should use exactly the same source information.
-    ticket: ai.ops.experimental.EvaluationInput = {
+    ticket: ai.ops.experimental.DecisionInput = {
         "message": (
             "I was charged $240 twice for the same renewal. The service works, "
             "but please refund the duplicate charge."
@@ -88,7 +88,7 @@ async def main() -> None:
         "service_status": "operational",
     }
 
-    result = await ai.ops.experimental.evaluate(
+    result = await ai.ops.experimental.decide(
         model,
         ticket,
         TicketQuestions(
@@ -110,7 +110,7 @@ async def main() -> None:
                     "Critical: security incident, outage, or ongoing loss",
                 ],
             ),
-            refund_warranted=ai.ops.experimental.NoulQuestion(
+            refund_warranted=ai.ops.experimental.PredicateQuestion(
                 instructions="Does the evidence warrant a refund?",
                 criteria={
                     "true": "A duplicate settlement or billing error is shown",
@@ -120,7 +120,7 @@ async def main() -> None:
         ),
         output_type=TicketAnswers,
         # Provider options are optional and apply only to this request.
-        params=ai.ops.experimental.EvaluationParams(
+        params=ai.ops.experimental.DecideParams(
             provider_options={
                 "gateway": {
                     "zeroDataRetention": True,
@@ -141,7 +141,7 @@ async def main() -> None:
 
     print(
         "\nrefund warranted:",
-        f"{answers.refund_warranted.noul:.0%}",
+        f"{answers.refund_warranted.probability:.0%}",
     )
 
     # Every operation also exposes framework and provider metadata.

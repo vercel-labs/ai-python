@@ -775,7 +775,7 @@ async def generate(
             status(f"Filling {'.'.join(map(str, path))} ({kind})")
             started = time.perf_counter()
             try:
-                result = await ai.ops.experimental.evaluate(
+                result = await ai.ops.experimental.decide(
                     model, state.model_dump(), questions, output_type=Answers
                 )
                 break

@@ -70,8 +70,8 @@ def _semconv_name(sp: telemetry.Span) -> str:
             (telemetry.AiStreamSpanData() | telemetry.AiGenerateSpanData()) as d
         ):
             return f"chat {d.model}"
-        case telemetry.EvaluateSpanData() as d:
-            return f"evaluate {d.model}"
+        case telemetry.DecideSpanData() as d:
+            return f"decide {d.model}"
         case telemetry.EmbedSpanData() as d:
             return f"embeddings {d.model}"
         case (
@@ -101,7 +101,7 @@ def _semconv_kind(sp: telemetry.Span) -> opentelemetry.trace.SpanKind:
         case (
             telemetry.AiStreamSpanData()
             | telemetry.AiGenerateSpanData()
-            | telemetry.EvaluateSpanData()
+            | telemetry.DecideSpanData()
             | telemetry.EmbedSpanData()
             | telemetry.GenerateAudioSpanData()
             | telemetry.GenerateImageSpanData()
@@ -348,8 +348,8 @@ def _attributes(sp: telemetry.Span, *, capture_content: bool) -> dict[str, Any]:
                     error=sp.error is not None,
                     finish_reason=d.finish_reason,
                 )
-        case telemetry.EvaluateSpanData() as d:
-            attrs["gen_ai.operation.name"] = "evaluate"
+        case telemetry.DecideSpanData() as d:
+            attrs["gen_ai.operation.name"] = "decide"
             if d.provider is not None:
                 attrs["gen_ai.provider.name"] = d.provider
             attrs["gen_ai.request.model"] = d.model
