@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 from typing import Any
 
+import httpx2 as httpx
 import openai
 import pytest
 
@@ -10,10 +11,6 @@ import ai
 from ai.providers.openai import (
     OpenAICompatibleProvider,
     OpenAIResponsesProtocol,
-)
-
-httpx = importlib.import_module(
-    "httpx2" if int(openai.__version__.partition(".")[0]) >= 3 else "httpx"
 )
 
 

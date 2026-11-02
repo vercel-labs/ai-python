@@ -1,17 +1,12 @@
 from __future__ import annotations
 
-import importlib
 import json
 from typing import Any
 
-import openai
+import httpx2 as httpx
 import pytest
 
 import ai
-
-httpx = importlib.import_module(
-    "httpx2" if int(openai.__version__.partition(".")[0]) >= 3 else "httpx"
-)
 
 
 def _client_with_mock(

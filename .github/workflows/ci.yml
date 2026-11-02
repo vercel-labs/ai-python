@@ -42,10 +42,10 @@ jobs:
       matrix:
         include:
           - sdk-versions: minimum
-            openai: openai==2.34.0
+            openai: openai==3.42.0
             anthropic: anthropic==0.83.0
           - sdk-versions: latest
-            openai: openai>=2.34.0,<4.0.0
+            openai: openai>=3.42.0,<4.0.0
             anthropic: anthropic>=0.83.0,<2.0.0
     name: Provider SDKs (${{ matrix.sdk-versions }})
     steps:

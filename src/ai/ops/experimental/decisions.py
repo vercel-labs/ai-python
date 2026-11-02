@@ -268,6 +268,18 @@ class PredicateAnswer(pydantic.BaseModel):
         return self.probability
 
 
+class RefusalAnswer(pydantic.BaseModel):
+    """The model declined to answer this question.
+
+    Annotate an output field as ``XAnswer | RefusalAnswer`` to accept a
+    refusal for that question.
+    """
+
+    type: Literal["refusal"] = "refusal"
+
+    model_config = pydantic.ConfigDict(frozen=True)
+
+
 @dataclasses.dataclass(frozen=True, kw_only=True)
 class DecideParams:
     """Parameters for decisions."""
@@ -279,7 +291,7 @@ class DecideParams:
 
 
 type _Question = ChoiceQuestion | ScoreQuestion | PredicateQuestion
-type _Answer = ChoiceAnswer | ScoreAnswer | PredicateAnswer
+type _Answer = ChoiceAnswer | ScoreAnswer | PredicateAnswer | RefusalAnswer
 
 _QUESTION_TYPES = (ChoiceQuestion, ScoreQuestion, PredicateQuestion)
 _ANSWER_TYPES: dict[type[_Question], type[pydantic.BaseModel]] = {
@@ -334,6 +346,11 @@ async def decide(
     ``{"photo": ai.file_part(data), "note": "..."}``. Providers reject files
     they cannot send.
 
+    Some providers can refuse a question. A refusal is a
+    :class:`RefusalAnswer`. In typed mode, annotate the output field as
+    ``XAnswer | RefusalAnswer`` to accept it; otherwise a refusal raises
+    ``ValueError``.
+
     Experimental: not part of the stable API, may change or be removed.
     """
     # Validate the shared state before dispatching it to a provider.
@@ -372,21 +389,29 @@ async def decide(
 
     # Normalize either public input form to the mapping expected by providers.
     normalized: dict[str, _Question] = {}
+    # Questions that accept a refusal. In dynamic mode, all of them do.
+    refusable: set[str] = set()
     for name, question in values:
         if not isinstance(name, str):
             raise TypeError("question IDs must be strings")
         if not isinstance(question, _QUESTION_TYPES):
             raise TypeError(f"question field {name!r} must contain a question")
 
-        # In typed mode, verify each question has its corresponding answer type.
+        # In typed mode, verify each question has its corresponding answer
+        # type, optionally in a union with RefusalAnswer.
         if answer_fields is not None:
             expected = _ANSWER_TYPES[type(question)]
             actual = answer_fields[name].annotation
-            if actual is not expected:
+            if actual == expected | RefusalAnswer:
+                refusable.add(name)
+            elif actual is not expected:
                 raise TypeError(
                     f"output field {name!r} must be annotated as "
-                    f"{expected.__name__}"
+                    f"{expected.__name__} or "
+                    f"{expected.__name__} | RefusalAnswer"
                 )
+        else:
+            refusable.add(name)
         normalized[name] = question
 
     # Start telemetry after local validation, immediately around provider work.
@@ -410,6 +435,20 @@ async def decide(
         if raw_item.value.keys() != normalized.keys():
             raise ValueError("answer fields must match question fields")
 
+        # A refusal needs an output field that accepts it.
+        refused = {
+            name
+            for name, raw_answer in raw_item.value.items()
+            if isinstance(raw_answer, Mapping)
+            and raw_answer.get("type") == "refusal"
+        }
+        unaccepted = sorted(refused - refusable)
+        if unaccepted:
+            raise ValueError(
+                f"the model refused question {unaccepted[0]!r}; annotate its "
+                "output field with '| RefusalAnswer' to accept refusals"
+            )
+
         if output_type is not None:
             # Typed mode validates the complete response into the user's model.
             value: pydantic.BaseModel | dict[str, _Answer] = (
@@ -421,7 +460,9 @@ async def decide(
             answers: dict[str, _Answer] = {}
             for name, question in normalized.items():
                 raw_answer = raw_item.value[name]
-                if isinstance(question, ChoiceQuestion):
+                if name in refused:
+                    answers[name] = RefusalAnswer.model_validate(raw_answer)
+                elif isinstance(question, ChoiceQuestion):
                     answers[name] = ChoiceAnswer.model_validate(raw_answer)
                 elif isinstance(question, ScoreQuestion):
                     answers[name] = ScoreAnswer.model_validate(raw_answer)

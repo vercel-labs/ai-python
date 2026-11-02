@@ -36,7 +36,7 @@ dependencies = [
 [project.optional-dependencies]
 anthropic = ["anthropic>=0.83.0,<2.0.0"]
 mcp = ["mcp>=2.0.0,<3.0.0"]
-openai = ["openai>=2.34.0,<4.0.0"]
+openai = ["openai>=3.42.0,<4.0.0"]
 otel = [
     "opentelemetry-exporter-otlp-proto-http>=1.30",
     "opentelemetry-sdk>=1.30",
@@ -75,7 +75,7 @@ dev = [
     "pytest-asyncio>=0.24",
     "rich>=14.2.0",
     "mypy~=2.1.0",
-    "openai>=2.14.0",
+    "openai>=3.42.0",
     "ruff~=0.8.0",
     "async-solipsism>=0.9",
     "ty~=0.0.37",
