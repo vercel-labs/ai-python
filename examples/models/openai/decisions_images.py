@@ -27,7 +27,11 @@ class DeliveryQuestions(pydantic.BaseModel):
 
 
 class DeliveryAnswers(pydantic.BaseModel):
-    damaged: ai.ops.experimental.PredicateAnswer
+    # OpenAI can refuse a question. This field accepts a refusal; a refusal
+    # for the other fields raises ValueError.
+    damaged: (
+        ai.ops.experimental.PredicateAnswer | ai.ops.experimental.RefusalAnswer
+    )
     condition: ai.ops.experimental.ScoreAnswer
     matches_reference: ai.ops.experimental.PredicateAnswer
 
@@ -77,7 +81,10 @@ async def main() -> None:
     )
 
     answers = result.value
-    print("damaged:", f"{answers.damaged.probability:.0%}")
+    if isinstance(answers.damaged, ai.ops.experimental.RefusalAnswer):
+        print("damaged: refused")
+    else:
+        print("damaged:", f"{answers.damaged.probability:.0%}")
     print("condition:", answers.condition.score)
     print("matches reference:", f"{answers.matches_reference.probability:.0%}")
     print("usage:", result.usage)

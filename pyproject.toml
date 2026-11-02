@@ -36,7 +36,7 @@ dependencies = [
 [project.optional-dependencies]
 anthropic = ["anthropic>=0.83.0,<2.0.0"]
 mcp = ["mcp>=2.0.0,<3.0.0"]
-openai = ["openai>=2.34.0,<4.0.0"]
+openai = ["openai>=3.42.0,<4.0.0"]
 otel = [
     "opentelemetry-exporter-otlp-proto-http>=1.30",
     "opentelemetry-sdk>=1.30",

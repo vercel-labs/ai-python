@@ -15,6 +15,8 @@ from ... import errors as ai_errors
 from ... import types
 from ...models import core
 from ...models.core import params as params_
+from ...ops import items
+from ...ops.experimental import decisions
 from .. import base, history_utils
 from . import _sdk, errors
 from . import params as openai_params
@@ -1898,6 +1900,182 @@ async def _stream_responses(
         ) from exc
 
 
+# ---------------------------------------------------------------------------
+# Decisions — ``/v1/decisions``
+# ---------------------------------------------------------------------------
+
+
+_DECISIONS_PROTECTED_PARAMS = frozenset({"model", "input", "questions"})
+
+
+async def _decide(
+    sdk_client: openai.AsyncOpenAI,
+    model: core.model.Model,
+    state: decisions.DecisionInput,
+    questions: Mapping[
+        str,
+        decisions.ChoiceQuestion
+        | decisions.ScoreQuestion
+        | decisions.PredicateQuestion,
+    ],
+    *,
+    params: decisions.DecideParams,
+    provider: str,
+) -> items.Item[dict[str, Any]]:
+    openai_sdk = _sdk.import_sdk(provider=provider)
+
+    # Provider options are extra top-level request body fields, e.g.
+    # prompt_cache_key or safety_identifier.
+    options = params.provider_options.get(provider)
+    if options is not None and not isinstance(options, Mapping):
+        raise TypeError(f"provider_options[{provider!r}] must be a mapping")
+    protected = sorted(_DECISIONS_PROTECTED_PARAMS & (options or {}).keys())
+    if protected:
+        raise ValueError(
+            "openai decisions provider options cannot override "
+            "protocol-owned fields: " + ", ".join(protected)
+        )
+
+    def has_file(value: Any) -> bool:
+        if isinstance(value, types.messages.FilePart):
+            return True
+        if isinstance(value, dict):
+            return any(has_file(item) for item in value.values())
+        if isinstance(value, list):
+            return any(has_file(item) for item in value)
+        return False
+
+    # OpenAI takes content parts: text, images, and JSON objects. A list is
+    # an ordered list of parts; any other value is one part. Images use the
+    # Responses API image part. OpenAI does not take files inside JSON.
+    async def to_parts(value: Any) -> list[dict[str, Any]]:
+        parts: list[dict[str, Any]] = []
+        for item in value if isinstance(value, list) else [value]:
+            match item:
+                case str():
+                    parts.append({"type": "input_text", "text": item})
+                case types.messages.FilePart(media_type=media_type):
+                    if not media_type.startswith("image/"):
+                        raise ValueError(
+                            "Unsupported media type for OpenAI decisions: "
+                            f"{media_type}"
+                        )
+                    parts.append(await _file_part_to_responses(item))
+                case dict() if has_file(item):
+                    raise ValueError(
+                        "OpenAI decisions do not support files inside JSON"
+                    )
+                case dict():
+                    parts.append({"type": "input_json", "data": item})
+                case _:
+                    raise ValueError(
+                        "OpenAI decisions accept only text, files, and JSON "
+                        f"objects in a list, got {type(item).__name__}"
+                    )
+        return parts
+
+    # OpenAI choice and level descriptions are text only.
+    def description(name: str, criterion: Any) -> dict[str, str]:
+        if criterion is None:
+            return {}
+        if not isinstance(criterion, str):
+            raise ValueError(
+                "OpenAI decisions accept only text criteria, "
+                f"see question {name!r}"
+            )
+        return {"description": criterion}
+
+    # Questions go as a list; the question ID is the name. OpenAI answers
+    # by name, so each answer goes back to its question.
+    wire_questions: list[dict[str, Any]] = []
+    for name, question in questions.items():
+        wire_question: dict[str, Any] = {
+            "type": question.type,
+            "name": name,
+            "instructions": question.instructions
+            if isinstance(question.instructions, str)
+            else await to_parts(question.instructions),
+        }
+        if isinstance(question, decisions.ChoiceQuestion):
+            wire_question["choices"] = [
+                {"value": value, **description(name, criterion)}
+                for value, criterion in question.criteria.items()
+            ]
+        elif isinstance(question, decisions.ScoreQuestion):
+            # OpenAI levels need a label. The label is the level index,
+            # which is also the key of the answer's probabilities.
+            wire_question["levels"] = [
+                {"label": str(index), **description(name, criterion)}
+                for index, criterion in enumerate(question.criteria)
+            ]
+        elif question.criteria and any(
+            criterion is not None for criterion in question.criteria.values()
+        ):
+            raise ValueError(
+                "OpenAI decisions do not support predicate criteria, "
+                f"see question {name!r}"
+            )
+        wire_questions.append(wire_question)
+
+    # Shared state is a text string or one user message.
+    api_kwargs: dict[str, Any] = {
+        "model": model.id,
+        "input": state
+        if isinstance(state, str)
+        else [{"role": "user", "content": await to_parts(state)}],
+        "questions": wire_questions,
+    }
+    # The SDK takes only known fields as arguments, so provider options go
+    # in the body.
+    if options:
+        api_kwargs["extra_body"] = dict(options)
+
+    try:
+        response = await sdk_client.decisions.create(**api_kwargs)
+    except openai_sdk.OpenAIError as exc:
+        raise errors.map_error(
+            exc, provider=provider, model_id=model.id
+        ) from exc
+
+    # Answers come as a list with names. Probability lists become maps
+    # keyed by choice value or level index, like the shared answer models.
+    decision_types = _sdk.import_decision_types(provider=provider)
+    answers: dict[str, Any] = {}
+    for answer in response.answers:
+        if (
+            answer.name is None
+            or answer.name not in questions
+            or answer.name in answers
+        ):
+            raise ValueError(
+                "decision response has an unexpected answer name: "
+                f"{answer.name!r}"
+            )
+        data = answer.model_dump(mode="json", exclude={"name"})
+        if isinstance(
+            answer, decision_types.AnswerAnswerResourceChoice
+        ) or isinstance(answer, decision_types.AnswerAnswerResourceScore):
+            data["probabilities"] = {
+                str(item.value): item.probability
+                for item in answer.probabilities
+            }
+        answers[answer.name] = data
+
+    usage = response.usage
+    return items.Item(
+        value=answers,
+        usage=types.usage.Usage(
+            input_tokens=usage.input_tokens,
+            output_tokens=usage.output_tokens,
+            reasoning_tokens=usage.output_tokens_details.reasoning_tokens,
+            cache_read_tokens=usage.input_tokens_details.cached_tokens,
+            cache_write_tokens=usage.input_tokens_details.cache_write_tokens,
+            raw=usage.model_dump(mode="json"),
+        ),
+        provider_metadata={provider: {"model": response.model}},
+    )
+
+
 class OpenAIResponsesProtocol(base.ProviderProtocol[Any]):
     """OpenAI Responses API protocol."""
 
@@ -1920,6 +2098,31 @@ class OpenAIResponsesProtocol(base.ProviderProtocol[Any]):
             messages,
             tools=tools,
             output_type=output_type,
+            params=params,
+            provider=provider,
+        )
+
+    async def decide(
+        self,
+        client: openai.AsyncOpenAI,
+        model: core.model.Model,
+        state: decisions.DecisionInput,
+        questions: Mapping[
+            str,
+            decisions.ChoiceQuestion
+            | decisions.ScoreQuestion
+            | decisions.PredicateQuestion,
+        ],
+        *,
+        params: decisions.DecideParams,
+        provider: str,
+    ) -> items.Item[dict[str, Any]]:
+        """Hit ``/v1/decisions`` and return raw decision answers."""
+        return await _decide(
+            client,
+            model,
+            state,
+            questions,
             params=params,
             provider=provider,
         )

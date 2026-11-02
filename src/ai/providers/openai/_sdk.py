@@ -10,6 +10,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     import openai
+    from openai.types import decision
 
 
 class OpenAISDK(Protocol):
@@ -26,6 +27,11 @@ class OpenAIPydantic(Protocol):
     to_strict_json_schema: Callable[[Any], dict[str, Any]]
 
 
+class OpenAIDecisionTypes(Protocol):
+    AnswerAnswerResourceChoice: type[decision.AnswerAnswerResourceChoice]
+    AnswerAnswerResourceScore: type[decision.AnswerAnswerResourceScore]
+
+
 def import_sdk(*, provider: str = "openai") -> OpenAISDK:
     return cast(
         "OpenAISDK",
@@ -40,6 +46,17 @@ def import_pydantic(*, provider: str = "openai") -> OpenAIPydantic:
         "OpenAIPydantic",
         _optional.import_optional_sdk(
             "openai.lib._pydantic",
+            provider=provider,
+            extra="openai",
+        ),
+    )
+
+
+def import_decision_types(*, provider: str = "openai") -> OpenAIDecisionTypes:
+    return cast(
+        "OpenAIDecisionTypes",
+        _optional.import_optional_sdk(
+            "openai.types.decision",
             provider=provider,
             extra="openai",
         ),
