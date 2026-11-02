@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import types
 from collections.abc import Mapping
 from typing import Any, Literal, assert_type, cast
 
@@ -529,11 +530,45 @@ async def test_decide_keeps_file_shaped_dicts_as_json() -> None:
     assert not isinstance(sent, ai.types.messages.FilePart)
 
 
+async def test_decide_accepts_typed_and_read_only_containers() -> None:
+    photo = ai.file_part(b"\x89PNG\r\n\x1a\n", media_type="image/png")
+    path: list[str | int] = ["body", 0]
+    counts: dict[str, int] = {"items": 2}
+    provider = RecordingDecisionProvider()
+    model = models.Model(id="mock-decision-model", provider=provider)
+
+    await ops.experimental.decide(
+        model,
+        {
+            "path": path,
+            "counts": counts,
+            "photos": (photo,),
+            "meta": types.MappingProxyType({"note": "Delivered."}),
+        },
+        {
+            "damaged": ops.experimental.PredicateQuestion(
+                instructions=("Damaged?", photo),
+            )
+        },
+    )
+
+    [(state, sent)] = provider.requests
+    assert state == {
+        "path": ["body", 0],
+        "counts": {"items": 2},
+        "photos": [photo],
+        "meta": {"note": "Delivered."},
+    }
+    assert type(state["meta"]) is dict
+    assert state["photos"][0] is photo
+    assert sent["damaged"].instructions == ["Damaged?", photo]
+
+
 @pytest.mark.parametrize(
     ("state", "loc", "error_type"),
     [
         (1, (), "invalid-decision-input"),
-        ((1,), (), "invalid-decision-input"),
+        (b"\x89PNG", (), "invalid-decision-input"),
         (
             {"a": [1, {"b": object()}]},
             ("dict", "a", "list", 1, "dict", "b"),
