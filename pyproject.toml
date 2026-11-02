@@ -45,7 +45,7 @@ vercel = [
     "vercel-oidc>=0.8.0",
 ]
 typesafe = [
-    "typesafe-sdk>=0.7.2,<1",
+    "typesafe-sdk>=0.7.5,<1",
 ]
 
 [project.urls]
@@ -82,7 +82,7 @@ dev = [
     "vercel-oidc>=0.8.0",
     "opentelemetry-sdk>=1.43.0",
     "opentelemetry-exporter-otlp-proto-http>=1.43.0",
-    "typesafe-sdk>=0.7.2",
+    "typesafe-sdk>=0.7.5",
 ]
 
 [tool.uv]

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import types
 from collections.abc import Mapping
 from typing import Any, Literal, assert_type, cast
 
@@ -97,6 +98,35 @@ class StaticDecisionProvider(models.Provider):
         params: ops.experimental.DecideParams,
     ) -> ops.Item[dict[str, Any]]:
         return ops.Item(value=self.answers)
+
+
+class RecordingDecisionProvider(models.Provider):
+    provider_class_id: Literal["test-recording-decision-provider"] = (
+        "test-recording-decision-provider"
+    )
+    name: str = "mock-recording-decision"
+    default_base_url: str = "http://mock.test"
+    api_key_env: str | None = None
+    requests: list[Any] = pydantic.Field(default_factory=list)
+
+    async def list_models(self) -> list[str]:
+        return []
+
+    async def decide(
+        self,
+        model: models.Model,
+        state: ops.experimental.DecisionInput,
+        questions: Mapping[str, DecisionQuestion],
+        *,
+        params: ops.experimental.DecideParams,
+    ) -> ops.Item[dict[str, Any]]:
+        self.requests.append((state, dict(questions)))
+        return ops.Item(
+            value={
+                name: {"type": "predicate", "probability": 0.5}
+                for name in questions
+            }
+        )
 
 
 def questions() -> Questions:
@@ -423,6 +453,154 @@ async def test_decide_requires_matching_answer_fields() -> None:
         await ops.experimental.decide(
             model,
             "state",
+            questions(),
+            output_type=Answers,
+        )
+
+
+async def test_decide_accepts_files_in_state_and_questions() -> None:
+    photo = ai.file_part(b"\x89PNG\r\n\x1a\n", media_type="image/png")
+    reference = ai.file_part("https://example.com/reference.jpg")
+    provider = RecordingDecisionProvider()
+    model = models.Model(id="mock-decision-model", provider=provider)
+    question = ops.experimental.PredicateQuestion(
+        instructions=[
+            "Is the item in `photo` the same as this one?",
+            reference,
+        ],
+        criteria={"true": reference, "false": None},
+    )
+
+    result = await ops.experimental.decide(
+        model,
+        {"photo": photo, "notes": ["Delivered today.", photo]},
+        {"same_item": question},
+    )
+
+    [(state, sent)] = provider.requests
+    assert state == {"photo": photo, "notes": ["Delivered today.", photo]}
+    assert state["photo"] is photo
+    assert sent["same_item"].instructions[1] is reference
+    assert sent["same_item"].criteria == {"true": reference, "false": None}
+    answer = result.value["same_item"]
+    assert isinstance(answer, ops.experimental.PredicateAnswer)
+    assert answer.probability == 0.5
+
+
+async def test_decide_accepts_a_file_as_state() -> None:
+    photo = ai.file_part(b"\x89PNG\r\n\x1a\n", media_type="image/png")
+    provider = RecordingDecisionProvider()
+    model = models.Model(id="mock-decision-model", provider=provider)
+
+    await ops.experimental.decide(
+        model,
+        photo,
+        {
+            "damaged": ops.experimental.PredicateQuestion(
+                instructions="Damaged?"
+            )
+        },
+    )
+
+    [(state, _)] = provider.requests
+    assert state is photo
+
+
+async def test_decide_keeps_file_shaped_dicts_as_json() -> None:
+    provider = RecordingDecisionProvider()
+    model = models.Model(id="mock-decision-model", provider=provider)
+    state: ops.experimental.DecisionInput = {
+        "kind": "file",
+        "data": "aGk=",
+        "media_type": "image/png",
+    }
+
+    await ops.experimental.decide(
+        model,
+        state,
+        {
+            "damaged": ops.experimental.PredicateQuestion(
+                instructions="Damaged?"
+            )
+        },
+    )
+
+    [(sent, _)] = provider.requests
+    assert sent == state
+    assert not isinstance(sent, ai.types.messages.FilePart)
+
+
+async def test_decide_accepts_typed_and_read_only_containers() -> None:
+    photo = ai.file_part(b"\x89PNG\r\n\x1a\n", media_type="image/png")
+    path: list[str | int] = ["body", 0]
+    counts: dict[str, int] = {"items": 2}
+    provider = RecordingDecisionProvider()
+    model = models.Model(id="mock-decision-model", provider=provider)
+
+    await ops.experimental.decide(
+        model,
+        {
+            "path": path,
+            "counts": counts,
+            "photos": (photo,),
+            "meta": types.MappingProxyType({"note": "Delivered."}),
+        },
+        {
+            "damaged": ops.experimental.PredicateQuestion(
+                instructions=("Damaged?", photo),
+            )
+        },
+    )
+
+    [(state, sent)] = provider.requests
+    assert state == {
+        "path": ["body", 0],
+        "counts": {"items": 2},
+        "photos": [photo],
+        "meta": {"note": "Delivered."},
+    }
+    assert type(state["meta"]) is dict
+    assert state["photos"][0] is photo
+    assert sent["damaged"].instructions == ["Damaged?", photo]
+
+
+@pytest.mark.parametrize(
+    ("state", "loc", "error_type"),
+    [
+        (1, (), "invalid-decision-input"),
+        (b"\x89PNG", (), "invalid-decision-input"),
+        (
+            {"a": [1, {"b": object()}]},
+            ("dict", "a", "list", 1, "dict", "b"),
+            "invalid-decision-value",
+        ),
+    ],
+)
+async def test_decide_reports_one_error_per_invalid_value(
+    state: Any, loc: tuple[str | int, ...], error_type: str
+) -> None:
+    model = models.Model(id="mock-decision-model", provider=DecisionProvider())
+
+    with pytest.raises(pydantic.ValidationError) as exc_info:
+        await ops.experimental.decide(
+            model,
+            cast("ops.experimental.DecisionInput", state),
+            questions(),
+            output_type=Answers,
+        )
+
+    [error] = exc_info.value.errors()
+    assert error["loc"] == loc
+    assert error["type"] == error_type
+
+
+async def test_decide_rejects_bare_bytes() -> None:
+    model = models.Model(id="mock-decision-model", provider=DecisionProvider())
+
+    with pytest.raises(pydantic.ValidationError):
+        await ops.experimental.decide(
+            model,
+            cast("ops.experimental.DecisionInput", {"photo": b"\x89PNG"}),
             questions(),
             output_type=Answers,
         )
