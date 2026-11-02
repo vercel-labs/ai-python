@@ -267,10 +267,10 @@ class AiGenerateSpanData(pydantic.BaseModel):
     response_model: str | None = None
 
 
-class EvaluateSpanData(pydantic.BaseModel):
-    """One typed evaluation operation."""
+class DecideSpanData(pydantic.BaseModel):
+    """One typed decision operation."""
 
-    kind: Literal["evaluate"] = "evaluate"
+    kind: Literal["decide"] = "decide"
     model: str
     provider: str | None = None
     question_count: int
@@ -442,7 +442,7 @@ _FrameworkData = Annotated[
     | LoopTurnSpanData
     | AiStreamSpanData
     | AiGenerateSpanData
-    | EvaluateSpanData
+    | DecideSpanData
     | EmbedSpanData
     | GenerateAudioSpanData
     | GenerateImageSpanData

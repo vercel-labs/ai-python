@@ -20,21 +20,21 @@ _MODEL_ID = "typesafe-ai/jev"
 class Questions(pydantic.BaseModel):
     department: ops.experimental.ChoiceQuestion
     severity: ops.experimental.ScoreQuestion
-    refund: ops.experimental.NoulQuestion
+    refund: ops.experimental.PredicateQuestion
 
 
 class Answers(pydantic.BaseModel):
     department: ops.experimental.ChoiceAnswer
     severity: ops.experimental.ScoreAnswer
-    refund: ops.experimental.NoulAnswer
+    refund: ops.experimental.PredicateAnswer
 
 
-class NoulQuestions(pydantic.BaseModel):
-    answer: ops.experimental.NoulQuestion
+class PredicateQuestions(pydantic.BaseModel):
+    answer: ops.experimental.PredicateQuestion
 
 
-class NoulAnswers(pydantic.BaseModel):
-    answer: ops.experimental.NoulAnswer
+class PredicateAnswers(pydantic.BaseModel):
+    answer: ops.experimental.PredicateAnswer
 
 
 def questions() -> Questions:
@@ -47,14 +47,14 @@ def questions() -> Questions:
             instructions="How severe is this?",
             criteria=["Cosmetic", "Workaround exists", "Blocking"],
         ),
-        refund=ops.experimental.NoulQuestion(
+        refund=ops.experimental.PredicateQuestion(
             instructions="Is a refund requested?",
             criteria={"true": "A refund is requested", "false": None},
         ),
     )
 
 
-async def test_evaluate_request_and_response() -> None:
+async def test_decide_request_and_response() -> None:
     captured_body: dict[str, Any] = {}
     captured_headers: dict[str, str] = {}
     captured_url: list[str] = []
@@ -95,7 +95,7 @@ async def test_evaluate_request_and_response() -> None:
             },
         )
 
-    result = await ops.experimental.evaluate(
+    result = await ops.experimental.decide(
         mock_model(
             httpx.MockTransport(handler),
             api_key="sk-test",
@@ -104,7 +104,7 @@ async def test_evaluate_request_and_response() -> None:
         {"message": "Please refund the duplicate charge."},
         questions(),
         output_type=Answers,
-        params=ops.experimental.EvaluationParams(
+        params=ops.experimental.DecideParams(
             provider_options={
                 "gateway": {
                     "zeroDataRetention": True,
@@ -162,7 +162,7 @@ async def test_evaluate_request_and_response() -> None:
     assert result.value.severity.score == 1.5
     assert result.value.department.confidence == 0.91
     assert result.value.severity.confidence == 0.87
-    assert result.value.refund.noul == 0.98
+    assert result.value.refund.probability == 0.98
     assert result.metadata == {
         "rounding": {
             "probabilityDecimals": 2,
@@ -192,7 +192,7 @@ async def test_evaluate_request_and_response() -> None:
         {"typesafe": {"confidence": {"department": 1.0, "severity": 0.5}}},
     ],
 )
-async def test_evaluate_dynamic_confidence_and_noul(
+async def test_decide_dynamic_confidence_and_predicate(
     provider_metadata: dict[str, Any] | None,
 ) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
@@ -214,13 +214,13 @@ async def test_evaluate_dynamic_confidence_and_noul(
         )
 
     question_values = questions()
-    result = await ops.experimental.evaluate(
+    result = await ops.experimental.decide(
         mock_model(httpx.MockTransport(handler), model_id=_MODEL_ID),
         "state",
         {
             "department": question_values.department,
             "severity": question_values.severity,
-            "refund": ops.experimental.NoulQuestion(
+            "refund": ops.experimental.PredicateQuestion(
                 instructions="Refund requested?"
             ),
         },
@@ -233,15 +233,15 @@ async def test_evaluate_dynamic_confidence_and_noul(
     refund = result.value["refund"]
     assert isinstance(department, ops.experimental.ChoiceAnswer)
     assert isinstance(severity, ops.experimental.ScoreAnswer)
-    assert isinstance(refund, ops.experimental.NoulAnswer)
+    assert isinstance(refund, ops.experimental.PredicateAnswer)
     assert department.confidence == confidence.get("department")
     assert severity.confidence == confidence.get("severity")
-    assert refund.model_dump() == {"type": "noul", "noul": 0.98}
+    assert refund.model_dump() == {"type": "predicate", "probability": 0.98}
     assert result.provider_metadata == provider_metadata
 
 
 @pytest.mark.parametrize("confidence", [-0.1, 1.1, "0.5", True])
-async def test_evaluate_rejects_invalid_confidence(confidence: Any) -> None:
+async def test_decide_rejects_invalid_confidence(confidence: Any) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,
@@ -254,7 +254,7 @@ async def test_evaluate_rejects_invalid_confidence(confidence: Any) -> None:
         )
 
     with pytest.raises(pydantic.ValidationError, match="confidence"):
-        await ops.experimental.evaluate(
+        await ops.experimental.decide(
             mock_model(httpx.MockTransport(handler), model_id=_MODEL_ID),
             "state",
             {
@@ -265,7 +265,7 @@ async def test_evaluate_rejects_invalid_confidence(confidence: Any) -> None:
         )
 
 
-async def test_evaluate_maps_all_warning_types() -> None:
+async def test_decide_maps_all_warning_types() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,
@@ -291,7 +291,7 @@ async def test_evaluate_maps_all_warning_types() -> None:
             },
         )
 
-    result = await ops.experimental.evaluate(
+    result = await ops.experimental.decide(
         mock_model(httpx.MockTransport(handler), model_id=_MODEL_ID),
         "state",
         {
@@ -312,7 +312,7 @@ async def test_evaluate_maps_all_warning_types() -> None:
     ]
 
 
-async def test_evaluate_maps_authentication_error() -> None:
+async def test_decide_maps_authentication_error() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             401,
@@ -325,13 +325,13 @@ async def test_evaluate_maps_authentication_error() -> None:
         )
 
     with pytest.raises(ai.ProviderAuthenticationError):
-        await ops.experimental.evaluate(
+        await ops.experimental.decide(
             mock_model(httpx.MockTransport(handler), model_id=_MODEL_ID),
             "state",
-            NoulQuestions(
-                answer=ops.experimental.NoulQuestion(
+            PredicateQuestions(
+                answer=ops.experimental.PredicateQuestion(
                     instructions="Is this true?"
                 )
             ),
-            output_type=NoulAnswers,
+            output_type=PredicateAnswers,
         )
