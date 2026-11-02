@@ -22,6 +22,10 @@
         output_type=Answers,
     )
     result.value.requests_refund
+
+Images go anywhere in the state or question text as file parts::
+
+    state = {"photo": ai.file_part(photo_bytes), "note": "Delivered today."}
 """
 
 from __future__ import annotations
@@ -34,15 +38,66 @@ from typing import TYPE_CHECKING, Annotated, Any, Literal, TypedDict, overload
 import pydantic
 
 from ... import experimental_telemetry as telemetry
+from ...types import messages
 from .. import items
 
 if TYPE_CHECKING:
     from ...models.core import model as model_
 
 
-type DecisionInput = (
-    str | dict[str, pydantic.JsonValue] | list[pydantic.JsonValue]
+_JSON_TYPES = frozenset((str, int, float, bool, list, dict))
+
+
+def _decision_value_tag(value: Any) -> str:
+    # Like pydantic.JsonValue: pick one union member by type, so bad input
+    # gives one error at its path. Exact types take the fast path. Subclasses
+    # validate as their base type; bool goes before int because bool
+    # subclasses int.
+    exact = type(value)
+    if exact in _JSON_TYPES:
+        return exact.__name__
+    for type_ in (bool, int, float, str, list, dict, messages.FilePart):
+        if isinstance(value, type_):
+            return type_.__name__
+    return "None" if value is None else "invalid"
+
+
+_VALUE_DISCRIMINATOR = pydantic.Discriminator(
+    _decision_value_tag,
+    custom_error_type="invalid-decision-value",
+    custom_error_message="input was not text, JSON, or a FilePart",
 )
+_INPUT_DISCRIMINATOR = pydantic.Discriminator(
+    _decision_value_tag,
+    custom_error_type="invalid-decision-input",
+    custom_error_message="input was not text, a FilePart, a dict, or a list",
+)
+
+# Static type checkers ignore the Annotated metadata and see a plain union.
+type _DecisionValue = Annotated[
+    Annotated[str, pydantic.Tag("str")]
+    | Annotated[int, pydantic.Tag("int")]
+    | Annotated[float, pydantic.Tag("float")]
+    | Annotated[bool, pydantic.Tag("bool")]
+    | Annotated[messages.FilePart, pydantic.Tag("FilePart")]
+    | Annotated[list[_DecisionValue], pydantic.Tag("list")]
+    | Annotated[dict[str, _DecisionValue], pydantic.Tag("dict")]
+    | Annotated[None, pydantic.Tag("None")],
+    _VALUE_DISCRIMINATOR,
+]
+
+type DecisionInput = Annotated[
+    Annotated[str, pydantic.Tag("str")]
+    | Annotated[messages.FilePart, pydantic.Tag("FilePart")]
+    | Annotated[dict[str, _DecisionValue], pydantic.Tag("dict")]
+    | Annotated[list[_DecisionValue], pydantic.Tag("list")],
+    _INPUT_DISCRIMINATOR,
+]
+"""Text, a file, or JSON data with files at any position.
+
+Files are :class:`~ai.types.messages.FilePart` objects, e.g. from
+:func:`ai.file_part`. A plain ``str`` is always text, never a URL.
+"""
 
 
 class PredicateCriteria(TypedDict, total=False):
@@ -240,6 +295,11 @@ async def decide(
     Pass matching Pydantic question and output models for a statically typed
     value, or pass a question mapping to receive an answer mapping. Each choice,
     score, or predicate question is validated against its corresponding answer.
+
+    ``state``, question ``instructions``, and ``criteria`` accept files
+    (:class:`~ai.types.messages.FilePart`) alongside text and JSON, e.g.
+    ``{"photo": ai.file_part(data), "note": "..."}``. Providers reject files
+    they cannot send.
 
     Experimental: not part of the stable API, may change or be removed.
     """

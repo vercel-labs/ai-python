@@ -546,6 +546,22 @@ async def decide(
     params: ops.experimental.DecideParams,
 ) -> ops.items.Item[dict[str, Any]]:
     """Hit ``/evaluation-model`` and return raw decision answers."""
+
+    # The v4 spec does not define files in decision requests yet.
+    def has_file(value: Any) -> bool:
+        if isinstance(value, types.messages.FilePart):
+            return True
+        if isinstance(value, dict):
+            return any(has_file(item) for item in value.values())
+        if isinstance(value, list):
+            return any(has_file(item) for item in value)
+        return False
+
+    if has_file(state) or any(
+        has_file(dict(question)) for question in questions.values()
+    ):
+        raise ValueError("AI Gateway decisions do not support files")
+
     wire_questions: dict[str, dict[str, Any]] = {}
     for question_id, question in questions.items():
         wire_question = question.model_dump(mode="json", by_alias=True)

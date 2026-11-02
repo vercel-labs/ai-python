@@ -12,6 +12,7 @@ if TYPE_CHECKING:
 
 class TypeSafeSDK(Protocol):
     AsyncTypeSafeClient: type[typesafe_sdk.AsyncTypeSafeClient]
+    Image: type[typesafe_sdk.Image]
     TypeSafeError: type[typesafe_sdk.TypeSafeError]
     TypeSafeAPIError: type[typesafe_sdk.TypeSafeAPIError]
     TypeSafeAPIConnectionError: type[typesafe_sdk.TypeSafeAPIConnectionError]
