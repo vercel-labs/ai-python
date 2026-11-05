@@ -1,33 +1,19 @@
 """``ai.harness.Agent``: a coding agent loop for long-running processes.
 
-The loop is the standard ``ai.Agent`` loop plus, in order: a built system
-prompt (env facts, ``AGENTS.md`` files, a skill list), steering through
-the ``steer`` hook, turn/token limits, and compaction by a client-side
-summary. The ``task`` tool runs a subagent. Settings are class variables.
+The loop is the ``ai.Agent`` loop with steering, limits and compaction.
+Settings are class variables. Make the system message with
+:func:`.prompts.system_message` and put it first in the messages.
 
-Budgets: ``MAX_TOKENS`` and ``MAX_USD`` cover the run and its subagents
-(see :class:`Budget`). ``MAX_USD`` is best-effort, from models.dev
-prices; without prices for the model the run raises
-:class:`UnknownCostError` before its first request.
+Steering: before each request, the loop asks the interface for user
+messages with the ``steer`` hook. The interface must answer each ask.
+If it has no messages, it answers with an empty :class:`Steer`.
 
-Steering: before each model request the loop asks the interface for new
-messages with ``ai.hook("steer", payload=Steer)``. The interface keeps
-its own buffer and answers every ask, with an empty list if it has
-nothing::
-
-    if isinstance(event, ai.events.PendingHookEvent) and (
-        event.hook.hook_id == ai.harness.STEER
-    ):
-        ai.resolve_hook(event.hook, ai.harness.Steer(messages=queued))
-        queued.clear()
-
-The run waits until the ask is answered.
+Limits: ``MAX_TURNS`` is per run. ``MAX_TOKENS`` and ``MAX_USD`` are
+shared with subagents (see :class:`Budget`).
 
 Interrupting: cancel the task that runs the agent. The loop adds the
-partial turn to the history (``stream.messages``) before the cancel goes
-on: the text so far, the finished tool results, and an ``INTERRUPTED``
-error result for every tool call that did not finish. To interrupt and
-redirect, start a new run on that history with the new user message.
+partial turn to ``stream.messages``. Each tool call that did not finish
+gets an ``INTERRUPTED`` error result.
 """
 
 from __future__ import annotations
@@ -35,9 +21,6 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import dataclasses
-import datetime
-import pathlib
-import platform
 from collections.abc import AsyncGenerator, Sequence
 from typing import TYPE_CHECKING, ClassVar, Literal
 
@@ -48,7 +31,8 @@ from .. import experimental_telemetry as telemetry
 from ..types import builders, events
 from ..types import messages as messages_
 from ..types import usage as usage_
-from . import tools
+from . import events as harness_events
+from . import prompts, tools
 
 if TYPE_CHECKING:
     import modelsdotdev
@@ -58,55 +42,7 @@ STEER = "steer"
 # result of a tool call that was cut short by an interrupt
 INTERRUPTED = "Interrupted by user"
 
-PROMPT = """\
-You are a coding agent that works in the user's local environment.
-Use your tools to inspect files and run commands; do not guess.
-- read: read files and images.
-- bash: run shell commands (search, edit, write, git, curl, ...).
-- task: hand a self-contained job to a subagent with a fresh context.
-Be brief. Show file paths clearly."""
-
-SUMMARY_PROMPT = """\
-The messages above are a conversation to summarize. Create a structured \
-context checkpoint summary that another LLM will use to continue the work.
-
-Use this EXACT format:
-
-## Goal
-[What is the user trying to accomplish?]
-
-## Constraints & Preferences
-- [Constraints, preferences, or requirements from the user, or "(none)"]
-
-## Progress
-### Done
-- [x] [Completed tasks/changes]
-
-### In Progress
-- [ ] [Current work]
-
-### Blocked
-- [Issues preventing progress, if any]
-
-## Key Decisions
-- **[Decision]**: [Brief rationale]
-
-## Next Steps
-1. [Ordered list of what should happen next]
-
-## Critical Context
-- [Data, examples, or references needed to continue, or "(none)"]
-
-Keep each section concise. Preserve exact file paths, function names, \
-and error messages."""
-
-# pi's prefix: the summary goes into history as a `user` message
-SUMMARY_PREFIX = (
-    "The conversation history before this point was compacted into the "
-    "following summary:\n\n<summary>\n"
-)
-
-# The model of the current run, for the `task` tool. `loop` sets it.
+# The model of the current run, for the `subagent` tool. `loop` sets it.
 # `decouple` runs the loop in its own task, so the value does not leak
 # out of the run, and tool tasks created by the loop inherit it.
 _model: contextvars.ContextVar[models.Model] = contextvars.ContextVar(
@@ -129,35 +65,6 @@ class Steer(pydantic.BaseModel):
     messages: list[str] = []
 
 
-class Steered(events.BaseEvent):
-    """Steering messages were added to the history."""
-
-    messages: tuple[messages_.Message, ...]
-    kind: Literal["harness_steered"] = "harness_steered"
-
-
-class Compacted(events.BaseEvent):
-    """Old history was replaced by a summary."""
-
-    summary: messages_.Message
-    removed: int
-    usage: usage_.Usage | None
-    kind: Literal["harness_compacted"] = "harness_compacted"
-
-
-class LimitReached(events.BaseEvent):
-    """The run stopped at ``MAX_TURNS``, ``MAX_TOKENS`` or ``MAX_USD``.
-
-    ``usage`` and ``usd`` are the budget's totals: this run and the runs
-    that share its budget (subagents).
-    """
-
-    limit: Literal["turns", "tokens", "usd"]
-    usage: usage_.Usage
-    usd: float
-    kind: Literal["harness_limit_reached"] = "harness_limit_reached"
-
-
 class UnknownCostError(errors.AIError):
     """``MAX_USD`` is set, but the cost of a request cannot be known.
 
@@ -171,15 +78,15 @@ class Budget:
     """What a run and its subagents spent, and the limits they share.
 
     The top-level run makes it from its ``MAX_TOKENS`` and ``MAX_USD``.
-    Subagent runs (``task``) find it in a contextvar, add their spend to
-    it, and stop at the same limits; their own ``MAX_TOKENS`` and
-    ``MAX_USD`` are not used. A request counts when its model stream
-    ends, before the turn's tools run. Limits are checked before each
-    request, so a run can go over by its last request, and parallel
-    subagents by one request each. Tools start when their call ends, so a
-    subagent can send its first request before the parent's request is
-    counted. A request cut short by an interrupt is not counted: its usage is
-    never reported.
+    Subagent runs find it in a contextvar, add their spend to it, and
+    stop at the same limits; their own ``MAX_TOKENS`` and ``MAX_USD`` are
+    not used. A request counts when its model stream ends, before the
+    turn's tools run. Limits are checked before each request, so a run
+    can go over by its last request, and parallel subagents by one
+    request each. Tools start when their call ends, so a subagent can
+    send its first request before the parent's request is counted. A
+    request cut short by an interrupt is not counted: its usage is never
+    reported.
     """
 
     max_tokens: int | None = None
@@ -187,8 +94,38 @@ class Budget:
     usage: usage_.Usage = dataclasses.field(default_factory=usage_.Usage)
     usd: float = 0.0
 
+    def spend(
+        self,
+        request: usage_.Usage | None,
+        *,
+        prices: Sequence[modelsdotdev.Cost] | None,
+        model_id: str,
+    ) -> None:
+        """Add the usage of one request. ``None``: it was not reported."""
+        if request is None:
+            if self.max_usd is not None:
+                raise UnknownCostError(
+                    f"{model_id} did not report usage; "
+                    "MAX_USD cannot be enforced"
+                )
+            return
+        self.usage += request
+        if prices:
+            self.usd += to_usd(prices, request)
 
-def usd(prices: Sequence[modelsdotdev.Cost], usage: usage_.Usage) -> float:
+    def exceeded(self) -> Literal["tokens", "usd"] | None:
+        """Return the limit that was reached, or None."""
+        if (
+            self.max_tokens is not None
+            and self.usage.total_tokens >= self.max_tokens
+        ):
+            return "tokens"
+        if self.max_usd is not None and self.usd >= self.max_usd:
+            return "usd"
+        return None
+
+
+def to_usd(prices: Sequence[modelsdotdev.Cost], usage: usage_.Usage) -> float:
     """Best-effort cost of one request in USD, from models.dev prices.
 
     Prices are per million tokens. The tier is picked by the request's
@@ -219,113 +156,84 @@ def usd(prices: Sequence[modelsdotdev.Cost], usage: usage_.Usage) -> float:
     ) / 1_000_000
 
 
-type HarnessEvent = events.AgentEvent | Steered | Compacted | LimitReached
+def _shared_budget(max_tokens: int | None, max_usd: float | None) -> Budget:
+    """Get the shared budget. The top-level run makes and sets it."""
+    budget = _budget.get(None)
+    if budget is None:
+        budget = Budget(max_tokens=max_tokens, max_usd=max_usd)
+        _budget.set(budget)
+    return budget
+
+
+def _add_partial_turn(
+    context: agents.Context,
+    message: messages_.Message,
+    tool_message: messages_.Message | None,
+    ended: set[str],
+) -> None:
+    """Add an interrupted turn to the history.
+
+    Tool calls with incomplete args are dropped. Each kept call gets a
+    result: a call without one would be replayed (run again) by the
+    next run.
+    """
+    parts = [
+        p
+        for p in message.parts
+        if not isinstance(p, messages_.ToolCallPart) or p.tool_call_id in ended
+    ]
+    if parts:
+        context.add(message.model_copy(update={"parts": parts}))
+    results = list(tool_message.tool_results) if tool_message else []
+    answered = {r.tool_call_id for r in results}
+    results += [
+        builders.tool_result_part(
+            p.tool_call_id,
+            tool_name=p.tool_name,
+            result=INTERRUPTED,
+            is_error=True,
+        )
+        for p in parts
+        if isinstance(p, messages_.ToolCallPart)
+        and p.tool_call_id not in answered
+    ]
+    if results:
+        context.add(builders.tool_message(*results))
 
 
 class Agent(agents.Agent):
-    TOOLS: ClassVar[list[agents.AgentTool]] = [tools.read, tools.bash]  # + task
+    TOOLS: ClassVar[list[agents.AgentTool]] = [tools.read, tools.bash]
     STEERING: ClassVar[bool] = True
     MAX_TURNS: ClassVar[int | None] = None
     MAX_TOKENS: ClassVar[int | None] = None  # shared with subagents
     MAX_USD: ClassVar[float | None] = None  # shared with subagents
     RESERVE_TOKENS: ClassVar[int] = 16_384
     KEEP_RECENT_TOKENS: ClassVar[int] = 20_000
-    SKILL_DIRS: ClassVar[tuple[str, ...]] = (
-        ".agents/skills",
-        "~/.agents/skills",
-    )
 
     # The loop yields harness events too; they join `AgentEvent` later.
     async def loop(  # type: ignore[override]  # ty: ignore[invalid-method-override]
         self, context: agents.Context
-    ) -> AsyncGenerator[HarnessEvent]:
+    ) -> AsyncGenerator[harness_events.HarnessEvent]:
         _model.set(context.model)
 
-        # ── system prompt: built only if the caller gave none ──
-        if not context.messages or context.messages[0].role != "system":
-            cwd = pathlib.Path.cwd()
-            sections = [
-                PROMPT,
-                f"cwd: {cwd}\nos: {platform.system()} {platform.release()}\n"
-                f"date: {datetime.date.today().isoformat()}",
-            ]
-            # AGENTS.md from the filesystem root down to cwd, so the
-            # most specific file comes last and wins
-            for d in reversed([cwd, *cwd.parents]):
-                if (f := d / "AGENTS.md").is_file():
-                    sections.append(
-                        f"Instructions from {f}:\n\n{f.read_text()}"
-                    )
-            # skills: name + description from SKILL.md frontmatter; the
-            # model reads the file itself with `read`
-            skills = []
-            for root in self.SKILL_DIRS:
-                for f in sorted(
-                    pathlib.Path(root).expanduser().glob("*/SKILL.md")
-                ):
-                    meta = {"name": f.parent.name, "description": ""}
-                    head = f.read_text().split("---")
-                    if len(head) >= 3:  # "", frontmatter, body...
-                        for line in head[1].splitlines():
-                            key, sep, value = line.partition(":")
-                            if sep and key.strip() in meta:
-                                meta[key.strip()] = value.strip()
-                    skills.append(
-                        f"  <skill>\n"
-                        f"    <name>{meta['name']}</name>\n"
-                        f"    <description>{meta['description']}"
-                        "</description>\n"
-                        f"    <location>{f.resolve()}</location>\n"
-                        f"  </skill>"
-                    )
-            if skills:
-                sections.append(
-                    "Skills give task-specific instructions. When a task "
-                    "matches a skill, read its SKILL.md first.\n"
-                    "<available_skills>\n"
-                    + "\n".join(skills)
-                    + "\n</available_skills>"
-                )
-            context.messages.insert(
-                0, builders.system_message("\n\n".join(sections))
-            )
-
-        info = _modelsdev.get_model_by_id(
-            f"{context.model.provider.name}:{context.model.id}"
-        )
+        model_id = f"{context.model.provider.name}:{context.model.id}"
+        info = _modelsdev.get_model_by_id(model_id)
         window = (
             info.limits.context if info and info.limits.context else 128_000
         )
-        # size of the last request, for the compaction trigger
-        last = next(
-            (m.usage for m in reversed(context.messages) if m.usage), None
-        )
-        turns = 0
-
-        # ── budget: the top-level run makes it, subagents share it ──
-        budget = _budget.get(None)
-        if budget is None:
-            budget = Budget(max_tokens=self.MAX_TOKENS, max_usd=self.MAX_USD)
-            _budget.set(budget)
-        model_id = f"{context.model.provider.name}:{context.model.id}"
         prices = info.cost if info else None
+        budget = _shared_budget(self.MAX_TOKENS, self.MAX_USD)
         if budget.max_usd is not None and not prices:
             raise UnknownCostError(
                 f"models.dev has no token prices for {model_id}; "
                 "MAX_USD cannot be enforced"
             )
 
-        def spend(request: usage_.Usage | None) -> None:
-            if request is None:
-                if budget.max_usd is not None:
-                    raise UnknownCostError(
-                        f"{model_id} did not report usage; "
-                        "MAX_USD cannot be enforced"
-                    )
-                return
-            budget.usage += request
-            if prices:
-                budget.usd += usd(prices, request)
+        # size of the last request, for the compaction trigger
+        last = next(
+            (m.usage for m in reversed(context.messages) if m.usage), None
+        )
+        turns = 0
 
         while True:
             # ── steering: ask the interface before each request, and
@@ -335,23 +243,18 @@ class Agent(agents.Agent):
                 if steer.messages:
                     new = [builders.user_message(t) for t in steer.messages]
                     context.add(new)
-                    yield Steered(messages=tuple(new))
+                    yield harness_events.Steered(messages=tuple(new))
             if not context.keep_running():
                 return
 
             # ── limits: turns are per run, the budget is shared ──
-            limit: Literal["turns", "tokens", "usd"] | None = None
-            if self.MAX_TURNS is not None and turns >= self.MAX_TURNS:
-                limit = "turns"
-            elif (
-                budget.max_tokens is not None
-                and budget.usage.total_tokens >= budget.max_tokens
-            ):
-                limit = "tokens"
-            elif budget.max_usd is not None and budget.usd >= budget.max_usd:
-                limit = "usd"
+            limit: Literal["turns", "tokens", "usd"] | None = (
+                "turns"
+                if self.MAX_TURNS is not None and turns >= self.MAX_TURNS
+                else budget.exceeded()
+            )
             if limit is not None:
-                yield LimitReached(
+                yield harness_events.LimitReached(
                     limit=limit, usage=budget.usage, usd=budget.usd
                 )
                 return
@@ -362,15 +265,15 @@ class Agent(agents.Agent):
                 and last.total_tokens > window - self.RESERVE_TOKENS
             ):
                 before = len(context.messages)
-                compacted, cost = await compact(
+                compacted, summary, cost = await compact(
                     context, keep_recent_tokens=self.KEEP_RECENT_TOKENS
                 )
-                if len(compacted) < before:
+                if summary is not None:
                     context.messages[:] = compacted
-                    spend(cost)
+                    budget.spend(cost, prices=prices, model_id=model_id)
                     last = None
-                    yield Compacted(
-                        summary=compacted[1],
+                    yield harness_events.Compacted(
+                        summary=summary,
                         removed=before - len(compacted) + 1,
                         usage=cost,
                     )
@@ -391,41 +294,17 @@ class Agent(agents.Agent):
                         ):
                             # count the request now, not after the turn:
                             # its tools (subagents) check the same budget
-                            spend(event.usage)
+                            budget.spend(
+                                event.usage, prices=prices, model_id=model_id
+                            )
                         yield event
                         if isinstance(event, events.ToolEnd):
                             ended.add(event.tool_call.tool_call_id)
                             tr.schedule(self.resolve(event.tool_call))
                 except asyncio.CancelledError:
-                    # interrupted: keep the partial turn, but every tool
-                    # call must have a result. A call without one would
-                    # be replayed (run again) by the next run.
-                    parts = [
-                        p
-                        for p in stream.message.parts
-                        if not isinstance(p, messages_.ToolCallPart)
-                        or p.tool_call_id in ended
-                    ]
-                    if parts:
-                        context.add(
-                            stream.message.model_copy(update={"parts": parts})
-                        )
-                    done = tr.get_tool_message()
-                    results = list(done.tool_results) if done else []
-                    answered = {r.tool_call_id for r in results}
-                    results += [
-                        builders.tool_result_part(
-                            p.tool_call_id,
-                            tool_name=p.tool_name,
-                            result=INTERRUPTED,
-                            is_error=True,
-                        )
-                        for p in parts
-                        if isinstance(p, messages_.ToolCallPart)
-                        and p.tool_call_id not in answered
-                    ]
-                    if results:
-                        context.add(builders.tool_message(*results))
+                    _add_partial_turn(
+                        context, stream.message, tr.get_tool_message(), ended
+                    )
                     raise
                 context.add(stream.message)
                 context.add(tr.get_tool_message())
@@ -436,13 +315,17 @@ class Agent(agents.Agent):
 
 async def compact(
     context: agents.Context, *, keep_recent_tokens: int = 20_000
-) -> tuple[list[messages_.Message], usage_.Usage | None]:
-    """Replace old history with a summary. Keeps ``messages[0]`` (system).
+) -> tuple[
+    list[messages_.Message], messages_.Message | None, usage_.Usage | None
+]:
+    """Replace old history with a summary. Keeps a leading system message.
 
-    Returns the new messages and the usage of the summary request, or
-    the old messages and None if there is nothing to cut.
+    Returns the new messages, the summary message, and the usage of the
+    summary request. If there is nothing to cut, returns the old
+    messages, None and None.
     """
-    system, history = context.messages[:1], context.messages[1:]
+    n = 1 if context.messages and context.messages[0].role == "system" else 0
+    system, history = context.messages[:n], context.messages[n:]
 
     # ── cut point: walk back from the end, about `keep_recent_tokens`
     # deep. Cut only before a user/assistant message, so a tool call
@@ -455,7 +338,7 @@ async def compact(
             if kept >= keep_recent_tokens:
                 break
     if cut == len(history):
-        return context.messages, None
+        return context.messages, None, None
 
     # ── summary request: same prefix and tools as the last request, so
     # the prompt cache hits; tool choice "none" forces a text answer
@@ -467,25 +350,27 @@ async def compact(
                 tool_choice=models.ToolChoiceMode.NONE
             ),
         )
-    async with models.stream(
+    response = await models.experimental_generate(
         context.model,
-        [*system, *history[:cut], builders.user_message(SUMMARY_PROMPT)],
+        [
+            *system,
+            *history[:cut],
+            builders.user_message(prompts.SUMMARY_PROMPT),
+        ],
         tools=context.tools,
         params=params,
-    ) as s:
-        async for _ in s:
-            pass
+    )
 
     summary = builders.user_message(
-        f"{SUMMARY_PREFIX}{s.message.text}\n</summary>"
+        f"{prompts.SUMMARY_PREFIX}{response.text}\n</summary>"
     )
-    return [*system, summary, *history[cut:]], s.usage
+    return [*system, summary, *history[cut:]], summary, response.usage
 
 
 class Subagent(Agent):
-    """The agent behind ``task``.
+    """The agent behind the ``subagent`` tool.
 
-    No ``task`` tool, so no nesting. No steering: the subagent shares
+    No ``subagent`` tool, so no nesting. No steering: the subagent shares
     the parent's hook registry, so its asks would take the parent's
     messages, and parallel subagents would collide on the label.
     """
@@ -495,37 +380,29 @@ class Subagent(Agent):
 
 
 @agents.tool
-async def task(prompt: str) -> agents.SubAgentTool:
+async def subagent(prompt: str) -> agents.SubAgentTool:
     """Give a self-contained task to a subagent with a fresh context.
 
     It returns its final answer. Use it for broad searches or
     independent work. The prompt must contain everything it needs.
     """
-    async with Subagent().run(
-        _model.get(), [builders.user_message(prompt)]
-    ) as stream:
+    messages = [prompts.system_message(), builders.user_message(prompt)]
+    async with Subagent().run(_model.get(), messages) as stream:
         async for event in stream:
             yield event
 
 
-Agent.TOOLS = [*Agent.TOOLS, task]
+Agent.TOOLS = [*Agent.TOOLS, subagent]
 
 __all__ = [
     "INTERRUPTED",
-    "PROMPT",
     "STEER",
-    "SUMMARY_PREFIX",
-    "SUMMARY_PROMPT",
     "Agent",
     "Budget",
-    "Compacted",
-    "HarnessEvent",
-    "LimitReached",
     "Steer",
-    "Steered",
     "Subagent",
     "UnknownCostError",
     "compact",
-    "task",
-    "usd",
+    "subagent",
+    "to_usd",
 ]

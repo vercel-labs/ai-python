@@ -24,6 +24,8 @@ from .. import agents, errors, models
 from ..types import builders, events
 from ..types import messages as messages_
 from . import agent as agent_
+from . import events as harness_events
+from . import prompts
 
 
 async def _run(
@@ -61,11 +63,11 @@ async def _run(
                             head = text[0][:100] if text else ""
                             more = f" (+{len(text) - 1} lines)" if text else ""
                             print(f"< {head}{more}", flush=True)
-                    case agent_.Steered():
+                    case harness_events.Steered():
                         print("\n[steered]", flush=True)
-                    case agent_.Compacted():
+                    case harness_events.Compacted():
                         print(f"\n[compacted {event.removed} messages]")
-                    case agent_.LimitReached():
+                    case harness_events.LimitReached():
                         print(
                             f"\n[limit reached: {event.limit}, "
                             f"{event.usage.total_tokens} tokens, "
@@ -89,7 +91,7 @@ async def _repl(agent: agent_.Agent, model: models.Model) -> None:
 
     threading.Thread(target=read_stdin, daemon=True).start()
 
-    history: list[messages_.Message] = []
+    history = [prompts.system_message()]
     steering: list[str] = []
     eof = False
     while True:
@@ -146,7 +148,8 @@ async def _repl(agent: agent_.Agent, model: models.Model) -> None:
 async def _headless(
     agent: agent_.Agent, model: models.Model, prompt: str
 ) -> None:
-    await _run(agent, model, [builders.user_message(prompt)], [])
+    messages = [prompts.system_message(), builders.user_message(prompt)]
+    await _run(agent, model, messages, [])
 
 
 def main() -> None:

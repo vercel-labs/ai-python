@@ -1,25 +1,20 @@
 """A coding agent harness on top of ``ai.Agent``. See :mod:`.agent`."""
 
-from . import tools
+from . import events, prompts, tools
 from .agent import (
     INTERRUPTED,
-    PROMPT,
     STEER,
-    SUMMARY_PREFIX,
-    SUMMARY_PROMPT,
     Agent,
     Budget,
-    Compacted,
-    HarnessEvent,
-    LimitReached,
     Steer,
-    Steered,
     Subagent,
     UnknownCostError,
     compact,
-    task,
-    usd,
+    subagent,
+    to_usd,
 )
+from .events import Compacted, HarnessEvent, LimitReached, Steered
+from .prompts import PROMPT, SUMMARY_PREFIX, SUMMARY_PROMPT, system_message
 
 __all__ = [
     "INTERRUPTED",
@@ -37,7 +32,10 @@ __all__ = [
     "Subagent",
     "UnknownCostError",
     "compact",
-    "task",
+    "events",
+    "prompts",
+    "subagent",
+    "system_message",
+    "to_usd",
     "tools",
-    "usd",
 ]

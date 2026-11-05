@@ -70,7 +70,11 @@ async def test_system_prompt_has_env_agents_md_and_skills(
         [ai.user_message("hi"), ai.assistant_message("hello")]
     )
 
-    _, messages = await _run(harness.Agent(), model, [ai.user_message("hi")])
+    _, messages = await _run(
+        harness.Agent(),
+        model,
+        [harness.system_message(), ai.user_message("hi")],
+    )
 
     system = model.calls[0][0]
     assert system.role == "system"
@@ -84,16 +88,12 @@ async def test_system_prompt_has_env_agents_md_and_skills(
     assert messages[-1].text == "hello"
 
 
-async def test_caller_system_message_is_kept() -> None:
+async def test_loop_adds_no_system_message() -> None:
     model = ai.testing.FakeModel(
         [ai.user_message("hi"), ai.assistant_message("hello")]
     )
-    await _run(
-        harness.Agent(),
-        model,
-        [ai.system_message("custom"), ai.user_message("hi")],
-    )
-    assert [m.text for m in model.calls[0]] == ["custom", "hi"]
+    await _run(harness.Agent(), model, [ai.user_message("hi")])
+    assert [m.text for m in model.calls[0]] == ["hi"]
 
 
 async def test_asks_before_each_request_and_before_stopping() -> None:
@@ -224,12 +224,13 @@ async def test_compaction_replaces_old_history_with_summary() -> None:
 
     compacted = next(e for e in got if isinstance(e, harness.Compacted))
     assert compacted.removed == 2
-    assert [m.text for m in messages[1:]] == [summary.text, "two", "done"]
+    assert compacted.summary.text == summary.text
+    assert [m.text for m in messages] == [summary.text, "two", "done"]
     assert len(model.calls) == 2  # the summary request, then the turn
 
 
-async def test_task_runs_a_subagent_that_does_not_steer() -> None:
-    call = ai.testing.tool_call(harness.task, prompt="look around")
+async def test_subagent_tool_runs_a_subagent_that_does_not_steer() -> None:
+    call = ai.testing.tool_call(harness.subagent, prompt="look around")
     model = ai.testing.FakeModel(
         [
             ai.user_message("go"),
@@ -352,11 +353,11 @@ async def test_interrupt_while_waiting_for_steering_keeps_history() -> None:
         lambda e: isinstance(e, ai.events.PendingHookEvent),
     )
 
-    assert [m.role for m in history] == ["system", "user"]
+    assert [m.role for m in history] == ["user"]
     assert not model.calls
 
 
-def test_usd_prices_cache_tiers_and_reasoning() -> None:
+def test_to_usd_prices_cache_tiers_and_reasoning() -> None:
     sonnet = [
         modelsdotdev.Cost(input=3, output=15, cache_read=0.3, cache_write=3.75)
     ]
@@ -366,7 +367,7 @@ def test_usd_prices_cache_tiers_and_reasoning() -> None:
         cache_read_tokens=400,
         cache_write_tokens=100,  # charged on top
     )
-    assert harness.usd(sonnet, request) == pytest.approx(
+    assert harness.to_usd(sonnet, request) == pytest.approx(
         (600 * 3 + 400 * 0.3 + 100 * 3.75 + 200 * 15) / 1e6
     )
 
@@ -374,11 +375,11 @@ def test_usd_prices_cache_tiers_and_reasoning() -> None:
         modelsdotdev.Cost(input=1, output=0),
         modelsdotdev.Cost(input=2, output=0, min_context=200_000),
     ]
-    assert harness.usd(tiers, usage.Usage(input_tokens=1_000_000)) == 2
+    assert harness.to_usd(tiers, usage.Usage(input_tokens=1_000_000)) == 2
 
     priced = [modelsdotdev.Cost(input=0, output=10, reasoning=1)]
     request = usage.Usage(output_tokens=1_000_000, reasoning_tokens=400_000)
-    assert harness.usd(priced, request) == pytest.approx(6 + 0.4)
+    assert harness.to_usd(priced, request) == pytest.approx(6 + 0.4)
 
 
 def _priced(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -458,7 +459,7 @@ async def test_subagent_spend_counts_against_the_parent_budget(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _priced(monkeypatch)
-    call = ai.testing.tool_call(harness.task, prompt="look around")
+    call = ai.testing.tool_call(harness.subagent, prompt="look around")
     model = ai.testing.FakeModel(
         [
             ai.user_message("go"),
@@ -484,7 +485,7 @@ async def test_subagent_stops_at_the_shared_limit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _priced(monkeypatch)
-    call = ai.testing.tool_call(harness.task, prompt="look around")
+    call = ai.testing.tool_call(harness.subagent, prompt="look around")
     model = ai.testing.FakeModel(
         [ai.user_message("go"), _costs(1.0, call), ai.assistant_message("x")],
         [ai.user_message("look around"), _costs(1.0, "found it")],
