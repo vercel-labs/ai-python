@@ -179,6 +179,62 @@ async def test_steering_after_the_final_answer_continues_the_run() -> None:
     assert not model.unused
 
 
+async def test_steering_twice_in_one_run() -> None:
+    model = ai.testing.FakeModel(
+        [
+            ai.user_message("go"),
+            ai.assistant_message(ai.testing.tool_call(fast)),
+            ai.user_message("s1"),
+            ai.assistant_message(ai.testing.tool_call(fast)),
+            ai.user_message("s2"),
+            ai.assistant_message("ok"),
+        ]
+    )
+
+    class A(harness.Agent):
+        TOOLS: ClassVar[list[ai.AgentTool]] = [fast]
+
+    got, messages = await _run(
+        A(), model, [ai.user_message("go")], steer=[[], ["s1"], ["s2"]]
+    )
+
+    steered = [e for e in got if isinstance(e, harness.Steered)]
+    assert [[m.text for m in e.messages] for e in steered] == [["s1"], ["s2"]]
+    assert messages[-1].text == "ok"
+    assert not model.unused
+
+
+async def test_steering_in_each_of_two_runs() -> None:
+    model = ai.testing.FakeModel(
+        [
+            ai.user_message("go"),
+            ai.assistant_message(ai.testing.tool_call(fast)),
+            ai.user_message("s1"),
+            ai.assistant_message("ok1"),
+            ai.user_message("go2"),
+            ai.assistant_message(ai.testing.tool_call(fast)),
+            ai.user_message("s2"),
+            ai.assistant_message("ok2"),
+        ]
+    )
+
+    class A(harness.Agent):
+        TOOLS: ClassVar[list[ai.AgentTool]] = [fast]
+
+    got1, history = await _run(
+        A(), model, [ai.user_message("go")], steer=[[], ["s1"]]
+    )
+    got2, history = await _run(
+        A(), model, [*history, ai.user_message("go2")], steer=[[], ["s2"]]
+    )
+
+    for got, text in [(got1, "s1"), (got2, "s2")]:
+        (steered,) = [e for e in got if isinstance(e, harness.Steered)]
+        assert [m.text for m in steered.messages] == [text]
+    assert history[-1].text == "ok2"
+    assert not model.unused
+
+
 async def test_max_turns() -> None:
     call = ai.testing.tool_call(fast)
     model = ai.testing.FakeModel(
