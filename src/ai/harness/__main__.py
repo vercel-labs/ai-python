@@ -2,10 +2,13 @@
 
     python -m ai.harness [-m MODEL]            # REPL
     python -m ai.harness [-m MODEL] -p PROMPT  # headless, one run
+    python -m ai.harness --max-usd 0.50        # budget per run
 
 In the REPL, a line typed during a run is queued as steering: the run
-takes it before its next model request. Ctrl+C stops the run; Ctrl+C or
-Ctrl+D at the prompt exits.
+takes it before its next model request. Ctrl+C stops the run at once and
+keeps the partial turn; if lines were typed during the run, a new run
+starts with them (interrupt and redirect). Ctrl+C or Ctrl+D at the
+prompt exits.
 """
 
 from __future__ import annotations
@@ -24,6 +27,7 @@ from . import agent as agent_
 
 
 async def _run(
+    agent: agent_.Agent,
     model: models.Model,
     history: list[messages_.Message],
     steering: list[str],
@@ -32,9 +36,10 @@ async def _run(
 
     Every steering ask is answered with the lines in *steering*, which
     the caller may append to while the run goes. *history* is updated in
-    place, also when the run is stopped: the loop adds only whole turns.
+    place, also when the run is stopped: the loop then adds the partial
+    turn, with a result for every tool call.
     """
-    async with agent_.Agent().run(model, history) as stream:
+    async with agent.run(model, history) as stream:
         try:
             async for event in stream:
                 match event:
@@ -61,13 +66,17 @@ async def _run(
                     case agent_.Compacted():
                         print(f"\n[compacted {event.removed} messages]")
                     case agent_.LimitReached():
-                        print(f"\n[limit reached: {event.limit}]")
+                        print(
+                            f"\n[limit reached: {event.limit}, "
+                            f"{event.usage.total_tokens} tokens, "
+                            f"${event.usd:.4f}]"
+                        )
             print()
         finally:
             history[:] = stream.messages
 
 
-async def _repl(model: models.Model) -> None:
+async def _repl(agent: agent_.Agent, model: models.Model) -> None:
     loop = asyncio.get_running_loop()
 
     # stdin is read on a thread, so lines arrive while a run is going
@@ -97,7 +106,7 @@ async def _repl(model: models.Model) -> None:
             history.append(builders.user_message(line))
 
         # ── one run: Ctrl+C cancels it, typed lines steer it ──
-        run = asyncio.create_task(_run(model, history, steering))
+        run = asyncio.create_task(_run(agent, model, history, steering))
         loop.add_signal_handler(signal.SIGINT, run.cancel)
         try:
             while not run.done():
@@ -116,14 +125,15 @@ async def _repl(model: models.Model) -> None:
             loop.remove_signal_handler(signal.SIGINT)
 
         if run.cancelled():
-            print("\n[stopped]")
-            steering.clear()
+            # the history has the partial turn. Lines typed during the
+            # run are kept: the next run starts with them (redirect).
+            print("\n[stopped]" + (", redirecting" if steering else ""))
             continue
-        # keep the session on provider errors; the history has every
-        # finished turn. The loop's task groups wrap them in a group.
+        # keep the session on provider and budget errors; the history
+        # has every finished turn. The loop's task groups may wrap them.
         try:
             run.result()
-        except* errors.ProviderError as group:
+        except* errors.AIError as group:
             todo: list[BaseException] = [group]
             while todo:  # the groups nest; print the leaves
                 exc = todo.pop()
@@ -133,22 +143,34 @@ async def _repl(model: models.Model) -> None:
                     print(f"\n[error] {type(exc).__name__}: {exc}")
 
 
-async def _headless(model: models.Model, prompt: str) -> None:
-    await _run(model, [builders.user_message(prompt)], [])
+async def _headless(
+    agent: agent_.Agent, model: models.Model, prompt: str
+) -> None:
+    await _run(agent, model, [builders.user_message(prompt)], [])
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(prog="python -m ai.harness")
     parser.add_argument("-m", "--model", help="model id, e.g. openai:gpt-5")
     parser.add_argument("-p", "--prompt", help="run once, headless")
+    parser.add_argument(
+        "--max-usd",
+        type=float,
+        help="budget per run in USD, subagents included (best-effort)",
+    )
     args = parser.parse_args()
     model = models.get_model(args.model)
 
+    class Agent(agent_.Agent):
+        MAX_USD = args.max_usd
+
+    agent = Agent()
+
     with contextlib.suppress(KeyboardInterrupt):
         if args.prompt is not None:
-            asyncio.run(_headless(model, args.prompt))
+            asyncio.run(_headless(agent, model, args.prompt))
         else:
-            asyncio.run(_repl(model))
+            asyncio.run(_repl(agent, model))
 
 
 if __name__ == "__main__":

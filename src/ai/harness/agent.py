@@ -5,6 +5,11 @@ prompt (env facts, ``AGENTS.md`` files, a skill list), steering through
 the ``steer`` hook, turn/token limits, and compaction by a client-side
 summary. The ``task`` tool runs a subagent. Settings are class variables.
 
+Budgets: ``MAX_TOKENS`` and ``MAX_USD`` cover the run and its subagents
+(see :class:`Budget`). ``MAX_USD`` is best-effort, from models.dev
+prices; without prices for the model the run raises
+:class:`UnknownCostError` before its first request.
+
 Steering: before each model request the loop asks the interface for new
 messages with ``ai.hook("steer", payload=Steer)``. The interface keeps
 its own buffer and answers every ask, with an empty list if it has
@@ -17,28 +22,41 @@ nothing::
         queued.clear()
 
 The run waits until the ask is answered.
+
+Interrupting: cancel the task that runs the agent. The loop adds the
+partial turn to the history (``stream.messages``) before the cancel goes
+on: the text so far, the finished tool results, and an ``INTERRUPTED``
+error result for every tool call that did not finish. To interrupt and
+redirect, start a new run on that history with the new user message.
 """
 
 from __future__ import annotations
 
+import asyncio
 import contextvars
 import dataclasses
 import datetime
 import pathlib
 import platform
-from collections.abc import AsyncGenerator
-from typing import ClassVar, Literal
+from collections.abc import AsyncGenerator, Sequence
+from typing import TYPE_CHECKING, ClassVar, Literal
 
 import pydantic
 
-from .. import _modelsdev, agents, models, util
+from .. import _modelsdev, agents, errors, models, util
 from .. import experimental_telemetry as telemetry
 from ..types import builders, events
 from ..types import messages as messages_
 from ..types import usage as usage_
 from . import tools
 
+if TYPE_CHECKING:
+    import modelsdotdev
+
 STEER = "steer"
+
+# result of a tool call that was cut short by an interrupt
+INTERRUPTED = "Interrupted by user"
 
 PROMPT = """\
 You are a coding agent that works in the user's local environment.
@@ -95,6 +113,12 @@ _model: contextvars.ContextVar[models.Model] = contextvars.ContextVar(
     "harness_model"
 )
 
+# The budget of the top-level run. `loop` sets it when it is not set, so
+# subagent runs, which run in tool tasks of the parent, share it.
+_budget: contextvars.ContextVar[Budget] = contextvars.ContextVar(
+    "harness_budget"
+)
+
 
 class Steer(pydantic.BaseModel):
     """Answer to the ``steer`` hook: user messages for the next request.
@@ -122,11 +146,77 @@ class Compacted(events.BaseEvent):
 
 
 class LimitReached(events.BaseEvent):
-    """The run stopped at ``MAX_TURNS`` or ``MAX_TOKENS``."""
+    """The run stopped at ``MAX_TURNS``, ``MAX_TOKENS`` or ``MAX_USD``.
 
-    limit: Literal["turns", "tokens"]
+    ``usage`` and ``usd`` are the budget's totals: this run and the runs
+    that share its budget (subagents).
+    """
+
+    limit: Literal["turns", "tokens", "usd"]
     usage: usage_.Usage
+    usd: float
     kind: Literal["harness_limit_reached"] = "harness_limit_reached"
+
+
+class UnknownCostError(errors.AIError):
+    """``MAX_USD`` is set, but the cost of a request cannot be known.
+
+    models.dev has no token prices for the model, or the provider did not
+    report the usage of a request.
+    """
+
+
+@dataclasses.dataclass
+class Budget:
+    """What a run and its subagents spent, and the limits they share.
+
+    The top-level run makes it from its ``MAX_TOKENS`` and ``MAX_USD``.
+    Subagent runs (``task``) find it in a contextvar, add their spend to
+    it, and stop at the same limits; their own ``MAX_TOKENS`` and
+    ``MAX_USD`` are not used. A request counts when its model stream
+    ends, before the turn's tools run. Limits are checked before each
+    request, so a run can go over by its last request, and parallel
+    subagents by one request each. Tools start when their call ends, so a
+    subagent can send its first request before the parent's request is
+    counted. A request cut short by an interrupt is not counted: its usage is
+    never reported.
+    """
+
+    max_tokens: int | None = None
+    max_usd: float | None = None
+    usage: usage_.Usage = dataclasses.field(default_factory=usage_.Usage)
+    usd: float = 0.0
+
+
+def usd(prices: Sequence[modelsdotdev.Cost], usage: usage_.Usage) -> float:
+    """Best-effort cost of one request in USD, from models.dev prices.
+
+    Prices are per million tokens. The tier is picked by the request's
+    input size. It errs high: cache writes are charged on top of
+    ``input_tokens`` (Anthropic does not count them there, other
+    providers may), and reasoning is priced as output unless the model
+    has a reasoning price.
+    """
+    tier = next(
+        (p for p in reversed(prices) if p.min_context <= usage.input_tokens),
+        prices[0],
+    )
+    cache_read = usage.cache_read_tokens or 0
+    cache_write = usage.cache_write_tokens or 0
+    reasoning = usage.reasoning_tokens or 0
+    return (
+        max(usage.input_tokens - cache_read, 0) * tier.input
+        + cache_read
+        * (tier.input if tier.cache_read is None else tier.cache_read)
+        + cache_write
+        * (tier.input if tier.cache_write is None else tier.cache_write)
+        + (
+            usage.output_tokens * tier.output
+            if tier.reasoning is None
+            else max(usage.output_tokens - reasoning, 0) * tier.output
+            + reasoning * tier.reasoning
+        )
+    ) / 1_000_000
 
 
 type HarnessEvent = events.AgentEvent | Steered | Compacted | LimitReached
@@ -136,7 +226,8 @@ class Agent(agents.Agent):
     TOOLS: ClassVar[list[agents.AgentTool]] = [tools.read, tools.bash]  # + task
     STEERING: ClassVar[bool] = True
     MAX_TURNS: ClassVar[int | None] = None
-    MAX_TOKENS: ClassVar[int | None] = None
+    MAX_TOKENS: ClassVar[int | None] = None  # shared with subagents
+    MAX_USD: ClassVar[float | None] = None  # shared with subagents
     RESERVE_TOKENS: ClassVar[int] = 16_384
     KEEP_RECENT_TOKENS: ClassVar[int] = 20_000
     SKILL_DIRS: ClassVar[tuple[str, ...]] = (
@@ -209,7 +300,32 @@ class Agent(agents.Agent):
         last = next(
             (m.usage for m in reversed(context.messages) if m.usage), None
         )
-        usage, turns = usage_.Usage(), 0
+        turns = 0
+
+        # ── budget: the top-level run makes it, subagents share it ──
+        budget = _budget.get(None)
+        if budget is None:
+            budget = Budget(max_tokens=self.MAX_TOKENS, max_usd=self.MAX_USD)
+            _budget.set(budget)
+        model_id = f"{context.model.provider.name}:{context.model.id}"
+        prices = info.cost if info else None
+        if budget.max_usd is not None and not prices:
+            raise UnknownCostError(
+                f"models.dev has no token prices for {model_id}; "
+                "MAX_USD cannot be enforced"
+            )
+
+        def spend(request: usage_.Usage | None) -> None:
+            if request is None:
+                if budget.max_usd is not None:
+                    raise UnknownCostError(
+                        f"{model_id} did not report usage; "
+                        "MAX_USD cannot be enforced"
+                    )
+                return
+            budget.usage += request
+            if prices:
+                budget.usd += usd(prices, request)
 
         while True:
             # ── steering: ask the interface before each request, and
@@ -223,15 +339,21 @@ class Agent(agents.Agent):
             if not context.keep_running():
                 return
 
-            # ── limits ──
+            # ── limits: turns are per run, the budget is shared ──
+            limit: Literal["turns", "tokens", "usd"] | None = None
             if self.MAX_TURNS is not None and turns >= self.MAX_TURNS:
-                yield LimitReached(limit="turns", usage=usage)
-                return
-            if (
-                self.MAX_TOKENS is not None
-                and usage.total_tokens >= self.MAX_TOKENS
+                limit = "turns"
+            elif (
+                budget.max_tokens is not None
+                and budget.usage.total_tokens >= budget.max_tokens
             ):
-                yield LimitReached(limit="tokens", usage=usage)
+                limit = "tokens"
+            elif budget.max_usd is not None and budget.usd >= budget.max_usd:
+                limit = "usd"
+            if limit is not None:
+                yield LimitReached(
+                    limit=limit, usage=budget.usage, usd=budget.usd
+                )
                 return
 
             # ── compaction, when the last request was near the window ──
@@ -245,8 +367,7 @@ class Agent(agents.Agent):
                 )
                 if len(compacted) < before:
                     context.messages[:] = compacted
-                    if cost is not None:
-                        usage += cost
+                    spend(cost)
                     last = None
                     yield Compacted(
                         summary=compacted[1],
@@ -261,17 +382,56 @@ class Agent(agents.Agent):
                 agents.ToolRunner() as tr,
                 util.merge(stream, tr.events()) as merged,
             ):
-                async for event in merged:
-                    yield event
-                    if isinstance(event, events.ToolEnd):
-                        tr.schedule(self.resolve(event.tool_call))
+                ended: set[str] = set()  # tool calls with complete args
+                try:
+                    async for event in merged:
+                        if (
+                            isinstance(event, events.StreamEnd)
+                            and not event.replay
+                        ):
+                            # count the request now, not after the turn:
+                            # its tools (subagents) check the same budget
+                            spend(event.usage)
+                        yield event
+                        if isinstance(event, events.ToolEnd):
+                            ended.add(event.tool_call.tool_call_id)
+                            tr.schedule(self.resolve(event.tool_call))
+                except asyncio.CancelledError:
+                    # interrupted: keep the partial turn, but every tool
+                    # call must have a result. A call without one would
+                    # be replayed (run again) by the next run.
+                    parts = [
+                        p
+                        for p in stream.message.parts
+                        if not isinstance(p, messages_.ToolCallPart)
+                        or p.tool_call_id in ended
+                    ]
+                    if parts:
+                        context.add(
+                            stream.message.model_copy(update={"parts": parts})
+                        )
+                    done = tr.get_tool_message()
+                    results = list(done.tool_results) if done else []
+                    answered = {r.tool_call_id for r in results}
+                    results += [
+                        builders.tool_result_part(
+                            p.tool_call_id,
+                            tool_name=p.tool_name,
+                            result=INTERRUPTED,
+                            is_error=True,
+                        )
+                        for p in parts
+                        if isinstance(p, messages_.ToolCallPart)
+                        and p.tool_call_id not in answered
+                    ]
+                    if results:
+                        context.add(builders.tool_message(*results))
+                    raise
                 context.add(stream.message)
                 context.add(tr.get_tool_message())
 
             turns += 1
             last = stream.usage
-            if last is not None:
-                usage += last
 
 
 async def compact(
@@ -351,17 +511,21 @@ async def task(prompt: str) -> agents.SubAgentTool:
 Agent.TOOLS = [*Agent.TOOLS, task]
 
 __all__ = [
+    "INTERRUPTED",
     "PROMPT",
     "STEER",
     "SUMMARY_PREFIX",
     "SUMMARY_PROMPT",
     "Agent",
+    "Budget",
     "Compacted",
     "HarnessEvent",
     "LimitReached",
     "Steer",
     "Steered",
     "Subagent",
+    "UnknownCostError",
     "compact",
     "task",
+    "usd",
 ]
