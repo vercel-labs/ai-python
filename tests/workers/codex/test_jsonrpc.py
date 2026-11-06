@@ -9,7 +9,7 @@ from typing import Any, cast
 import pytest
 
 from ai import workers
-from ai.workers._adapters import jsonrpc
+from ai.workers.codex import jsonrpc
 
 from .. import fakes
 

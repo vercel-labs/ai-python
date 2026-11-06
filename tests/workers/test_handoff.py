@@ -3,7 +3,9 @@
 Text verbatim; tool calls as native items with the ORIGINAL name and
 arguments; tool results as strings bound to their call; reasoning as a
 user-role note after the turn it belonged to (codex), or not at all
-(claude, pi). The CLI's own tools arrive as built-in parts.
+(claude, pi). A worker holds a tool an `ai.Agent` ran as a call and a
+`tool` message, and a tool the CLI ran as built-in parts in one message:
+each renderer takes both, and both seed the same.
 """
 
 from __future__ import annotations
@@ -19,9 +21,13 @@ from ai.types.messages import (
     ToolCallPart,
     ToolResultPart,
 )
-from ai.workers._adapters import _handoff
+from ai.workers import _handoff
+from ai.workers.claude_code import handoff as claude_handoff
+from ai.workers.codex import handoff as codex_handoff
+from ai.workers.pi import handoff as pi_handoff
 
-HISTORY = [
+# Write as a tool an `ai.Agent` ran: its result in a `tool` message.
+AGENT_TOOL = [
     Message(role="user", parts=[TextPart(text="Create recipe.txt")]),
     Message(
         role="assistant",
@@ -51,9 +57,9 @@ HISTORY = [
     Message(role="assistant", parts=[TextPart(text="Done.")]),
 ]
 
-# The same conversation, the way a worker holds it.
-MODEL_VIEW = [
-    HISTORY[0],
+# The same conversation, Write as a tool the CLI ran: built-in parts.
+CLI_TOOL = [
+    AGENT_TOOL[0],
     Message(
         role="assistant",
         parts=[
@@ -71,12 +77,12 @@ MODEL_VIEW = [
             ),
         ],
     ),
-    HISTORY[3],
+    AGENT_TOOL[3],
 ]
 
 
 def test_codex_items_follow_the_rule() -> None:
-    items = _handoff.to_codex_items(HISTORY)
+    items = codex_handoff.to_codex_items(AGENT_TOOL)
     kinds = [(i["type"], i.get("role")) for i in items]
     assert kinds == [
         ("message", "user"),
@@ -94,18 +100,28 @@ def test_codex_items_follow_the_rule() -> None:
     assert out["call_id"] == "call_1"
     assert out["output"] == json.dumps({"ok": True})
     note = items[3]["content"][0]["text"]
-    assert note.startswith(_handoff.NOTE_PREFIX)
+    assert note.startswith(codex_handoff.NOTE_PREFIX)
     assert "Write is the tool" in note
 
 
-def test_the_model_view_seeds_the_same_items() -> None:
-    assert _handoff.to_codex_items(MODEL_VIEW) == _handoff.to_codex_items(
-        HISTORY
+def test_both_shapes_seed_the_same() -> None:
+    assert codex_handoff.to_codex_items(CLI_TOOL) == (
+        codex_handoff.to_codex_items(AGENT_TOOL)
     )
+    assert pi_handoff.to_pi_messages(CLI_TOOL, timestamp=1) == (
+        pi_handoff.to_pi_messages(AGENT_TOOL, timestamp=1)
+    )
+    assert [
+        (r["type"], r["message"])
+        for r in claude_handoff.to_claude_records(CLI_TOOL, "s", "/w")
+    ] == [
+        (r["type"], r["message"])
+        for r in claude_handoff.to_claude_records(AGENT_TOOL, "s", "/w")
+    ]
 
 
 def test_claude_records_follow_the_rule() -> None:
-    recs = _handoff.to_claude_records(MODEL_VIEW, "sid-1", "/w")
+    recs = claude_handoff.to_claude_records(CLI_TOOL, "sid-1", "/w")
     # user prompt, assistant (text + tool_use), tool result, assistant; NO
     # reasoning note: Claude's safeguards refuse replayed reasoning.
     assert [r["type"] for r in recs] == [
@@ -122,7 +138,7 @@ def test_claude_records_follow_the_rule() -> None:
     result = recs[2]["message"]["content"][0]
     assert result["type"] == "tool_result"
     assert result["tool_use_id"] == "call_1"
-    assert _handoff.reasoning_count(MODEL_VIEW) == 1  # what is warned about
+    assert _handoff.reasoning_count(CLI_TOOL) == 1  # what is warned about
     # a real chain, in the CLI's own store shape
     assert recs[0]["parentUuid"] is None
     assert all(
@@ -133,7 +149,7 @@ def test_claude_records_follow_the_rule() -> None:
 
 
 def test_pi_merges_assistant_messages_and_keeps_tool_results() -> None:
-    rendered = _handoff.to_pi_messages(
+    rendered = pi_handoff.to_pi_messages(
         [
             Message(role="user", parts=[TextPart(text="hi")]),
             Message(role="assistant", parts=[TextPart(text="one")]),
@@ -161,19 +177,9 @@ def test_pi_merges_assistant_messages_and_keeps_tool_results() -> None:
     assert rendered[2]["isError"] is True
 
 
-def test_model_view_and_harness_view_are_inverse() -> None:
-    model = _handoff.model_view(HISTORY)
-    assert [m.role for m in model] == ["user", "assistant", "assistant"]
-    parts = model[1].parts
-    assert isinstance(parts[2], BuiltinToolCallPart)
-    assert isinstance(parts[3], BuiltinToolReturnPart)
-    assert parts[3].result == {"ok": True}
-    back = _handoff.harness_view(model)
-    assert [m.role for m in back] == ["user", "assistant", "tool", "assistant"]
-    assert isinstance(back[2].parts[0], ToolResultPart)
-
-
 def test_text_after_a_cli_tool_stays_after_its_result() -> None:
+    """Claude and pi keep a result in a message of its own: the message
+    with the call ends there, and what follows comes after the result."""
     one = Message(
         role="assistant",
         parts=[
@@ -184,43 +190,35 @@ def test_text_after_a_cli_tool_stays_after_its_result() -> None:
             TextPart(text="It says x."),
         ],
     )
-    first, result, after = _handoff.harness_view([one])
-    assert (first.role, result.role, after.role) == (
-        "assistant",
-        "tool",
-        "assistant",
-    )
-    assert first.id == one.id and after.id != one.id
-    assert after.text == "It says x."
-
-
-def test_a_stored_result_without_a_name_takes_its_calls() -> None:
-    stored = [
-        Message(
-            role="assistant",
-            parts=[
-                ToolCallPart(tool_call_id="c", tool_name="Read", tool_args="")
-            ],
-        ),
-        Message(
-            role="tool",
-            parts=[ToolResultPart(tool_call_id="c", tool_name="", result="x")],
-        ),
+    recs = claude_handoff.to_claude_records([one], "s", "/w")
+    assert [r["type"] for r in recs] == ["assistant", "user", "assistant"]
+    assert recs[1]["message"]["content"][0]["type"] == "tool_result"
+    assert recs[2]["message"]["content"] == [
+        {"type": "text", "text": "It says x."}
     ]
-    (message,) = _handoff.model_view(stored)
-    result = message.parts[1]
-    assert isinstance(result, BuiltinToolReturnPart)
-    assert result.tool_name == "Read"
+    rendered = pi_handoff.to_pi_messages([one], timestamp=1)
+    assert [r["role"] for r in rendered] == [
+        "assistant",
+        "toolResult",
+        "assistant",
+    ]
+    assert rendered[2]["content"] == [{"type": "text", "text": "It says x."}]
+    items = codex_handoff.to_codex_items([one])
+    assert [i["type"] for i in items] == [
+        "function_call",
+        "function_call_output",
+        "message",
+    ]
 
 
 def test_reasoning_is_never_the_agents_own_thought() -> None:
     """No thinking block, no reasoning item: both were measured to fail,
     one rejected, one silently ignored. It travels as a note, or not at all."""
-    items = _handoff.to_codex_items(HISTORY)
+    items = codex_handoff.to_codex_items(AGENT_TOOL)
     assert not any(i["type"] == "reasoning" for i in items)
     blocks = [
         b
-        for r in _handoff.to_claude_records(HISTORY, "s", "/w")
+        for r in claude_handoff.to_claude_records(AGENT_TOOL, "s", "/w")
         if isinstance(r["message"]["content"], list)
         for b in r["message"]["content"]
     ]
@@ -229,6 +227,6 @@ def test_reasoning_is_never_the_agents_own_thought() -> None:
 
 def test_empty_parts_produce_nothing() -> None:
     blank = [Message(role="assistant", parts=[TextPart(text="   ")])]
-    assert _handoff.to_codex_items(blank) == []
+    assert codex_handoff.to_codex_items(blank) == []
     empty = [Message(role="assistant", parts=[ReasoningPart(text="")])]
-    assert _handoff.to_claude_records(empty, "s", "/w") == []
+    assert claude_handoff.to_claude_records(empty, "s", "/w") == []

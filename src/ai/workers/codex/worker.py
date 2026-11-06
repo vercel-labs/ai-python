@@ -1,7 +1,4 @@
-"""The workers, one per CLI.
-
-Each adds its CLI's own options to `Worker` and builds its adapter.
-"""
+"""`Codex`: Codex as a worker."""
 
 from __future__ import annotations
 
@@ -9,8 +6,8 @@ from typing import Any, Literal
 
 import pydantic
 
-from . import _bridge, _worker
-from ._adapters import base, codex
+from .. import _adapter, _bridge, _worker
+from . import adapter
 
 
 class Codex(_worker.Worker):
@@ -30,8 +27,8 @@ class Codex(_worker.Worker):
     def _make_adapter(
         self,
         mcp_servers: dict[str, dict[str, Any]],
-        approve: base.Approve | None,
-    ) -> base.Adapter:
+        approve: _adapter.Approve | None,
+    ) -> _adapter.CLIAdapter:
         config = dict(self.config)
         if self.effort is not None:
             config.setdefault(
@@ -45,7 +42,7 @@ class Codex(_worker.Worker):
                 f"mcp_servers.{_bridge.SERVER_NAME}.tool_timeout_sec",
                 24 * 3600,
             )
-        return codex.CodexAdapter(
+        return adapter.CodexAdapter(
             cwd=self.cwd,
             env=dict(self.env),
             executable=self.executable or "codex",
