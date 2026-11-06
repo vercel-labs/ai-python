@@ -1040,11 +1040,16 @@ class ToolRunner:
 
 
 def _validate_model(value: Any) -> models.ModelLike:
-    # Another model-like is kept as it is; a dict from JSON is an ai.Model.
+    # Another model-like (an ai.workers.Worker) is kept as it is. A dict
+    # from JSON with a worker's `kind` is a worker; any other is an ai.Model.
     if isinstance(value, models.ModelLike) and not isinstance(
         value, models.Model
     ):
         return value
+    if isinstance(value, dict) and "kind" in value:
+        from .. import workers  # noqa: PLC0415
+
+        return workers.Worker.model_validate(value)
     return models.Model.model_validate(value)
 
 

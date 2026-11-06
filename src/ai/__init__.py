@@ -8,6 +8,7 @@ from . import (
     testing,
     ui,
     util,
+    workers,
 )
 from .agents import (
     Agent,
@@ -229,5 +230,6 @@ __all__ = [
     "ui",
     "user_message",
     "util",
+    "workers",
     "yield_from",
 ]
