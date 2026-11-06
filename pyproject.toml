@@ -176,6 +176,11 @@ extend-ignore = [
     "TC003",   # annoying and wrong if TYPE_CHECKING for stdlib imports
 ]
 
+[tool.ruff.lint.flake8-type-checking]
+# pydantic evaluates field annotations at runtime, so their imports must stay
+# real even under `from __future__ import annotations`
+runtime-evaluated-base-classes = ["pydantic.BaseModel"]
+
 [tool.ruff.lint.per-file-ignores]
 "examples/**/*.py" = [
     "D",       # examples are executable samples, not public API
