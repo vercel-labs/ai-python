@@ -1,6 +1,6 @@
 """`ai.workers.Worker`: a coding-agent CLI that goes where a model goes.
 
-A worker is ONE conversation with one coding-agent CLI, such as Codex. It is
+A worker is ONE conversation with one CLI: Claude Code, Codex or Pi. It is
 a pydantic model: its fields are its settings, the CLI's `session_id` and
 the conversation so far (`messages`). Dump it, store it, and validate it
 again later; it continues the same conversation.
@@ -112,7 +112,7 @@ class _Runtime:
 
 
 class Worker(pydantic.BaseModel):
-    """Base class of the workers, such as `Codex`.
+    """Base class of `ClaudeCode`, `Codex` and `Pi`.
 
     `Worker.model_validate(data)` builds the kind that `data["kind"]` names.
     """

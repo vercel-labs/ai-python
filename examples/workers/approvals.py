@@ -3,7 +3,7 @@
 With `approve=True`, every tool call the CLI makes becomes a `ToolApproval`
 hook. Answer it with `ai.resolve_hook`, the way any tool approval is.
 
-    uv run python examples/workers/approvals.py [codex]
+    uv run python examples/workers/approvals.py [claude-code|codex|pi]
 """
 
 import asyncio
@@ -14,7 +14,9 @@ import ai
 from ai import workers
 
 KINDS: dict[str, Callable[..., workers.Worker]] = {
+    "claude-code": workers.ClaudeCode,
     "codex": workers.Codex,
+    "pi": workers.Pi,
 }
 
 
@@ -39,4 +41,4 @@ async def main(kind: str) -> None:
         print()
 
 
-asyncio.run(main(sys.argv[1] if len(sys.argv) > 1 else "codex"))
+asyncio.run(main(sys.argv[1] if len(sys.argv) > 1 else "claude-code"))

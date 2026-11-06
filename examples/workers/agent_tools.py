@@ -3,7 +3,7 @@
 The CLI calls `lookup_order`. The worker hands the call to the agent, the
 agent runs the tool, and the CLI gets the result and goes on.
 
-    uv run python examples/workers/agent_tools.py [codex]
+    uv run python examples/workers/agent_tools.py [claude-code|codex|pi]
 """
 
 import asyncio
@@ -14,7 +14,9 @@ import ai
 from ai import workers
 
 KINDS: dict[str, Callable[..., workers.Worker]] = {
+    "claude-code": workers.ClaudeCode,
     "codex": workers.Codex,
+    "pi": workers.Pi,
 }
 
 
@@ -47,4 +49,4 @@ async def main(kind: str) -> None:
         print([m.role for m in run.messages])
 
 
-asyncio.run(main(sys.argv[1] if len(sys.argv) > 1 else "codex"))
+asyncio.run(main(sys.argv[1] if len(sys.argv) > 1 else "claude-code"))

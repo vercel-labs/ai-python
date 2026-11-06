@@ -1,6 +1,6 @@
 """A worker where a model goes: stream it, then continue the conversation.
 
-uv run python examples/workers/streaming.py [codex]
+uv run python examples/workers/streaming.py [claude-code|codex|pi]
 """
 
 import asyncio
@@ -11,7 +11,9 @@ import ai
 from ai import workers
 
 KINDS: dict[str, Callable[..., workers.Worker]] = {
+    "claude-code": workers.ClaudeCode,
     "codex": workers.Codex,
+    "pi": workers.Pi,
 }
 
 
@@ -49,4 +51,4 @@ async def main(kind: str) -> None:
         print(reply.text)
 
 
-asyncio.run(main(sys.argv[1] if len(sys.argv) > 1 else "codex"))
+asyncio.run(main(sys.argv[1] if len(sys.argv) > 1 else "claude-code"))

@@ -35,6 +35,7 @@ dependencies = [
 
 [project.optional-dependencies]
 anthropic = ["anthropic>=0.83.0,<2.0.0"]
+claude-code = ["claude-agent-sdk>=0.2.144,<0.3"]
 mcp = ["mcp>=2.0.0,<3.0.0"]
 openai = ["openai>=2.34.0,<4.0.0"]
 otel = [
@@ -69,6 +70,7 @@ bump = true
 [dependency-groups]
 dev = [
     "anthropic>=0.83.0",
+    "claude-agent-sdk>=0.2.144,<0.3",
     "mcp>=2.0.0,<3.0.0",
     "python-dotenv>=1.2.1",
     "pytest>=8.0",
@@ -82,6 +84,7 @@ dev = [
     "vercel-oidc>=0.8.0",
     "opentelemetry-sdk>=1.43.0",
     "opentelemetry-exporter-otlp-proto-http>=1.43.0",
+    "pytest-timeout>=2.3",
     "typesafe-sdk>=0.7.2",
 ]
 
@@ -115,6 +118,14 @@ exclude = [
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+# Live worker tests drive real agent CLIs, so they are opt-in:
+# `uv run pytest -m live tests/workers` (a later -m overrides this one).
+addopts = "-m 'not live'"
+# A live test drives a real agent; hanging must be a failure.
+timeout = 300
+markers = [
+    "live: drives a real Claude Code, Codex or Pi (deselect with -m 'not live')",
+]
 filterwarnings = [
     "ignore:'asyncio\\.DefaultEventLoopPolicy' is deprecated.*:DeprecationWarning:async_solipsism\\.loop",
 ]
