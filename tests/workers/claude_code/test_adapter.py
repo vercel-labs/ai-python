@@ -15,7 +15,7 @@ claude_agent_sdk = pytest.importorskip("claude_agent_sdk")
 from ai import workers  # noqa: E402
 from ai.types import events  # noqa: E402
 from ai.types import messages as m  # noqa: E402
-from ai.workers._adapters import claude  # noqa: E402
+from ai.workers.claude_code import adapter as adapter_  # noqa: E402
 
 
 def _stream(event: dict[str, Any]) -> Any:
@@ -109,8 +109,8 @@ class Client:
         pass
 
 
-def _adapter(tmp_path: Path, **options: Any) -> claude.ClaudeAdapter:
-    return claude.ClaudeAdapter(
+def _adapter(tmp_path: Path, **options: Any) -> adapter_.ClaudeAdapter:
+    return adapter_.ClaudeAdapter(
         cwd=str(tmp_path),
         env={"CLAUDE_CONFIG_DIR": str(tmp_path / "config")},
         executable="claude",
@@ -124,7 +124,7 @@ def _adapter(tmp_path: Path, **options: Any) -> claude.ClaudeAdapter:
     )
 
 
-async def _turn(adapter: claude.ClaudeAdapter, *prompt: Any) -> list[Any]:
+async def _turn(adapter: adapter_.ClaudeAdapter, *prompt: Any) -> list[Any]:
     async with asyncio.timeout(5):
         return [e async for e in adapter.turn(list(prompt))]
 
@@ -286,9 +286,9 @@ def test_a_stored_transcript_reads_as_the_model_view() -> None:
             parent_tool_use_id=None,
         ),
     ]
-    from ai.workers._adapters import _handoff
+    from ai.workers import _handoff
 
-    stored = [msg for r in records for msg in claude._stored_to_messages(r)]
+    stored = [msg for r in records for msg in adapter_._stored_to_messages(r)]
     history = _handoff.model_view(stored)
     assert [x.role for x in history] == ["user", "assistant"]
     call, result = history[1].parts

@@ -26,14 +26,14 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from ..types import tools as tools_
 
+# The MCP server name the CLI sees. Claude Code calls a tool
+# `mcp__ai_sdk__<name>`.
 SERVER_NAME = "ai_sdk"
-"""The MCP server name the CLI sees. Claude Code calls a tool
-`mcp__ai_sdk__<name>`."""
 
 PROTOCOL_VERSION = "2025-06-18"
 
+# `on_call(name, arguments)` returns `(text, is_error)`.
 OnCall = Callable[[str, dict[str, Any]], Awaitable[tuple[str, bool]]]
-"""`on_call(name, arguments)` returns `(text, is_error)`."""
 
 
 class Bridge:

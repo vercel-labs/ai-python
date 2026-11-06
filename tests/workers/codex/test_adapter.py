@@ -12,7 +12,8 @@ import pytest
 from ai import workers
 from ai.types import events
 from ai.types import messages as m
-from ai.workers._adapters import codex, jsonrpc
+from ai.workers.codex import adapter as adapter_
+from ai.workers.codex import jsonrpc
 
 from .. import fakes
 
@@ -98,8 +99,8 @@ TURN = [
 
 def _adapter(
     server: AppServer, approve: Any = None, **options: Any
-) -> codex.CodexAdapter:
-    adapter = codex.CodexAdapter(
+) -> adapter_.CodexAdapter:
+    adapter = adapter_.CodexAdapter(
         cwd=CWD,
         env={},
         executable="codex",
@@ -119,7 +120,7 @@ def _adapter(
     return adapter
 
 
-async def _turn(adapter: codex.CodexAdapter, text: str = "go") -> list[Any]:
+async def _turn(adapter: adapter_.CodexAdapter, text: str = "go") -> list[Any]:
     async with asyncio.timeout(5):
         return [e async for e in adapter.turn([m.TextPart(text=text)])]
 

@@ -22,19 +22,19 @@ from typing import Any
 from ...types import events as events_
 from ...types import messages as messages_
 from ...types import usage as usage_
-from .. import _bridge
+from .. import _adapter, _bridge, _convert, _handoff
 from .. import _errors as errors
-from . import _handoff, base, jsonrpc
+from . import handoff, jsonrpc
 
 KIND = "codex"
 INSTALL = "npm install -g @openai/codex"
+# The CLI the live tests last passed against. Older ones get a warning.
 VERIFIED_VERSION = "0.160.1"
-"""The CLI the live tests last passed against. Older ones get a warning."""
+# Put on the turn's queue when app-server dies.
 CRASHED = "__crashed__"
-"""Put on the turn's queue when app-server dies."""
 LIST_PAGE_SIZE = 100
+# `list_sessions()` reads at most this many pages of threads.
 LIST_PAGES = 50
-"""`list_sessions()` reads at most this many pages of threads."""
 
 APPROVAL_METHODS = (
     "item/commandExecution/requestApproval",
@@ -44,6 +44,7 @@ APPROVAL_METHODS = (
     "applyPatchApproval",
 )
 
+# Item types that are the agent doing something, rather than speaking.
 TOOL_ITEMS = (
     "fileChange",
     "commandExecution",
@@ -51,7 +52,6 @@ TOOL_ITEMS = (
     "webSearch",
     "toolCall",
 )
-"""Item types that are the agent doing something, rather than speaking."""
 
 AUTH_HINT = (
     "codex uses your own login: run `codex login`, or pass "
@@ -69,7 +69,7 @@ class CodexAdapter:
         executable: str,
         model: str | None,
         mcp_servers: dict[str, Any],
-        approve: base.Approve | None,
+        approve: _adapter.Approve | None,
         sandbox: str | None,
         config: dict[str, Any],
     ) -> None:
@@ -88,7 +88,7 @@ class CodexAdapter:
         # CLI takes. An explicit config wins over the MCP servers.
         self._config = {**mcp_config(mcp_servers), **config}
         self._instructions: str | None = None
-        self._process: base.Process | None = None
+        self._process: jsonrpc.Process | None = None
         self._peer: jsonrpc.JsonRpcPeer | None = None
         self._thread: str | None = None
         self._turn: str | None = None
@@ -98,7 +98,7 @@ class CodexAdapter:
         self.version: str | None = None
 
     async def start(self) -> None:
-        self.version = await base.probe(
+        self.version = await _adapter.probe(
             KIND,
             self._executable,
             install=INSTALL,
@@ -106,7 +106,7 @@ class CodexAdapter:
             cwd=self._cwd,
             env=self._env,
         )
-        self._process = await base.spawn(
+        self._process = await jsonrpc.spawn(
             [self._executable, "app-server", *_config_args(self._config)],
             cwd=self._cwd,
             env=self._env,
@@ -206,7 +206,7 @@ class CodexAdapter:
             _handoff.warn_unsupported_files(seed, KIND)
             await self._rpc().call(
                 "thread/inject_items",
-                {"threadId": thread, "items": _handoff.to_codex_items(seed)},
+                {"threadId": thread, "items": handoff.to_codex_items(seed)},
             )
         return thread
 
@@ -277,8 +277,10 @@ class CodexAdapter:
 
     # -- turns ----------------------------------------------------------------
 
-    async def turn(self, prompt: base.Prompt) -> AsyncIterator[events_.Event]:
-        base.check_files(prompt, KIND, ("image/",))
+    async def turn(
+        self, prompt: _adapter.Prompt
+    ) -> AsyncIterator[events_.Event]:
+        _convert.check_files(prompt, KIND, ("image/",))
         # Unbounded: the reader fills it inline and must never wait on a
         # slow consumer.
         queue: asyncio.Queue[tuple[str, dict[str, Any]]] = asyncio.Queue()
@@ -366,14 +368,14 @@ class CodexAdapter:
                         open_reasoning.discard(item_id)
                         yield events_.ReasoningEnd(block_id=item_id)
                     elif kind in TOOL_ITEMS:
-                        for event in base.builtin_call(
+                        for event in _convert.builtin_call(
                             item_id,
                             _tool_name(item),
                             json.dumps(_tool_args(item)),
                             started=started,
                         ):
                             yield event
-                        yield base.builtin_result(
+                        yield _convert.builtin_result(
                             item_id,
                             _tool_name(item),
                             _item_result(item),
@@ -452,7 +454,7 @@ class CodexAdapter:
                 stored.extend(_item_to_messages(item))
         return _handoff.model_view(stored)
 
-    async def list_sessions(self) -> list[base.SessionInfo]:
+    async def list_sessions(self) -> list[_adapter.SessionInfo]:
         # Asked for THIS directory, page by page: one unfiltered page of the
         # machine's store (measured: 3159 threads) missed threads from here.
         threads: list[dict[str, Any]] = []
@@ -471,7 +473,7 @@ class CodexAdapter:
             if not cursor:
                 break
         return [
-            base.SessionInfo(
+            _adapter.SessionInfo(
                 session_id=t.get("id", ""),
                 title=t.get("name") or t.get("preview") or None,
                 cwd=t.get("cwd"),
@@ -507,7 +509,7 @@ class CodexAdapter:
         return argv, dict(self._env), None
 
 
-async def _input_items(prompt: base.Prompt) -> list[dict[str, Any]]:
+async def _input_items(prompt: _adapter.Prompt) -> list[dict[str, Any]]:
     """Return a prompt as app-server's `UserInput` items.
 
     An image travels as a data URL, built here from its bytes.
@@ -517,9 +519,11 @@ async def _input_items(prompt: base.Prompt) -> list[dict[str, Any]]:
         if isinstance(part, messages_.TextPart):
             items.append({"type": "text", "text": part.text})
         elif part.media_type.startswith("text/"):
-            items.append({"type": "text", "text": await base.as_text(part)})
+            items.append({"type": "text", "text": await _convert.as_text(part)})
         else:
-            encoded = base64.b64encode(await base.data(part)).decode("ascii")
+            encoded = base64.b64encode(await _convert.data(part)).decode(
+                "ascii"
+            )
             items.append(
                 {
                     "type": "image",

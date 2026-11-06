@@ -5,7 +5,7 @@ hand pi (`--session-id`) IS its session id, so `pi --session-id <id>` opens
 the same conversation in pi's own TUI.
 
 pi has no permission prompt. Approval is an extension loaded into every pi
-a worker starts (`pi_extension.js`): its `tool_call` handler asks through an
+a worker starts (`extension.js`): its `tool_call` handler asks through an
 RPC dialog, and this adapter answers it. The protocol shapes here were
 measured against a real pi (see VERIFIED_VERSION).
 """
@@ -22,34 +22,42 @@ import pathlib
 import re
 import uuid
 import warnings
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import Any
 
 from ...types import events as events_
 from ...types import messages as messages_
 from ...types import usage as usage_
-from .. import _bridge
+from .. import _adapter, _bridge, _convert, _handoff
 from .. import _errors as errors
-from . import _handoff, base
+from . import handoff
 
 KIND = "pi"
 INSTALL = "npm install -g @earendil-works/pi-coding-agent"
+# The CLI the live tests last passed against. Older ones get a warning.
 VERIFIED_VERSION = "1.3.0"
-"""The CLI the live tests last passed against. Older ones get a warning."""
-EXTENSION = str(pathlib.Path(__file__).with_name("pi_extension.js"))
+EXTENSION = str(pathlib.Path(__file__).with_name("extension.js"))
+# The dialog title the extension asks approvals under.
 APPROVE = "ai-python:approve"
-"""The dialog title the extension asks approvals under."""
+# The command the extension registers last: proof that it loaded.
 READY = "ai-python-ready"
-"""The command the extension registers last: proof that it loaded."""
+# The environment variable that configures the extension.
 CONFIG_VAR = "AI_PYTHON_PI"
-"""The environment variable that configures the extension."""
+# pi's rule for a session id: letters, digits, `.`, `_` and `-`, starting and
+# ending with a letter or digit. Never a path.
 SESSION_ID = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9._-]{0,198}[A-Za-z0-9])?\Z")
-"""pi's rule for a session id: letters, digits, `.`, `_` and `-`, starting
-and ending with a letter or digit. Never a path."""
+# Extension UI methods that wait for an answer; the rest are notices.
 DIALOGS = ("select", "confirm", "input", "editor")
-"""Extension UI methods that wait for an answer; the rest are notices."""
 CRASHED = "__crashed__"
 CLOSED = "__closed__"
+
+# Longest line pi may write. The protocol is JSON lines, and one line can be
+# megabytes. With asyncio's default (64 KiB) such a line fails as if the CLI had
+# crashed.
+LINE_LIMIT = 256 * 1024 * 1024
+
+# Seconds pi gets to exit after SIGTERM, before SIGKILL.
+TERM_GRACE = 3.0
 
 AUTH_HINT = (
     "pi uses its own login (`/login`, auth.json) or a provider key in the "
@@ -67,7 +75,7 @@ class PiAdapter:
         model: str | None,
         effort: str | None,
         mcp_servers: dict[str, Any],
-        approve: base.Approve | None,
+        approve: _adapter.Approve | None,
         allowed_tools: list[str] | None,
         disallowed_tools: list[str] | None,
     ) -> None:
@@ -89,7 +97,7 @@ class PiAdapter:
         self.version: str | None = None
 
     async def start(self) -> None:
-        self.version = await base.probe(
+        self.version = await _adapter.probe(
             KIND,
             self._executable,
             install=INSTALL,
@@ -169,7 +177,7 @@ class PiAdapter:
         A pi that cannot start (an unknown model, a bad flag) exits at once,
         and the handshake reports its last words.
         """
-        process = await base.spawn(
+        process = await spawn(
             [self._executable, "--mode", "rpc", *args, *self._args()],
             cwd=self._cwd,
             env=self._extension_env(
@@ -264,7 +272,7 @@ class PiAdapter:
             *changes,
             *(
                 {"type": "message", "message": message}
-                for message in _handoff.to_pi_messages(
+                for message in handoff.to_pi_messages(
                     history, timestamp=int(now.timestamp() * 1000)
                 )
             ),
@@ -331,8 +339,10 @@ class PiAdapter:
 
     # -- turns ----------------------------------------------------------------
 
-    async def turn(self, prompt: base.Prompt) -> AsyncIterator[events_.Event]:
-        base.check_files(prompt, KIND, ("image/",))
+    async def turn(
+        self, prompt: _adapter.Prompt
+    ) -> AsyncIterator[events_.Event]:
+        _convert.check_files(prompt, KIND, ("image/",))
         agent = self._agent
         assert agent is not None
         if agent.dead is not None:
@@ -421,7 +431,7 @@ class PiAdapter:
                     # transcript: only the tool that made it reports it.
                     call_id = str(event.get("toolCallId") or "")
                     name = str(event.get("toolName") or "")
-                    yield base.builtin_result(
+                    yield _convert.builtin_result(
                         call_id,
                         name,
                         _tool_result(event.get("result") or {}),
@@ -554,9 +564,9 @@ class PiAdapter:
             stored.extend(_stored_to_messages(record))
         return _handoff.model_view(stored)
 
-    async def list_sessions(self) -> list[base.SessionInfo]:
+    async def list_sessions(self) -> list[_adapter.SessionInfo]:
         return [
-            base.SessionInfo(
+            _adapter.SessionInfo(
                 session_id=s["id"],
                 title=s.get("title"),
                 cwd=s.get("cwd"),
@@ -584,6 +594,84 @@ class PiAdapter:
         )
 
 
+# -- the process -------------------------------------------------------------
+
+
+class Process:
+    """A CLI started by `spawn`: JSON lines on stdin and stdout."""
+
+    def __init__(self, proc: asyncio.subprocess.Process) -> None:
+        self._proc = proc
+
+    async def write(self, data: str) -> None:
+        assert self._proc.stdin is not None
+        self._proc.stdin.write(data.encode())
+        await self._proc.stdin.drain()
+
+    async def readline(self) -> str:
+        assert self._proc.stdout is not None
+        return (await self._proc.stdout.readline()).decode()
+
+    async def read_stderr(self) -> str:
+        if self._proc.stderr is None:
+            return ""
+        return (await self._proc.stderr.read()).decode(errors="replace")
+
+    async def wait(self) -> int:
+        return await self._proc.wait()
+
+    async def terminate(self) -> None:
+        """Stop the process group: SIGTERM, then SIGKILL."""
+        if self._proc.returncode is not None:
+            return
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(os.getpgid(self._proc.pid), 15)
+        try:
+            async with asyncio.timeout(TERM_GRACE):
+                await self._proc.wait()
+        except TimeoutError:
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(os.getpgid(self._proc.pid), 9)
+            with contextlib.suppress(Exception):
+                await self._proc.wait()
+
+    async def death_note(self) -> str:
+        """Say how the process ended, and its last words."""
+        code: int | None = None
+        tail = ""
+        with contextlib.suppress(Exception):
+            async with asyncio.timeout(2):
+                code = await self.wait()
+        with contextlib.suppress(Exception):
+            async with asyncio.timeout(2):
+                tail = (await self.read_stderr()).strip()
+        how = f"exit code {code}" if code is not None else "exited"
+        if code in (137, -9):
+            how += " (SIGKILL, typically the kernel's OOM killer)"
+        return f"{how}; stderr: {tail[-800:]}" if tail else f"{how}; no stderr"
+
+
+async def spawn(
+    argv: Sequence[str], *, cwd: str, env: Mapping[str, str]
+) -> Process:
+    """Start a CLI in its own process group, with pipes for stdio."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *argv,
+            cwd=cwd,
+            env={**os.environ, **env},
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            # Own the whole tree, so teardown reaches grandchildren too.
+            start_new_session=True,
+            limit=LINE_LIMIT,
+        )
+    except OSError as exc:
+        raise errors.WorkerError(f"cannot start {argv[0]!r}: {exc}") from exc
+    return Process(proc)
+
+
 class _CommandError(Exception):
     """pi answered a command with `success: false`."""
 
@@ -597,7 +685,7 @@ class _Agent:
     including the reply to an `abort` sent from inside it.
     """
 
-    def __init__(self, process: base.Process, *, on_dialog: Any) -> None:
+    def __init__(self, process: Process, *, on_dialog: Any) -> None:
         self.process = process
         self.events: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         self.dead: str | None = None
@@ -730,7 +818,7 @@ class _Agent:
             future.set_result(record.get("data"))
 
 
-async def _prompt_command(prompt: base.Prompt) -> dict[str, Any]:
+async def _prompt_command(prompt: _adapter.Prompt) -> dict[str, Any]:
     """Return a prompt as pi's `prompt` command: text, and images as base64."""
     texts: list[str] = []
     images: list[dict[str, Any]] = []
@@ -738,12 +826,12 @@ async def _prompt_command(prompt: base.Prompt) -> dict[str, Any]:
         if isinstance(part, messages_.TextPart):
             texts.append(part.text)
         elif part.media_type.startswith("text/"):
-            texts.append(await base.as_text(part))
+            texts.append(await _convert.as_text(part))
         else:
             images.append(
                 {
                     "type": "image",
-                    "data": base64.b64encode(await base.data(part)).decode(
+                    "data": base64.b64encode(await _convert.data(part)).decode(
                         "ascii"
                     ),
                     "mimeType": part.media_type,
@@ -795,7 +883,7 @@ def _stream_events(
         )
     elif kind == "toolcall_end":
         call = _tool_call(update.get("toolCall") or {})
-        out += base.builtin_call(
+        out += _convert.builtin_call(
             call.tool_call_id, call.tool_name, call.tool_args, started=started
         )
     return out
@@ -832,7 +920,7 @@ def _unstreamed(
             ]
         elif kind == "toolCall" and str(block.get("id")) not in started:
             call = _tool_call(block)
-            out += base.builtin_call(
+            out += _convert.builtin_call(
                 call.tool_call_id,
                 call.tool_name,
                 call.tool_args,

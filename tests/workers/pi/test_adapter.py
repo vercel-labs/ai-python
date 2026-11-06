@@ -16,7 +16,7 @@ import pytest
 from ai import workers
 from ai.types import events
 from ai.types import messages as m
-from ai.workers._adapters import pi
+from ai.workers.pi import adapter as adapter_
 
 from .. import fakes
 
@@ -147,8 +147,8 @@ class Pi:
 
 def _adapter(
     server: Pi | None = None, approve: Any = None, cwd: str = "/w", **env: str
-) -> pi.PiAdapter:
-    adapter = pi.PiAdapter(
+) -> adapter_.PiAdapter:
+    adapter = adapter_.PiAdapter(
         cwd=cwd,
         env=env,
         executable="pi",
@@ -160,7 +160,7 @@ def _adapter(
         disallowed_tools=None,
     )
     if server is not None:
-        agent = pi._Agent(
+        agent = adapter_._Agent(
             cast("Any", server.process), on_dialog=adapter._on_dialog
         )
         agent.start()
@@ -168,7 +168,7 @@ def _adapter(
     return adapter
 
 
-async def _turn(adapter: pi.PiAdapter, *prompt: Any) -> list[Any]:
+async def _turn(adapter: adapter_.PiAdapter, *prompt: Any) -> list[Any]:
     parts: list[m.TextPart | m.FilePart] = list(prompt) or [
         m.TextPart(text="go")
     ]
@@ -251,7 +251,7 @@ def _ask(server: Pi) -> None:
             "type": "extension_ui_request",
             "id": "ui-1",
             "method": "input",
-            "title": pi.APPROVE,
+            "title": adapter_.APPROVE,
             "placeholder": json.dumps(
                 {
                     "toolCallId": "toolu_1",
@@ -423,8 +423,8 @@ def test_history_follows_the_active_branch_only() -> None:
     text = "\n".join(json.dumps(line) for line in lines)
     stored = [
         msg
-        for entry in pi._active_branch(text)
-        for msg in pi._stored_to_messages(entry)
+        for entry in adapter_._active_branch(text)
+        for msg in adapter_._stored_to_messages(entry)
     ]
     assert [msg.role for msg in stored] == ["user", "assistant", "tool"]
     result = stored[2].parts[0]
@@ -501,7 +501,7 @@ async def test_a_seeded_pi_conversation_stays_on_its_model(
     }
     seed = [
         m.Message(role="user", parts=[m.TextPart(text="hello")]),
-        *pi._stored_to_messages(stored),
+        *adapter_._stored_to_messages(stored),
     ]
     session_id = await adapter._stage(seed)
     (written,) = agent_dir.glob(f"sessions/*/*_{session_id}.jsonl")
@@ -525,7 +525,7 @@ async def test_a_seeded_pi_conversation_stays_on_its_model(
 
 
 def test_options_reach_pi_in_its_own_spelling() -> None:
-    adapter = pi.PiAdapter(
+    adapter = adapter_.PiAdapter(
         cwd="/w",
         env={"K": "v"},
         executable="pi",
@@ -541,14 +541,14 @@ def test_options_reach_pi_in_its_own_spelling() -> None:
     )
     argv, env, minted = adapter.tui_command(None)
     assert argv[:3] == ["pi", "--session-id", minted]
-    assert argv[3:5] == ["-e", pi.EXTENSION]
+    assert argv[3:5] == ["-e", adapter_.EXTENSION]
     assert argv[argv.index("--model") + 1] == "anthropic/claude-sonnet-4.6"
     assert argv[argv.index("--thinking") + 1] == "high"
     assert "--no-tools" in argv
     assert argv[argv.index("--exclude-tools") + 1] == "bash"
     assert env["K"] == "v"
     # The person at the TUI is the gate; the bridge is not there.
-    assert json.loads(env[pi.CONFIG_VAR]) == {
+    assert json.loads(env[adapter_.CONFIG_VAR]) == {
         "approve": False,
         "mcp": {"docs": {"command": "docs-mcp"}},
     }

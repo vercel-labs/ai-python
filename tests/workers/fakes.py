@@ -15,7 +15,7 @@ from ai import workers
 from ai.types import events
 from ai.types import messages as m
 from ai.types import usage as usage_
-from ai.workers._adapters import base
+from ai.workers import _adapter, _convert
 
 
 @dataclasses.dataclass
@@ -56,8 +56,8 @@ def tool(
 ) -> list[Step]:
     """One of the CLI's own tool calls, start to result."""
     return [
-        *base.builtin_call(call_id, name, args, started=set()),
-        base.builtin_result(call_id, name, result, is_error=False),
+        *_convert.builtin_call(call_id, name, args, started=set()),
+        _convert.builtin_result(call_id, name, result, is_error=False),
     ]
 
 
@@ -67,7 +67,9 @@ def reply(prompt: str) -> list[Step]:
 
 
 class FakeAdapter:
-    def __init__(self, script: Script, approve: base.Approve | None) -> None:
+    def __init__(
+        self, script: Script, approve: _adapter.Approve | None
+    ) -> None:
         self.script = script
         self.approve = approve
         self.version: str | None = None
@@ -106,11 +108,13 @@ class FakeAdapter:
             return f"{session_id}-fork"
         return session_id or "s1"
 
-    async def turn(self, prompt: base.Prompt) -> AsyncIterator[events.Event]:
-        self.turns.append(base.text_of(prompt))
+    async def turn(
+        self, prompt: _adapter.Prompt
+    ) -> AsyncIterator[events.Event]:
+        self.turns.append(_convert.text_of(prompt))
         self._resume.clear()
         yield events.StreamStart()
-        for step in self.script(base.text_of(prompt)):
+        for step in self.script(_convert.text_of(prompt)):
             if isinstance(step, Pause):
                 await self._resume.wait()
                 yield events.StreamEnd(finish_reason="cancelled")
@@ -141,8 +145,8 @@ class FakeAdapter:
     async def history(self, session_id: str) -> list[m.Message]:
         return self.stored.get(session_id, [])
 
-    async def list_sessions(self) -> list[base.SessionInfo]:
-        return [base.SessionInfo(session_id="s1", title="first")]
+    async def list_sessions(self) -> list[_adapter.SessionInfo]:
+        return [_adapter.SessionInfo(session_id="s1", title="first")]
 
     def tui_command(
         self, session_id: str | None
@@ -167,8 +171,8 @@ class FakeWorker(workers.Worker):
     def _make_adapter(
         self,
         mcp_servers: dict[str, dict[str, Any]],
-        approve: base.Approve | None,
-    ) -> base.Adapter:
+        approve: _adapter.Approve | None,
+    ) -> _adapter.CLIAdapter:
         self._fake = FakeAdapter(self._run, approve)
         self._servers = mcp_servers
         return self._fake
@@ -203,7 +207,6 @@ class FakeProcess:
         self._lines: asyncio.Queue[str] = asyncio.Queue()
         self.answer = answer or (lambda message: {})
         self.written: list[dict[str, Any]] = []
-        self.pid = 0
 
     def server_says(self, message: dict[str, Any]) -> None:
         self._lines.put_nowait(json.dumps(message) + "\n")

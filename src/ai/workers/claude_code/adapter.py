@@ -25,18 +25,18 @@ import claude_agent_sdk
 from ...types import events as events_
 from ...types import messages as messages_
 from ...types import usage as usage_
-from .. import _bridge
+from .. import _adapter, _bridge, _convert, _handoff
 from .. import _errors as errors
-from . import _handoff, base
+from . import handoff
 
 KIND = "claude-code"
 INSTALL = "npm install -g @anthropic-ai/claude-code"
+# The CLI the live tests last passed against. Older ones get a warning.
 VERIFIED_VERSION = "2.1.289"
-"""The CLI the live tests last passed against. Older ones get a warning."""
 
+# Seconds the CLI waits for an approval. Its own default (60s) would cut a
+# person short: the hook would time out and the call would be denied.
 APPROVAL_TIMEOUT = 24 * 3600
-"""Seconds the CLI waits for an approval. Its own default (60s) would cut a
-person short: the hook would time out and the call would be denied."""
 
 AUTH_HINT = (
     "claude-code uses your own login: run `claude` once and sign in, or "
@@ -54,7 +54,7 @@ class ClaudeAdapter:
         model: str | None,
         effort: str | None,
         mcp_servers: dict[str, Any],
-        approve: base.Approve | None,
+        approve: _adapter.Approve | None,
         allowed_tools: list[str] | None,
         disallowed_tools: list[str] | None,
         max_turns: int | None,
@@ -82,7 +82,7 @@ class ClaudeAdapter:
         self.version: str | None = None
 
     async def start(self) -> None:
-        self.version = await base.probe(
+        self.version = await _adapter.probe(
             KIND,
             self._executable,
             install=INSTALL,
@@ -153,7 +153,7 @@ class ClaudeAdapter:
         )
         key = claude_agent_sdk.project_key_for_directory(self._cwd)
         path = pathlib.Path(config) / "projects" / key / f"{session_id}.jsonl"
-        records = _handoff.to_claude_records(history, session_id, self._cwd)
+        records = handoff.to_claude_records(history, session_id, self._cwd)
         text = "".join(
             json.dumps(r, separators=(",", ":")) + "\n" for r in records
         )
@@ -281,8 +281,10 @@ class ClaudeAdapter:
 
     # -- turns ----------------------------------------------------------------
 
-    async def turn(self, prompt: base.Prompt) -> AsyncIterator[events_.Event]:
-        base.check_files(prompt, KIND, ("image/", "application/pdf"))
+    async def turn(
+        self, prompt: _adapter.Prompt
+    ) -> AsyncIterator[events_.Event]:
+        _convert.check_files(prompt, KIND, ("image/", "application/pdf"))
         client = self._client
         assert client is not None
         # An interrupted turn leaves its trailing result unread: the CLI
@@ -318,7 +320,7 @@ class ClaudeAdapter:
                     for block in message.content:
                         if isinstance(block, claude_agent_sdk.ToolUseBlock):
                             names[block.id] = block.name
-                            for event in base.builtin_call(
+                            for event in _convert.builtin_call(
                                 block.id,
                                 block.name,
                                 json.dumps(block.input),
@@ -333,7 +335,7 @@ class ClaudeAdapter:
                     )
                     for block in content_blocks:
                         if isinstance(block, claude_agent_sdk.ToolResultBlock):
-                            yield base.builtin_result(
+                            yield _convert.builtin_result(
                                 block.tool_use_id,
                                 names.get(block.tool_use_id, ""),
                                 block.content,
@@ -390,12 +392,12 @@ class ClaudeAdapter:
             out.extend(_stored_to_messages(record))
         return _handoff.model_view(out)
 
-    async def list_sessions(self) -> list[base.SessionInfo]:
+    async def list_sessions(self) -> list[_adapter.SessionInfo]:
         infos = await asyncio.to_thread(
             claude_agent_sdk.list_sessions, self._cwd
         )
         return [
-            base.SessionInfo(
+            _adapter.SessionInfo(
                 session_id=i.session_id,
                 title=i.custom_title or i.summary or i.first_prompt,
                 cwd=i.cwd,
@@ -436,7 +438,7 @@ class ClaudeAdapter:
         return argv, env, running_as
 
 
-async def _content(prompt: base.Prompt) -> str | list[dict[str, Any]]:
+async def _content(prompt: _adapter.Prompt) -> str | list[dict[str, Any]]:
     """Return a prompt as the CLI takes it: a string, or content blocks.
 
     Images and PDFs travel as base64 blocks (measured: both read correctly).
@@ -448,7 +450,9 @@ async def _content(prompt: base.Prompt) -> str | list[dict[str, Any]]:
         if isinstance(part, messages_.TextPart):
             blocks.append({"type": "text", "text": part.text})
         elif part.media_type.startswith("text/"):
-            blocks.append({"type": "text", "text": await base.as_text(part)})
+            blocks.append(
+                {"type": "text", "text": await _convert.as_text(part)}
+            )
         else:
             kind = (
                 "image" if part.media_type.startswith("image/") else "document"
@@ -459,9 +463,9 @@ async def _content(prompt: base.Prompt) -> str | list[dict[str, Any]]:
                     "source": {
                         "type": "base64",
                         "media_type": part.media_type,
-                        "data": base64.b64encode(await base.data(part)).decode(
-                            "ascii"
-                        ),
+                        "data": base64.b64encode(
+                            await _convert.data(part)
+                        ).decode("ascii"),
                     },
                 }
             )

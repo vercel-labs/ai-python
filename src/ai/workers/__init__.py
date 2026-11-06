@@ -24,15 +24,17 @@ a new worker on the same settings, and `ClaudeCode(session_id=...)` resumes
 a conversation the CLI has stored.
 """
 
-from ._adapters.base import SessionInfo
+from ._adapter import SessionInfo
 from ._errors import (
     ExecutableMissingError,
     NotAuthenticatedError,
     TranscriptMismatchError,
     WorkerError,
 )
-from ._kinds import ClaudeCode, Codex, Pi
 from ._worker import Worker
+from .claude_code import ClaudeCode
+from .codex import Codex
+from .pi import Pi
 
 __all__ = [
     "ClaudeCode",

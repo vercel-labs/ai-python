@@ -38,18 +38,17 @@ from ..types import events as events_
 from ..types import messages as messages_
 from ..types import tools as tools_
 from ..types import usage as usage_
-from . import _bridge
+from . import _adapter, _bridge, _convert
 from . import _errors as errors
-from ._adapters import base
 
 Effort = Literal["low", "medium", "high", "max"]
 
+# Seconds to wait for more bridge calls before handing a batch to the caller. A
+# CLI that calls tools in parallel sends them close together.
 BATCH_WINDOW = 0.05
-"""Seconds to wait for more bridge calls before handing a batch to the
-caller. A CLI that calls tools in parallel sends them close together."""
 
+# How many times to ask again for output that does not validate.
 OUTPUT_RETRIES = 2
-"""How many times to ask again for output that does not validate."""
 
 OUTPUT_INSTRUCTION = (
     "\n\nRespond with ONLY a JSON value matching this schema, "
@@ -96,7 +95,7 @@ class _Plan:
 class _Runtime:
     """What lives only while a worker is open. Never copied, never dumped."""
 
-    adapter: base.Adapter
+    adapter: _adapter.CLIAdapter
     bridge: _bridge.Bridge
     lock: asyncio.Lock = dataclasses.field(default_factory=asyncio.Lock)
     in_session: bool = False
@@ -184,8 +183,8 @@ class Worker(pydantic.BaseModel):
     def _make_adapter(
         self,
         mcp_servers: dict[str, dict[str, Any]],
-        approve: base.Approve | None,
-    ) -> base.Adapter:
+        approve: _adapter.Approve | None,
+    ) -> _adapter.CLIAdapter:
         raise NotImplementedError
 
     # -- ModelLike ------------------------------------------------------------
@@ -248,7 +247,7 @@ class Worker(pydantic.BaseModel):
                 if rt.queue is not None:
                     # Tool results came with a new user message. The CLI is
                     # still in its turn: the message is guidance for it.
-                    await rt.adapter.steer(base.text_of(plan.prompt))
+                    await rt.adapter.steer(_convert.text_of(plan.prompt))
                 else:
                     await self._ensure_session(plan)
                     self._start(plan.prompt, output_type)
@@ -752,7 +751,7 @@ class Worker(pydantic.BaseModel):
         return code
 
     @classmethod
-    async def list_sessions(cls, **fields: Any) -> list[base.SessionInfo]:
+    async def list_sessions(cls, **fields: Any) -> list[_adapter.SessionInfo]:
         """Return the conversations the CLI has stored for a directory.
 
         Takes the worker's fields: `cwd=`, `env=`, `executable=`.

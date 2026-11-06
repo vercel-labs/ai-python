@@ -19,7 +19,10 @@ from ai.types.messages import (
     ToolCallPart,
     ToolResultPart,
 )
-from ai.workers._adapters import _handoff
+from ai.workers import _handoff
+from ai.workers.claude_code import handoff as claude_handoff
+from ai.workers.codex import handoff as codex_handoff
+from ai.workers.pi import handoff as pi_handoff
 
 HISTORY = [
     Message(role="user", parts=[TextPart(text="Create recipe.txt")]),
@@ -76,7 +79,7 @@ MODEL_VIEW = [
 
 
 def test_codex_items_follow_the_rule() -> None:
-    items = _handoff.to_codex_items(HISTORY)
+    items = codex_handoff.to_codex_items(HISTORY)
     kinds = [(i["type"], i.get("role")) for i in items]
     assert kinds == [
         ("message", "user"),
@@ -94,18 +97,18 @@ def test_codex_items_follow_the_rule() -> None:
     assert out["call_id"] == "call_1"
     assert out["output"] == json.dumps({"ok": True})
     note = items[3]["content"][0]["text"]
-    assert note.startswith(_handoff.NOTE_PREFIX)
+    assert note.startswith(codex_handoff.NOTE_PREFIX)
     assert "Write is the tool" in note
 
 
 def test_the_model_view_seeds_the_same_items() -> None:
-    assert _handoff.to_codex_items(MODEL_VIEW) == _handoff.to_codex_items(
-        HISTORY
-    )
+    assert codex_handoff.to_codex_items(
+        MODEL_VIEW
+    ) == codex_handoff.to_codex_items(HISTORY)
 
 
 def test_claude_records_follow_the_rule() -> None:
-    recs = _handoff.to_claude_records(MODEL_VIEW, "sid-1", "/w")
+    recs = claude_handoff.to_claude_records(MODEL_VIEW, "sid-1", "/w")
     # user prompt, assistant (text + tool_use), tool result, assistant; NO
     # reasoning note: Claude's safeguards refuse replayed reasoning.
     assert [r["type"] for r in recs] == [
@@ -133,7 +136,7 @@ def test_claude_records_follow_the_rule() -> None:
 
 
 def test_pi_merges_assistant_messages_and_keeps_tool_results() -> None:
-    rendered = _handoff.to_pi_messages(
+    rendered = pi_handoff.to_pi_messages(
         [
             Message(role="user", parts=[TextPart(text="hi")]),
             Message(role="assistant", parts=[TextPart(text="one")]),
@@ -216,11 +219,11 @@ def test_a_stored_result_without_a_name_takes_its_calls() -> None:
 def test_reasoning_is_never_the_agents_own_thought() -> None:
     """No thinking block, no reasoning item: both were measured to fail,
     one rejected, one silently ignored. It travels as a note, or not at all."""
-    items = _handoff.to_codex_items(HISTORY)
+    items = codex_handoff.to_codex_items(HISTORY)
     assert not any(i["type"] == "reasoning" for i in items)
     blocks = [
         b
-        for r in _handoff.to_claude_records(HISTORY, "s", "/w")
+        for r in claude_handoff.to_claude_records(HISTORY, "s", "/w")
         if isinstance(r["message"]["content"], list)
         for b in r["message"]["content"]
     ]
@@ -229,6 +232,6 @@ def test_reasoning_is_never_the_agents_own_thought() -> None:
 
 def test_empty_parts_produce_nothing() -> None:
     blank = [Message(role="assistant", parts=[TextPart(text="   ")])]
-    assert _handoff.to_codex_items(blank) == []
+    assert codex_handoff.to_codex_items(blank) == []
     empty = [Message(role="assistant", parts=[ReasoningPart(text="")])]
-    assert _handoff.to_claude_records(empty, "s", "/w") == []
+    assert claude_handoff.to_claude_records(empty, "s", "/w") == []
