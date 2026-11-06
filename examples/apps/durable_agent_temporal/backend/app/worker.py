@@ -109,6 +109,8 @@ class DurableAgent(ai.Agent):
     async def loop(self, context: ai.Context) -> AsyncGenerator[ai.events.AgentEvent]:
         tools_data = [tool.model_dump(mode="json") for tool in context.tools]
 
+        # A durable step serializes the model: it must be an ai.Model.
+        assert isinstance(context.model, ai.Model)
         while context.keep_running():
             result = await temporalio.workflow.execute_activity(
                 llm_activity,
