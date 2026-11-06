@@ -934,6 +934,37 @@ def _raw_item_from_metadata(part: Any) -> dict[str, Any] | None:
     return None
 
 
+def _sanitized_raw_item(raw_item: dict[str, Any], part: Any) -> dict[str, Any]:
+    """Replace invalid tool args in a replayed Responses item.
+
+    ``repair()`` fixes ``ToolCallPart.tool_args`` but the stored ``raw_item``
+    still holds the original string. Resending it would put invalid JSON
+    in the request payload, which strict providers reject, so patch invalid
+    ``arguments``/``input`` here and fall back to the repaired ``tool_args``.
+
+    ``raw_item`` is an owned copy from ``_raw_item_from_metadata``.
+    """
+    if raw_item.get("type") not in ("function_call", "custom_tool_call"):
+        return raw_item
+    fallback = getattr(part, "tool_args", "{}")
+    if not isinstance(fallback, str):
+        fallback = "{}"
+    else:
+        try:
+            json.loads(fallback)
+        except (json.JSONDecodeError, TypeError):
+            fallback = "{}"
+    for key in ("arguments", "input"):
+        value = raw_item.get(key)
+        if not isinstance(value, str):
+            continue
+        try:
+            json.loads(value)
+        except (json.JSONDecodeError, TypeError):
+            raw_item[key] = fallback
+    return raw_item
+
+
 def _tool_result_to_responses(value: Any) -> str | list[dict[str, Any]]:
     """Convert a tool result's model-facing value to a Responses ``output``.
 
@@ -1048,7 +1079,7 @@ async def _messages_to_responses(
 
                     if raw_item := _raw_item_from_metadata(part):
                         _flush_assistant_content(result, assistant_content)
-                        result.append(raw_item)
+                        result.append(_sanitized_raw_item(raw_item, part))
                         continue
 
                     match part:
