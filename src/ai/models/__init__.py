@@ -39,7 +39,7 @@ from .core.api import (
     probe,
     stream,
 )
-from .core.model import Model, get_model
+from .core.model import Model, ModelLike, get_model
 from .core.params import (
     DEFAULT,
     GLOBAL,
@@ -85,6 +85,7 @@ __all__ = [
     "InferenceRequestParams",
     "MinPSamplerParams",
     "Model",
+    "ModelLike",
     "ModelProviderDefault",
     "OutputParams",
     "Provider",
