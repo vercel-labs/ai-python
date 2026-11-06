@@ -421,15 +421,12 @@ def test_history_follows_the_active_branch_only() -> None:
         {"type": "label", "id": "e", "parentId": "d"},
     ]
     text = "\n".join(json.dumps(line) for line in lines)
-    stored = [
-        msg
-        for entry in adapter_._active_branch(text)
-        for msg in adapter_._stored_to_messages(entry)
-    ]
-    assert [msg.role for msg in stored] == ["user", "assistant", "tool"]
-    result = stored[2].parts[0]
-    assert isinstance(result, m.ToolResultPart)
-    assert (result.result, result.result_kind) == ("hi", "error")
+    stored = adapter_._read(adapter_._active_branch(text))
+    assert [msg.role for msg in stored] == ["user", "assistant"]
+    call, result = stored[1].parts  # the result joins its call
+    assert isinstance(call, m.BuiltinToolCallPart)
+    assert isinstance(result, m.BuiltinToolReturnPart)
+    assert (result.result, result.is_error) == ("hi", True)
 
 
 async def test_a_seed_is_listed_and_read_back(tmp_path: Path) -> None:

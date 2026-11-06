@@ -1,9 +1,14 @@
 """The adapter protocol: what `Worker` needs from each CLI.
 
-An adapter drives ONE conversation with one CLI. It speaks the model view
-both ways: `turn()` yields the events of one assistant message, with the
-CLI's own tools as `BuiltinTool*` events, and ends with a `StreamEnd`; a
-history it reads or is seeded with is a plain `list[Message]`.
+An adapter drives ONE conversation with one CLI. Outside it, the CLI's own
+tools are built-in tools, and nothing else: `turn()` yields them as
+`BuiltinTool*` events, and a history it reads holds them as built-in parts,
+each result in the assistant message of its call. A seed holds them the
+same way, next to the calls and `tool` messages of the tools an `ai.Agent`
+ran. How the CLI stores a tool call is the adapter's business alone.
+
+`turn()` yields the events of one assistant message and ends with a
+`StreamEnd`.
 """
 
 from __future__ import annotations

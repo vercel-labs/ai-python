@@ -61,9 +61,30 @@ def to_claude_records(
         )
         parent = uid
 
-    for m in _handoff.harness_view(messages):
+    for m in messages:
+        role = "user" if m.role in ("user", "tool") else "assistant"
         blocks: list[dict[str, Any]] = []
+        results: list[dict[str, Any]] = []
         for p in m.parts:
+            if isinstance(p, messages_.BuiltinToolReturnPart):
+                # A tool the CLI ran: the worker holds its result in the
+                # assistant message, the store in the NEXT user record. So
+                # the assistant record ends here, and the results follow.
+                if blocks:
+                    add(role, blocks)
+                    blocks = []
+                results.append(
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": p.tool_call_id,
+                        "content": _handoff.result_text(p.result),
+                        **({"is_error": True} if p.is_error else {}),
+                    }
+                )
+                continue
+            if results:
+                add("user", results)
+                results = []
             if isinstance(p, messages_.TextPart) and p.text.strip():
                 blocks.append({"type": "text", "text": p.text})
             elif isinstance(p, messages_.FilePart) and m.role == "user":
@@ -71,7 +92,9 @@ def to_claude_records(
                     blocks.append({"type": "image", "source": _source(p)})
                 elif p.media_type == "application/pdf":
                     blocks.append({"type": "document", "source": _source(p)})
-            elif isinstance(p, messages_.ToolCallPart):
+            elif isinstance(
+                p, messages_.ToolCallPart | messages_.BuiltinToolCallPart
+            ):
                 try:
                     args = json.loads(p.tool_args) if p.tool_args else {}
                 except json.JSONDecodeError:
@@ -85,6 +108,8 @@ def to_claude_records(
                     }
                 )
             elif isinstance(p, messages_.ToolResultPart):
+                # A tool an `ai.Agent` ran: its result is in a `tool`
+                # message, which becomes a user record of its own.
                 blocks.append(
                     {
                         "type": "tool_result",
@@ -100,7 +125,7 @@ def to_claude_records(
             # ReasoningPart: omitted on purpose — Anthropic's safeguards
             # refuse replayed reasoning. The adapter warns with the count.
         if blocks:
-            # Tool results live in role="tool" messages in the IR; on disk
-            # the CLI keeps them as user records with tool_result blocks.
-            add("user" if m.role in ("user", "tool") else "assistant", blocks)
+            add(role, blocks)
+        if results:
+            add("user", results)
     return records

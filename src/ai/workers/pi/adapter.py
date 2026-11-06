@@ -559,10 +559,7 @@ class PiAdapter:
         """
         found = await self._find(session_id)
         text = await asyncio.to_thread(pathlib.Path(found["path"]).read_text)
-        stored: list[messages_.Message] = []
-        for record in _active_branch(text):
-            stored.extend(_stored_to_messages(record))
-        return _handoff.model_view(stored)
+        return _read(_active_branch(text))
 
     async def list_sessions(self) -> list[_adapter.SessionInfo]:
         return [
@@ -962,7 +959,14 @@ def _assistant_parts(content: Any) -> list[messages_.Part]:
         elif kind == "thinking" and block.get("thinking"):
             parts.append(messages_.ReasoningPart(text=block["thinking"]))
         elif kind == "toolCall":
-            parts.append(_tool_call(block))
+            call = _tool_call(block)
+            parts.append(
+                messages_.BuiltinToolCallPart(
+                    tool_call_id=call.tool_call_id,
+                    tool_name=call.tool_name,
+                    tool_args=call.tool_args,
+                )
+            )
     return parts
 
 
@@ -1030,8 +1034,44 @@ def _active_branch(text: str) -> list[dict[str, Any]]:
     return list(reversed(path))
 
 
+def _read(entries: list[dict[str, Any]]) -> list[messages_.Message]:
+    """Read session entries as messages, like a live turn's.
+
+    The CLI's tools are built-in parts. pi keeps a tool result as a message
+    of its own (`toolResult`); here it joins the assistant message of its
+    call.
+    """
+    out: list[messages_.Message] = []
+    calls: dict[str, tuple[messages_.Message, messages_.BuiltinToolCallPart]]
+    calls = {}
+    for entry in entries:
+        message = entry.get("message") or {}
+        if entry.get("type") == "message" and message.get("role") == (
+            "toolResult"
+        ):
+            found = calls.get(str(message.get("toolCallId") or ""))
+            if found is None:
+                continue  # a result without its call: nothing to join
+            owner, call = found
+            owner.parts.append(
+                messages_.BuiltinToolReturnPart(
+                    tool_call_id=call.tool_call_id,
+                    tool_name=str(message.get("toolName") or call.tool_name),
+                    result=_tool_result(message),
+                    is_error=bool(message.get("isError")),
+                )
+            )
+            continue
+        for found_message in _stored_to_messages(entry):
+            out.append(found_message)
+            for part in found_message.parts:
+                if isinstance(part, messages_.BuiltinToolCallPart):
+                    calls[part.tool_call_id] = (found_message, part)
+    return out
+
+
 def _stored_to_messages(entry: dict[str, Any]) -> list[messages_.Message]:
-    """One session entry -> messages, CLI tools as tool calls.
+    """One session entry -> messages. A tool result is `_read`'s to join.
 
     Everything pi sends the model is kept: what an extension injected
     (`custom_message`) and a `!` command's output (`bashExecution`) reach it
@@ -1078,14 +1118,6 @@ def _stored_to_messages(entry: dict[str, Any]) -> list[messages_.Message]:
                 provider_metadata=_written_by(message),
             )
         ]
-    if role == "toolResult":
-        result = messages_.ToolResultPart(
-            tool_call_id=str(message.get("toolCallId") or ""),
-            tool_name=str(message.get("toolName") or ""),
-            result=_tool_result(message),
-            result_kind="error" if message.get("isError") else "json",
-        )
-        return [messages_.Message(role="tool", parts=[result])]
     return []
 
 

@@ -14,10 +14,14 @@ from .. import _handoff
 NOTE_PREFIX = "[Handoff from a previous session — earlier reasoning: "
 
 
-def _note(reasoning: list[str]) -> str:
-    return (
-        NOTE_PREFIX + " ".join(r.strip() for r in reasoning if r.strip()) + "]"
-    )
+def _note(reasoning: list[str]) -> dict[str, Any]:
+    """Return the reasoning of a turn as a user-role note."""
+    text = " ".join(r.strip() for r in reasoning if r.strip())
+    return {
+        "type": "message",
+        "role": "user",
+        "content": [{"type": "input_text", "text": NOTE_PREFIX + text + "]"}],
+    }
 
 
 def _image_url(part: messages_.FilePart) -> str:
@@ -26,9 +30,17 @@ def _image_url(part: messages_.FilePart) -> str:
 
 
 def to_codex_items(messages: list[messages_.Message]) -> list[dict[str, Any]]:
-    """Responses API items for `thread/inject_items`."""
+    """Responses API items for `thread/inject_items`.
+
+    The items are a flat list, so each message goes in as it is: a call and
+    its result are two items that follow each other. That holds for a tool
+    an `ai.Agent` ran (a `ToolCallPart`, its result in a `tool` message) and
+    for a tool the CLI ran (built-in parts, the result in the same message).
+    A turn's reasoning goes in as a note after its calls, before their
+    results.
+    """
     items: list[dict[str, Any]] = []
-    for m in _handoff.harness_view(messages):
+    for m in messages:
         reasoning: list[str] = []
         for p in m.parts:
             if isinstance(p, messages_.TextPart) and p.text.strip():
@@ -54,7 +66,9 @@ def to_codex_items(messages: list[messages_.Message]) -> list[dict[str, Any]]:
                         ],
                     }
                 )
-            elif isinstance(p, messages_.ToolCallPart):
+            elif isinstance(
+                p, messages_.ToolCallPart | messages_.BuiltinToolCallPart
+            ):
                 items.append(
                     {
                         "type": "function_call",
@@ -63,7 +77,12 @@ def to_codex_items(messages: list[messages_.Message]) -> list[dict[str, Any]]:
                         "arguments": p.tool_args or "{}",
                     }
                 )
-            elif isinstance(p, messages_.ToolResultPart):
+            elif isinstance(
+                p, messages_.ToolResultPart | messages_.BuiltinToolReturnPart
+            ):
+                if reasoning:
+                    items.append(_note(reasoning))
+                    reasoning = []
                 items.append(
                     {
                         "type": "function_call_output",
@@ -74,13 +93,5 @@ def to_codex_items(messages: list[messages_.Message]) -> list[dict[str, Any]]:
             elif isinstance(p, messages_.ReasoningPart) and p.text.strip():
                 reasoning.append(p.text)
         if reasoning:
-            items.append(
-                {
-                    "type": "message",
-                    "role": "user",
-                    "content": [
-                        {"type": "input_text", "text": _note(reasoning)}
-                    ],
-                }
-            )
+            items.append(_note(reasoning))
     return items

@@ -18,7 +18,7 @@ import pathlib
 import uuid
 import warnings
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, Literal
 
 import claude_agent_sdk
 
@@ -387,10 +387,7 @@ class ClaudeAdapter:
         stored = await asyncio.to_thread(
             claude_agent_sdk.get_session_messages, session_id, self._cwd
         )
-        out: list[messages_.Message] = []
-        for record in stored:
-            out.extend(_stored_to_messages(record))
-        return _handoff.model_view(out)
+        return _read(stored)
 
     async def list_sessions(self) -> list[_adapter.SessionInfo]:
         infos = await asyncio.to_thread(
@@ -574,11 +571,47 @@ def _stream_events(
     return out
 
 
-def _stored_to_messages(record: Any) -> list[messages_.Message]:
-    """One stored transcript record -> messages, shaped like a live turn's.
+def _read(records: list[Any]) -> list[messages_.Message]:
+    """Read stored transcript records as messages, like a live turn's.
 
-    Tool results become their own `tool` message; `_handoff.model_view`
-    then folds them into the model view.
+    The CLI's tools are built-in parts. On disk a tool result is a block in
+    the NEXT user record; here it joins the assistant message of its call.
+    """
+    out: list[messages_.Message] = []
+    calls: dict[str, tuple[messages_.Message, messages_.BuiltinToolCallPart]]
+    calls = {}
+    for record in records:
+        role, parts, results = _record(record)
+        if parts and role is not None:
+            message = messages_.Message(role=role, parts=parts)
+            out.append(message)
+            for part in parts:
+                if isinstance(part, messages_.BuiltinToolCallPart):
+                    calls[part.tool_call_id] = (message, part)
+        for block in results:
+            found = calls.get(block.get("tool_use_id", ""))
+            if found is None:
+                continue  # a result without its call: nothing to join
+            message, call = found
+            message.parts.append(
+                messages_.BuiltinToolReturnPart(
+                    tool_call_id=call.tool_call_id,
+                    tool_name=call.tool_name,
+                    result=block.get("content"),
+                    is_error=bool(block.get("is_error")),
+                )
+            )
+    return out
+
+
+def _record(
+    record: Any,
+) -> tuple[
+    Literal["user", "assistant"] | None, list[Any], list[dict[str, Any]]
+]:
+    """Return a record's role, its parts, and its tool result blocks.
+
+    The role is None for a record that is neither user nor assistant.
     """
     raw = record.message if isinstance(record.message, dict) else {}
     role = raw.get("role") or record.type
@@ -588,7 +621,7 @@ def _stored_to_messages(record: Any) -> list[messages_.Message]:
     else:
         blocks = content if isinstance(content, list) else []
     parts: list[Any] = []
-    tool_results: list[Any] = []
+    results: list[dict[str, Any]] = []
     for block in blocks:
         if not isinstance(block, dict):
             continue
@@ -612,24 +645,12 @@ def _stored_to_messages(record: Any) -> list[messages_.Message]:
             parts.append(messages_.ReasoningPart(text=block["thinking"]))
         elif kind == "tool_use":
             parts.append(
-                messages_.ToolCallPart(
+                messages_.BuiltinToolCallPart(
                     tool_call_id=block.get("id", ""),
                     tool_name=block.get("name", ""),
                     tool_args=json.dumps(block.get("input") or {}),
                 )
             )
         elif kind == "tool_result":
-            tool_results.append(
-                messages_.ToolResultPart(
-                    tool_call_id=block.get("tool_use_id", ""),
-                    tool_name="",
-                    result=block.get("content"),
-                    result_kind="error" if block.get("is_error") else "json",
-                )
-            )
-    out: list[messages_.Message] = []
-    if parts and role in ("user", "assistant"):
-        out.append(messages_.Message(role=role, parts=parts))
-    if tool_results:
-        out.append(messages_.Message(role="tool", parts=tool_results))
-    return out
+            results.append(block)
+    return (role if role in ("user", "assistant") else None), parts, results

@@ -247,7 +247,8 @@ async def test_a_seed_is_written_where_the_cli_reads(tmp_path: Path) -> None:
     assert records[2]["message"]["content"][0]["type"] == "tool_result"
 
 
-def test_a_stored_transcript_reads_as_the_model_view() -> None:
+def test_a_stored_result_joins_the_message_of_its_call() -> None:
+    """On disk the result is in the next user record, without a name."""
     records = [
         claude_agent_sdk.SessionMessage(
             type="user",
@@ -286,10 +287,7 @@ def test_a_stored_transcript_reads_as_the_model_view() -> None:
             parent_tool_use_id=None,
         ),
     ]
-    from ai.workers import _handoff
-
-    stored = [msg for r in records for msg in adapter_._stored_to_messages(r)]
-    history = _handoff.model_view(stored)
+    history = adapter_._read(records)
     assert [x.role for x in history] == ["user", "assistant"]
     call, result = history[1].parts
     assert isinstance(call, m.BuiltinToolCallPart)

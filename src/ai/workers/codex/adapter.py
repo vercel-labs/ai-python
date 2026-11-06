@@ -448,11 +448,11 @@ class CodexAdapter:
             "thread/read",
             {"threadId": session_id, "includeTurns": True, "itemsView": "full"},
         )
-        stored: list[messages_.Message] = []
+        out: list[messages_.Message] = []
         for turn in ((result or {}).get("thread") or {}).get("turns") or []:
             for item in turn.get("items") or []:
-                stored.extend(_item_to_messages(item))
-        return _handoff.model_view(stored)
+                out.extend(_item_to_messages(item))
+        return out
 
     async def list_sessions(self) -> list[_adapter.SessionInfo]:
         # Asked for THIS directory, page by page: one unfiltered page of the
@@ -585,7 +585,11 @@ def _reasoning_text(item: dict[str, Any]) -> str:
 
 
 def _item_to_messages(item: dict[str, Any]) -> list[messages_.Message]:
-    """One stored thread item -> messages, CLI tools as tool calls."""
+    """One stored thread item -> messages, shaped like a live turn's.
+
+    A tool item holds the call and its result: one assistant message with
+    both, as built-in parts.
+    """
     kind = item.get("type")
     if kind == "userMessage":
         # A user item carries `content` blocks, its `UserInput`s.
@@ -619,21 +623,18 @@ def _item_to_messages(item: dict[str, Any]) -> list[messages_.Message]:
             )
         ]
     if kind in TOOL_ITEMS:
-        call = messages_.ToolCallPart(
+        call = messages_.BuiltinToolCallPart(
             tool_call_id=item.get("id", ""),
             tool_name=_tool_name(item),
             tool_args=json.dumps(_tool_args(item)),
         )
-        result = messages_.ToolResultPart(
-            tool_call_id=item.get("id", ""),
+        result = messages_.BuiltinToolReturnPart(
+            tool_call_id=call.tool_call_id,
             tool_name=call.tool_name,
             result=_item_result(item),
-            result_kind="error" if item.get("status") == "failed" else "json",
+            is_error=item.get("status") == "failed",
         )
-        return [
-            messages_.Message(role="assistant", parts=[call]),
-            messages_.Message(role="tool", parts=[result]),
-        ]
+        return [messages_.Message(role="assistant", parts=[call, result])]
     return []
 
 

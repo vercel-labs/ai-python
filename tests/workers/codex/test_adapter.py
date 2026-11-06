@@ -323,7 +323,7 @@ async def test_a_thread_from_another_directory_is_refused() -> None:
         )
 
 
-async def test_history_is_the_model_view() -> None:
+async def test_history_has_the_cli_tools_as_builtin_parts() -> None:
     server = AppServer()
     server.threads[THREAD]["turns"] = [
         {

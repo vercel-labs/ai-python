@@ -45,66 +45,24 @@ def to_pi_messages(
             "total": 0,
         },
     }
-    for m in _handoff.harness_view(messages):
-        if m.role == "tool":
-            for p in m.parts:
-                if isinstance(p, messages_.ToolResultPart):
-                    out.append(
-                        {
-                            "role": "toolResult",
-                            "toolCallId": p.tool_call_id,
-                            "toolName": p.tool_name,
-                            "content": [
-                                {
-                                    "type": "text",
-                                    "text": _handoff.result_text(p.result),
-                                }
-                            ],
-                            "isError": p.result_kind == "error",
-                            "timestamp": timestamp,
-                        }
-                    )
-            continue
-        blocks: list[dict[str, Any]] = []
-        for p in m.parts:
-            if isinstance(p, messages_.TextPart) and p.text.strip():
-                blocks.append({"type": "text", "text": p.text})
-            elif (
-                isinstance(p, messages_.FilePart)
-                and m.role == "user"
-                and p.media_type.startswith("image/")
-            ):
-                if isinstance(p.data, str) and media.is_downloadable_url(
-                    p.data
-                ):
-                    blocks.append(
-                        {"type": "text", "text": f"[image: {p.data}]"}
-                    )
-                else:
-                    blocks.append(
-                        {
-                            "type": "image",
-                            "data": media.data_to_base64(p.data),
-                            "mimeType": p.media_type,
-                        }
-                    )
-            elif (
-                isinstance(p, messages_.ToolCallPart) and m.role == "assistant"
-            ):
-                try:
-                    args = json.loads(p.tool_args) if p.tool_args else {}
-                except json.JSONDecodeError:
-                    args = {"raw": p.tool_args}
-                blocks.append(
-                    {
-                        "type": "toolCall",
-                        "id": p.tool_call_id or p.id,
-                        "name": p.tool_name,
-                        "arguments": args if isinstance(args, dict) else {},
-                    }
-                )
+
+    def result(call_id: str, name: str, value: Any, *, is_error: bool) -> None:
+        out.append(
+            {
+                "role": "toolResult",
+                "toolCallId": call_id,
+                "toolName": name,
+                "content": [
+                    {"type": "text", "text": _handoff.result_text(value)}
+                ],
+                "isError": is_error,
+                "timestamp": timestamp,
+            }
+        )
+
+    def add(m: messages_.Message, blocks: list[dict[str, Any]]) -> None:
         if not blocks:
-            continue
+            return
         if m.role == "system":
             # Measured (pi 1.3.0): a system message in a session file is
             # pi's own prompt state, and replaying one REPLACED pi's system
@@ -116,7 +74,7 @@ def to_pi_messages(
             out.append(
                 {"role": "user", "content": blocks, "timestamp": timestamp}
             )
-            continue
+            return
         if out and out[-1]["role"] == "assistant":
             out[-1]["content"] += blocks
         else:
@@ -145,4 +103,65 @@ def to_pi_messages(
             )
         if any(b["type"] == "toolCall" for b in out[-1]["content"]):
             out[-1]["stopReason"] = "toolUse"
+
+    for m in messages:
+        blocks: list[dict[str, Any]] = []
+        for p in m.parts:
+            if isinstance(p, messages_.ToolResultPart):
+                # A tool an `ai.Agent` ran: its result is in a `tool` message.
+                result(
+                    p.tool_call_id,
+                    p.tool_name,
+                    p.result,
+                    is_error=p.result_kind == "error",
+                )
+            elif isinstance(p, messages_.BuiltinToolReturnPart):
+                # A tool the CLI ran: the worker holds its result in the
+                # assistant message, pi as a message of its own. So the
+                # assistant message ends here, and the result follows.
+                add(m, blocks)
+                blocks = []
+                result(
+                    p.tool_call_id, p.tool_name, p.result, is_error=p.is_error
+                )
+            elif isinstance(p, messages_.TextPart) and p.text.strip():
+                blocks.append({"type": "text", "text": p.text})
+            elif (
+                isinstance(p, messages_.FilePart)
+                and m.role == "user"
+                and p.media_type.startswith("image/")
+            ):
+                if isinstance(p.data, str) and media.is_downloadable_url(
+                    p.data
+                ):
+                    blocks.append(
+                        {"type": "text", "text": f"[image: {p.data}]"}
+                    )
+                else:
+                    blocks.append(
+                        {
+                            "type": "image",
+                            "data": media.data_to_base64(p.data),
+                            "mimeType": p.media_type,
+                        }
+                    )
+            elif (
+                isinstance(
+                    p, messages_.ToolCallPart | messages_.BuiltinToolCallPart
+                )
+                and m.role == "assistant"
+            ):
+                try:
+                    args = json.loads(p.tool_args) if p.tool_args else {}
+                except json.JSONDecodeError:
+                    args = {"raw": p.tool_args}
+                blocks.append(
+                    {
+                        "type": "toolCall",
+                        "id": p.tool_call_id or p.id,
+                        "name": p.tool_name,
+                        "arguments": args if isinstance(args, dict) else {},
+                    }
+                )
+        add(m, blocks)
     return out
