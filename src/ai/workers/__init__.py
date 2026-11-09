@@ -45,13 +45,17 @@ from ._worker import (
     WorkerSessionSpanData,
     is_interrupted,
 )
+from .claude_code import ClaudeCode
 from .codex import Codex
+from .pi import Pi
 
 __all__ = [
+    "ClaudeCode",
     "Codex",
     "ExecutableMissingError",
     "MessageEvent",
     "NotAuthenticatedError",
+    "Pi",
     "TranscriptMismatchError",
     "UnsupportedError",
     "Worker",

@@ -12,7 +12,7 @@ import pytest
 import ai
 from ai import workers
 from ai.types import messages as m
-from ai.workers import _wire
+from ai.workers import _process, _wire
 from ai.workers.codex import jsonrpc
 
 from .. import fakes
@@ -127,14 +127,14 @@ def server(cwd: str, monkeypatch: pytest.MonkeyPatch) -> AppServer:
     async def probe(kind: str, executable: str, **kwargs: Any) -> str:
         return "codex 0.160.1"
 
-    async def spawn(argv: list[str], **kwargs: Any) -> jsonrpc.Process:
+    async def spawn(argv: list[str], **kwargs: Any) -> _process.Process:
         server.spawned.append((argv, kwargs))
         if server.process.terminated:
             server.process = fakes.FakeProcess(server.process.answer)
-        return cast("jsonrpc.Process", server.process)
+        return cast("_process.Process", server.process)
 
     monkeypatch.setattr(_wire, "probe", probe)
-    monkeypatch.setattr(jsonrpc, "spawn", spawn)
+    monkeypatch.setattr(_process, "spawn", spawn)
     return server
 
 

@@ -24,7 +24,7 @@ import pydantic
 from ...types import events as events_
 from ...types import messages as messages_
 from ...types import usage as usage_
-from .. import _bridge, _convert, _handoff, _wire, _worker
+from .. import _bridge, _convert, _handoff, _process, _wire, _worker
 from .. import _errors as errors
 from . import handoff, jsonrpc
 
@@ -85,7 +85,7 @@ class _CodexWire:
         # Codex records a thread's directory as its real path (on macOS a
         # temp dir /var/... is recorded as /private/var/..., measured).
         self.cwd = os.path.realpath(worker.cwd)
-        self.process: jsonrpc.Process | None = None
+        self.process: _process.Process | None = None
         self.peer: jsonrpc.JsonRpcPeer | None = None
         self.thread = ""
         self.instructions: str | None = None
@@ -124,7 +124,7 @@ class _CodexWire:
             f"mcp_servers.{_bridge.SERVER_NAME}.tool_timeout_sec": 24 * 3600,
             **worker.config,
         }
-        self.process = await jsonrpc.spawn(
+        self.process = await _process.spawn(
             [executable, "app-server", *config_args(config)],
             cwd=self.cwd,
             env=worker.env,

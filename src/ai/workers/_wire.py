@@ -22,7 +22,7 @@ import os
 import re
 import warnings
 from collections.abc import AsyncIterator, Mapping
-from typing import Literal, Protocol
+from typing import Any, Literal, Protocol
 
 from ..types import events
 from ..types import messages as messages_
@@ -55,11 +55,14 @@ class TurnEnd:
     """The CLI finished a turn.
 
     `error` is set when the turn failed; the worker raises it from `stream()`.
+    `metadata` goes into the `provider_metadata` of the turn's last
+    assistant message, for example which model wrote it.
     """
 
     reason: Literal["stop", "length", "interrupted", "error"] = "stop"
     usage: usage_.Usage | None = None
     error: errors.WorkerError | None = None
+    metadata: dict[str, Any] | None = None
 
 
 Item = Content | Accepted | TurnEnd

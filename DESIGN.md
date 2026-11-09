@@ -1,6 +1,6 @@
 # `ai.workers` design
 
-Status: implemented for Codex (see section 10). Written in ASD-STE100 style.
+Status: implemented for Codex, Claude Code and Pi (see section 10). Written in ASD-STE100 style.
 
 ## 1. Goal
 
@@ -80,7 +80,7 @@ class Worker(pydantic.BaseModel):
     async def close(self) -> None: ...   # also __aexit__
 
 
-class ClaudeCode(Worker): worker_class_id: Literal["claude_code"] = "claude_code"
+class ClaudeCode(Worker): worker_class_id: Literal["claude-code"] = "claude-code"
 class Codex(Worker):      worker_class_id: Literal["codex"] = "codex"
 class Pi(Worker):         worker_class_id: Literal["pi"] = "pi"
 
@@ -220,7 +220,10 @@ If the tools change while a turn runs, the worker warns and keeps the old tools 
 2. System messages before the first user message, and `instructions=`, become the CLI's instructions. A system message after the start is refused.
 3. `output_type` raises `UnsupportedError` for now (open question 2).
 4. A steer during an L2 `stream()` ends that stream at the split (`finish_reason="other"`). `ai.Agent` then ends its run. The next run must use `worker.messages` as its history.
-5. The wire must yield `Accepted` before the content that the message causes. Codex can send a turn's notifications before the `turn/start` response; its wire keeps them until the response comes.
+5. The wire must yield `Accepted` before the content that the message causes. Each CLI tells it in its own way:
+   - Codex can send a turn's notifications before the `turn/start` response. Its wire keeps them until the response comes.
+   - Claude Code echoes each user message when it takes it into the conversation (`--replay-user-messages`). The wire matches the echo by a `uuid` that it sets. A steer lands at the next step of the turn, not when it is written (measured).
+   - Pi sends `message_start` with role `user` when a message goes into the conversation. The command response cannot be used: for a steer it says `queued` long before the message lands (measured).
 
 ## 7. Open questions
 
@@ -289,7 +292,7 @@ Items 1 and 2 can come back later without a change to the core API. Items 3 and 
 | L1 + L2 core | `src/ai/workers/_worker.py` | Done |
 | MCP bridge | `src/ai/workers/_bridge.py` | Done (from #343) |
 | Codex wire | `src/ai/workers/codex/` | Done. Live tests pass with codex-cli 0.167.0. |
-| Claude Code wire | — | Next change |
-| Pi wire | — | Next change |
+| Claude Code wire | `src/ai/workers/claude_code/` | Done, through `claude-agent-sdk` (extra `claude-code`). Live tests pass with Claude Code 2.1.319. |
+| Pi wire | `src/ai/workers/pi/` | Done, through `pi --mode rpc` and a small extension that registers the bridge. Live tests pass with pi 1.5.0. |
 
 Tests: `tests/workers` (offline). Live tests: `uv run pytest -m live tests/workers` (opt-in, they spend tokens).

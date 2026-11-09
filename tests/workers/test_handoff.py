@@ -21,7 +21,10 @@ from ai.types.messages import (
     ToolCallPart,
     ToolResultPart,
 )
+from ai.workers import _handoff
+from ai.workers.claude_code import handoff as claude_handoff
 from ai.workers.codex import handoff as codex_handoff
+from ai.workers.pi import handoff as pi_handoff
 
 # Write as a tool an `ai.Agent` ran: its result in a `tool` message.
 AGENT_TOOL = [
@@ -101,10 +104,75 @@ def test_codex_items_follow_the_rule() -> None:
     assert "Write is the tool" in note
 
 
-def test_both_shapes_seed_the_same() -> None:
+async def test_both_shapes_seed_the_same() -> None:
     assert codex_handoff.to_codex_items(CLI_TOOL) == (
         codex_handoff.to_codex_items(AGENT_TOOL)
     )
+    assert pi_handoff.to_pi_messages(CLI_TOOL, timestamp=1) == (
+        pi_handoff.to_pi_messages(AGENT_TOOL, timestamp=1)
+    )
+    cli = await claude_handoff.to_claude_records(CLI_TOOL, "s", "/w")
+    agent = await claude_handoff.to_claude_records(AGENT_TOOL, "s", "/w")
+    assert [(r["type"], r["message"]) for r in cli] == [
+        (r["type"], r["message"]) for r in agent
+    ]
+
+
+async def test_claude_records_follow_the_rule() -> None:
+    recs = await claude_handoff.to_claude_records(CLI_TOOL, "sid-1", "/w")
+    # user prompt, assistant (text + tool_use), tool result, assistant; NO
+    # reasoning note: Claude's safeguards refuse replayed reasoning.
+    assert [r["type"] for r in recs] == [
+        "user",
+        "assistant",
+        "user",
+        "assistant",
+    ]
+    assistant = recs[1]["message"]["content"]
+    assert [b["type"] for b in assistant] == ["text", "tool_use"]
+    assert assistant[1]["name"] == "Write"
+    assert assistant[1]["input"]["content"] == "two eggs"
+    assert assistant[1]["id"] == "call_1"
+    result = recs[2]["message"]["content"][0]
+    assert result["type"] == "tool_result"
+    assert result["tool_use_id"] == "call_1"
+    assert _handoff.reasoning_count(CLI_TOOL) == 1  # what is warned about
+    # a real chain, in the CLI's own store shape
+    assert recs[0]["parentUuid"] is None
+    assert all(
+        recs[i]["parentUuid"] == recs[i - 1]["uuid"]
+        for i in range(1, len(recs))
+    )
+    assert all(r["sessionId"] == "sid-1" and r["cwd"] == "/w" for r in recs)
+
+
+def test_pi_merges_assistant_messages_and_keeps_tool_results() -> None:
+    rendered = pi_handoff.to_pi_messages(
+        [
+            Message(role="user", parts=[TextPart(text="hi")]),
+            Message(role="assistant", parts=[TextPart(text="one")]),
+            Message(
+                role="assistant",
+                parts=[
+                    BuiltinToolCallPart(
+                        tool_call_id="c1", tool_name="Bash", tool_args="{}"
+                    ),
+                    BuiltinToolReturnPart(
+                        tool_call_id="c1",
+                        tool_name="Bash",
+                        result={"ok": True},
+                        is_error=True,
+                    ),
+                ],
+            ),
+        ],
+        timestamp=1,
+    )
+    assert [r["role"] for r in rendered] == ["user", "assistant", "toolResult"]
+    assert [b["type"] for b in rendered[1]["content"]] == ["text", "toolCall"]
+    assert rendered[1]["stopReason"] == "toolUse"
+    assert rendered[2]["content"] == [{"type": "text", "text": '{"ok": true}'}]
+    assert rendered[2]["isError"] is True
 
 
 def test_text_after_a_cli_tool_stays_after_its_result() -> None:
@@ -123,6 +191,12 @@ def test_text_after_a_cli_tool_stays_after_its_result() -> None:
         "function_call",
         "function_call_output",
         "message",
+    ]
+    rendered = pi_handoff.to_pi_messages([one], timestamp=1)
+    assert [r["role"] for r in rendered] == [
+        "assistant",
+        "toolResult",
+        "assistant",
     ]
 
 

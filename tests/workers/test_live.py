@@ -24,7 +24,9 @@ from ai import workers
 pytestmark = pytest.mark.live
 
 KINDS: dict[str, tuple[type[workers.Worker], str]] = {
+    "claude-code": (workers.ClaudeCode, "claude"),
     "codex": (workers.Codex, "codex"),
+    "pi": (workers.Pi, "pi"),
 }
 
 

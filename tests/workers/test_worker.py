@@ -216,6 +216,23 @@ async def test_cli_tools_are_builtin_parts() -> None:
     assert s.message.text == "two files"
 
 
+async def test_turn_metadata_goes_on_the_last_reply() -> None:
+    def reply(msg: m.Message) -> list[Any]:
+        return [
+            _wire.Accepted(msg),
+            *fakes.text("hi"),
+            _wire.TurnEnd(metadata={"fake": {"model": "m1"}}),
+        ]
+
+    worker = fakes.fake(reply)
+    async with worker:
+        async with ai.stream(worker, [ai.user_message("x")]) as s:
+            async for _ in s:
+                pass
+    assert s.message.provider_metadata == {"fake": {"model": "m1"}}
+    assert worker.messages[-1].provider_metadata == {"fake": {"model": "m1"}}
+
+
 async def test_a_failed_turn_raises_from_stream() -> None:
     error = workers.NotAuthenticatedError("fake", "401", "log in")
 

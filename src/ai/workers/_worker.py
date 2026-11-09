@@ -453,7 +453,11 @@ class _Session:
         reason: str = "other" if interrupted else end.reason
         # Every turn ends with one StreamEnd, also a turn that said nothing.
         await self._end_message(
-            reason, usage=end.usage, interrupted=interrupted, error=end.error
+            reason,
+            usage=end.usage,
+            interrupted=interrupted,
+            error=end.error,
+            metadata=end.metadata,
         )
         self.interrupting = False
         self.idle.set()
@@ -541,20 +545,23 @@ class _Session:
         usage: usage_.Usage | None = None,
         interrupted: bool = False,
         error: BaseException | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         if self.hydrator is None:
             await self._begin_message()
         assert self.hydrator is not None
         self.close_at = None
-        metadata: dict[str, Any] | None = None
+        metadata = dict(metadata or {})
         if error is not None:
-            metadata = {METADATA_KEY: {"error": str(error)}}
+            metadata[METADATA_KEY] = {"error": str(error)}
             self.failures[self.message_id] = error
         elif interrupted:
-            metadata = {METADATA_KEY: {"interrupted": True}}
+            metadata[METADATA_KEY] = {"interrupted": True}
         self._emit(
             events_.StreamEnd(
-                finish_reason=reason, usage=usage, provider_metadata=metadata
+                finish_reason=reason,
+                usage=usage,
+                provider_metadata=metadata or None,
             )
         )
         message = self.hydrator.message
