@@ -10,6 +10,7 @@ import pydantic
 import pytest
 
 import ai
+from ai.agents import runtime
 from ai.types import events as agent_events_
 
 from ..conftest import MOCK_MODEL, Recorder, mock_llm, text_msg
@@ -135,6 +136,87 @@ async def test_pre_registered_resolution_consumed() -> None:
 
     assert resolved_value is not None
     assert resolved_value.approved is True
+
+
+# -- Hooks outside Agent -----------------------------------------------------
+
+
+class QueueRuntime(runtime.Runtime):
+    def __init__(self) -> None:
+        super().__init__()
+        self.events: asyncio.Queue[agent_events_.AgentEvent] = asyncio.Queue()
+
+    async def put_event(self, event: agent_events_.AgentEvent) -> None:
+        await self.events.put(event)
+
+
+@pytest.mark.parametrize("cancel", [False, True])
+async def test_hook_outside_agent(cancel: bool) -> None:
+    reg = ai.HookRegistry()
+    rt = QueueRuntime()
+    with pytest.raises(LookupError):
+        runtime.get_runtime()
+    with pytest.raises(LookupError):
+        ai.agents.hooks.get_hook_registry()
+
+    async with asyncio.TaskGroup() as tasks:
+        task = tasks.create_task(
+            ai.hook(
+                "approval",
+                payload=Confirmation,
+                metadata={"tool": "write_file"},
+                tool_call_id="call_1",
+                registry=reg,
+                runtime=rt,
+            )
+        )
+        pending = await rt.events.get()
+        assert isinstance(pending, agent_events_.HookEvent)
+        assert pending.hook.hook_id == "approval"
+        assert pending.hook.hook_type == "Confirmation"
+        assert pending.hook.status == "pending"
+        assert pending.hook.metadata == {"tool": "write_file"}
+        assert pending.hook.tool_call_id == "call_1"
+        assert not task.done()
+        assert reg._live_hooks["approval"][2] is rt
+
+        if cancel:
+            await ai.cancel_hook(pending.hook, reason="denied", registry=reg)
+            with pytest.raises(asyncio.CancelledError, match="denied"):
+                await task
+        else:
+            ai.resolve_hook(pending.hook, {"approved": True}, registry=reg)
+            assert await task == Confirmation(approved=True)
+
+        completed = await rt.events.get()
+        assert isinstance(completed, agent_events_.HookEvent)
+        assert completed.hook.hook_id == "approval"
+        assert completed.hook.metadata == {"tool": "write_file"}
+        if cancel:
+            assert completed.hook.status == "cancelled"
+        else:
+            assert completed.hook.status == "resolved"
+            assert completed.hook.resolution == {"approved": True}
+            assert completed.hook.tool_call_id == "call_1"
+
+    assert not reg._live_hooks
+    assert not reg._pending_resolutions
+    assert rt.events.empty()
+
+
+async def test_pre_registered_hook_outside_agent() -> None:
+    reg = ai.HookRegistry()
+    rt = QueueRuntime()
+    ai.resolve_hook("approval", {"approved": True}, registry=reg)
+
+    result = await ai.hook(
+        "approval", payload=Confirmation, registry=reg, runtime=rt
+    )
+
+    assert result == Confirmation(approved=True)
+    assert not reg._live_hooks
+    assert not reg._pending_resolutions
+    assert rt.events.empty()
 
 
 # -- Explicit HookRegistry ---------------------------------------------------

@@ -1,32 +1,18 @@
-"""`ai.workers.Worker`: a coding-agent CLI that goes where a model goes.
+"""One serializable CLI session, with direct control and the model protocol.
 
-A worker is ONE conversation with one CLI: Claude Code, Codex or Pi. It is
-a pydantic model: its fields are its settings, the CLI's `session_id` and
-the conversation so far (`messages`). Dump it, store it, and validate it
-again later; it continues the same conversation.
-
-It follows the model protocol: `stream(messages, tools=, output_type=)`
-yields the events of one assistant message, so `ai.stream`,
-`ai.experimental_generate` and `ai.Agent.run` take a worker where they take
-a model. The CLI runs its own loop and its own tools; those come back as
-`BuiltinTool*` events, so an `ai.Agent` does not run them again. The tools
-of an `ai.Agent` reach the CLI through the MCP bridge (see `_bridge`) and
-come back as normal tool calls, for the agent to run.
-
-A worker has state, a model does not. `stream()` still receives the whole
-conversation on every call. The worker compares it with `messages` and
-sends the CLI only what is new (see `_plan`).
+The CLI owns the transcript. Input and output are separate: ``send`` accepts
+input, and one reader consumes ``events`` across turns. ``stream`` uses those
+same primitives to expose one assistant message to the model API.
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
-import contextvars
 import dataclasses
 import json
 import os
-from collections.abc import AsyncGenerator, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Sequence
 from typing import Any, ClassVar, Literal, Self
 
 import pydantic
@@ -38,28 +24,34 @@ from ..types import events as events_
 from ..types import messages as messages_
 from ..types import tools as tools_
 from ..types import usage as usage_
-from . import _adapter, _bridge, _convert
+from . import _adapter, _bridge
 from . import _errors as errors
 
 Effort = Literal["low", "medium", "high", "max"]
-
-# Seconds to wait for more bridge calls before handing a batch to the caller. A
-# CLI that calls tools in parallel sends them close together.
 BATCH_WINDOW = 0.05
-
-# How many times to ask again for output that does not validate.
 OUTPUT_RETRIES = 2
-
 OUTPUT_INSTRUCTION = (
     "\n\nRespond with ONLY a JSON value matching this schema, "
     "no prose, no code fences:\n"
 )
 
 
+class UserMessageAccepted(events_.BaseEvent):
+    """The transport accepted input. This is not a model response event.
+
+    CLI protocols differ: Claude Code confirms the input write, while Codex
+    and Pi acknowledge an RPC. ``sync`` reads the authoritative stored text.
+    """
+
+    kind: Literal["user_message_accepted"] = "user_message_accepted"
+    message: messages_.Message
+
+
+SessionEvent = events_.Event | events_.HookEvent | UserMessageAccepted
+
+
 @dataclasses.dataclass
 class _Call:
-    """A call from the CLI to an `ai` tool, through the bridge."""
-
     tool_call_id: str
     name: str
     arguments: dict[str, Any]
@@ -72,212 +64,375 @@ class _Failed:
 
 
 @dataclasses.dataclass
-class _Plan:
-    """What one `stream()` call must do, from the messages it was given."""
+class _Accepted:
+    messages: list[messages_.Message]
 
+
+@dataclasses.dataclass
+class _Plan:
     seed: list[messages_.Message] = dataclasses.field(default_factory=list)
     instructions: str | None = None
     results: list[messages_.ToolResultPart] = dataclasses.field(
         default_factory=list
     )
     system: list[str] = dataclasses.field(default_factory=list)
-    """System text that arrived after the conversation began."""
-    prompt: list[messages_.TextPart | messages_.FilePart] = dataclasses.field(
-        default_factory=list
-    )
+    prompt: _adapter.Prompt = dataclasses.field(default_factory=list)
     transcript: list[messages_.Message] = dataclasses.field(
         default_factory=list
     )
-    """The transcript once this call succeeds, before its answer."""
+
+
+class _HookRuntime(runtime_.Runtime):
+    """Route hooks into the same session feed as CLI output."""
+
+    def __init__(self, queue: asyncio.Queue[Any]) -> None:
+        super().__init__()
+        self.queue = queue
+
+    async def put_event(self, event: events_.AgentEvent) -> None:
+        self.queue.put_nowait(event)
 
 
 @dataclasses.dataclass
 class _Runtime:
-    """What lives only while a worker is open. Never copied, never dumped."""
-
-    adapter: _adapter.CLIAdapter
     bridge: _bridge.Bridge
-    lock: asyncio.Lock = dataclasses.field(default_factory=asyncio.Lock)
+    queue: asyncio.Queue[Any] = dataclasses.field(default_factory=asyncio.Queue)
+    send_lock: asyncio.Lock = dataclasses.field(default_factory=asyncio.Lock)
     in_session: bool = False
-    # The running turn: its pump task and the queue it fills.
-    queue: asyncio.Queue[Any] | None = None
+    closed: bool = False
+    reader: bool = False
+    stream_owner: asyncio.Task[Any] | None = None
+    model_ready: asyncio.Event = dataclasses.field(
+        default_factory=asyncio.Event
+    )
     pump: asyncio.Task[None] | None = None
-    # Bridge calls handed to the caller, waiting for their results.
     pending: dict[str, _Call] = dataclasses.field(default_factory=dict)
-    # CLI tool ids that are bridge calls, hidden from the stream.
     hidden: set[str] = dataclasses.field(default_factory=set)
-    # The context of the latest `stream()` call: approvals ask in it.
-    context: contextvars.Context | None = None
+    submission: list[messages_.Message] | None = None
+    registry: hooks.HookRegistry = dataclasses.field(
+        default_factory=hooks.HookRegistry
+    )
+    approvals: set[asyncio.Task[Any]] = dataclasses.field(default_factory=set)
 
 
 class Worker(pydantic.BaseModel):
-    """Base class of `ClaudeCode`, `Codex` and `Pi`.
+    """Base of ClaudeCode, Codex and Pi. One object represents one session.
 
-    `Worker.model_validate(data)` builds the kind that `data["kind"]` names.
+    Dump and validate to resume a session. Use ``await worker.fork()`` to
+    create an independent native session; copying is not a fork.
     """
 
-    kind: str
-    model: str | None = None
-    """The CLI's model. None: the CLI's own default."""
+    model_config = pydantic.ConfigDict(extra="forbid")
+
+    worker_class_id: str
+    model_name: str | None = None  # None selects the CLI default.
     cwd: str = pydantic.Field(default_factory=os.getcwd)
-    """Where the CLI runs and keeps its sessions."""
-    env: dict[str, str] = {}
-    """Added to the CLI's environment: keys, base URLs, config dirs."""
-    executable: str | None = None
+    env: dict[str, str] = pydantic.Field(default_factory=dict)
+    executable: str | None = None  # A PATH command or a filesystem path.
     effort: Effort | None = None
-    mcp_servers: dict[str, dict[str, Any]] = {}
-    """MCP servers for the CLI.
-
-    `{"name": {"command": ..., "args": [...]}}` or `{"name": {"url": ...}}`.
-    """
-    approve: bool = False
-    """Ask before each of the CLI's own tool calls, through `ai.hook`.
-
-    False: the CLI's own permission settings decide (`allowed_tools`,
-    Codex's `sandbox`). True: each call becomes a `ToolApproval` hook, which
-    `ai.resolve_hook` and UIs answer as they answer any tool approval. Needs
-    an `ai.Agent.run()`, where hooks live.
-    """
+    mcp_servers: dict[str, dict[str, Any]] = pydantic.Field(
+        default_factory=dict
+    )
+    approve: bool = False  # ToolApproval hooks, also available outside Agent.
     session_id: str | None = None
-    """The CLI's own id for the conversation. Set it to resume one."""
-    fork: bool = False
-    """With `session_id`: fork that conversation natively on first use."""
-    messages: list[messages_.Message] = []
-    """The conversation so far. Send it back with the next user message."""
+    messages: list[messages_.Message] = pydantic.Field(default_factory=list)
 
-    _kinds: ClassVar[dict[str, type[Worker]]] = {}
+    _classes: ClassVar[dict[str, type[Worker]]] = {}
     _runtime: _Runtime | None = pydantic.PrivateAttr(default=None)
+    _cli_version: str | None = pydantic.PrivateAttr(default=None)
+    _open_lock: asyncio.Lock = pydantic.PrivateAttr(
+        default_factory=asyncio.Lock
+    )
 
     @classmethod
     def __pydantic_init_subclass__(cls, **kwargs: Any) -> None:  # noqa: PLW3201
         super().__pydantic_init_subclass__(**kwargs)
-        kind = cls.model_fields["kind"].default
-        if isinstance(kind, str):
-            Worker._kinds[kind] = cls
+        name = cls.model_fields["worker_class_id"].default
+        if isinstance(name, str):
+            Worker._classes[name] = cls
 
     @pydantic.model_validator(mode="wrap")
     @classmethod
-    def _of_kind(
+    def _of_class(
         cls, data: Any, handler: pydantic.ValidatorFunctionWrapHandler
     ) -> Any:
         if cls is Worker and isinstance(data, dict):
-            kind = Worker._kinds.get(str(data.get("kind")))
-            if kind is None:
-                raise ValueError(f"no worker of kind {data.get('kind')!r}")
-            return kind.model_validate(data)
+            worker_class = Worker._classes.get(str(data.get("worker_class_id")))
+            if worker_class is None:
+                raise ValueError(
+                    f"unknown worker class {data.get('worker_class_id')!r}"
+                )
+            return worker_class.model_validate(data)
         return handler(data)
 
     def __copy__(self) -> Self:
-        # A copy is a new worker: it opens a CLI of its own.
-        copied = super().__copy__()
-        copied._runtime = None
-        return copied
+        # Revalidation resets ALL private transport state, not just the base.
+        return type(self).model_validate(self.model_dump())
 
     def __deepcopy__(self, memo: dict[int, Any] | None = None) -> Self:
-        copied = super().__deepcopy__(memo)
-        copied._runtime = None
-        return copied
+        return self.__copy__()
 
-    # -- subclass point -------------------------------------------------------
+    # Private transport operations. Concrete workers own their CLI processes.
+    async def _cli_start(self, mcp_servers: dict[str, dict[str, Any]]) -> None:
+        raise errors.UnsupportedError("this worker cannot start a CLI")
 
-    def _make_adapter(
+    async def _cli_close(self) -> None:
+        pass
+
+    async def _cli_open(
         self,
-        mcp_servers: dict[str, dict[str, Any]],
-        approve: _adapter.Approve | None,
-    ) -> _adapter.CLIAdapter:
-        raise NotImplementedError
+        *,
+        session_id: str | None,
+        fork: bool,
+        seed: list[messages_.Message] | None,
+        instructions: str | None,
+    ) -> str:
+        raise errors.UnsupportedError("this worker cannot open a session")
 
-    # -- ModelLike ------------------------------------------------------------
+    def _cli_turn(
+        self, prompt: _adapter.Prompt
+    ) -> AsyncIterator[events_.Event]:
+        raise errors.UnsupportedError("this worker cannot send input")
+
+    async def _cli_send_running(self, prompt: _adapter.Prompt) -> bool:
+        raise errors.UnsupportedError("this worker cannot send during a turn")
+
+    async def _cli_interrupt(self) -> None:
+        raise errors.UnsupportedError("this worker cannot interrupt")
+
+    async def _cli_history(self, session_id: str) -> list[messages_.Message]:
+        raise errors.UnsupportedError("this worker cannot read history")
+
+    async def _cli_list_sessions(self) -> list[_adapter.SessionInfo]:
+        raise errors.UnsupportedError("this worker cannot list sessions")
+
+    def _cli_tui_command(
+        self,
+        session_id: str | None,
+    ) -> tuple[list[str], dict[str, str], str | None]:
+        raise errors.UnsupportedError("this worker has no TUI command")
 
     @property
     def id(self) -> str:
-        return self.model or "default"
+        return self.model_name or "default"
 
     @property
     def provider_name(self) -> str:
-        return self.kind
+        return self.worker_class_id
 
-    async def stream(
-        self,
-        messages: list[messages_.Message],
-        *,
-        tools: Sequence[tools_.Tool] | None = None,
-        output_type: type[pydantic.BaseModel] | None = None,
-        params: Any = None,
-    ) -> AsyncGenerator[events_.Event]:
-        """Answer `messages` with one assistant message.
+    @property
+    def version(self) -> str | None:
+        return self._cli_version
 
-        Use `ai.stream(worker, messages)`, as with a model. The message ends
-        in one of two ways:
+    @property
+    def hook_registry(self) -> hooks.HookRegistry:
+        """Pass to ``ai.resolve_hook(..., registry=worker.hook_registry)``."""
+        return self._require_runtime().registry
 
-        - `finish_reason="tool_call"`: the CLI called `ai` tools from
-          `tools=`. The message holds them as `ToolCallPart`s. Run them and
-          call again with the results; the CLI waits until then.
-        - Anything else: the CLI's turn is over.
-
-        `params` is ignored: the CLI chooses its own.
-        """
-        rt = await self._open()
-        await rt.lock.acquire()
-        paused = False
-        try:
-            if self.approve:
-                try:
-                    hooks.get_hook_registry()
-                    runtime_.get_runtime()
-                except LookupError:
-                    raise errors.WorkerError(
-                        "approve=True asks through ai.hook, which needs a "
-                        "run: use the worker in ai.Agent.run()"
-                    ) from None
-            rt.context = contextvars.copy_context()
-            plan = self._plan(messages)
-            rt.bridge.set_tools(
-                [t for t in tools or () if t.kind == "function"]
-            )
-            if rt.pending:
-                if plan.results:
-                    self._answer(plan.results)
-                else:
-                    await self._abandon()
-            if plan.prompt:
-                if rt.in_session and plan.system:
-                    text = "\n\n".join(plan.system) + "\n\n"
-                    plan.prompt.insert(0, messages_.TextPart(text=text))
-                if rt.queue is not None:
-                    # Tool results came with a new user message. The CLI is
-                    # still in its turn: the message is guidance for it.
-                    await rt.adapter.steer(_convert.text_of(plan.prompt))
-                else:
-                    await self._ensure_session(plan)
-                    self._start(plan.prompt, output_type)
-            if rt.queue is None:
-                raise ValueError(
-                    "stream(): no new user message or tool result to send"
-                )
-
-            stamp = messages_.Message(role="assistant", parts=[])
-            hydrator = events_.MessageHydrator()
-
-            def out(event: events_.Event) -> events_.Event:
-                event = event.model_copy(
-                    update={
-                        "message": messages_.Message(
-                            id=stamp.id, role="assistant", parts=[]
-                        )
+    async def open(self) -> None:
+        """Start the CLI transport once. A session opens on first input."""
+        async with self._open_lock:
+            if self._runtime is not None:
+                return
+            bridge = _bridge.Bridge(self._on_call)
+            await bridge.start()
+            rt = _Runtime(bridge=bridge)
+            self._runtime = rt
+            try:
+                await self._cli_start(
+                    {
+                        **self.mcp_servers,
+                        _bridge.SERVER_NAME: {
+                            "type": "http",
+                            "url": bridge.url,
+                        },
                     }
                 )
-                hydrator.feed(event)
-                return event
+            except BaseException:
+                self._runtime = None
+                try:
+                    await self._cli_close()
+                finally:
+                    await bridge.close()
+                raise
 
-            yield out(events_.StreamStart())
-            # Text after the last CLI tool call: the answer, for output_type.
-            answer: list[str] = []
+    async def close(self) -> None:
+        """Stop the CLI and unblock the reader. Keep serializable state."""
+        async with self._open_lock:
+            rt = self._runtime
+            if rt is None:
+                return
+            await self._abandon()
+            rt.closed = True
+            rt.queue.put_nowait(None)
+            try:
+                await self._cli_close()
+            finally:
+                self._runtime = None
+                await rt.bridge.close()
+
+    async def __aenter__(self) -> Self:
+        await self.open()
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> None:
+        await self.close()
+
+    def _require_runtime(self) -> _Runtime:
+        if self._runtime is None:
+            raise errors.WorkerError(
+                f"{self.worker_class_id} worker is not open"
+            )
+        return self._runtime
+
+    async def _ensure_session(self, plan: _Plan | None = None) -> None:
+        rt = self._require_runtime()
+        if rt.in_session:
+            return
+        plan = plan or _Plan()
+        self.session_id = await self._cli_open(
+            session_id=self.session_id,
+            fork=False,
+            seed=plan.seed if self.session_id is None and plan.seed else None,
+            instructions=plan.instructions,
+        )
+        rt.in_session = True
+
+    async def send(self, prompt: str | _adapter.Prompt) -> None:
+        """Submit input and wait for transport acceptance, not the answer.
+
+        While a turn runs this is guidance; when idle it starts a turn.
+        Read ``events`` to observe acceptance and update ``messages``.
+        """
+        parts: _adapter.Prompt = (
+            [messages_.TextPart(text=prompt)]
+            if isinstance(prompt, str)
+            else list(prompt)
+        )
+        if not parts:
+            raise ValueError("send(): prompt must not be empty")
+        await self.open()
+        rt = self._require_runtime()
+        if (
+            rt.stream_owner is not None
+            and rt.stream_owner is not asyncio.current_task()
+        ):
+            # Initial model input must open the session before another task
+            # can steer it. Otherwise both paths can create a native session.
+            await rt.model_ready.wait()
+        async with rt.send_lock:
+            accepted = rt.submission
+            rt.submission = None
+            if accepted is None:
+                accepted = [messages_.Message(role="user", parts=list(parts))]
+            await self._ensure_session()
+            if rt.pump is not None and not rt.pump.done():
+                if await self._cli_send_running(parts):
+                    rt.queue.put_nowait(_Accepted(accepted))
+                    return
+                # The CLI confirmed idle without writing. Let the old reader
+                # finish its terminal event before starting another turn.
+                await rt.pump
+            ready: asyncio.Future[None] = (
+                asyncio.get_running_loop().create_future()
+            )
+
+            async def pump() -> None:
+                try:
+                    async for event in self._cli_turn(parts):
+                        if (
+                            isinstance(event, events_.StreamStart)
+                            and not ready.done()
+                        ):
+                            rt.queue.put_nowait(_Accepted(accepted))
+                            ready.set_result(None)
+                        rt.queue.put_nowait(event)
+                    if not ready.done():
+                        raise errors.WorkerError(
+                            "CLI ended before accepting input"
+                        )
+                except asyncio.CancelledError:
+                    if not ready.done():
+                        ready.cancel()
+                    raise
+                except BaseException as exc:
+                    if not ready.done():
+                        ready.set_exception(exc)
+                    else:
+                        rt.queue.put_nowait(_Failed(exc))
+
+            rt.pump = asyncio.create_task(pump())
+            try:
+                await ready
+            except asyncio.CancelledError:
+                await self._abandon()
+                raise
+
+    async def events(self) -> AsyncGenerator[SessionEvent]:
+        """Read the session feed until close; exactly one reader is allowed.
+
+        StreamStart/StreamEnd mark assistant messages. UserMessageAccepted
+        records input. HookEvent carries approvals. Closing/cancelling a
+        reader interrupts a running turn, except when Agent tools must run.
+        """
+        await self.open()
+        rt = self._require_runtime()
+        if rt.reader or (
+            rt.stream_owner is not None
+            and rt.stream_owner is not asyncio.current_task()
+        ):
+            raise errors.WorkerError(
+                "events(): this session already has a reader"
+            )
+        rt.reader = True
+        hydrator: events_.MessageHydrator | None = None
+
+        def out(event: events_.Event) -> events_.Event:
+            nonlocal hydrator
+            if hydrator is None:
+                hydrator = events_.MessageHydrator()
+            event = event.model_copy(update={"message": hydrator.message})
+            hydrator.feed(event)
+            if all(m.id != hydrator.message.id for m in self.messages):
+                self.messages.append(hydrator.message)
+            return event
+
+        try:
             while True:
                 item = await rt.queue.get()
+                if item is None:
+                    return
                 if isinstance(item, _Failed):
-                    self._end_turn()
                     raise item.error
+                if isinstance(item, _Accepted):
+                    known = {m.id for m in self.messages}
+                    for message in item.messages:
+                        if message.id not in known:
+                            # Guidance belongs before the in-progress answer,
+                            # not after the final answer in the model history.
+                            if (
+                                hydrator is not None
+                                and hydrator.message in self.messages
+                            ):
+                                self.messages.insert(
+                                    self.messages.index(hydrator.message),
+                                    message,
+                                )
+                            else:
+                                self.messages.append(message)
+                            known.add(message.id)
+                            if message.role == "user":
+                                yield UserMessageAccepted(message=message)
+                    continue
+                if isinstance(item, events_.HookEvent):
+                    yield item
+                    continue
+                if isinstance(item, events_.StreamStart):
+                    hydrator = None
+                    yield out(item)
+                    continue
+                if hydrator is None:
+                    yield out(events_.StreamStart())
                 if isinstance(item, _Call):
                     calls = [item]
                     with contextlib.suppress(TimeoutError):
@@ -287,7 +442,6 @@ class Worker(pydantic.BaseModel):
                                 if isinstance(more, _Call):
                                     calls.append(more)
                                 else:
-                                    # Not ours to handle here: put it back.
                                     rt.queue.put_nowait(more)
                                     break
                     for call in calls:
@@ -314,94 +468,336 @@ class Worker(pydantic.BaseModel):
                                 tool_call_id=part.tool_call_id, tool_call=part
                             )
                         )
-                    paused = True
                     yield out(
                         events_.StreamEnd(
                             finish_reason="tool_call",
                             provider_metadata=self._metadata(None),
                         )
                     )
-                    break
+                    hydrator = None
+                    continue
                 if isinstance(item, events_.StreamEnd):
-                    self._end_turn()
-                    usage = item.usage
-                    if output_type is not None:
-                        text, usage = await self._output(
-                            "".join(answer), output_type, usage
-                        )
-                        yield out(events_.TextStart(block_id="output"))
-                        yield out(
-                            events_.TextDelta(chunk=text, block_id="output")
-                        )
-                        yield out(events_.TextEnd(block_id="output"))
                     finish = item.finish_reason
+                    rt.hidden.clear()
                     yield out(
-                        events_.StreamEnd(
-                            finish_reason=(
-                                "other" if finish == "cancelled" else finish
-                            ),
-                            usage=usage,
-                            provider_metadata={
-                                **(item.provider_metadata or {}),
-                                **self._metadata(finish),
-                            },
+                        item.model_copy(
+                            update={
+                                "finish_reason": "other"
+                                if finish == "cancelled"
+                                else finish,
+                                "provider_metadata": {
+                                    **(item.provider_metadata or {}),
+                                    **self._metadata(finish),
+                                },
+                            }
                         )
                     )
-                    break
+                    hydrator = None
+                    continue
                 for event in self._visible(item):
+                    yield out(event)
+        finally:
+            rt.reader = False
+            if not rt.closed and not rt.pending:
+                await self._abandon()
+
+    async def interrupt(self) -> None:
+        """Request a clean turn end. The current reader receives StreamEnd."""
+        rt = self._runtime
+        if rt is None or rt.pump is None or rt.pump.done():
+            return
+        for task in list(rt.approvals):
+            task.cancel()
+        self._answer([])
+        await self._cli_interrupt()
+
+    async def _abandon(self) -> None:
+        rt = self._runtime
+        if rt is None:
+            return
+        for task in list(rt.approvals):
+            task.cancel()
+        self._answer([])
+        pump = rt.pump
+        if pump is not None and not pump.done():
+            with contextlib.suppress(Exception):
+                await self._cli_interrupt()
+            pump.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await pump
+        rt.pump = None
+        # A cancelled reader must not hand its queued terminal event to the
+        # next model request. The partial mirror remains until sync().
+        while not rt.queue.empty():
+            item = rt.queue.get_nowait()
+            if isinstance(item, _Call) and not item.answer.done():
+                item.answer.set_result(("cancelled by the caller", True))
+        rt.hidden.clear()
+
+    async def sync(self) -> None:
+        """Replace the mirror from the CLI store, for example after TUI use."""
+        await self.open()
+        rt = self._require_runtime()
+        if rt.reader or (rt.pump is not None and not rt.pump.done()):
+            raise errors.WorkerError("sync(): stop the turn and reader first")
+        if self.session_id is None:
+            raise errors.WorkerError("sync(): no session_id to read")
+        self.messages = await self._cli_history(self.session_id)
+        # Native history supersedes output queued before synchronization.
+        await self._abandon()
+
+    async def fork(self) -> Self:
+        """Create a native session with a new id. Never fork a running turn."""
+        if self.session_id is None:
+            raise errors.WorkerError("fork(): no session_id to fork")
+        rt = self._runtime
+        if rt is not None and (
+            rt.reader or (rt.pump is not None and not rt.pump.done())
+        ):
+            raise errors.WorkerError("fork(): stop the turn and reader first")
+        branch = self.__copy__()
+        try:
+            await branch.open()
+            branch.session_id = await branch._cli_open(
+                session_id=self.session_id,
+                fork=True,
+                seed=None,
+                instructions=None,
+            )
+            if branch.session_id == self.session_id:
+                raise errors.WorkerError(
+                    "fork(): CLI did not create a new session id"
+                )
+            branch._require_runtime().in_session = True
+            branch.messages = await branch._cli_history(branch.session_id)
+            return branch
+        except BaseException:
+            await branch.close()
+            raise
+
+    def tui_command(self) -> tuple[list[str], dict[str, str]]:
+        """Return argv and env. Close this worker before starting the TUI."""
+        argv, env, minted = self._cli_tui_command(self.session_id)
+        if self.session_id is None:
+            if minted is None:
+                raise errors.WorkerError(
+                    "CLI chooses its session id: send input first"
+                )
+            self.session_id = minted
+        return argv, env
+
+    async def tui(self) -> int:
+        await self.close()
+        argv, env = self.tui_command()
+        proc = await asyncio.create_subprocess_exec(
+            *argv, cwd=self.cwd, env={**os.environ, **env}
+        )
+        code = await proc.wait()
+        await self.sync()
+        return code
+
+    @classmethod
+    async def list_sessions(
+        cls, cwd: str, **fields: Any
+    ) -> list[_adapter.SessionInfo]:
+        worker = cls(cwd=cwd, **fields)
+        async with worker:
+            return await worker._cli_list_sessions()
+
+    async def stream(
+        self,
+        messages: list[messages_.Message],
+        *,
+        tools: Sequence[tools_.Tool] | None = None,
+        output_type: type[pydantic.BaseModel] | None = None,
+        params: Any = None,
+    ) -> AsyncGenerator[events_.Event]:
+        """Send only new input and read one assistant message via events()."""
+        await self.open()
+        rt = self._require_runtime()
+        if rt.reader or rt.stream_owner is not None:
+            raise errors.WorkerError(
+                "stream(): this session already has a reader"
+            )
+        if not rt.queue.empty() and not rt.pending:
+            raise errors.WorkerError(
+                "stream(): unread session events; "
+                "consume events() or sync() first"
+            )
+        rt.stream_owner = asyncio.current_task()
+        rt.model_ready.clear()
+        # Transport reader tasks can predate Agent.run(). Use the current
+        # consumer's registry, not the callback task's inherited context.
+        with contextlib.suppress(LookupError):
+            rt.registry = hooks.get_hook_registry()
+        try:
+            plan = self._plan(messages)
+            rt.bridge.set_tools(
+                [t for t in tools or () if t.kind == "function"]
+            )
+            if rt.pending:
+                self._answer(plan.results)
+                for message in plan.transcript:
+                    if all(m.id != message.id for m in self.messages):
+                        self.messages.append(message)
+            if plan.prompt:
+                if rt.in_session and plan.system:
+                    plan.prompt.insert(
+                        0,
+                        messages_.TextPart(
+                            text="\n\n".join(plan.system) + "\n\n"
+                        ),
+                    )
+                await self._ensure_session(plan)
+                rt.submission = plan.transcript
+                prompt = list(plan.prompt)
+                if output_type is not None:
+                    prompt.append(
+                        messages_.TextPart(
+                            text=OUTPUT_INSTRUCTION
+                            + json.dumps(TypeAdapter(output_type).json_schema())
+                        )
+                    )
+                await self.send(prompt)
+            elif not plan.results:
+                raise ValueError(
+                    "stream(): no new user message or tool result to send"
+                )
+            rt.model_ready.set()
+
+            answer: list[str] = []
+            # events() owns the native mirror; model output must hydrate a
+            # separate message, retaining the native id even across retries.
+            projection = events_.MessageHydrator()
+            async with contextlib.aclosing(self.events()) as feed:
+                async for event in feed:
+                    if isinstance(event, UserMessageAccepted):
+                        continue
+                    if isinstance(event, events_.HookEvent):
+                        # Agent's outer runtime carries hook events, while the
+                        # direct path exposes them in events().
+                        try:
+                            runtime = runtime_.get_runtime()
+                        except LookupError:
+                            raise errors.WorkerError(
+                                "approval requires events() or ai.Agent.run(); "
+                                "resolve with worker.hook_registry"
+                            ) from None
+                        await runtime.put_event(event)
+                        continue
+                    if isinstance(event, events_.StreamEnd):
+                        if (
+                            output_type is not None
+                            and event.finish_reason != "tool_call"
+                        ):
+                            text, usage = await self._output(
+                                "".join(answer), output_type, event.usage, feed
+                            )
+                            yield projection.feed(
+                                events_.TextStart(
+                                    block_id="output", message=event.message
+                                )
+                            )
+                            yield projection.feed(
+                                events_.TextDelta(
+                                    chunk=text,
+                                    block_id="output",
+                                    message=event.message,
+                                )
+                            )
+                            yield projection.feed(
+                                events_.TextEnd(
+                                    block_id="output", message=event.message
+                                )
+                            )
+                            event = event.model_copy(update={"usage": usage})
+                        native = event.message
+                        event = projection.feed(event)
+                        if output_type is not None:
+                            # Persist all emitted parts, including builtin and
+                            # Agent tools, not just the validated output text.
+                            metadata = native.provider_metadata or {}
+                            native.provider_metadata = {
+                                **metadata,
+                                "worker": {
+                                    **metadata.get("worker", {}),
+                                    "model_parts": event.message.model_dump(
+                                        mode="json"
+                                    )["parts"],
+                                },
+                            }
+                        yield event
+                        break
                     if output_type is not None and isinstance(
                         event,
                         events_.TextStart | events_.TextDelta | events_.TextEnd,
                     ):
-                        # Narration is not the output. Keep only the text
-                        # after the last tool call, and send it once parsed.
                         if isinstance(event, events_.TextDelta):
                             answer.append(event.chunk)
                         continue
                     if isinstance(event, events_.BuiltinToolStart):
                         answer.clear()
-                    yield out(event)
-            # Committed only now: a call that failed can be sent again.
-            self.messages = [*plan.transcript, hydrator.message]
-        except (GeneratorExit, asyncio.CancelledError):
-            if not paused:
-                # Nobody reads this turn any more: end it in the CLI too.
-                await self._abandon()
-            raise
+                    yield projection.feed(event)
         finally:
-            rt.lock.release()
-
-    # -- the conversation -----------------------------------------------------
+            rt.stream_owner = None
+            rt.submission = None
+            rt.model_ready.set()
 
     def _plan(self, messages: list[messages_.Message]) -> _Plan:
-        """Compare `messages` with the transcript; return what is new."""
         known = [m.id for m in self.messages]
         given = [m.id for m in messages]
         plan = _Plan()
-        system = [m.text for m in messages if m.role == "system"]
-        plan.instructions = "\n\n".join(system) or None
+        plan.instructions = (
+            "\n\n".join(m.text for m in messages if m.role == "system") or None
+        )
         if known:
-            if given[: len(known)] != known:
-                raise errors.TranscriptMismatchError(
-                    f"{self.kind}: these messages do not continue this "
-                    "worker's conversation; start a new worker"
+            projected: list[messages_.Message] = []
+            for message in self.messages:
+                metadata = (message.provider_metadata or {}).get("worker", {})
+                if metadata.get("model_hidden"):
+                    continue
+                parts = metadata.get("model_parts")
+                projected.append(
+                    message
+                    if parts is None
+                    else message.model_copy(
+                        update={
+                            "parts": TypeAdapter(
+                                list[messages_.Part]
+                            ).validate_python(parts)
+                        }
+                    )
                 )
-            new = messages[len(known) :]
-            plan.transcript = list(self.messages)
+            matched_ids = False
+            for history in (self.messages, projected):
+                if given[: len(history)] != [m.id for m in history]:
+                    continue
+                matched_ids = True
+                # Accept either complete view, never arbitrary per-message
+                # substitutions. Matching ids must not conceal changed parts.
+                if all(
+                    old.role == new.role and old.parts == new.parts
+                    for old, new in zip(history, messages, strict=False)
+                ):
+                    new_messages = messages[len(history) :]
+                    break
+            else:
+                raise errors.TranscriptMismatchError(
+                    "stored message content was changed"
+                    if matched_ids
+                    else f"{self.worker_class_id}: messages do not continue "
+                    "this session; use a new worker"
+                )
         elif self.session_id is not None:
-            # A stored conversation the worker has not loaded: the CLI holds
-            # the past, so everything given is new. `load()` reads the past.
-            new = list(messages)
+            new_messages = list(messages)
         else:
-            # A new conversation. What comes before the last user turn is
-            # its past; the CLI is seeded with it before the first turn.
             cut = len(messages)
             while cut and messages[cut - 1].role in ("user", "system", "tool"):
                 cut -= 1
             plan.seed = [m for m in messages[:cut] if m.role != "system"]
-            new = messages[cut:]
+            new_messages = messages[cut:]
             plan.transcript = list(messages[:cut])
-        for message in new:
+        for message in new_messages:
             if message.role == "tool":
                 plan.results.extend(message.tool_results)
             elif message.role == "system":
@@ -414,58 +810,11 @@ class Worker(pydantic.BaseModel):
                 )
             else:
                 raise errors.TranscriptMismatchError(
-                    f"{self.kind}: a {message.role} message the worker did "
-                    "not write; only user, system and tool messages can "
-                    "follow its last answer (load() reads a stored past)"
+                    "only user, system and tool messages may follow "
+                    "the last answer"
                 )
-        plan.transcript.extend(new)
+        plan.transcript.extend(new_messages)
         return plan
-
-    async def _ensure_session(self, plan: _Plan) -> None:
-        rt = self._require_runtime()
-        if rt.in_session:
-            return
-        self.session_id = await rt.adapter.open(
-            session_id=self.session_id,
-            fork=self.fork,
-            seed=plan.seed if self.session_id is None and plan.seed else None,
-            instructions=plan.instructions,
-        )
-        self.fork = False
-        rt.in_session = True
-
-    def _start(
-        self,
-        prompt: list[messages_.TextPart | messages_.FilePart],
-        output_type: type[pydantic.BaseModel] | None,
-    ) -> None:
-        rt = self._require_runtime()
-        if output_type is not None:
-            schema = json.dumps(TypeAdapter(output_type).json_schema())
-            prompt = [
-                *prompt,
-                messages_.TextPart(text=OUTPUT_INSTRUCTION + schema),
-            ]
-        queue: asyncio.Queue[Any] = asyncio.Queue()
-        adapter = rt.adapter
-
-        async def pump() -> None:
-            try:
-                async for event in adapter.turn(prompt):
-                    queue.put_nowait(event)
-            except asyncio.CancelledError:
-                raise
-            except BaseException as exc:
-                queue.put_nowait(_Failed(exc))
-
-        rt.queue = queue
-        rt.pump = asyncio.create_task(pump())
-
-    def _end_turn(self) -> None:
-        rt = self._require_runtime()
-        rt.queue = None
-        rt.pump = None
-        rt.hidden.clear()
 
     def _answer(self, results: list[messages_.ToolResultPart]) -> None:
         rt = self._require_runtime()
@@ -476,40 +825,23 @@ class Worker(pydantic.BaseModel):
             value = part.model_input
             if value is messages_.MODEL_INPUT_UNSET:
                 value = part.result
-            text = value if isinstance(value, str) else _dump(value)
-            call.answer.set_result((text, part.result_kind == "error"))
+            call.answer.set_result(
+                (
+                    value if isinstance(value, str) else _dump(value),
+                    part.result_kind == "error",
+                )
+            )
         for call in rt.pending.values():
-            # A call the caller did not answer: tell the CLI, do not hang.
             if not call.answer.done():
                 call.answer.set_result(("no result was given", True))
         rt.pending.clear()
 
-    async def _abandon(self) -> None:
-        """End the running turn: the caller moved on without it."""
-        rt = self._runtime
-        if rt is None:
-            return
-        for call in rt.pending.values():
-            if not call.answer.done():
-                call.answer.set_result(("cancelled by the caller", True))
-        rt.pending.clear()
-        pump = rt.pump
-        if pump is None:
-            return
-        with contextlib.suppress(Exception):
-            await rt.adapter.interrupt()
-        pump.cancel()
-        with contextlib.suppress(BaseException):
-            await pump
-        self._end_turn()
-
     async def _on_call(
         self, name: str, arguments: dict[str, Any]
     ) -> tuple[str, bool]:
-        """Hand a bridge call to the caller, and wait for the result."""
         rt = self._runtime
-        if rt is None or rt.queue is None:
-            return ("no turn is running", True)
+        if rt is None or rt.pump is None:
+            return "no turn is running", True
         answer: asyncio.Future[tuple[str, bool]] = (
             asyncio.get_running_loop().create_future()
         )
@@ -521,44 +853,33 @@ class Worker(pydantic.BaseModel):
     async def _approve(
         self, tool_call_id: str, tool_name: str, tool_input: dict[str, Any]
     ) -> tuple[bool, str]:
-        """Ask about one of the CLI's own tool calls, through `ai.hook`."""
         if self._is_bridge_tool(tool_name):
-            # An `ai` tool: the agent gates it itself, if it is gated.
             return True, ""
         rt = self._runtime
-        if rt is None or rt.context is None:
-            return False, "no run to ask in; denied"
-
-        async def ask() -> tuple[bool, str]:
+        if rt is None or rt.closed:
+            return False, "session is closed"
+        task = asyncio.current_task()
+        if task is not None:
+            rt.approvals.add(task)
+        try:
             approval = await hooks.hook(
                 f"approve_{tool_call_id}",
                 payload=hooks.ToolApproval,
                 metadata={"tool": tool_name, "kwargs": tool_input},
                 tool_call_id=tool_call_id,
+                registry=rt.registry,
+                runtime=_HookRuntime(rt.queue),
             )
             return approval.granted, approval.reason or "denied"
-
-        # In the caller's context: that is where the run's hooks live.
-        task = asyncio.create_task(ask(), context=rt.context)
-        try:
-            return await task
         except asyncio.CancelledError:
-            current = asyncio.current_task()
-            if current is not None and current.cancelling():
-                raise
             return False, "the approval was cancelled"
         except Exception as exc:
             return False, f"approval failed ({type(exc).__name__}); denied"
+        finally:
+            if task is not None:
+                rt.approvals.discard(task)
 
     def _is_bridge_tool(self, tool_name: str) -> bool:
-        """Whether a tool the CLI reports is a bridge call.
-
-        Those reach the caller as `ToolCallPart`s, so the CLI's own report
-        of them is hidden. Claude Code names an MCP tool
-        `mcp__<server>__<name>`; codex uses the bare name, or the server's
-        name when the tool name is missing (measured: codex 0.160). How pi
-        names them is not measured yet: the forms it may use are accepted.
-        """
         rt = self._runtime
         if rt is None:
             return False
@@ -570,11 +891,8 @@ class Worker(pydantic.BaseModel):
         )
 
     def _visible(self, event: events_.Event) -> list[events_.Event]:
-        """Drop StreamStart and the CLI's own report of bridge calls."""
         rt = self._require_runtime()
         match event:
-            case events_.StreamStart():
-                return []  # a worker message has its own
             case events_.BuiltinToolStart():
                 if self._is_bridge_tool(event.tool_name):
                     rt.hidden.add(event.tool_call_id)
@@ -595,174 +913,51 @@ class Worker(pydantic.BaseModel):
         text: str,
         output_type: type[pydantic.BaseModel],
         usage: usage_.Usage | None,
+        feed: AsyncIterator[SessionEvent],
     ) -> tuple[str, usage_.Usage | None]:
-        """Parse the answer, asking again when it does not validate."""
-        adapter = self._require_runtime().adapter
         parsed, error = _parse(text, output_type)
         attempt = 0
         while error is not None and attempt < OUTPUT_RETRIES:
             attempt += 1
-            retry = messages_.TextPart(
-                text=f"Your previous reply failed validation: {error}\n"
+            await self.send(
+                f"Your previous reply failed validation: {error}\n"
                 "Reply again with ONLY the corrected JSON."
             )
             chunks: list[str] = []
-            async for event in adapter.turn([retry]):
-                if isinstance(event, events_.BuiltinToolStart):
-                    chunks.clear()
-                elif isinstance(event, events_.TextDelta):
+            async for event in feed:
+                if isinstance(event, UserMessageAccepted | events_.ModelEvent):
+                    # Retry input and answers remain in the native mirror, but
+                    # are not separate messages in the caller's model view.
+                    # Reapply on StreamEnd, which installs native metadata.
+                    metadata = event.message.provider_metadata or {}
+                    event.message.provider_metadata = {
+                        **metadata,
+                        "worker": {
+                            **metadata.get("worker", {}),
+                            "model_hidden": True,
+                        },
+                    }
+                if isinstance(event, events_.TextDelta):
                     chunks.append(event.chunk)
-                elif isinstance(event, events_.StreamEnd) and event.usage:
-                    usage = usage + event.usage if usage else event.usage
+                elif isinstance(event, events_.BuiltinToolStart):
+                    chunks.clear()
+                elif isinstance(event, events_.StreamEnd):
+                    if event.usage:
+                        usage = usage + event.usage if usage else event.usage
+                    break
+                elif isinstance(event, events_.HookEvent):
+                    await runtime_.get_runtime().put_event(event)
             text = "".join(chunks)
             parsed, error = _parse(text, output_type)
         return (parsed.model_dump_json() if parsed else text), usage
 
     def _metadata(self, finish: str | None) -> dict[str, Any]:
-        meta: dict[str, Any] = {"kind": self.kind}
+        meta: dict[str, Any] = {"worker_class_id": self.worker_class_id}
         if self.session_id:
             meta["session_id"] = self.session_id
         if finish is not None:
             meta["finish_reason"] = finish
         return {"worker": meta}
-
-    # -- lifecycle ------------------------------------------------------------
-
-    async def _open(self) -> _Runtime:
-        if self._runtime is not None:
-            return self._runtime
-        bridge = _bridge.Bridge(self._on_call)
-        await bridge.start()
-        servers = {
-            **self.mcp_servers,
-            _bridge.SERVER_NAME: {"type": "http", "url": bridge.url},
-        }
-        adapter = self._make_adapter(
-            servers, self._approve if self.approve else None
-        )
-        try:
-            await adapter.start()
-        except BaseException:
-            await bridge.close()
-            raise
-        self._runtime = _Runtime(adapter=adapter, bridge=bridge)
-        return self._runtime
-
-    async def close(self) -> None:
-        """End the turn, the CLI and the bridge. The fields stay as they are.
-
-        A closed worker opens again on its next use, and resumes its
-        conversation.
-        """
-        rt = self._runtime
-        if rt is None:
-            return
-        await self._abandon()
-        self._runtime = None
-        try:
-            await rt.adapter.close()
-        finally:
-            await rt.bridge.close()
-
-    async def __aenter__(self) -> Self:
-        await self._open()
-        return self
-
-    async def __aexit__(self, *exc_info: object) -> None:
-        await self.close()
-
-    def _require_runtime(self) -> _Runtime:
-        if self._runtime is None:
-            raise errors.WorkerError(f"{self.kind} worker is not open")
-        return self._runtime
-
-    @property
-    def version(self) -> str | None:
-        """What the CLI's `--version` printed, once the worker is open."""
-        return self._runtime.adapter.version if self._runtime else None
-
-    # -- what only a CLI has --------------------------------------------------
-
-    async def load(self) -> None:
-        """Read the stored conversation `session_id` names into `messages`.
-
-        Also after a person worked in the CLI's TUI (see `tui()`).
-        """
-        if self.session_id is None:
-            raise errors.WorkerError(f"{self.kind}: no session_id to load")
-        rt = await self._open()
-        self.messages = await rt.adapter.history(self.session_id)
-
-    async def steer(self, text: str) -> None:
-        """Send guidance to the turn that runs now; the agent acts on it.
-
-        For use from another task while `stream()` runs. The text is not
-        added to `messages`; `load()` reads it back from the CLI.
-        """
-        rt = self._require_runtime()
-        if rt.queue is None:
-            raise errors.WorkerError(f"{self.kind}: no turn is running")
-        await rt.adapter.steer(text)
-
-    def tui_command(self) -> tuple[list[str], dict[str, str]]:
-        """Return the CLI's own TUI command for this conversation.
-
-        Run it in `cwd`, with the env added to yours::
-
-            argv, env = worker.tui_command()
-            subprocess.run(argv, cwd=worker.cwd, env={**os.environ, **env})
-
-        A worker with no conversation yet gets a new one, when the CLI lets
-        us choose its id (Claude Code, Pi). Close the worker first: one
-        writer per conversation.
-        """
-        if self.fork:
-            raise errors.WorkerError(
-                f"{self.kind}: run a turn first; the fork happens on first use"
-            )
-        rt = self._runtime
-        adapter = (
-            rt.adapter if rt else self._make_adapter(self.mcp_servers, None)
-        )
-        argv, env, minted = adapter.tui_command(self.session_id)
-        if self.session_id is None:
-            if minted is None:
-                raise errors.WorkerError(
-                    f"{self.kind} picks its own session id: run a turn "
-                    "first, or pass session_id="
-                )
-            self.session_id = minted
-        return argv, env
-
-    async def tui(self) -> int:
-        """Hand the conversation to a person, in this terminal.
-
-        Runs the CLI's TUI on it and returns its exit code once the person
-        quits. The worker then reads the conversation back (`load()`) and
-        goes on headless.
-        """
-        await self.close()
-        argv, env = self.tui_command()
-        proc = await asyncio.create_subprocess_exec(
-            *argv, cwd=self.cwd, env={**os.environ, **env}
-        )
-        code = await proc.wait()
-        await self.load()
-        return code
-
-    @classmethod
-    async def list_sessions(cls, **fields: Any) -> list[_adapter.SessionInfo]:
-        """Return the conversations the CLI has stored for a directory.
-
-        Takes the worker's fields: `cwd=`, `env=`, `executable=`.
-        """
-        worker = cls(**fields)
-        adapter = worker._make_adapter({}, None)
-        await adapter.start()
-        try:
-            return await adapter.list_sessions()
-        finally:
-            await adapter.close()
 
 
 def _parse(
@@ -775,7 +970,6 @@ def _parse(
 
 
 def _extract_json(text: str) -> str:
-    """Best effort: the model was told "only JSON", but fences happen."""
     candidate = text.strip()
     if candidate.startswith("```"):
         parts = candidate.split("```")

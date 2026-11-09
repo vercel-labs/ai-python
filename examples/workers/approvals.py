@@ -1,7 +1,8 @@
-"""Approve each of the CLI's own tool calls, as `ai.Agent` tool approvals.
+"""Answer CLI approval requests through `ai.Agent` tool approvals.
 
-With `approve=True`, every tool call the CLI makes becomes a `ToolApproval`
-hook. Answer it with `ai.resolve_hook`, the way any tool approval is.
+With `approve=True`, native approval requests become `ToolApproval` hooks.
+Coverage depends on the CLI's policy; this is not a sandbox. Answer each
+request with `ai.resolve_hook`, the way any tool approval is.
 
     uv run python examples/workers/approvals.py [claude-code|codex|pi]
 """

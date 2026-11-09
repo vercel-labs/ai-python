@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 from typing import Any
 
 import pydantic
@@ -14,7 +15,7 @@ import ai
 from ai import workers
 from ai.types import events
 from ai.types import messages as m
-from ai.workers import _bridge
+from ai.workers import _adapter, _bridge
 
 from . import fakes
 
@@ -111,7 +112,7 @@ async def test_a_cancelled_turn_ends_as_other(worker: fakes.FakeWorker) -> None:
         async for event in stream:
             seen.append(event)
             if isinstance(event, events.TextEnd):
-                await worker.fake.interrupt()
+                await worker.interrupt()
     end = seen[-1]
     assert isinstance(end, events.StreamEnd)
     assert end.finish_reason == "other"
@@ -180,21 +181,59 @@ async def test_a_rewritten_past_is_refused(worker: fakes.FakeWorker) -> None:
             await ai.experimental_generate(worker, [ai.user_message("other")])
 
 
-async def test_a_failed_call_can_be_sent_again(
+async def test_failure_after_acceptance_keeps_the_accepted_user(
     worker: fakes.FakeWorker,
 ) -> None:
     def boom(prompt: str) -> list[fakes.Step]:
         raise RuntimeError("boom")
 
     worker.script(boom)
-    messages = [ai.user_message("one")]
+    message = ai.user_message("one")
     async with worker:
         with pytest.raises(RuntimeError, match="boom"):
-            await ai.experimental_generate(worker, messages)
-        assert worker.messages == []
+            await ai.experimental_generate(worker, [message])
+        assert worker.messages[0] == message
+        assert [x.role for x in worker.messages] == ["user", "assistant"]
+        assert worker.messages[1].parts == []
         worker.script(fakes.reply)
-        again = await ai.experimental_generate(worker, messages)
+        with pytest.raises(ValueError, match="no new user message"):
+            await ai.experimental_generate(worker, list(worker.messages))
+        again = await ai.experimental_generate(
+            worker, [*worker.messages, ai.user_message("two")]
+        )
+        assert worker.fake.turns == ["one", "two"]
+    assert again.text == "two"
+    assert sum(x.id == message.id for x in worker.messages) == 1
+
+
+async def test_failure_before_acceptance_can_be_retried(
+    worker: fakes.FakeWorker, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    turn = fakes.FakeAdapter.turn
+    reject = True
+
+    async def sometimes_reject(
+        adapter: fakes.FakeAdapter, prompt: _adapter.Prompt
+    ) -> AsyncIterator[events.Event]:
+        if reject:
+            raise RuntimeError("not accepted")
+        async for event in turn(adapter, prompt):
+            yield event
+
+    monkeypatch.setattr(fakes.FakeAdapter, "turn", sometimes_reject)
+    message = ai.user_message("one")
+    async with worker:
+        with pytest.raises(RuntimeError, match="not accepted"):
+            await ai.experimental_generate(worker, [message])
+        assert worker.messages == []
+        assert worker._runtime is not None
+        assert worker._runtime.stream_owner is None
+        assert worker._runtime.submission is None
+        reject = False
+        again = await ai.experimental_generate(worker, [message])
+        assert worker.fake.turns == ["one"]
     assert again.text == "one"
+    assert worker.messages[0] == message
 
 
 async def test_walking_away_interrupts_the_turn(
@@ -269,9 +308,24 @@ async def test_a_dumped_worker_continues_its_conversation(
         assert again.fake.turns == ["two"]
 
 
-async def test_an_unknown_kind_is_refused() -> None:
-    with pytest.raises(pydantic.ValidationError):
-        workers.Worker.model_validate({"kind": "nope"})
+async def test_an_unknown_worker_class_is_refused() -> None:
+    with pytest.raises(pydantic.ValidationError, match="unknown worker class"):
+        workers.Worker.model_validate({"worker_class_id": "nope"})
+
+
+def test_worker_identity_and_removed_fields() -> None:
+    worker = fakes.FakeWorker(model_name="test-model")
+    assert worker.id == "test-model"
+    assert worker.worker_class_id == worker.provider_name == "fake"
+    assert worker.version is None
+    data = worker.model_dump()
+    assert data["model_name"] == "test-model"
+    assert data["worker_class_id"] == "fake"
+    assert "fork" not in data
+    assert callable(worker.fork)
+    for field, value in (("kind", "fake"), ("model", "old"), ("fork", True)):
+        with pytest.raises(pydantic.ValidationError, match="Extra inputs"):
+            fakes.FakeWorker.model_validate({field: value})
 
 
 async def test_resume_by_session_id() -> None:
@@ -285,7 +339,7 @@ async def test_resume_by_session_id() -> None:
     assert worker.session_id == "old"
 
 
-async def test_load_reads_the_stored_past() -> None:
+async def test_sync_reads_the_stored_past() -> None:
     worker = fakes.FakeWorker(session_id="old")
     stored = [
         ai.user_message("earlier"),
@@ -293,33 +347,44 @@ async def test_load_reads_the_stored_past() -> None:
     ]
     async with worker:
         worker.fake.stored["old"] = stored
-        await worker.load()
+        await worker.sync()
         assert worker.messages == stored
+        assert worker.messages is not stored
+        assert worker.messages[0] is not stored[0]
         await ai.experimental_generate(
             worker, [*worker.messages, ai.user_message("now")]
         )
         assert worker.fake.turns == ["now"]
 
 
-async def test_a_copy_with_fork_branches_natively(
-    worker: fakes.FakeWorker,
-) -> None:
+async def test_fork_branches_natively(worker: fakes.FakeWorker) -> None:
     async with worker:
         await ai.experimental_generate(worker, [ai.user_message("one")])
-        branch = worker.model_copy(update={"fork": True})
+        branch = await worker.fork()
         async with branch:
-            assert branch.fake is not worker.fake  # a CLI of its own
+            assert branch.fake is not worker.fake
+            assert branch.session_id == "s1-fork"
+            assert branch.messages == worker.messages
+            assert branch.messages is not worker.messages
+            assert branch.messages[0] is not worker.messages[0]
+            assert (
+                branch.messages[0].parts[0] is not worker.messages[0].parts[0]
+            )
+            stored = branch.fake.stored["s1-fork"]
+            assert branch.messages == stored
+            assert branch.messages[0] is not stored[0]
             await ai.experimental_generate(
                 branch, [*branch.messages, ai.user_message("two")]
             )
-            assert branch.fake.opens[0] == {
-                "session_id": "s1",
-                "fork": True,
-                "seed": None,
-                "instructions": None,
-            }
-    assert branch.session_id == "s1-fork"
-    assert branch.fork is False
+            assert branch.fake.opens == [
+                {
+                    "session_id": "s1",
+                    "fork": True,
+                    "seed": None,
+                    "instructions": None,
+                }
+            ]
+            assert branch.fake.turns == ["two"]
     assert worker.session_id == "s1"
     assert len(worker.messages) == 2
     assert len(branch.messages) == 4
@@ -328,7 +393,7 @@ async def test_a_copy_with_fork_branches_natively(
 async def test_a_worker_goes_in_a_context(worker: fakes.FakeWorker) -> None:
     context = ai.Context(model=worker, messages=[], tools=[])
     data = json.loads(context.model_dump_json())
-    assert data["model"]["kind"] == "fake"
+    assert data["model"]["worker_class_id"] == "fake"
     restored = ai.Context.model_validate(data)
     assert isinstance(restored.model, fakes.FakeWorker)
 
@@ -344,6 +409,188 @@ async def test_close_keeps_the_fields(worker: fakes.FakeWorker) -> None:
             worker, [*worker.messages, ai.user_message("two")]
         )
         assert worker.fake.opens[0]["session_id"] == "s1"
+
+
+@pytest.mark.parametrize("mode", ["resume", "copy", "deepcopy"])
+async def test_resume_and_copy_reset_all_private_state(
+    worker: fakes.FakeWorker, mode: str
+) -> None:
+    async with worker:
+        await ai.experimental_generate(worker, [ai.user_message("one")])
+        worker.script(lambda prompt: fakes.text("private script"))
+        if mode == "resume":
+            restored = workers.Worker.model_validate_json(
+                worker.model_dump_json()
+            )
+        else:
+            restored = worker.model_copy(deep=mode == "deepcopy")
+        assert isinstance(restored, fakes.FakeWorker)
+        assert restored.model_dump() == worker.model_dump()
+        assert restored.messages is not worker.messages
+        assert restored.messages[0].parts[0] is not worker.messages[0].parts[0]
+        assert restored._runtime is None
+        assert restored._fake is None
+        assert restored._servers == {}
+        assert restored._script is fakes.reply
+        assert restored.version is None
+        assert restored._open_lock is not worker._open_lock
+        async with restored:
+            assert restored._runtime is not worker._runtime
+            assert restored.fake is not worker.fake
+            assert restored.hook_registry is not worker.hook_registry
+            answer = await ai.experimental_generate(
+                restored, [*restored.messages, ai.user_message("two")]
+            )
+            assert answer.text == "two"
+            assert restored.fake.opens == [
+                {
+                    "session_id": "s1",
+                    "fork": False,
+                    "seed": None,
+                    "instructions": None,
+                }
+            ]
+        assert not worker.fake.closed
+        assert len(worker.messages) == 2
+
+
+async def test_concurrent_open_starts_one_transport(
+    worker: fakes.FakeWorker, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    second_entered = asyncio.Event()
+    starts: list[fakes.FakeAdapter] = []
+    start = fakes.FakeAdapter.start
+
+    async def slow_start(adapter: fakes.FakeAdapter) -> None:
+        starts.append(adapter)
+        entered.set()
+        await release.wait()
+        await start(adapter)
+
+    async def second_open() -> None:
+        second_entered.set()
+        await worker.open()
+
+    monkeypatch.setattr(fakes.FakeAdapter, "start", slow_start)
+    try:
+        async with asyncio.timeout(5), asyncio.TaskGroup() as tasks:
+            first = tasks.create_task(worker.open())
+            await entered.wait()
+            second = tasks.create_task(second_open())
+            await second_entered.wait()
+            assert not first.done()
+            assert not second.done()
+            assert len(starts) == 1
+            release.set()
+        assert starts == [worker.fake]
+        assert worker.version == "fake 1.0"
+        runtime = worker._runtime
+        await worker.open()
+        assert worker._runtime is runtime
+        assert len(starts) == 1
+        message = await ai.experimental_generate(
+            worker, [ai.user_message("one")]
+        )
+        assert message.text == "one"
+        assert len(worker.fake.opens) == 1
+    finally:
+        release.set()
+        await worker.close()
+    assert starts[0].closed
+
+
+async def test_initial_stream_and_send_open_once_and_preserve_input(
+    worker: fakes.FakeWorker, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    opening = asyncio.Event()
+    release_open = asyncio.Event()
+    sending = asyncio.Event()
+    reading = asyncio.Event()
+    finish = asyncio.Event()
+    native_open = fakes.FakeAdapter.open
+    initial = ai.user_message("one")
+
+    async def slow_open(
+        adapter: fakes.FakeAdapter,
+        *,
+        session_id: str | None,
+        fork: bool,
+        seed: list[m.Message] | None,
+        instructions: str | None,
+    ) -> str:
+        opened = await native_open(
+            adapter,
+            session_id=session_id,
+            fork=fork,
+            seed=seed,
+            instructions=instructions,
+        )
+        opening.set()
+        await release_open.wait()
+        return opened
+
+    async def read() -> list[events.Event]:
+        seen = []
+        async with contextlib.aclosing(worker.stream([initial])) as feed:
+            async for event in feed:
+                seen.append(event)
+                if isinstance(event, events.StreamStart):
+                    reading.set()
+        return seen
+
+    async def send_guidance() -> None:
+        sending.set()
+        await worker.send("use tabs")
+
+    async def wait_for_finish() -> None:
+        await finish.wait()
+
+    monkeypatch.setattr(fakes.FakeAdapter, "open", slow_open)
+    worker.script(
+        lambda prompt: [fakes.Run(wait_for_finish), *fakes.text("done")]
+    )
+    async with worker, asyncio.timeout(5):
+        reader = asyncio.create_task(read())
+        sender: asyncio.Task[None] | None = None
+        try:
+            await opening.wait()
+            assert worker._runtime is not None
+            assert worker._runtime.stream_owner is reader
+            # The stream has reserved the reader, but its native session and
+            # initial input are not ready. A public send must wait, then steer.
+            sender = asyncio.create_task(send_guidance())
+            await sending.wait()
+            assert not sender.done()
+            assert len(worker.fake.opens) == 1
+            assert worker.fake.turns == []
+            release_open.set()
+            await sender
+            await reading.wait()
+            finish.set()
+            seen = await reader
+            assert len(worker.fake.opens) == 1
+            assert worker.fake.turns == ["one"]
+            assert worker.fake.steers == ["use tabs"]
+            users = [
+                message for message in worker.messages if message.role == "user"
+            ]
+            assert [message.text for message in users] == ["one", "use tabs"]
+            assert users[0].id == initial.id
+            assert users[1].id != initial.id
+            assert worker.messages[-1].text == "done"
+            assert isinstance(seen[-1], events.StreamEnd)
+            assert seen[-1].finish_reason == "stop"
+        finally:
+            release_open.set()
+            finish.set()
+            reader.cancel()
+            tasks: list[asyncio.Task[Any]] = [reader]
+            if sender is not None:
+                sender.cancel()
+                tasks.append(sender)
+            await asyncio.gather(*tasks, return_exceptions=True)
 
 
 # -- ai.Agent tools, through the bridge ---------------------------------------
@@ -461,29 +708,470 @@ async def test_approvals_are_tool_approval_hooks(granted: bool) -> None:
         assert answers[0][1] == "not today"  # the reason the agent reads
 
 
-async def test_approve_needs_a_run() -> None:
+@pytest.mark.parametrize("granted", [True, False])
+async def test_agent_resolves_approval_from_a_preexisting_task(
+    granted: bool,
+) -> None:
     worker = fakes.FakeWorker(approve=True)
-    async with worker:
-        with pytest.raises(workers.WorkerError, match=r"ai\.Agent\.run"):
-            await ai.experimental_generate(worker, [ai.user_message("go")])
+    requested = asyncio.Event()
+    answered = asyncio.Event()
+
+    async def external_callback() -> tuple[bool, str]:
+        await requested.wait()
+        approve = worker.fake.approve
+        assert approve is not None
+        answer = await approve("c1", "Bash", {"command": "ls"})
+        answered.set()
+        return answer
+
+    async def request_approval() -> None:
+        requested.set()
+        await answered.wait()
+
+    worker.script(
+        lambda prompt: [fakes.Run(request_approval), *fakes.text("done")]
+    )
+    async with worker, asyncio.timeout(5):
+        # CLI readers are often created before Agent.run establishes its
+        # context. The callback must use the stream's registry, not its own.
+        callback = asyncio.create_task(external_callback())
+        seen: list[events.HookEvent] = []
+        try:
+            async with ai.Agent().run(worker, [ai.user_message("go")]) as run:
+                async for event in run:
+                    if isinstance(event, events.HookEvent):
+                        seen.append(event)
+                    if isinstance(event, events.PendingHookEvent):
+                        assert event.hook.tool_call_id == "c1"
+                        assert event.hook.metadata == {
+                            "tool": "Bash",
+                            "kwargs": {"command": "ls"},
+                        }
+                        # Deliberately use the Agent context, without registry=.
+                        ai.resolve_hook(
+                            event.hook,
+                            {"granted": granted, "reason": "user decision"},
+                        )
+                        done, _ = await asyncio.wait({callback}, timeout=1)
+                        assert callback in done, (
+                            "Agent resolution did not reach the approval "
+                            "callback created before Agent.run"
+                        )
+            assert callback.result() == (granted, "user decision")
+            assert [type(event) for event in seen] == [
+                events.PendingHookEvent,
+                events.ResolvedHookEvent,
+            ]
+            assert run.messages[-1].text == "done"
+            assert worker.hook_registry._live_hooks == {}
+            assert worker._runtime is not None
+            assert worker._runtime.approvals == set()
+        finally:
+            callback.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await callback
 
 
-# -- steer, the TUI, the store ------------------------------------------------
+@pytest.mark.parametrize("granted", [True, False])
+async def test_direct_approvals_use_the_worker_registry(granted: bool) -> None:
+    worker = fakes.FakeWorker(approve=True)
+    worker.script(
+        lambda prompt: [
+            fakes.Ask("c1", "Bash", {"command": "ls"}),
+            *fakes.text("done"),
+        ]
+    )
+    seen: list[workers.SessionEvent] = []
+    async with worker, contextlib.aclosing(worker.events()) as feed:
+        async with asyncio.timeout(5):
+            await worker.send("go")
+            async for event in feed:
+                seen.append(event)
+                if isinstance(event, events.PendingHookEvent):
+                    assert worker.fake.answers == []
+                    assert event.hook.tool_call_id == "c1"
+                    assert event.hook.hook_type == "ToolApproval"
+                    assert event.hook.metadata == {
+                        "tool": "Bash",
+                        "kwargs": {"command": "ls"},
+                    }
+                    ai.resolve_hook(
+                        event.hook,
+                        {"granted": granted, "reason": "user decision"},
+                        registry=worker.hook_registry,
+                    )
+                if isinstance(event, events.StreamEnd):
+                    break
+        assert worker.fake.answers == [(granted, "user decision")]
+        assert [
+            type(event) for event in seen if isinstance(event, events.HookEvent)
+        ] == [events.PendingHookEvent, events.ResolvedHookEvent]
+        assert worker.hook_registry._live_hooks == {}
+        assert worker._runtime is not None
+        assert worker._runtime.approvals == set()
+        assert worker.messages[-1].text == "done"
 
 
-async def test_steer_reaches_the_running_turn(
+@pytest.mark.parametrize("action", ["interrupt", "cancel"])
+async def test_stopping_a_pending_approval_cleans_up(action: str) -> None:
+    worker = fakes.FakeWorker(approve=True)
+    worker.script(lambda prompt: [fakes.Ask("c1", "Bash"), fakes.Pause()])
+    pending = asyncio.Event()
+    seen: list[workers.SessionEvent] = []
+
+    async def read() -> None:
+        async with contextlib.aclosing(worker.events()) as feed:
+            async for event in feed:
+                seen.append(event)
+                if isinstance(event, events.PendingHookEvent):
+                    pending.set()
+                if isinstance(event, events.StreamEnd):
+                    return
+
+    async with worker, asyncio.timeout(5):
+        await worker.send("one")
+        reader = asyncio.create_task(read())
+        try:
+            await pending.wait()
+            registry = worker.hook_registry
+            assert len(registry._live_hooks) == 1
+            if action == "interrupt":
+                await worker.interrupt()
+                await reader
+                assert isinstance(seen[-1], events.StreamEnd)
+                assert seen[-1].finish_reason == "other"
+            else:
+                reader.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await reader
+        finally:
+            if not reader.done():
+                reader.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await reader
+        assert worker.fake.answers == [(False, "the approval was cancelled")]
+        assert registry._live_hooks == {}
+        assert not worker.fake.running
+        assert worker._runtime is not None
+        assert not worker._runtime.reader
+        assert worker._runtime.pump is None
+        assert worker._runtime.approvals == set()
+        worker.script(fakes.reply)
+        answer = await ai.experimental_generate(
+            worker, [*worker.messages, ai.user_message("two")]
+        )
+        assert answer.text == "two"
+        assert worker.messages[-2].text == "two"
+        assert worker.fake.turns == ["one", "two"]
+
+
+async def test_approve_without_a_hook_does_not_require_an_agent() -> None:
+    async with fakes.FakeWorker(approve=True) as worker:
+        message = await ai.experimental_generate(
+            worker, [ai.user_message("go")]
+        )
+    assert message.text == "go"
+
+
+# -- direct control, the TUI, the store ---------------------------------------
+
+
+async def test_send_reaches_the_running_turn(worker: fakes.FakeWorker) -> None:
+    worker.script(lambda prompt: [*fakes.text("working"), fakes.Pause()])
+    async with worker, contextlib.aclosing(worker.events()) as feed:
+        async with asyncio.timeout(5):
+            await worker.send("go")
+            accepted = []
+            async for event in feed:
+                if isinstance(event, workers.UserMessageAccepted):
+                    accepted.append(event.message.text)
+                    if event.message.text == "use tabs":
+                        await worker.interrupt()
+                if isinstance(event, events.TextEnd):
+                    await worker.send("use tabs")
+                    assert [
+                        x.text for x in worker.messages if x.role == "user"
+                    ] == ["go"]
+                if isinstance(event, events.StreamEnd):
+                    assert event.finish_reason == "other"
+                    break
+        assert accepted == ["go", "use tabs"]
+        assert worker.fake.turns == ["go"]
+        assert worker.fake.steers == ["use tabs"]
+
+
+async def test_one_persistent_feed_mirrors_multiple_sends(
     worker: fakes.FakeWorker,
+) -> None:
+    async with worker, contextlib.aclosing(worker.events()) as feed:
+        async with asyncio.timeout(5):
+            for index, prompt in enumerate(("one", "two")):
+                await worker.send(prompt)
+                # Acceptance is queued, but send() must not mutate the mirror.
+                assert len(worker.messages) == index * 2
+                accepted = await anext(feed)
+                assert isinstance(accepted, workers.UserMessageAccepted)
+                assert accepted.message.text == prompt
+                assert worker.messages[-1] is accepted.message
+                assert len(worker.messages) == index * 2 + 1
+                seen = []
+                async for event in feed:
+                    seen.append(event)
+                    if isinstance(event, events.StreamEnd):
+                        break
+                assert [type(event) for event in seen] == [
+                    events.StreamStart,
+                    events.TextStart,
+                    events.TextDelta,
+                    events.TextEnd,
+                    events.StreamEnd,
+                ]
+                assert len(worker.messages) == (index + 1) * 2
+                assert worker.messages[-1].text == prompt
+                assert all(
+                    event.message is worker.messages[-1] for event in seen
+                )
+            assert worker.fake.turns == ["one", "two"]
+            assert len(worker.fake.opens) == 1
+            await worker.close()
+            with pytest.raises(StopAsyncIteration):
+                await anext(feed)
+    assert [message.role for message in worker.messages] == [
+        "user",
+        "assistant",
+        "user",
+        "assistant",
+    ]
+    assert len({message.id for message in worker.messages}) == 4
+
+
+@pytest.mark.parametrize("owner", ["direct", "stream"])
+@pytest.mark.parametrize("challenger", ["direct", "stream"])
+async def test_one_reader_guard_across_direct_and_model_apis(
+    worker: fakes.FakeWorker, owner: str, challenger: str
 ) -> None:
     worker.script(lambda prompt: [*fakes.text("working"), fakes.Pause()])
     async with worker:
-        with pytest.raises(workers.WorkerError):
-            await worker.steer("too early")
-        async with ai.stream(worker, [ai.user_message("go")]) as s:
-            async for event in s:
+        if owner == "direct":
+            await worker.send("one")
+            feed = worker.events()
+        else:
+            feed = worker.stream([ai.user_message("one")])
+        async with contextlib.aclosing(feed):
+            await anext(feed)
+            other = (
+                worker.events()
+                if challenger == "direct"
+                else worker.stream([*worker.messages, ai.user_message("two")])
+            )
+            async with contextlib.aclosing(other):
+                with pytest.raises(
+                    workers.WorkerError, match="already has a reader"
+                ):
+                    await anext(other)
+            assert worker.fake.turns == ["one"]
+            assert worker.fake.interrupts == 0
+            async with asyncio.timeout(5):
+                await worker.interrupt()
+                async for event in feed:
+                    if isinstance(event, events.StreamEnd):
+                        assert event.finish_reason == "other"
+                        break
+        assert worker._runtime is not None
+        assert not worker._runtime.reader
+        assert worker._runtime.stream_owner is None
+
+
+async def test_stream_reserves_the_reader_before_send_acceptance(
+    worker: fakes.FakeWorker, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    turn = fakes.FakeAdapter.turn
+
+    async def slow_turn(
+        adapter: fakes.FakeAdapter, prompt: _adapter.Prompt
+    ) -> AsyncIterator[events.Event]:
+        entered.set()
+        await release.wait()
+        async for event in turn(adapter, prompt):
+            yield event
+
+    monkeypatch.setattr(fakes.FakeAdapter, "turn", slow_turn)
+    async with worker, asyncio.timeout(5), asyncio.TaskGroup() as tasks:
+        first = tasks.create_task(
+            collect(worker.stream([ai.user_message("one")]))
+        )
+        await entered.wait()
+        try:
+            for other in (
+                worker.events(),
+                worker.stream([ai.user_message("two")]),
+            ):
+                async with contextlib.aclosing(other):
+                    with pytest.raises(
+                        workers.WorkerError, match="already has a reader"
+                    ):
+                        await anext(other)
+        finally:
+            release.set()
+    assert isinstance(first.result()[-1], events.StreamEnd)
+    assert [message.text for message in worker.messages] == ["one", "one"]
+
+
+async def test_cancellation_before_acceptance_cleans_up(
+    worker: fakes.FakeWorker, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    exited = asyncio.Event()
+    turn = fakes.FakeAdapter.turn
+
+    async def slow_turn(
+        adapter: fakes.FakeAdapter, prompt: _adapter.Prompt
+    ) -> AsyncIterator[events.Event]:
+        entered.set()
+        try:
+            await release.wait()
+            async for event in turn(adapter, prompt):
+                yield event
+        finally:
+            exited.set()
+
+    monkeypatch.setattr(fakes.FakeAdapter, "turn", slow_turn)
+    async with worker, asyncio.timeout(5):
+        reader = asyncio.create_task(
+            collect(worker.stream([ai.user_message("one")]))
+        )
+        try:
+            await entered.wait()
+        finally:
+            reader.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await reader
+        assert exited.is_set()
+        assert worker.messages == []
+        assert worker.fake.interrupts == 1
+        assert worker._runtime is not None
+        assert worker._runtime.pump is None
+        assert not worker._runtime.reader
+        assert worker._runtime.stream_owner is None
+        assert worker._runtime.submission is None
+        release.set()
+        answer = await ai.experimental_generate(
+            worker, [ai.user_message("one")]
+        )
+        assert answer.text == "one"
+        assert worker.fake.turns == ["one"]
+
+
+async def test_interrupt_ends_a_turn_but_not_the_session_feed(
+    worker: fakes.FakeWorker,
+) -> None:
+    worker.script(lambda prompt: [*fakes.text("partial"), fakes.Pause()])
+    async with worker, contextlib.aclosing(worker.events()) as feed:
+        async with asyncio.timeout(5):
+            await worker.send("one")
+            async for event in feed:
                 if isinstance(event, events.TextEnd):
-                    await worker.steer("use tabs")
-                    await worker.fake.interrupt()
-        assert worker.fake.steers == ["use tabs"]
+                    await worker.interrupt()
+                if isinstance(event, events.StreamEnd):
+                    assert event.finish_reason == "other"
+                    assert event.provider_metadata is not None
+                    assert (
+                        event.provider_metadata["worker"]["finish_reason"]
+                        == "cancelled"
+                    )
+                    break
+            assert worker.fake.interrupts == 1
+            assert worker.messages[-1].text == "partial"
+            worker.script(fakes.reply)
+            await worker.send("two")
+            accepted = await anext(feed)
+            assert isinstance(accepted, workers.UserMessageAccepted)
+            assert accepted.message.text == "two"
+            async for event in feed:
+                if isinstance(event, events.StreamEnd):
+                    assert event.finish_reason == "stop"
+                    break
+            assert worker.messages[-1].text == "two"
+            assert worker.fake.turns == ["one", "two"]
+
+
+@pytest.mark.parametrize("api", ["direct", "stream"])
+async def test_cancelling_a_reader_cleans_up_and_allows_another_turn(
+    worker: fakes.FakeWorker, api: str
+) -> None:
+    waiting = asyncio.Event()
+    worker.script(lambda prompt: [*fakes.text("partial"), fakes.Pause()])
+
+    async def read() -> None:
+        if api == "direct":
+            await worker.send("one")
+            feed = worker.events()
+        else:
+            feed = worker.stream([ai.user_message("one")])
+        async with contextlib.aclosing(feed):
+            async for event in feed:
+                if isinstance(event, events.TextEnd):
+                    waiting.set()
+
+    async with worker, asyncio.timeout(5):
+        reader = asyncio.create_task(read())
+        try:
+            await waiting.wait()
+        finally:
+            reader.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await reader
+        assert worker.fake.interrupts == 1
+        assert not worker.fake.running
+        assert worker._runtime is not None
+        assert worker._runtime.pump is None
+        assert not worker._runtime.reader
+        assert worker._runtime.stream_owner is None
+        assert worker._runtime.pending == {}
+        assert worker._runtime.approvals == set()
+        assert [message.text for message in worker.messages] == [
+            "one",
+            "partial",
+        ]
+        worker.script(fakes.reply)
+        answer = await ai.experimental_generate(
+            worker, [*worker.messages, ai.user_message("two")]
+        )
+        assert answer.text == "two"
+        assert worker.fake.turns == ["one", "two"]
+
+
+async def test_sync_and_fork_require_an_idle_session(
+    worker: fakes.FakeWorker,
+) -> None:
+    async with worker:
+        for action in (worker.sync, worker.fork):
+            with pytest.raises(workers.WorkerError, match="no session_id"):
+                await action()
+        worker.script(lambda prompt: [fakes.Pause()])
+        await worker.send("one")
+        for action in (worker.sync, worker.fork):
+            with pytest.raises(
+                workers.WorkerError, match="stop the turn and reader"
+            ):
+                await action()
+        async with (
+            contextlib.aclosing(worker.events()) as feed,
+            asyncio.timeout(5),
+        ):
+            await worker.interrupt()
+            async for event in feed:
+                if isinstance(event, events.StreamEnd):
+                    break
+            # Even between turns a live reader owns the mirror.
+            for action in (worker.sync, worker.fork):
+                with pytest.raises(
+                    workers.WorkerError, match="stop the turn and reader"
+                ):
+                    await action()
 
 
 async def test_tui_command_mints_a_session(worker: fakes.FakeWorker) -> None:
@@ -503,7 +1191,7 @@ async def test_tui_hands_over_and_reads_back() -> None:
         assert await worker.tui() == 0
         # tui() closed the worker's CLI, ran the TUI, and opened again.
         worker.fake.stored["s1"] = stored
-        await worker.load()
+        await worker.sync()
     assert worker.messages == stored
 
 

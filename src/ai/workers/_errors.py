@@ -13,6 +13,10 @@ class WorkerError(errors.AIError):
     """A worker or its CLI failed."""
 
 
+class UnsupportedError(WorkerError):
+    """The CLI does not support the requested operation."""
+
+
 class ExecutableMissingError(WorkerError):
     """The CLI is not installed, or `executable=` does not run."""
 

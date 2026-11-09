@@ -20,14 +20,14 @@ has the context, and the rule for what becomes what is the same everywhere:
   Claude does NOT accept it in any form: Anthropic's safeguards flag real
   model reasoning replayed as user content (`[reasoning_extraction]`) —
   hand-written notes passed, genuine Opus thinking was refused. So the
-  Claude renderer omits reasoning, and the adapter warns with the count,
+  Claude renderer omits reasoning, and the worker warns with the count,
   because dropping context silently is the one thing this SDK never does.
   Pi omits it too, for both reasons: pi drops thinking another model wrote,
   and pi often runs Claude.
 - files: images go to every harness, as the image input each takes (pi
   takes bytes, so an image known only by URL becomes a note naming it);
   PDFs to Claude as documents. Anything else (a PDF into codex, a text
-  file) is left out and counted (`unsupported_files`), and the adapter
+  file) is left out and counted (`unsupported_files`), and the worker
   warns, like it does for reasoning into Claude.
 """
 

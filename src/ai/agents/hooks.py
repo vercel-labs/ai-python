@@ -40,7 +40,7 @@ class HookRegistry:
     """Holds hook state: live suspensions and pre-registered resolutions.
 
     ``_live_hooks``:
-        Populated by ``hook()`` when it suspends inside a running agent.
+        Populated by ``hook()`` when it suspends.
         Maps hook label -> (future, metadata dict, Runtime).
         Consumed by ``resolve_hook()`` / ``cancel_hook()`` to unblock the
         awaiting coroutine.  Each entry is removed by the suspended hook
@@ -154,8 +154,14 @@ async def hook[T: pydantic.BaseModel](
     metadata: dict[str, Any] | None = None,
     tool_call_id: str | None = None,
     registry: HookRegistry | None = None,
+    runtime: runtime_.Runtime | None = None,
 ) -> T:
     """Create a hook suspension point and await its resolution.
+
+    Outside an Agent run, pass an explicit ``registry`` and ``runtime``.
+    The runtime emits hook events; a Runtime subclass can override
+    ``put_event()`` to forward them to its own queue. Resolve or cancel
+    the hook using the same registry.
 
     Args:
         hook: Unique identifier for this hook instance, or a HookPart
@@ -172,9 +178,11 @@ async def hook[T: pydantic.BaseModel](
             custom gating wrappers should pass it too.
         registry: The :class:`HookRegistry` to register the hook in.
             Defaults to the current registry.
+        runtime: The Runtime that emits pending, resolved, and cancelled
+            hook events. Defaults to the current runtime.
 
     """
-    rt = runtime_.get_runtime()
+    rt = runtime if runtime is not None else runtime_.get_runtime()
     registry = _registry(registry)
     label = _label(hook)
     hook_metadata = dict(metadata or {})
