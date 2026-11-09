@@ -32,8 +32,9 @@ SERVER_NAME = "ai_sdk"
 
 PROTOCOL_VERSION = "2025-06-18"
 
-# `on_call(name, arguments)` returns `(text, is_error)`.
-OnCall = Callable[[str, dict[str, Any]], Awaitable[tuple[str, bool]]]
+# `on_call(name, arguments)` returns `(result, is_error)`. A result that is
+# not a `str` goes to the CLI as JSON text.
+OnCall = Callable[[str, dict[str, Any]], Awaitable[tuple[Any, bool]]]
 
 
 class Bridge:
@@ -166,7 +167,8 @@ class Bridge:
             if name not in self._tools:
                 return _error(rid, -32602, f"unknown tool: {name}")
             arguments = params.get("arguments") or {}
-            text, is_error = await self._on_call(name, dict(arguments))
+            result, is_error = await self._on_call(name, dict(arguments))
+            text = result if isinstance(result, str) else json.dumps(result)
             return _result(
                 rid,
                 {

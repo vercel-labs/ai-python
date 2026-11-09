@@ -18,7 +18,7 @@ import pytest
 import ai
 from ai import workers
 from ai.types import messages as m
-from ai.workers import _wire
+from ai.workers import _process
 
 from .. import fakes
 
@@ -226,7 +226,7 @@ def cli(monkeypatch: pytest.MonkeyPatch) -> FakeCLI:
     def session_info(session_id: str, directory: str | None = None) -> Any:
         return object() if session_id in cli.sessions else None
 
-    monkeypatch.setattr(_wire, "probe", probe)
+    monkeypatch.setattr(_process, "probe", probe)
     monkeypatch.setattr(
         sdk, "ClaudeSDKClient", lambda options: FakeClient(cli, options)
     )

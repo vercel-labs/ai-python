@@ -34,7 +34,7 @@ class ModelLike(Protocol):
 
     `ai.stream`, `ai.experimental_generate` and `ai.Agent.run` take a
     `ModelLike`. `ai.Model` is one; anything with the same `stream` is
-    another, a coding-agent CLI for example.
+    another.
 
     `stream` receives the WHOLE conversation on every call and yields the
     events of ONE assistant message, ending with `StreamEnd`.
@@ -45,7 +45,7 @@ class ModelLike(Protocol):
 
     @property
     def provider_name(self) -> str:
-        """Who answers: a provider name, or a worker kind. For telemetry."""
+        """Who answers, for telemetry: for `ai.Model`, the provider name."""
         ...
 
     def stream(

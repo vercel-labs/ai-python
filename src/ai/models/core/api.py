@@ -67,7 +67,7 @@ class _Executor:
         request: _StreamRequest,
     ) -> AsyncGenerator[types.events.Event]:
         # Closed with the outer generator, not left to the garbage
-        # collector: a model-like with state (a worker) cleans up in it.
+        # collector: a model-like with state cleans up in it.
         async with contextlib.aclosing(
             request.model.stream(
                 request.messages,

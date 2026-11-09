@@ -16,18 +16,16 @@ A wire yields three kinds of items:
 
 from __future__ import annotations
 
-import asyncio
 import dataclasses
-import os
-import re
-import warnings
-from collections.abc import AsyncIterator, Mapping
-from typing import Any, Literal, Protocol
+from collections.abc import AsyncIterator
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 from ..types import events
 from ..types import messages as messages_
 from ..types import usage as usage_
-from . import _errors as errors
+
+if TYPE_CHECKING:
+    from . import _errors as errors
 
 Content = (
     events.TextStart
@@ -100,44 +98,3 @@ class Wire(Protocol):
     async def close(self) -> None:
         """Stop the CLI. Safe to call more than once."""
         ...
-
-
-async def probe(
-    kind: str,
-    executable: str,
-    *,
-    install: str,
-    verified: str,
-    cwd: str,
-    env: Mapping[str, str],
-) -> str:
-    """Check that the CLI runs; warn if it is older than the verified one."""
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            executable,
-            "--version",
-            cwd=cwd,
-            env={**os.environ, **env},
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        async with asyncio.timeout(60):
-            stdout, _ = await proc.communicate()
-    except (OSError, TimeoutError) as exc:
-        raise errors.ExecutableMissingError(kind, executable, install) from exc
-    if proc.returncode != 0:
-        raise errors.ExecutableMissingError(kind, executable, install)
-    version = (stdout.decode(errors="replace").strip().splitlines() or [""])[0]
-    have, want = _version(version), _version(verified)
-    if have is not None and want is not None and have < want:
-        warnings.warn(
-            f"{kind} {version} is older than {verified}, the version this "
-            "SDK was verified with; update it if something misbehaves",
-            stacklevel=2,
-        )
-    return version
-
-
-def _version(text: str | None) -> tuple[int, ...] | None:
-    found = re.search(r"\d+(?:\.\d+)+", text or "")
-    return tuple(int(n) for n in found.group(0).split(".")) if found else None

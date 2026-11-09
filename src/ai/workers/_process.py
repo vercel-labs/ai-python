@@ -1,6 +1,7 @@
-"""A CLI process: JSON lines on stdio, in its own process group.
+"""A CLI process: the version probe, and JSON lines on stdio.
 
-Shared by the wires that drive a CLI over stdio (Codex, Pi).
+Shared by the wires. `probe` serves every wire; `spawn` and `Process` serve
+the wires that drive a CLI over stdio (Codex, Pi).
 """
 
 from __future__ import annotations
@@ -8,6 +9,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
+import re
+import warnings
 from collections.abc import Mapping, Sequence
 
 from . import _errors as errors
@@ -94,3 +97,44 @@ async def spawn(
     except OSError as exc:
         raise errors.WorkerError(f"cannot start {argv[0]!r}: {exc}") from exc
     return Process(proc)
+
+
+async def probe(
+    kind: str,
+    executable: str,
+    *,
+    install: str,
+    verified: str,
+    cwd: str,
+    env: Mapping[str, str],
+) -> str:
+    """Check that the CLI runs; warn if it is older than the verified one."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            executable,
+            "--version",
+            cwd=cwd,
+            env={**os.environ, **env},
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        async with asyncio.timeout(60):
+            stdout, _ = await proc.communicate()
+    except (OSError, TimeoutError) as exc:
+        raise errors.ExecutableMissingError(kind, executable, install) from exc
+    if proc.returncode != 0:
+        raise errors.ExecutableMissingError(kind, executable, install)
+    version = (stdout.decode(errors="replace").strip().splitlines() or [""])[0]
+    have, want = _version(version), _version(verified)
+    if have is not None and want is not None and have < want:
+        warnings.warn(
+            f"{kind} {version} is older than {verified}, the version this "
+            "SDK was verified with; update it if something misbehaves",
+            stacklevel=2,
+        )
+    return version
+
+
+def _version(text: str | None) -> tuple[int, ...] | None:
+    found = re.search(r"\d+(?:\.\d+)+", text or "")
+    return tuple(int(n) for n in found.group(0).split(".")) if found else None

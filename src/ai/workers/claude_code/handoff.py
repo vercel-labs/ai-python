@@ -1,6 +1,6 @@
 """Seeding Claude Code with a past: records for its transcript store.
 
-The rule for what becomes what is the same for every CLI: see `_handoff`.
+The rule for what becomes what is the same for every CLI: see `_convert`.
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ import uuid
 from typing import Any
 
 from ...types import messages as messages_
-from .. import _convert, _handoff
+from .. import _convert
 
 
 async def to_claude_records(
@@ -20,8 +20,8 @@ async def to_claude_records(
 ) -> list[dict[str, Any]]:
     """Build Claude Code transcript records for the CLI's store.
 
-    Chained by parentUuid. Reasoning parts are omitted: see `_handoff`.
-    Callers report the omission; `_handoff.reasoning_count()` says how many.
+    Chained by parentUuid. Reasoning parts are omitted: see `_convert`.
+    Callers report the omission; `_convert.reasoning_count()` says how many.
     Files go in as base64, a URL downloaded first: Claude Code drops an
     image given by URL without a word (measured on prompts).
     """
@@ -66,7 +66,7 @@ async def to_claude_records(
                     {
                         "type": "tool_result",
                         "tool_use_id": p.tool_call_id,
-                        "content": _handoff.result_text(p.result),
+                        "content": _convert.result_text(p.result),
                         **({"is_error": True} if p.is_error else {}),
                     }
                 )
@@ -82,7 +82,7 @@ async def to_claude_records(
                 elif p.media_type == "application/pdf":
                     kind = "document"
                 else:
-                    continue  # counted by `_handoff.warn_unsupported_files`
+                    continue  # counted by `_convert.warn_unsupported_files`
                 encoded = base64.b64encode(await _convert.data(p)).decode()
                 blocks.append(
                     {
@@ -116,7 +116,7 @@ async def to_claude_records(
                     {
                         "type": "tool_result",
                         "tool_use_id": p.tool_call_id,
-                        "content": _handoff.result_text(p.result),
+                        "content": _convert.result_text(p.result),
                         **(
                             {"is_error": True}
                             if p.result_kind == "error"

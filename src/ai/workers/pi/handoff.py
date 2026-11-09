@@ -1,6 +1,6 @@
 """Seeding pi with a past: `AgentMessage`s for a session file.
 
-The rule for what becomes what is the same for every CLI: see `_handoff`.
+The rule for what becomes what is the same for every CLI: see `_convert`.
 """
 
 from __future__ import annotations
@@ -10,7 +10,7 @@ from typing import Any
 
 from ...types import media
 from ...types import messages as messages_
-from .. import _handoff
+from .. import _convert
 
 # What names a reply's author in a pi session: its API and model.
 AUTHOR = ("api", "provider", "model")
@@ -28,7 +28,7 @@ def to_pi_messages(
     model's — it keeps its text and tool calls and normalizes the call ids
     for its own provider. Consecutive assistant messages are merged, the way
     one model response holds text and calls together. Reasoning is omitted:
-    see `_handoff`.
+    see `_convert`.
     """
     out: list[dict[str, Any]] = []
     usage = {
@@ -53,7 +53,7 @@ def to_pi_messages(
                 "toolCallId": call_id,
                 "toolName": name,
                 "content": [
-                    {"type": "text", "text": _handoff.result_text(value)}
+                    {"type": "text", "text": _convert.result_text(value)}
                 ],
                 "isError": is_error,
                 "timestamp": timestamp,

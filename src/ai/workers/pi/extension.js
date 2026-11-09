@@ -6,8 +6,8 @@
 //   bridge (the `ai` tools) comes this way: pi has no flag for an MCP server,
 //   and a registration is not written to any config file.
 //
-// pi has no permission prompt, and the SDK asks for no approvals (DESIGN.md
-// D1), so there is no gate here.
+// pi has no permission prompt, and the SDK asks for no approvals,
+// so there is no gate here.
 
 // Registered LAST: its presence in `get_commands` is how the SDK knows every
 // part above loaded. No marker, no session.

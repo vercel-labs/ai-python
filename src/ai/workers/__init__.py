@@ -27,7 +27,7 @@ Or control it directly::
 The CLI's own tools come as `ai.events.BuiltinTool*` events. The state is
 plain data: `worker.messages` holds the conversation in `ai` messages, and
 `worker.model_dump()` / `workers.Worker.model_validate(data)` save and
-continue it. See DESIGN.md for the design.
+continue it.
 """
 
 from ._errors import (

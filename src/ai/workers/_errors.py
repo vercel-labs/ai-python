@@ -6,7 +6,12 @@ Everything else is a `WorkerError` with a message that says what happened.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from .. import errors
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 
 class WorkerError(errors.AIError):
@@ -46,8 +51,8 @@ class TranscriptMismatchError(WorkerError):
     """
 
 
-# Phrases that mean "no usable credentials", collected from what the CLIs
-# print. Narrow on purpose: a 403 is authorization, not authentication.
+# Phrases that mean "no usable credentials" in any CLI. Narrow on purpose: a
+# 403 is authorization, not authentication. A wire adds its CLI's own phrases.
 _AUTH_MARKERS = (
     "401",
     "unauthorized",
@@ -58,14 +63,17 @@ _AUTH_MARKERS = (
     "authentication_error",
     "failed to authenticate",
     "no api key",
-    "please run /login",
-    "please run `codex login`",
 )
 
 
-def turn_failed(kind: str, detail: str, hint: str) -> WorkerError:
-    """Name a failed turn for what the caller has to fix."""
+def turn_failed(
+    kind: str, detail: str, hint: str, markers: Sequence[str] = ()
+) -> WorkerError:
+    """Name a failed turn for what the caller has to fix.
+
+    `markers` are the CLI's own phrases for "no usable credentials".
+    """
     detail = (detail or "unknown error")[:500]
-    if any(marker in detail.lower() for marker in _AUTH_MARKERS):
+    if any(m in detail.lower() for m in (*_AUTH_MARKERS, *markers)):
         return NotAuthenticatedError(kind, detail, hint)
     return WorkerError(f"{kind} turn failed: {detail}")

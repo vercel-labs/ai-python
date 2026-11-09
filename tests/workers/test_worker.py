@@ -578,10 +578,11 @@ async def test_a_copy_is_not_started_and_shares_no_list() -> None:
 async def test_an_agent_context_keeps_the_worker() -> None:
     worker = workers.Codex(cwd="/w")
     context = ai.Context(model=worker, messages=[], tools=[])
-    data = context.model_dump(mode="json")
-    again = ai.Context.model_validate(data)
-    assert isinstance(again.model, workers.Codex)
-    assert again.model.cwd == "/w"
+    assert context.model is worker
+    # The data of a context loads its model as an ai.Model: save a worker
+    # with `worker.model_dump()`, not in a context.
+    with pytest.raises(pydantic.ValidationError):
+        ai.Context.model_validate(context.model_dump(mode="json"))
 
 
 # -- telemetry ----------------------------------------------------------------

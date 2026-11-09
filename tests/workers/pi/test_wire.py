@@ -19,9 +19,9 @@ import pytest
 import ai
 from ai import workers
 from ai.types import messages as m
-from ai.workers import _process, _wire
+from ai.workers import _process
 from ai.workers.pi import Pi
-from ai.workers.pi import worker as worker_
+from ai.workers.pi import wire as wire_
 
 from .. import fakes
 
@@ -219,7 +219,7 @@ class PiServer:
                 },
             )
         elif kind == "get_commands":
-            names = [worker_.READY] if self.loaded else []
+            names = [wire_.READY] if self.loaded else []
             self.respond(
                 command, data={"commands": [{"name": n} for n in names]}
             )
@@ -255,7 +255,7 @@ def server(monkeypatch: pytest.MonkeyPatch) -> PiServer:
             server.process = fakes.FakeProcess(server.process.answer)
         return cast("_process.Process", server.process)
 
-    monkeypatch.setattr(_wire, "probe", probe)
+    monkeypatch.setattr(_process, "probe", probe)
     monkeypatch.setattr(_process, "spawn", spawn)
     return server
 
@@ -337,8 +337,8 @@ async def test_start_runs_pi_with_the_extension_and_the_bridge(
     async with worker:
         (argv, kwargs) = server.spawned[0]
         assert argv[:3] == ["/custom/pi", "--mode", "rpc"]
-        assert argv[argv.index("-e") + 1] == worker_.EXTENSION
-        assert Path(worker_.EXTENSION).is_file()
+        assert argv[argv.index("-e") + 1] == wire_.EXTENSION
+        assert Path(wire_.EXTENSION).is_file()
         assert argv[argv.index("--session-id") + 1] == worker.session_id
         for flag, value in [
             ("--model", "claude-test"),
@@ -356,7 +356,7 @@ async def test_start_runs_pi_with_the_extension_and_the_bridge(
         env = kwargs["env"]
         assert env["ANTHROPIC_API_KEY"] == "k"
         assert worker._session is not None
-        assert json.loads(env[worker_.CONFIG_VAR]) == {
+        assert json.loads(env[wire_.CONFIG_VAR]) == {
             "mcp": {
                 "ai_sdk": {
                     "url": worker._session.bridge.url,
@@ -411,7 +411,7 @@ async def test_bridge_calls_are_ai_tool_calls_not_builtin(
     async def call_bridge(command: dict[str, Any]) -> None:
         # pi calls the MCP server the extension registered.
         env = server.spawned[-1][1]["env"]
-        url = json.loads(env[worker_.CONFIG_VAR])["mcp"]["ai_sdk"]["url"]
+        url = json.loads(env[wire_.CONFIG_VAR])["mcp"]["ai_sdk"]["url"]
         reply = await fakes.mcp_call(
             url,
             {

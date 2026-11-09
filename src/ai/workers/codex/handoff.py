@@ -1,6 +1,6 @@
 """Seeding Codex with a past: Responses API items for `thread/inject_items`.
 
-The rule for what becomes what is the same for every CLI: see `_handoff`.
+The rule for what becomes what is the same for every CLI: see `_convert`.
 """
 
 from __future__ import annotations
@@ -9,7 +9,7 @@ from typing import Any
 
 from ...types import media
 from ...types import messages as messages_
-from .. import _handoff
+from .. import _convert
 
 NOTE_PREFIX = "[Handoff from a previous session — earlier reasoning: "
 
@@ -87,7 +87,7 @@ def to_codex_items(messages: list[messages_.Message]) -> list[dict[str, Any]]:
                     {
                         "type": "function_call_output",
                         "call_id": p.tool_call_id,
-                        "output": _handoff.result_text(p.result),
+                        "output": _convert.result_text(p.result),
                     }
                 )
             elif isinstance(p, messages_.ReasoningPart) and p.text.strip():

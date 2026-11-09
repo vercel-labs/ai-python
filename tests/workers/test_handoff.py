@@ -21,7 +21,7 @@ from ai.types.messages import (
     ToolCallPart,
     ToolResultPart,
 )
-from ai.workers import _handoff
+from ai.workers import _convert
 from ai.workers.claude_code import handoff as claude_handoff
 from ai.workers.codex import handoff as codex_handoff
 from ai.workers.pi import handoff as pi_handoff
@@ -136,7 +136,7 @@ async def test_claude_records_follow_the_rule() -> None:
     result = recs[2]["message"]["content"][0]
     assert result["type"] == "tool_result"
     assert result["tool_use_id"] == "call_1"
-    assert _handoff.reasoning_count(CLI_TOOL) == 1  # what is warned about
+    assert _convert.reasoning_count(CLI_TOOL) == 1  # what is warned about
     # a real chain, in the CLI's own store shape
     assert recs[0]["parentUuid"] is None
     assert all(

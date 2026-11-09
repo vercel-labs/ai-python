@@ -1,10 +1,13 @@
 """`Worker`: one session of a coding-agent CLI.
 
-Two public layers live here (see DESIGN.md):
+Two public layers live here:
 
 - L1, direct control: `start`, `send`, `events`, `interrupt`, `close`, and
   the state `session_id` and `messages`.
-- L2, the model protocol: `stream`, built one time on L1.
+- L2, the model protocol: `stream`, built one time on L1. All that makes a
+  worker look like a model is in `stream`: it matches the history it gets
+  with `messages`, restarts the CLI when the tools or the past changed, and
+  turns a cancel into an interrupt.
 
 A concrete worker (`Codex`, ...) only adds settings and a private wire
 (`_wire.Wire`) that speaks its CLI's protocol.
@@ -35,7 +38,7 @@ from ..types import events as events_
 from ..types import messages as messages_
 from ..types import tools as tools_
 from ..types import usage as usage_
-from . import _bridge, _handoff, _wire
+from . import _bridge, _wire
 from . import _errors as errors
 
 if TYPE_CHECKING:
@@ -103,7 +106,7 @@ class _Call:
     tool_call_id: str
     name: str
     arguments: dict[str, Any]
-    answer: asyncio.Future[tuple[str, bool]]
+    answer: asyncio.Future[tuple[Any, bool]]
 
 
 @dataclasses.dataclass
@@ -154,6 +157,9 @@ class _Session:
         self.idle.set()
         self.interrupting = False
         self.stopped: BaseException | None = None
+
+        # For `stream()` only. The session records these; only `stream()`
+        # reads them, to match the history it gets with this session.
         # A new CLI session, not one that continues `session_id`.
         self.fresh = worker.session_id is None
         # The tools the CLI saw when it connected to the bridge.
@@ -161,6 +167,7 @@ class _Session:
         # True after the first user message went to the CLI.
         self.used = False
         # Turn errors, by the id of the assistant message they ended.
+        # `stream()` raises them; `events()` gives only the message.
         self.failures: dict[str, BaseException] = {}
 
         # The open assistant message.
@@ -333,7 +340,7 @@ class _Session:
 
     async def _on_call(
         self, name: str, arguments: dict[str, Any]
-    ) -> tuple[str, bool]:
+    ) -> tuple[Any, bool]:
         """Report a bridge call to an `ai` tool; wait for its result."""
         if self.stopped is not None:
             return f"the worker stopped: {self.stopped}", True
@@ -480,9 +487,7 @@ class _Session:
             if value is messages_.MODEL_INPUT_UNSET:
                 value = part.result
             if not call.answer.done():
-                call.answer.set_result(
-                    (_handoff.result_text(value), part.result_kind == "error")
-                )
+                call.answer.set_result((value, part.result_kind == "error"))
         await self._append(message)
         if not self.calls:
             await self._release()
@@ -850,7 +855,48 @@ class Worker(pydantic.BaseModel):
         if self._stream_lock.locked():
             raise errors.WorkerError("a worker runs one stream() at a time")
         async with self._stream_lock:
-            new, seeds = self._new_messages(messages)
+            # Compare `messages` with the conversation; find the new part.
+            # `seeds`: the past must seed a session that a started worker
+            # opened empty.
+            seeds = False
+            if not self.messages:
+                # First use: the past is the conversation. Without a
+                # session_id it seeds the new CLI session; with one, the CLI
+                # has it already.
+                start = len(messages)
+                while start and messages[start - 1].role == "user":
+                    start -= 1
+                if start == len(messages):
+                    raise errors.TranscriptMismatchError(
+                        "the last message must be a user message: a worker "
+                        "cannot continue tool calls that it did not make"
+                    )
+                self.messages = list(messages[:start])
+                seeds = (
+                    bool(start)
+                    and self._session is not None
+                    and self._session.fresh
+                )
+                new = list(messages[start:])
+            else:
+                skipped = {m.id for m in self.messages if is_interrupted(m)}
+                known = [m.id for m in self.messages if m.id not in skipped]
+                given = [m for m in messages if m.id not in skipped]
+                if [m.id for m in given[: len(known)]] != known:
+                    raise errors.TranscriptMismatchError(
+                        "the messages do not continue this worker's "
+                        "conversation; use worker.messages as the history, "
+                        "or a new worker"
+                    )
+                new = given[len(known) :]
+                if not new:
+                    raise ValueError("stream(): no new message to send")
+                for message in new:
+                    if message.role not in ("user", "tool"):
+                        raise errors.TranscriptMismatchError(
+                            f"a new {message.role} message cannot go to the "
+                            "CLI: only user and tool messages can"
+                        )
             if tools is not None:
                 self.tools = [t for t in tools if t.kind == "function"]
             session = self._session
@@ -910,51 +956,6 @@ class Worker(pydantic.BaseModel):
                 raise
             finally:
                 await feed.aclose()
-
-    def _new_messages(
-        self, messages: list[messages_.Message]
-    ) -> tuple[list[messages_.Message], bool]:
-        """Compare `messages` with the conversation; return the new part.
-
-        Also return True when the past must seed a session that a started
-        worker opened empty.
-        """
-        if not self.messages:
-            # First use: the past is the conversation. Without a session_id
-            # it seeds the new CLI session; with one, the CLI has it already.
-            start = len(messages)
-            while start and messages[start - 1].role == "user":
-                start -= 1
-            if start == len(messages):
-                raise errors.TranscriptMismatchError(
-                    "the last message must be a user message: a worker cannot "
-                    "continue tool calls that it did not make"
-                )
-            self.messages = list(messages[:start])
-            seeds = (
-                bool(start)
-                and self._session is not None
-                and self._session.fresh
-            )
-            return list(messages[start:]), seeds
-        skipped = {m.id for m in self.messages if is_interrupted(m)}
-        known = [m.id for m in self.messages if m.id not in skipped]
-        given = [m for m in messages if m.id not in skipped]
-        if [m.id for m in given[: len(known)]] != known:
-            raise errors.TranscriptMismatchError(
-                "the messages do not continue this worker's conversation; "
-                "use worker.messages as the history, or a new worker"
-            )
-        new = given[len(known) :]
-        if not new:
-            raise ValueError("stream(): no new message to send")
-        for message in new:
-            if message.role not in ("user", "tool"):
-                raise errors.TranscriptMismatchError(
-                    f"a new {message.role} message cannot go to the CLI: only "
-                    "user and tool messages can"
-                )
-        return new, False
 
 
 def _tool_specs(tools: list[tools_.Tool]) -> list[dict[str, Any]]:
