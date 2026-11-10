@@ -6,9 +6,9 @@ Usage::
     from ai.providers.typesafe import TypeSafeProvider
 
     model = ai.Model(id="jev-latest", provider=TypeSafeProvider())
-    result = await ai.ops.experimental.evaluate(model, state, questions)
+    result = await ai.ops.experimental.decide(model, state, questions)
 
-The provider supports evaluation only. The optional upstream TypeSafe SDK is
+The provider supports decisions only. The optional upstream TypeSafe SDK is
 loaded lazily when the provider creates or uses an SDK client.
 """
 

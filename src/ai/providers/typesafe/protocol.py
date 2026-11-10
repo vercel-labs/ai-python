@@ -21,33 +21,36 @@ else:
 
 
 class TypeSafeSystemOneProtocol(base.ProviderProtocol[TypeSafeClient]):
-    """TypeSafe ``/v1/systemone`` evaluation protocol."""
+    """TypeSafe ``/v1/systemone`` decision protocol."""
 
     protocol_class_id: Literal["typesafe-system-one"] = "typesafe-system-one"
 
-    async def evaluate(
+    async def decide(
         self,
         client: TypeSafeClient,
         model: model_.Model,
-        state: ops.experimental.EvaluationInput,
+        state: ops.experimental.DecisionInput,
         questions: Mapping[
             str,
             ops.experimental.ChoiceQuestion
             | ops.experimental.ScoreQuestion
-            | ops.experimental.NoulQuestion,
+            | ops.experimental.PredicateQuestion,
         ],
         *,
-        params: ops.experimental.EvaluationParams,
+        params: ops.experimental.DecideParams,
         provider: str,
     ) -> ops.items.Item[dict[str, Any]]:
-        """Hit ``/v1/systemone`` and return raw evaluation answers."""
+        """Hit ``/v1/systemone`` and return raw decision answers."""
         typesafe = _sdk.import_sdk(provider=provider)
 
-        # The native wire format matches the question models, except that an
-        # absent Noul criteria is omitted rather than sent as null.
+        # The native wire format matches the question models, except that
+        # TypeSafe calls the predicate primitive "noul" and an absent
+        # predicate criteria is omitted rather than sent as null.
         wire_questions: dict[str, Any] = {}
         for question_id, question in questions.items():
             wire_question = question.model_dump(mode="json")
+            if wire_question["type"] == "predicate":
+                wire_question["type"] = "noul"
             if wire_question.get("criteria", ...) is None:
                 del wire_question["criteria"]
             wire_questions[question_id] = wire_question
@@ -78,6 +81,10 @@ class TypeSafeSystemOneProtocol(base.ProviderProtocol[TypeSafeClient]):
             data = answer.model_dump(mode="json")
             if "legend" in data:
                 legends[question_id] = data.pop("legend")
+            if data.get("type") == "noul":
+                data["type"] = "predicate"
+                if "noul" in data:
+                    data["probability"] = data.pop("noul")
             answers[question_id] = data
 
         typesafe_metadata: dict[str, Any] = {"model": response.model}

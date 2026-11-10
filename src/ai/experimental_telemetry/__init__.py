@@ -5,6 +5,9 @@ Experimental: not part of the stable API, may change or be removed.
 See :mod:`.span` for the full story.
 """
 
+import warnings
+from typing import TYPE_CHECKING, Any
+
 from .span import (
     FIRST_TOKEN,
     HOOK_CANCELLED,
@@ -17,9 +20,9 @@ from .span import (
     AiGenerateSpanData,
     AiStreamSpanData,
     CustomSpanData,
+    DecideSpanData,
     DictSink,
     EmbedSpanData,
-    EvaluateSpanData,
     GenerateAudioSpanData,
     GenerateImageSpanData,
     GenerateVideoSpanData,
@@ -60,9 +63,9 @@ __all__ = [
     "AiGenerateSpanData",
     "AiStreamSpanData",
     "CustomSpanData",
+    "DecideSpanData",
     "DictSink",
     "EmbedSpanData",
-    "EvaluateSpanData",
     "GenerateAudioSpanData",
     "GenerateImageSpanData",
     "GenerateVideoSpanData",
@@ -90,3 +93,19 @@ __all__ = [
     "use_span",
     "use_time",
 ]
+
+if TYPE_CHECKING:
+    EvaluateSpanData = DecideSpanData
+else:
+
+    def __getattr__(name: str) -> Any:
+        # Deprecated names, kept as aliases of their replacements.
+        if name == "EvaluateSpanData":
+            warnings.warn(
+                "ai.experimental_telemetry.EvaluateSpanData is deprecated, "
+                "use ai.experimental_telemetry.DecideSpanData",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            return DecideSpanData
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

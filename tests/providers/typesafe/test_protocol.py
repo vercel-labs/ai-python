@@ -9,7 +9,7 @@ import pytest
 import typesafe_sdk
 
 import ai
-from ai.ops import experimental as evaluation
+from ai.ops import experimental as decisions
 from ai.providers.typesafe import TypeSafeProvider
 
 
@@ -34,18 +34,18 @@ def _response(answers: dict[str, Any]) -> dict[str, Any]:
 
 
 class Questions(pydantic.BaseModel):
-    urgent: evaluation.NoulQuestion
-    department: evaluation.ChoiceQuestion
-    frustration: evaluation.ScoreQuestion
+    urgent: decisions.PredicateQuestion
+    department: decisions.ChoiceQuestion
+    frustration: decisions.ScoreQuestion
 
 
 class Answers(pydantic.BaseModel):
-    urgent: evaluation.NoulAnswer
-    department: evaluation.ChoiceAnswer
-    frustration: evaluation.ScoreAnswer
+    urgent: decisions.PredicateAnswer
+    department: decisions.ChoiceAnswer
+    frustration: decisions.ScoreAnswer
 
 
-async def test_evaluate_sends_native_request_and_parses_answers() -> None:
+async def test_decide_sends_native_request_and_parses_answers() -> None:
     requests: list[httpx2.Request] = []
 
     def handler(request: httpx2.Request) -> httpx2.Response:
@@ -72,18 +72,18 @@ async def test_evaluate_sends_native_request_and_parses_answers() -> None:
             ),
         )
 
-    result = await evaluation.evaluate(
+    result = await decisions.decide(
         _model(handler),
         "Help! My payouts have been failing for 3 days.",
         Questions(
-            urgent=evaluation.NoulQuestion(
+            urgent=decisions.PredicateQuestion(
                 instructions="Does this convey urgency?"
             ),
-            department=evaluation.ChoiceQuestion(
+            department=decisions.ChoiceQuestion(
                 instructions="Which team should handle this?",
                 criteria={"billing": "Payments", "technical": None},
             ),
-            frustration=evaluation.ScoreQuestion(
+            frustration=decisions.ScoreQuestion(
                 instructions="How frustrated is the customer?",
                 criteria=["Calm", "Frustrated"],
             ),
@@ -115,7 +115,7 @@ async def test_evaluate_sends_native_request_and_parses_answers() -> None:
         },
     }
 
-    assert result.value.urgent.noul == 0.95
+    assert result.value.urgent.probability == 0.95
     assert result.value.department.choice == "billing"
     assert result.value.department.confidence == 0.81
     assert result.value.frustration.score == 1.05
@@ -131,7 +131,7 @@ async def test_evaluate_sends_native_request_and_parses_answers() -> None:
     }
 
 
-async def test_evaluate_sends_noul_criteria_and_provider_options() -> None:
+async def test_decide_sends_predicate_criteria_and_provider_options() -> None:
     bodies: list[dict[str, Any]] = []
 
     def handler(request: httpx2.Request) -> httpx2.Response:
@@ -140,16 +140,16 @@ async def test_evaluate_sends_noul_criteria_and_provider_options() -> None:
             200, json=_response({"urgent": {"type": "noul", "noul": 0.1}})
         )
 
-    result = await evaluation.evaluate(
+    result = await decisions.decide(
         _model(handler),
         {"message": "fine, thanks"},
         {
-            "urgent": evaluation.NoulQuestion(
+            "urgent": decisions.PredicateQuestion(
                 instructions="Urgent?",
                 criteria={"true": "Time-sensitive", "false": "Not urgent"},
             )
         },
-        params=evaluation.EvaluationParams(
+        params=decisions.DecideParams(
             provider_options={"typesafe": {"effort": "high"}}
         ),
     )
@@ -157,23 +157,26 @@ async def test_evaluate_sends_noul_criteria_and_provider_options() -> None:
     [body] = bodies
     assert body["state"] == {"message": "fine, thanks"}
     assert body["effort"] == "high"
+    assert body["questions"]["urgent"]["type"] == "noul"
     assert body["questions"]["urgent"]["criteria"] == {
         "true": "Time-sensitive",
         "false": "Not urgent",
     }
-    assert result.value == {"urgent": evaluation.NoulAnswer(noul=0.1)}
+    assert result.value == {
+        "urgent": decisions.PredicateAnswer(probability=0.1)
+    }
     assert result.provider_metadata == {"typesafe": {"model": "jev-1.13.0"}}
 
 
-async def test_evaluate_rejects_non_mapping_provider_options() -> None:
+async def test_decide_rejects_non_mapping_provider_options() -> None:
     model = _model(lambda request: httpx2.Response(500))
 
     with pytest.raises(TypeError, match="must be a mapping"):
-        await evaluation.evaluate(
+        await decisions.decide(
             model,
             "state",
-            {"q": evaluation.NoulQuestion(instructions="?")},
-            params=evaluation.EvaluationParams(
+            {"q": decisions.PredicateQuestion(instructions="?")},
+            params=decisions.DecideParams(
                 provider_options={"typesafe": "high"}
             ),
         )
@@ -189,7 +192,7 @@ async def test_evaluate_rejects_non_mapping_provider_options() -> None:
         (500, ai.ProviderInternalServerError),
     ],
 )
-async def test_evaluate_maps_status_errors(
+async def test_decide_maps_status_errors(
     status: int, error_type: type[ai.ProviderAPIError]
 ) -> None:
     def handler(request: httpx2.Request) -> httpx2.Response:
@@ -200,10 +203,10 @@ async def test_evaluate_maps_status_errors(
         )
 
     with pytest.raises(error_type) as exc_info:
-        await evaluation.evaluate(
+        await decisions.decide(
             _model(handler),
             "state",
-            {"q": evaluation.NoulQuestion(instructions="?")},
+            {"q": decisions.PredicateQuestion(instructions="?")},
         )
 
     exc = exc_info.value
@@ -215,29 +218,29 @@ async def test_evaluate_maps_status_errors(
     assert exc.http_context.status_code == status
 
 
-async def test_evaluate_maps_connection_errors() -> None:
+async def test_decide_maps_connection_errors() -> None:
     def handler(request: httpx2.Request) -> httpx2.Response:
         raise httpx2.ConnectError("boom", request=request)
 
     with pytest.raises(ai.ProviderConnectionError) as exc_info:
-        await evaluation.evaluate(
+        await decisions.decide(
             _model(handler),
             "state",
-            {"q": evaluation.NoulQuestion(instructions="?")},
+            {"q": decisions.PredicateQuestion(instructions="?")},
         )
 
     assert exc_info.value.is_retryable
 
 
-async def test_evaluate_maps_invalid_responses() -> None:
+async def test_decide_maps_invalid_responses() -> None:
     def handler(request: httpx2.Request) -> httpx2.Response:
         return httpx2.Response(200, json={"model": "jev-1.13.0"})
 
     with pytest.raises(ai.errors.ProviderResponseError) as exc_info:
-        await evaluation.evaluate(
+        await decisions.decide(
             _model(handler),
             "state",
-            {"q": evaluation.NoulQuestion(instructions="?")},
+            {"q": decisions.PredicateQuestion(instructions="?")},
         )
 
     assert not exc_info.value.is_retryable

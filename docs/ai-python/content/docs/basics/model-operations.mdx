@@ -1,8 +1,8 @@
 ---
 title: Non-LLM models
-description: Generate media and embeddings, transcribe audio, rerank documents, and evaluate state.
+description: Generate media and embeddings, transcribe audio, rerank documents, and make decisions.
 type: guide
-summary: Use dedicated models for images, video, speech, embeddings, transcription, reranking, and evaluation.
+summary: Use dedicated models for images, video, speech, embeddings, transcription, reranking, and decisions.
 ---
 
 Use `ai.ops` for model calls that do not produce a language-model message.
@@ -253,9 +253,9 @@ for ranked in result.value:
 Each result contains the document's original index and relevance score. Results
 are ordered from the highest score to the lowest.
 
-## Evaluate state
+## Make decisions
 
-Use `ai.ops.experimental.evaluate` to ask choice, score, and Noul questions about one shared state. Define matching Pydantic models for the questions and answers:
+Use `ai.ops.experimental.decide` to ask choice, score, and predicate questions about one shared state. Define matching Pydantic models for the questions and answers:
 
 ```python
 import pydantic
@@ -264,16 +264,16 @@ import pydantic
 class Questions(pydantic.BaseModel):
     department: ai.ops.experimental.ChoiceQuestion
     severity: ai.ops.experimental.ScoreQuestion
-    requests_refund: ai.ops.experimental.NoulQuestion
+    requests_refund: ai.ops.experimental.PredicateQuestion
 
 
 class Answers(pydantic.BaseModel):
     department: ai.ops.experimental.ChoiceAnswer
     severity: ai.ops.experimental.ScoreAnswer
-    requests_refund: ai.ops.experimental.NoulAnswer
+    requests_refund: ai.ops.experimental.PredicateAnswer
 
 
-result = await ai.ops.experimental.evaluate(
+result = await ai.ops.experimental.decide(
     ai.get_model("typesafe-ai/jev"),
     {"message": "Please refund the duplicate charge."},
     Questions(
@@ -285,7 +285,7 @@ result = await ai.ops.experimental.evaluate(
             instructions="How severe is this?",
             criteria=["Cosmetic", "Has workaround", "Blocking"],
         ),
-        requests_refund=ai.ops.experimental.NoulQuestion(
+        requests_refund=ai.ops.experimental.PredicateQuestion(
             instructions="Is the customer requesting a refund?",
         ),
     ),
@@ -299,11 +299,11 @@ When question IDs are dynamic, pass a mapping and omit `output_type`. The item
 value is then a validated answer mapping:
 
 ```python
-result = await ai.ops.experimental.evaluate(
+result = await ai.ops.experimental.decide(
     ai.get_model("typesafe-ai/jev"),
     state,
     {
-        question_id: ai.ops.experimental.NoulQuestion(instructions=instructions)
+        question_id: ai.ops.experimental.PredicateQuestion(instructions=instructions)
         for question_id, instructions in dynamic_questions.items()
     },
 )

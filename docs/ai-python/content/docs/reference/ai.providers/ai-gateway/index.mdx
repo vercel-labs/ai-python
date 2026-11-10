@@ -549,7 +549,7 @@ The Python provider currently supports:
 - Structured output.
 - Function and provider-executed tools.
 - Model listing and connection checks.
-- Image, video, and speech generation, embeddings, transcription, reranking, and evaluation through `ai.ops`.
+- Image, video, and speech generation, embeddings, transcription, reranking, and decisions through `ai.ops`.
 
 It does not currently expose realtime sessions, credit queries, spend reports,
 or generation lookup helpers.
@@ -586,7 +586,7 @@ Methods and properties:
 - `embed(...)`: Embeds text values.
 - `transcribe(...)`: Transcribes audio.
 - `rerank(...)`: Reranks documents against a query.
-- `evaluate(...)`: Evaluates typed questions against shared state.
+- `decide(...)`: Decides typed questions about shared state.
 - `aclose()`: Closes provider-owned resources.
 
 ### GatewayParams
