@@ -107,6 +107,24 @@ stream.output
   text. When `output_type` is set, the text is validated as JSON against that
   Pydantic model and the parsed instance is returned.
 
+## after_step
+
+Override `async def after_step(self, context: ai.Context) -> None` to inspect
+or modify the context between steps without replacing the default loop.
+The default implementation does nothing.
+
+The default loop calls it once after each completed model response and all
+of its tool results have been appended to history, after the step's stream,
+tool runner, and event merge have closed. This includes a final response
+without tool calls. Changes to the context affect the next `keep_running()`
+check; for example, appending a pending user message continues the run.
+An exception or cancellation propagates and prevents the next model request.
+A failed step does not call `after_step`.
+
+The hook does not wait for the consumer to drain buffered events. Set
+`LOOP_BUFFER = 0` if it must run after consumer side effects for the step's
+events. A custom `loop` must call `after_step` itself if needed.
+
 ## loop
 
 Override `Agent.loop(context)` to customize control flow. The default loop uses

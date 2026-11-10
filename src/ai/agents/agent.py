@@ -1504,6 +1504,19 @@ class Agent:
         """Resolve ToolCallPart(s) into callable ToolCall object(s)."""
         return self._tool_resolver.resolve(tool_part)
 
+    async def after_step(self, context: Context) -> None:
+        """Run after a completed step, before deciding whether to continue.
+
+        The assistant message and all tool results are in ``context``, and
+        the step's stream and tool runner are closed. This includes final
+        assistant-only steps. Override to inspect or modify the context;
+        the default does nothing. Exceptions and cancellation propagate.
+
+        This does not wait for the consumer to drain buffered events. Use
+        ``LOOP_BUFFER = 0`` when sequencing against consumer side effects.
+        Custom ``loop`` implementations must call this method themselves.
+        """
+
     async def loop(
         self, context: Context
     ) -> AsyncGenerator[events_.AgentEvent]:
@@ -1533,6 +1546,8 @@ class Agent:
                 # also has the effect of causing another turn through
                 # the loop.
                 context.add(tr.get_tool_message())
+
+            await self.after_step(context)
 
     @overload
     def run(
