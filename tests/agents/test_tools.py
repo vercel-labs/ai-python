@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import copy
+import dataclasses
 import functools
+import pickle
 from collections.abc import AsyncGenerator, Callable
 from typing import Any, cast
 
@@ -657,3 +660,133 @@ def test_to_model_input_with_aggregate_marker_is_rejected() -> None:
         async def t() -> ai.StreamingTextTool:
             """Stream."""
             yield "x"
+
+
+# -- Pickling -------------------------------------------------------------
+
+
+class _Point(pydantic.BaseModel):
+    x: int
+
+
+@ai.tool(require_approval=True)
+async def _pickled_tool(points: list[_Point], label: str | None = None) -> str:
+    """Pickled with its fn by name."""
+    return f"{label}: {len(points)}"
+
+
+async def _echo(**kwargs: Any) -> str:
+    return repr(kwargs)
+
+
+async def _plain(x: int) -> int:
+    return x
+
+
+_plain_tool = ai.tool(_plain)
+
+
+class _StrictArgs(pydantic.BaseModel):
+    model_config = pydantic.ConfigDict(extra="forbid")
+    x: int
+
+    @pydantic.field_validator("x")
+    @classmethod
+    def _positive(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("must be positive")
+        return v
+
+
+def test_decorated_tool_pickles_fn_by_name() -> None:
+    copy = dataclasses.replace(
+        _pickled_tool,
+        tool=_pickled_tool.tool.model_copy(update={"require_approval": False}),
+    )
+
+    restored = pickle.loads(pickle.dumps(copy))
+
+    assert restored is not _pickled_tool
+    assert restored.fn is _pickled_tool.fn
+    assert restored.tool == copy.tool
+    assert not restored.require_approval
+
+
+def test_decorated_tool_fn_pickles_anywhere() -> None:
+    partial = functools.partial(_pickled_tool.fn, label="x")
+
+    restored = pickle.loads(pickle.dumps(partial))
+
+    assert restored.func is _pickled_tool.fn
+    assert _pickled_tool.fn.__name__ == "_pickled_tool"
+    assert _pickled_tool.name == "_pickled_tool"
+
+
+def test_call_form_tool_keeps_fn_picklable() -> None:
+    assert pickle.loads(pickle.dumps(_plain)) is _plain
+    assert pickle.loads(pickle.dumps(_plain_tool)).fn is _plain
+
+
+def test_tool_qualname_rewrite_does_not_stack() -> None:
+    again = ai.tool(_plain)
+
+    assert _plain.__qualname__ == "_plain.fn"
+    assert again.fn is _plain
+
+
+def test_tool_copy_pickles_by_value() -> None:
+    copy = dataclasses.replace(_pickled_tool, fn=functools.partial(_echo))
+
+    restored = pickle.loads(pickle.dumps(copy))
+
+    assert restored is not copy
+    assert restored.tool == copy.tool
+    assert restored.validator is not None
+    assert copy.validator is not None
+    assert (
+        restored.validator.model_json_schema()
+        == copy.validator.model_json_schema()
+    )
+    args = restored.validator.model_validate({"points": [{"x": 1}]})
+    assert args.points == [_Point(x=1)]
+    assert isinstance(restored.fn, functools.partial)
+
+
+@pytest.mark.parametrize(
+    "roundtrip",
+    [copy.deepcopy, lambda t: pickle.loads(pickle.dumps(t))],
+    ids=["deepcopy", "pickle"],
+)
+def test_custom_validator_survives_copy(
+    roundtrip: Callable[[ai.AgentTool], ai.AgentTool],
+) -> None:
+    tool = ai.AgentTool(
+        tool=_plain_tool.tool, fn=_plain_tool.fn, validator=_StrictArgs
+    )
+
+    restored = roundtrip(tool)
+
+    assert restored.validator is _StrictArgs
+
+
+async def test_tool_leaves_existing_fn_attribute_alone() -> None:
+    async def target(x: int) -> int:
+        return x
+
+    wrapper = _Wrapper(target)
+    qualname = vars(wrapper)["__qualname__"]
+
+    tool = ai.tool(wrapper)
+
+    assert wrapper.fn is target
+    assert vars(wrapper)["__qualname__"] == qualname
+    assert await tool.fn(x=1) == 1
+
+
+def test_local_tool_does_not_pickle() -> None:
+    @ai.tool
+    async def local(x: int) -> int:
+        return x
+
+    with pytest.raises((pickle.PicklingError, AttributeError)):
+        pickle.dumps(local)
