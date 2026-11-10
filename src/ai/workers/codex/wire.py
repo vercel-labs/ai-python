@@ -87,6 +87,7 @@ class CodexWire:
     async def start(
         self,
         *,
+        session_id: str | None,
         bridge_url: str,
         instructions: str | None,
         seed: list[messages_.Message],
@@ -130,13 +131,15 @@ class CodexWire:
                 timeout=60,
             )
             await self.peer.notify("initialized")
-            return await self._open(seed)
+            return await self._open(session_id, seed)
         except BaseException:
             # A failed start must not leave the server running.
             await self.close()
             raise
 
-    async def _open(self, seed: list[messages_.Message]) -> str:
+    async def _open(
+        self, session_id: str | None, seed: list[messages_.Message]
+    ) -> str:
         params = {
             "sandbox": self.worker.sandbox or "danger-full-access",
             # Workers do not ask for approval. A request that nobody answers
@@ -153,7 +156,6 @@ class CodexWire:
                 else {}
             ),
         }
-        session_id = self.worker.session_id
         if session_id is not None:
             await self._require_here(session_id)
             try:

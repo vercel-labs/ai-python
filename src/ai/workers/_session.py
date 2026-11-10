@@ -1,14 +1,16 @@
-"""`Session`: a worker's CLI, live.
+"""`Session`: one session of a worker's CLI.
 
-The low level of a worker: `start`, `send`, `events`, `interrupt` and
-`close`. The session keeps the worker's state, `session_id` and `messages`,
-current. The model protocol (`WorkerProvider.stream`) is built on it.
+The state is here: `id` and `messages`. So is the low level: `start`,
+`send`, `events`, `interrupt` and `close`. The model protocol
+(`WorkerProvider.stream`) is built on it.
 """
 
 from __future__ import annotations
 
 import asyncio
+import collections
 import contextlib
+import contextvars
 import dataclasses
 import functools
 import json
@@ -40,11 +42,21 @@ METADATA_KEY = "worker"
 NEW_MESSAGE = "No result: a new user message came before the result."
 INTERRUPTED = "No result: the turn was interrupted."
 CLOSED = "No result: the worker closed."
-NOT_OPEN = "the session is not open: use `async with worker.session()`"
+NOT_OPEN = (
+    "the session is not open: use `async with worker.session()` "
+    "or `await session.start()`"
+)
+
+
+# The sessions that are open in this context, the newest last. A model call
+# of a worker runs on the worker's open session, if the context has one.
+_OPEN: contextvars.ContextVar[tuple[Session, ...]] = contextvars.ContextVar(
+    "ai_workers_open_sessions", default=()
+)
 
 
 class MessageEvent(events_.BaseEvent):
-    """A complete message went into `worker.messages`."""
+    """A complete message went into `session.messages`."""
 
     message: messages_.Message
     kind: Literal["worker_message"] = "worker_message"
@@ -75,66 +87,105 @@ class WorkerMessageSpanData(pydantic.BaseModel):
     finish_reason: str | None = None
 
 
-def is_interrupted(message: messages_.Message) -> bool:
-    """Tell if an interrupt ended `message`, or the worker made it up.
-
-    Such messages are in `worker.messages`, but `ai.Agent` does not keep
-    them. `stream()` ignores them when it compares histories.
-    """
-    data = (message.provider_metadata or {}).get(METADATA_KEY) or {}
-    return bool(data.get("interrupted"))
-
-
 class Session:
-    """A worker's CLI, live: direct control.
+    """One session of a worker's CLI: its state and direct control.
 
-    `worker.session()` makes one. Use it as a context manager::
+    `worker.session()` gives the worker's session (`worker.session_id`), or
+    a new one if the worker has none. `worker.session(session_id)` continues
+    another session that the CLI has, and `worker.session(messages=history)`
+    makes a new one that starts with a past. The state is plain data:
+
+    - `id`: the CLI's id for the session. None until a new session starts.
+    - `messages`: the conversation, in `ai` messages. The session keeps it
+      current.
+
+    Open the session to keep the CLI alive between turns and to control it::
 
         async with worker.session() as session:
-            feed = session.events()
             await session.send(ai.user_message("Fix the tests"))
-            async for event in feed:
+            async for event in session.events():
                 ...
 
-    Inside the block the worker also goes where a model goes:
-    `ai.stream(worker, messages)` and `ai.Agent(...).run(worker, messages)`
-    run on this session.
+    `start()` and `close()` do the same without a block. While the session is
+    open, the worker's model calls (`ai.stream(worker, messages)`,
+    `ai.Agent(...).run(worker, messages)`) run on it. This applies to the
+    task that opened the session and to the tasks that it makes after that.
 
     The CLI starts with the first `send()` or the first model call, not when
     the block opens: by then the tools and the past are known. `start()`
     starts it at once.
+
+    `provider_metadata["worker"]` marks a message that the worker wrote
+    outside a complete model call: `{"stop_reason": "interrupted"}` on a
+    reply that an interrupt or a close cut, `{"error": text}` on the reply of
+    a failed turn, and `{"synthetic": True}` on a tool message for calls that
+    got no result.
     """
 
-    def __init__(self, worker: _worker.Worker) -> None:
+    def __init__(
+        self,
+        worker: _worker.Worker,
+        session_id: str | None = None,
+        messages: list[messages_.Message] | None = None,
+    ) -> None:
         self.worker = worker
+        self.id = session_id if session_id is not None else worker.session_id
+        self.messages = list(messages or [])
+        # Open: the CLI stays alive between turns, and `send()` works.
         self._open = False
         self._run: _Run | None = None
-        self._readers: set[asyncio.Queue[Any]] = set()
+        # What `events()` did not give yet.
+        self._feed: collections.deque[Any] = collections.deque()
+        self._feed_wake = asyncio.Event()
+        # `events()` gave something since the last turn began.
+        self._feed_read = False
+        # The queues of the model calls that read. See the provider's
+        # `stream()`.
+        self._taps: set[asyncio.Queue[Any]] = set()
         self._start_lock = asyncio.Lock()
         # Held by the provider's `stream()`: one model call at a time.
         self._stream_lock = asyncio.Lock()
 
     async def __aenter__(self) -> Self:
-        current = self.worker._session
-        if current is not None and current is not self:
-            raise errors.WorkerError("the worker has an open session already")
-        self.worker._session = self
-        self._open = True
+        await self._hold()
         return self
 
     async def __aexit__(self, *exc_info: object) -> None:
         await self.close()
 
-    async def start(self) -> None:
-        """Start the CLI now.
+    async def _hold(self) -> None:
+        """Open the session: here, the worker's model calls run on it."""
+        if self._open:
+            return
+        opened = [s for s in _OPEN.get() if s._open]
+        if self.id is not None and any(s.id == self.id for s in opened):
+            raise errors.WorkerError(f"the session {self.id} is open already")
+        # The session that the worker's model calls made without a block.
+        last = self.worker._session
+        if last is not None and last.id == self.id:
+            if last._stream_lock.locked():
+                raise errors.WorkerError(
+                    "a model call runs on this session: wait for its end"
+                )
+            self.worker._session = None
+        self._open = True
+        _OPEN.set((*opened, self))
+        if last is not None and last.id == self.id:
+            # Its CLI can wait in a turn that nobody continues.
+            await last._end_run()
 
-        With `worker.session_id`, continue that CLI session. Without it,
-        start a new one, seeded with `worker.messages` (lossy). Started
-        already: nothing happens. After the CLI stopped, start it again.
+    async def start(self) -> None:
+        """Open the session and start the CLI now. `close()` ends both.
+
+        With `id`, continue that CLI session. Without it, start a new one,
+        seeded with `messages` (lossy). Started already: nothing happens.
+        After the CLI stopped, start it again.
         """
+        await self._hold()
+        await self._start()
+
+    async def _start(self) -> None:
         async with self._start_lock:
-            if not self._open:
-                raise errors.WorkerError(NOT_OPEN)
             if self._run is not None and self._run.stopped is None:
                 return
             if self._run is not None:
@@ -150,23 +201,34 @@ class Session:
         A user message starts a turn, or steers the turn that runs. The CLI
         decides. A tool message gives results to `ai` tool calls that wait.
         `send()` returns when the CLI has the message; the message goes into
-        `worker.messages` when the CLI accepts it.
+        `messages` when the CLI accepts it.
         """
         if message.role not in ("user", "tool"):
             raise ValueError(
                 f"send() takes a user or tool message, not {message.role!r}"
             )
+        if not self._open:
+            raise errors.WorkerError(NOT_OPEN)
+        await self._send(message)
+
+    async def _send(self, message: messages_.Message) -> None:
         if self._run is None:
-            await self.start()
+            await self._start()
         run = self._run
         if run is None:
-            raise errors.WorkerError(NOT_OPEN)
+            raise errors.WorkerError("the session closed during send()")
         if run.stopped is not None:
             raise errors.WorkerError(f"the worker stopped: {run.stopped}")
         if message.role == "tool":
             await run.do(functools.partial(run.answer, message))
             return
         await run.do(functools.partial(run.fail_calls, NEW_MESSAGE))
+        if run.idle.is_set():
+            # A new turn. Nobody read `events()` during the last one: nobody
+            # reads, so the feed must not grow.
+            if not self._feed_read:
+                self._feed.clear()
+            self._feed_read = False
         run.idle.clear()
         run.used = True
         try:
@@ -176,22 +238,31 @@ class Session:
                 run.idle.set()
             raise
 
-    def events(self) -> AsyncGenerator[WorkerEvent]:
-        """Return a new subscriber to the session's events.
+    async def events(self) -> AsyncGenerator[WorkerEvent]:
+        """Read the session's events from where the last reader stopped.
 
-        The subscription starts now, not at the first `__anext__`: call it
-        before `send()` to see everything that the message causes. Many
-        subscribers are permitted. It ends when the CLI stops or the session
-        closes, and raises if the CLI fails. Close it (or let it end) when
-        you are done.
+        The session keeps the events that nobody read. Thus `send()` and then
+        `events()` loses nothing, and a reader that stops needs no cleanup:
+        the next `events()` continues. One reader: with two, each event goes
+        to one of them. It ends when the session closes, and raises if the
+        CLI fails.
+
+        If nobody reads during a whole turn, the events before the latest
+        turn are dropped. The messages stay in `messages`.
         """
-        if not self._open:
+        if not self._open and not self._feed:
             raise errors.WorkerError(NOT_OPEN)
-        if self._run is not None and self._run.stopped is not None:
-            raise errors.WorkerError(f"the worker stopped: {self._run.stopped}")
-        queue: asyncio.Queue[Any] = asyncio.Queue()
-        self._readers.add(queue)
-        return _read_events(self, queue)
+        while True:
+            while self._feed:
+                item = self._feed.popleft()
+                if isinstance(item, BaseException):
+                    raise item
+                self._feed_read = True
+                yield item
+            if not self._open:
+                return
+            self._feed_wake.clear()
+            await self._feed_wake.wait()
 
     async def interrupt(self) -> None:
         """Stop the current turn. The CLI keeps the session.
@@ -215,33 +286,40 @@ class Session:
             await self._end_run()
 
     async def close(self) -> None:
-        """Stop the CLI and close the session. The worker's state stays.
+        """Stop the CLI and close the session. `id` and `messages` stay.
 
-        A second close does nothing.
+        A second close does nothing. `start()` opens the session again.
         """
         await self._end_run()
         self._open = False
-        if self.worker._session is self:
-            self.worker._session = None
+        _OPEN.set(tuple(s for s in _OPEN.get() if s is not self))
+        self._feed_wake.set()
 
     async def _end_run(self) -> None:
-        """Stop the CLI and end the readers. The session stays open."""
+        """Stop the CLI. The session stays as it is, open or not."""
         async with self._start_lock:
             run, self._run = self._run, None
             if run is not None:
                 await run.close()
-            # A reader that got the end takes nothing after it.
-            for reader in self._readers:
-                reader.put_nowait(_END)
-            self._readers.clear()
+            # A model call that got the end takes nothing after it.
+            for tap in self._taps:
+                tap.put_nowait(_END)
+            self._taps.clear()
+
+    def _put(self, item: Any) -> None:
+        """Give an event, or an error, to `events()` and to the model calls."""
+        self._feed.append(item)
+        self._feed_wake.set()
+        for tap in self._taps:
+            tap.put_nowait(item)
 
     async def _start_for_stream(self, *, seeds: bool) -> _Run:
         """Start the CLI for a model call. For the provider's `stream()`.
 
         A CLI reads the tool list once, when it connects to the bridge, and
-        takes a past only when its session starts. `seeds`: the worker just
+        takes a past only when its session starts. `seeds`: the session just
         took a past. If the tools or the past changed and no turn runs, start
-        the CLI again. The readers stay.
+        the CLI again.
         """
         worker = self.worker
         run = self._run
@@ -255,20 +333,72 @@ class Session:
                     await run.close()
                 if run.fresh and not run.used:
                     # The session is new and empty: start a new one, which
-                    # also takes the past.
-                    worker.session_id = None
+                    # also takes the past. The worker forgets the empty one.
+                    if worker.session_id == self.id:
+                        worker.session_id = None
+                    self.id = None
             elif restart:
                 warnings.warn(
                     "the tools changed during a turn: the CLI keeps the "
                     "tools it saw at the start until the worker restarts",
                     stacklevel=2,
                 )
-        await self.start()
+        await self._start()
         run = self._run
         if run is None:
-            raise errors.WorkerError(NOT_OPEN)
+            raise errors.WorkerError("the session closed during stream()")
         run.bridge.set_tools(worker.tools)
         return run
+
+    def _sync(
+        self, messages: list[messages_.Message]
+    ) -> list[messages_.Message]:
+        """Match a whole history with the conversation; return the new part.
+
+        First use: the history up to its last user messages becomes the
+        conversation. After that, the history must continue the
+        conversation.
+        """
+        if not self.messages:
+            # Without an id the past seeds the new CLI session; with one, the
+            # CLI has it already.
+            start = len(messages)
+            while start and messages[start - 1].role == "user":
+                start -= 1
+            if start == len(messages):
+                raise errors.TranscriptMismatchError(
+                    "the last message must be a user message: a worker "
+                    "cannot continue tool calls that it did not make"
+                )
+            self.messages = list(messages[:start])
+            return list(messages[start:])
+        # The worker wrote these outside a complete model call: the caller
+        # does not always have them.
+        own = {
+            m.id
+            for m in self.messages
+            if METADATA_KEY in (m.provider_metadata or {})
+        }
+        known = [m.id for m in self.messages if m.id not in own]
+        given = [m for m in messages if m.id not in own]
+        if [m.id for m in given[: len(known)]] != known:
+            raise errors.TranscriptMismatchError(
+                "the messages do not continue this session's conversation; "
+                "use session.messages as the history, or a new session"
+            )
+        new = given[len(known) :]
+        if not new:
+            raise errors.TranscriptMismatchError(
+                "the messages have nothing new for this session: "
+                "add a user message"
+            )
+        for message in new:
+            if message.role not in ("user", "tool"):
+                raise errors.TranscriptMismatchError(
+                    f"a new {message.role} message cannot go to the "
+                    "CLI: only user and tool messages can"
+                )
+        return new
 
 
 @dataclasses.dataclass
@@ -296,7 +426,7 @@ class _Stopped:
     error: BaseException
 
 
-_END = object()  # put on a reader's queue at close
+_END = object()  # put on a model call's queue when the CLI stops
 
 
 class _Run:
@@ -320,7 +450,7 @@ class _Run:
                     worker=worker.worker_class_id,
                     model=worker.model_name,
                     cwd=worker.cwd,
-                    session_id=worker.session_id,
+                    session_id=session.id,
                 ),
                 set_as_current=False,
             )
@@ -334,7 +464,7 @@ class _Run:
         # For the provider's `stream()` only. The run records these; only
         # `stream()` reads them, to match the history it gets with this run.
         # A new CLI session, not one that continues `session_id`.
-        self.fresh = worker.session_id is None
+        self.fresh = session.id is None
         # The tools the CLI saw when it connected to the bridge.
         self.served: list[dict[str, Any]] = []
         # True after the first user message went to the CLI.
@@ -371,17 +501,19 @@ class _Run:
         await self.bridge.start()
         self.bridge.set_tools(worker.tools)
         self.served = _tool_specs(worker.tools)
-        system = [m.text for m in worker.messages if m.role == "system"]
+        session = self.session
+        system = [m.text for m in session.messages if m.role == "system"]
         instructions = "\n\n".join(
             t for t in (worker.instructions, *system) if t
         )
         seed = (
-            [m for m in worker.messages if m.role != "system"]
-            if worker.session_id is None
+            [m for m in session.messages if m.role != "system"]
+            if session.id is None
             else []
         )
         try:
-            worker.session_id = await self.wire.start(
+            session.id = await self.wire.start(
+                session_id=session.id,
                 bridge_url=self.bridge.url,
                 instructions=instructions or None,
                 seed=seed,
@@ -393,7 +525,10 @@ class _Run:
                 await self.bridge.close()
             await self.span.stamp_end(error=exc).push()
             raise
-        self.span.data.session_id = worker.session_id
+        if self.fresh and worker.session_id is None:
+            # The worker's first new session: the worker remembers it.
+            worker.session_id = session.id
+        self.span.data.session_id = session.id
         self.tasks = [
             asyncio.create_task(self._read()),
             asyncio.create_task(self._pump()),
@@ -440,10 +575,6 @@ class _Run:
                 item.done.set_exception(
                     errors.WorkerError(f"the worker stopped: {self.stopped}")
                 )
-
-    def _broadcast(self, item: Any) -> None:
-        for reader in self.session._readers:
-            reader.put_nowait(item)
 
     # -- tasks ----------------------------------------------------------------
 
@@ -506,9 +637,8 @@ class _Run:
         self.stopped = error
         self.idle.set()
         self._fail_commands()
-        for reader in self.session._readers:
-            reader.put_nowait(error)
-        self.session._readers.clear()
+        self.session._put(error)
+        self.session._taps.clear()
 
     async def _on_call(
         self, name: str, arguments: dict[str, Any]
@@ -688,7 +818,7 @@ class _Run:
             messages_.Message(
                 role="tool",
                 parts=parts,
-                provider_metadata={METADATA_KEY: {"interrupted": True}},
+                provider_metadata={METADATA_KEY: {"synthetic": True}},
             )
         )
         await self._release()
@@ -707,7 +837,7 @@ class _Run:
             WorkerMessageSpanData(
                 worker=worker.worker_class_id,
                 model=worker.model_name,
-                session_id=worker.session_id,
+                session_id=self.session.id,
             ),
             parent=self.span,
             set_as_current=False,
@@ -733,7 +863,8 @@ class _Run:
             metadata[METADATA_KEY] = {"error": str(error)}
             self.failures[self.message_id] = error
         elif interrupted:
-            metadata[METADATA_KEY] = {"interrupted": True}
+            # Not in the finish-reason vocabulary: `other`, and the raw value.
+            metadata[METADATA_KEY] = {"stop_reason": "interrupted"}
         self._emit(
             events_.StreamEnd(
                 finish_reason=reason,
@@ -767,29 +898,14 @@ class _Run:
         stamp = messages_.Message(
             id=self.message_id, role="assistant", parts=[]
         )
-        self._broadcast(
+        self.session._put(
             self.hydrator.feed(event.model_copy(update={"message": stamp}))
         )
 
     async def _append(self, message: messages_.Message) -> None:
-        # A new list, not append: a copied worker must not share it.
-        self.worker.messages = [*self.worker.messages, message]
-        self._broadcast(MessageEvent(message=message))
-
-
-async def _read_events(
-    session: Session, queue: asyncio.Queue[Any]
-) -> AsyncGenerator[WorkerEvent]:
-    try:
-        while True:
-            item = await queue.get()
-            if item is _END:
-                return
-            if isinstance(item, BaseException):
-                raise item
-            yield item
-    finally:
-        session._readers.discard(queue)
+        # A new list, not append: a caller can hold the old one.
+        self.session.messages = [*self.session.messages, message]
+        self.session._put(MessageEvent(message=message))
 
 
 def _tool_specs(tools: list[tools_.Tool]) -> list[dict[str, Any]]:

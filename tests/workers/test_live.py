@@ -9,7 +9,6 @@ local login of each CLI, so the prompts are small.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import os
 import shutil
 from collections.abc import Callable
@@ -53,7 +52,7 @@ async def test_a_turn_with_a_cli_tool_and_a_resume(
     make: Callable[..., workers.Worker],
 ) -> None:
     worker = make()
-    async with asyncio.timeout(240), worker.session():
+    async with asyncio.timeout(240), worker.session() as session:
         async with ai.stream(
             worker,
             [
@@ -66,18 +65,43 @@ async def test_a_turn_with_a_cli_tool_and_a_resume(
                 pass
         assert "HERON" in s.text.upper()
         assert s.message.builtin_tool_calls
-    saved = worker.model_dump_json()
-    again = workers.Worker.model_validate_json(saved)
-    async with asyncio.timeout(240), again.session():
+    assert session.id is not None
+    assert worker.session_id == session.id  # the worker remembers it
+    # The worker's data is all that a later process needs. No block: the
+    # call starts the CLI and continues the session.
+    again = workers.Worker.model_validate_json(worker.model_dump_json())
+    async with asyncio.timeout(240):
         reply = await ai.experimental_generate(
-            again,
-            [
-                *again.messages,
-                ai.user_message("Which word did you read? One word."),
-            ],
+            again, [ai.user_message("Which word did you read? One word.")]
         )
     assert "HERON" in reply.text.upper()
-    assert again.session_id == worker.session_id
+    assert again.session_id == session.id
+
+
+async def test_model_calls_without_a_session_continue_the_conversation(
+    make: Callable[..., workers.Worker],
+) -> None:
+    worker = make()
+    history = [
+        ai.user_message(
+            "Read secret.txt with a tool. Reply with the word only."
+        )
+    ]
+    async with asyncio.timeout(240):
+        async with ai.stream(worker, history) as s:
+            async for _ in s:
+                pass
+        assert "HERON" in s.text.upper()
+        # The CLI stopped after the turn; this call continues its session.
+        reply = await ai.experimental_generate(
+            worker,
+            [
+                *history,
+                s.message,
+                ai.user_message("Which file did you read? The name only."),
+            ],
+        )
+    assert "SECRET" in reply.text.upper()
 
 
 async def test_an_agent_gives_its_tools_to_the_cli(
@@ -89,7 +113,7 @@ async def test_an_agent_gives_its_tools_to_the_cli(
         return "PELICAN" if topic == "birds" else "UNKNOWN"
 
     worker = make()
-    async with asyncio.timeout(240), worker.session():
+    async with asyncio.timeout(240):  # no session: the CLI runs for the turn
         async with ai.Agent(tools=[secret_word]).run(
             worker,
             [
@@ -101,9 +125,9 @@ async def test_an_agent_gives_its_tools_to_the_cli(
         ) as run:
             async for _ in run:
                 pass
-    roles = [message.role for message in worker.messages]
+    roles = [message.role for message in run.messages]
     assert "tool" in roles
-    assert "PELICAN" in worker.messages[-1].text.upper()
+    assert "PELICAN" in run.messages[-1].text.upper()
 
 
 async def test_cancel_interrupts_and_the_session_continues(
@@ -111,12 +135,13 @@ async def test_cancel_interrupts_and_the_session_continues(
 ) -> None:
     worker = make()
     history = [ai.user_message("Write the numbers 1 to 300, one per line.")]
-    async with asyncio.timeout(240), worker.session():
+    async with asyncio.timeout(240), worker.session() as session:
         async with ai.stream(worker, history) as s:
             async for event in s:
                 if isinstance(event, ai.events.TextDelta):
                     break  # stop reading: the turn stops
-        assert workers.is_interrupted(worker.messages[-1])
+        cut = session.messages[-1].provider_metadata or {}
+        assert cut.get("worker") == {"stop_reason": "interrupted"}
         reply = await ai.experimental_generate(
             worker, [*history, ai.user_message("Reply with the word OK only.")]
         )
@@ -128,7 +153,6 @@ async def test_a_steer_lands_in_the_conversation(
 ) -> None:
     worker = make()
     async with asyncio.timeout(240), worker.session() as session:
-        feed = session.events()
         await session.send(
             ai.user_message(
                 "Run `sleep 5` with a shell tool, "
@@ -136,7 +160,7 @@ async def test_a_steer_lands_in_the_conversation(
             )
         )
         steered = False
-        async for event in feed:
+        async for event in session.events():
             if not steered and isinstance(event, ai.events.BuiltinToolStart):
                 steered = True
                 await session.send(
@@ -148,16 +172,14 @@ async def test_a_steer_lands_in_the_conversation(
             ):
                 if any(
                     m.role == "user" and "STEERED" in m.text
-                    for m in worker.messages
+                    for m in session.messages
                 ):
                     break
-        with contextlib.suppress(Exception):
-            await feed.aclose()
-    user_texts = [m.text for m in worker.messages if m.role == "user"]
+    user_texts = [m.text for m in session.messages if m.role == "user"]
     assert any("STEERED" in t for t in user_texts)
     assert (
         "STEERED"
         in "".join(
-            m.text for m in worker.messages if m.role == "assistant"
+            m.text for m in session.messages if m.role == "assistant"
         ).upper()
     )

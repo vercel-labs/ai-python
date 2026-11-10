@@ -34,21 +34,21 @@ async def drain(feed: Any, until: type = events.StreamEnd) -> list[Any]:
 async def test_a_worker_streams_like_a_model() -> None:
     worker = fakes.fake(fakes.echo)
     user = ai.user_message("hello")
-    async with worker.session():
+    async with worker.session() as session:
         async with ai.stream(worker, [user]) as s:
             kinds = [type(e).__name__ async for e in s]
         assert s.text == "hello"
         assert kinds[0] == "StreamStart" and kinds[-1] == "StreamEnd"
-        # The worker's state and the stream agree, ids too.
-        assert [msg.id for msg in worker.messages] == [user.id, s.message.id]
-        assert worker.messages[1].text == "hello"
-        assert worker.session_id == "s1"
+        # The session's state and the stream agree, ids too.
+        assert [msg.id for msg in session.messages] == [user.id, s.message.id]
+        assert session.messages[1].text == "hello"
+        assert session.id == "s1"
 
 
 async def test_the_next_call_sends_only_the_new_messages() -> None:
     worker = fakes.fake(fakes.echo)
     first = ai.user_message("one")
-    async with worker.session():
+    async with worker.session() as session:
         async with ai.stream(worker, [first]) as s:
             async for _ in s:
                 pass
@@ -58,7 +58,7 @@ async def test_the_next_call_sends_only_the_new_messages() -> None:
                 pass
         assert [msg.text for msg in worker.wire.sent] == ["one", "two"]
         assert s2.text == "two"
-        assert len(worker.messages) == 4
+        assert len(session.messages) == 4
 
 
 async def test_a_rewritten_history_is_refused() -> None:
@@ -83,7 +83,7 @@ async def test_a_fresh_worker_seeds_the_session_with_the_past() -> None:
         ai.assistant_message("done"),
         ai.user_message("two"),
     ]
-    async with worker.session():
+    async with worker.session() as session:
         assert worker._wires == []  # the CLI starts with the first use
         async with ai.stream(worker, history, tools=[_tool("a")]) as s:
             async for _ in s:
@@ -94,23 +94,24 @@ async def test_a_fresh_worker_seeds_the_session_with_the_past() -> None:
     assert started["instructions"] == "Be brief.\n\nYou fix tests."
     assert [msg.text for msg in started["seed"]] == ["one", "done"]
     assert [msg.text for msg in worker.wire.sent] == ["two"]
-    assert [msg.id for msg in worker.messages[:4]] == [x.id for x in history]
+    assert [msg.id for msg in session.messages[:4]] == [x.id for x in history]
 
 
 async def test_a_resumed_session_does_not_resend_the_past() -> None:
-    worker = fakes.fake(fakes.echo, session_id="old")
+    worker = fakes.fake(fakes.echo)
     history = [
         ai.user_message("one"),
         ai.assistant_message("done"),
         ai.user_message("two"),
     ]
-    async with worker.session():
+    async with worker.session("old"):
         async with ai.stream(worker, history) as s:
             async for _ in s:
                 pass
     assert worker.wire.started is not None
     assert worker.wire.started["seed"] == []  # the CLI has it
     assert worker.wire.started["session_id"] == "old"
+    assert worker.session_id is None  # only a new session sets it
     assert [msg.text for msg in worker.wire.sent] == ["two"]
 
 
@@ -146,7 +147,7 @@ async def test_new_tools_restart_an_idle_cli_on_the_same_session() -> None:
             async for _ in st:
                 pass
         assert len(worker._wires) == 2  # same tools: no restart
-        more = [*worker.messages, ai.user_message("three")]
+        more = [*session.messages, ai.user_message("three")]
         async with ai.stream(worker, more, tools=[_tool("b")]) as st:
             async for _ in st:
                 pass
@@ -156,13 +157,13 @@ async def test_new_tools_restart_an_idle_cli_on_the_same_session() -> None:
 
 
 async def test_a_started_resumed_session_takes_its_known_past() -> None:
-    worker = fakes.fake(fakes.echo, session_id="old")
+    worker = fakes.fake(fakes.echo)
     history = [
         ai.user_message("one"),
         ai.assistant_message("done"),
         ai.user_message("two"),
     ]
-    async with worker.session() as session:
+    async with worker.session("old") as session:
         await session.start()
         async with ai.stream(worker, history) as s:
             async for _ in s:
@@ -186,12 +187,140 @@ async def test_a_worker_cannot_continue_tool_calls_it_did_not_make() -> None:
         assert worker._wires == []  # refused before the CLI starts
 
 
-async def test_a_model_call_needs_an_open_session() -> None:
+async def test_a_model_call_needs_no_session() -> None:
     worker = fakes.fake(fakes.echo)
-    with pytest.raises(workers.WorkerError, match="no open session"):
-        async with ai.stream(worker, [ai.user_message("x")]) as s:
+    first = ai.user_message("one")
+    async with ai.stream(worker, [first]) as s:
+        async for _ in s:
+            pass
+    assert s.text == "one"
+    assert worker.wire.closed  # the CLI ran for one turn
+    # The next call continues the same CLI session, and sends the new part.
+    second = ai.user_message("two")
+    async with ai.stream(worker, [first, s.message, second]) as s2:
+        async for _ in s2:
+            pass
+    assert s2.text == "two"
+    assert len(worker._wires) == 2 and worker.wire.closed
+    assert worker.wire.started is not None
+    assert worker.wire.started["session_id"] == "s1"
+    assert worker.wire.started["seed"] == []
+    assert [msg.text for msg in worker.wire.sent] == ["two"]
+
+
+async def test_a_worker_remembers_its_first_new_session() -> None:
+    worker = fakes.fake(fakes.echo)
+    assert worker.session_id is None
+    first = ai.user_message("one")
+    async with ai.stream(worker, [first]) as s:
+        async for _ in s:
+            pass
+    assert worker.session_id == "s1"
+    # The id is plain data: a worker in another process continues with it.
+    again = workers.Worker.model_validate(worker.model_dump(mode="json"))
+    assert isinstance(again, fakes.FakeWorker)
+    again._reply = fakes.echo
+    async with ai.stream(
+        again, [first, s.message, ai.user_message("two")]
+    ) as s:
+        async for _ in s:
+            pass
+    assert s.text == "two"
+    assert again.wire.started is not None
+    assert again.wire.started["session_id"] == "s1"
+    assert again.wire.started["seed"] == []
+    assert [msg.text for msg in again.wire.sent] == ["two"]
+    assert again.wire.closed
+    # The worker stays with its session: it refuses another history.
+    with pytest.raises(workers.TranscriptMismatchError):
+        async with ai.stream(worker, [ai.user_message("other")]) as s:
             async for _ in s:
                 pass
+    # Without the id, the next call starts a new session and remembers it.
+    worker.session_id = None
+    async with ai.stream(worker, [ai.user_message("other")]) as s:
+        async for _ in s:
+            pass
+    assert s.text == "other"
+    assert worker.wire.started is not None
+    assert worker.wire.started["session_id"] is None
+    assert worker.session_id == "s1"  # the fake CLI names each session "s1"
+
+
+async def test_in_a_block_the_model_calls_use_the_live_cli() -> None:
+    worker = fakes.fake(fakes.echo, session_id="abc")
+    first = ai.user_message("one")
+    async with worker.session() as session:
+        assert session.id == "abc"
+        async with ai.stream(worker, [first]) as s:
+            async for _ in s:
+                pass
+        # A copy has the same session_id: it is the same session.
+        twin = worker.model_copy()
+        more = [first, s.message, ai.user_message("two")]
+        async with ai.stream(twin, more) as s:
+            async for _ in s:
+                pass
+        assert len(worker._wires) == 1 and not worker.wire.closed
+        assert worker.wire.started is not None
+        assert worker.wire.started["session_id"] == "abc"
+        assert [msg.text for msg in worker.wire.sent] == ["one", "two"]
+    assert worker.wire.closed
+    # After the block: a new process for the call, on the same session.
+    more = [*session.messages, ai.user_message("three")]
+    async with ai.stream(worker, more) as s:
+        async for _ in s:
+            pass
+    assert len(worker._wires) == 2 and worker.wire.closed
+    assert worker.wire.started is not None
+    assert worker.wire.started["session_id"] == "abc"
+    assert [msg.text for msg in worker.wire.sent] == ["three"]
+
+
+async def test_two_tasks_open_sessions_of_one_worker() -> None:
+    worker = fakes.fake(fakes.echo)
+
+    async def chat(text: str) -> tuple[str, workers.Session]:
+        async with worker.session() as session:
+            async with ai.stream(worker, [ai.user_message(text)]) as s:
+                async for _ in s:
+                    pass
+            return s.text, session
+
+    (one, a), (two, b) = await asyncio.gather(chat("one"), chat("two"))
+    assert (one, two) == ("one", "two")
+    assert len(worker._wires) == 2  # each task had its own live CLI
+    assert [msg.text for msg in a.messages] == ["one", "one"]
+    assert [msg.text for msg in b.messages] == ["two", "two"]
+
+
+async def test_without_a_session_the_cli_stays_for_a_tool_loop() -> None:
+    @ai.tool
+    async def lookup(word: str) -> str:
+        """Look a word up."""
+        return word.upper()
+
+    def reply(msg: m.Message) -> list[Any]:
+        return [
+            _wire.Accepted(msg),
+            fakes.CallTool("lookup", {"word": "heron"}),
+        ]
+
+    worker = fakes.fake(reply)
+    async with ai.Agent(tools=[lookup]).run(
+        worker, [ai.user_message("go")]
+    ) as run:
+        async for _ in run:
+            pass
+    assert [msg.role for msg in run.messages] == [
+        "user",
+        "assistant",
+        "tool",
+        "assistant",
+    ]
+    assert run.messages[3].text == "got HERON"
+    assert len(worker._wires) == 1  # one CLI for the whole turn
+    assert worker.wire.closed  # and it stopped when the turn ended
 
 
 async def test_output_type_is_not_supported_yet() -> None:
@@ -240,12 +369,12 @@ async def test_turn_metadata_goes_on_the_last_reply() -> None:
         ]
 
     worker = fakes.fake(reply)
-    async with worker.session():
+    async with worker.session() as session:
         async with ai.stream(worker, [ai.user_message("x")]) as s:
             async for _ in s:
                 pass
     assert s.message.provider_metadata == {"fake": {"model": "m1"}}
-    assert worker.messages[-1].provider_metadata == {"fake": {"model": "m1"}}
+    assert session.messages[-1].provider_metadata == {"fake": {"model": "m1"}}
 
 
 async def test_a_failed_turn_raises_from_stream() -> None:
@@ -255,15 +384,29 @@ async def test_a_failed_turn_raises_from_stream() -> None:
         return [_wire.Accepted(msg), _wire.TurnEnd(reason="error", error=error)]
 
     worker = fakes.fake(reply)
-    async with worker.session():
+    history = [ai.user_message("x")]
+    async with worker.session() as session:
         with pytest.raises(workers.NotAuthenticatedError):
-            async with ai.stream(worker, [ai.user_message("x")]) as s:
+            async with ai.stream(worker, history) as s:
                 async for _ in s:
                     pass
         # The state keeps the failed message, marked.
-        assert worker.messages[-1].provider_metadata == {
+        assert session.messages[-1].provider_metadata == {
             "worker": {"error": str(error)}
         }
+        # The caller does not have it; the next call still works.
+        worker.wire.reply = fakes.echo
+        async with ai.stream(worker, [*history, ai.user_message("again")]) as s:
+            async for _ in s:
+                pass
+        assert s.text == "again"
+        # Nothing new is refused in an open session.
+        with pytest.raises(
+            workers.TranscriptMismatchError, match="nothing new"
+        ):
+            async with ai.stream(worker, list(session.messages)) as s:
+                async for _ in s:
+                    pass
 
 
 async def test_one_stream_at_a_time() -> None:
@@ -298,22 +441,22 @@ async def test_an_agent_runs_ai_tools_for_the_cli() -> None:
         ]
 
     worker = fakes.fake(reply)
-    async with worker.session():
+    async with worker.session() as session:
         async with ai.Agent(tools=[lookup]).run(
             worker, [ai.user_message("go")]
         ) as run:
             async for _ in run:
                 pass
-        roles = [msg.role for msg in worker.messages]
+        roles = [msg.role for msg in session.messages]
         assert roles == ["user", "assistant", "tool", "assistant"]
-        (call,) = worker.messages[1].tool_calls
+        (call,) = session.messages[1].tool_calls
         assert call.tool_name == "lookup"
-        assert worker.messages[1].provider_metadata is None
-        assert worker.messages[3].text == "got HERON"
+        assert session.messages[1].provider_metadata is None
+        assert session.messages[3].text == "got HERON"
         # The CLI got the result through MCP.
         assert await worker.wire.calls[0] == ("HERON", False)
         assert [msg.id for msg in run.messages] == [
-            msg.id for msg in worker.messages
+            msg.id for msg in session.messages
         ]
         assert worker.tools[0].name == "lookup"
 
@@ -329,7 +472,7 @@ async def test_parallel_calls_are_one_message() -> None:
         ]
 
     worker = fakes.fake(reply, tools=[_tool("a"), _tool("b")])
-    async with worker.session():
+    async with worker.session() as session:
         async with ai.stream(worker, [ai.user_message("go")]) as s:
             async for _ in s:
                 pass
@@ -345,7 +488,7 @@ async def test_parallel_calls_are_one_message() -> None:
                 for c in s.message.tool_calls
             ]
         )
-        async with ai.stream(worker, [*worker.messages, results]) as s2:
+        async with ai.stream(worker, [*session.messages, results]) as s2:
             async for _ in s2:
                 pass
         assert s2.text == "both"
@@ -366,7 +509,7 @@ async def test_cli_work_during_a_tool_call_comes_after_the_result() -> None:
         # The CLI keeps working on its own tools while it waits.
         worker.wire.push(*fakes.builtin("b1", "read"))
         await asyncio.sleep(0.05)
-        assert [msg.role for msg in worker.messages] == ["user", "assistant"]
+        assert [msg.role for msg in session.messages] == ["user", "assistant"]
         (call,) = s.message.tool_calls
         await session.send(
             ai.tool_message(
@@ -374,9 +517,9 @@ async def test_cli_work_during_a_tool_call_comes_after_the_result() -> None:
             )
         )
         await asyncio.sleep(0.05)
-        roles = [msg.role for msg in worker.messages]
+        roles = [msg.role for msg in session.messages]
         assert roles == ["user", "assistant", "tool", "assistant"]
-        assert worker.messages[3].builtin_tool_calls[0].tool_name == "read"
+        assert session.messages[3].builtin_tool_calls[0].tool_name == "read"
 
 
 async def test_a_new_message_fails_waiting_calls_with_a_tool_message() -> None:
@@ -389,20 +532,20 @@ async def test_a_new_message_fails_waiting_calls_with_a_tool_message() -> None:
         else fakes.echo(msg),
         tools=[_tool("a")],
     )
-    async with worker.session():
+    async with worker.session() as session:
         async with ai.stream(worker, [ai.user_message("go")]) as s:
             async for _ in s:
                 pass
         # An agent was cancelled while its tool ran; the next run comes.
         async with ai.stream(
-            worker, [*worker.messages, ai.user_message("next")]
+            worker, [*session.messages, ai.user_message("next")]
         ) as s2:
             async for _ in s2:
                 pass
-        roles = [msg.role for msg in worker.messages]
+        roles = [msg.role for msg in session.messages]
         assert roles == ["user", "assistant", "tool", "user", "assistant"]
-        synthetic = worker.messages[2]
-        assert workers.is_interrupted(synthetic)
+        synthetic = session.messages[2]
+        assert synthetic.provider_metadata == {"worker": {"synthetic": True}}
         assert synthetic.tool_results[0].result_kind == "error"
         assert await worker.wire.calls[0] == (_session.NEW_MESSAGE, True)
 
@@ -417,18 +560,39 @@ async def test_a_result_for_no_call_is_refused() -> None:
 # -- the session: direct control ----------------------------------------------
 
 
-async def test_events_start_when_called_and_go_to_every_reader() -> None:
+async def test_events_after_send_lose_nothing() -> None:
     worker = fakes.fake(fakes.echo)
     async with worker.session() as session:
-        a, b = session.events(), session.events()
-        await session.send(ai.user_message("hi"))  # before anyone iterates
-        seen_a, seen_b = await drain(a), await drain(b)
-        assert [type(e) for e in seen_a] == [type(e) for e in seen_b]
-        assert isinstance(seen_a[0], workers.MessageEvent)
-        assert seen_a[0].message.text == "hi"
-        assert isinstance(seen_a[1], events.StreamStart)
-        await a.aclose()
-        await b.aclose()
+        await session.send(ai.user_message("hi"))
+        await asyncio.sleep(0.01)  # the turn ends before anyone reads
+        seen = await drain(session.events())
+        assert isinstance(seen[0], workers.MessageEvent)
+        assert seen[0].message.text == "hi"
+        assert isinstance(seen[1], events.StreamStart)
+        # A reader that stopped needs no cleanup: the next one continues.
+        rest = await drain(session.events(), until=workers.MessageEvent)
+        assert [type(e) for e in rest] == [workers.MessageEvent]
+        assert rest[0].message.role == "assistant"
+
+
+async def test_events_that_nobody_reads_do_not_pile_up() -> None:
+    worker = fakes.fake(fakes.echo)
+    async with worker.session() as session:
+        history: list[m.Message] = []
+        sizes = []
+        for text in ("one", "two", "three"):
+            history = [*session.messages, ai.user_message(text)]
+            async with ai.stream(worker, history) as s:
+                async for _ in s:
+                    pass
+            sizes.append(len(session._feed))
+        assert sizes[0] == sizes[1] == sizes[2]  # the latest turn only
+        # A reader that reads keeps everything.
+        seen = await drain(session.events())
+        await session.send(ai.user_message("four"))
+        rest = await drain(session.events(), until=workers.MessageEvent)
+        assert isinstance(seen[0], workers.MessageEvent)
+        assert rest[0].message.text == "three"  # the reply before "four"
 
 
 async def test_a_steer_splits_the_reply_at_a_clean_point() -> None:
@@ -450,14 +614,13 @@ async def test_a_steer_splits_the_reply_at_a_clean_point() -> None:
         worker.wire.push(*fakes.text("Skipped.", block="t2"), _wire.TurnEnd())
         await drain(feed)  # the first part ends
         await drain(feed)  # the second part ends
-        texts = [(msg.role, msg.text) for msg in worker.messages]
+        texts = [(msg.role, msg.text) for msg in session.messages]
         assert texts == [
             ("user", "fix the tests"),
             ("assistant", "Looking."),
             ("user", "skip the slow ones"),
             ("assistant", "Skipped."),
         ]
-        await feed.aclose()
 
 
 async def test_interrupt_stops_the_turn_and_marks_the_reply() -> None:
@@ -468,9 +631,12 @@ async def test_interrupt_stops_the_turn_and_marks_the_reply() -> None:
         await asyncio.sleep(0.01)
         await session.interrupt()
         assert worker.wire.interrupts == 1
-        reply = worker.messages[-1]
+        reply = session.messages[-1]
         assert reply.text == "Starting"
-        assert workers.is_interrupted(reply)
+        # Not a finish reason of the vocabulary: the raw value is here.
+        assert reply.provider_metadata == {
+            "worker": {"stop_reason": "interrupted"}
+        }
         await session.interrupt()  # no turn: nothing happens
         assert worker.wire.interrupts == 1
 
@@ -490,8 +656,10 @@ async def test_an_ignored_interrupt_stops_the_cli(
         await session.interrupt()
         assert session._run is None
         assert worker.wire.closed
-        assert workers.is_interrupted(worker.messages[-1])
-        assert isinstance([e async for e in feed][-1], workers.MessageEvent)
+        assert session.messages[-1].provider_metadata == {
+            "worker": {"stop_reason": "interrupted"}
+        }
+        assert (await drain(feed))[-1].finish_reason == "other"
         # The session stays open: the next use continues the CLI session.
         worker._reply = fakes.echo
         await session.send(ai.user_message("again"))
@@ -503,13 +671,15 @@ async def test_an_ignored_interrupt_stops_the_cli(
 async def test_a_cancelled_stream_interrupts_the_turn() -> None:
     worker = fakes.fake(lambda msg: [_wire.Accepted(msg), *fakes.text("work")])
     history = [ai.user_message("long job")]
-    async with worker.session():
+    async with worker.session() as session:
         async with ai.stream(worker, history) as s:
             async for event in s:
                 if isinstance(event, events.TextEnd):
                     break  # stop reading: the turn must stop too
         assert worker.wire.interrupts == 1
-        assert workers.is_interrupted(worker.messages[-1])
+        assert session.messages[-1].provider_metadata == {
+            "worker": {"stop_reason": "interrupted"}
+        }
         # ai.Agent keeps no cancelled message; the next call still works.
         worker.wire.reply = fakes.echo
         async with ai.stream(worker, [*history, ai.user_message("again")]) as s:
@@ -526,17 +696,19 @@ async def test_a_cancelled_task_interrupts_the_turn() -> None:
             async for _ in s:
                 pass
 
-    async with worker.session():
+    async with worker.session() as session:
         task = asyncio.create_task(consume())
         await asyncio.sleep(0.02)
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await task
         assert worker.wire.interrupts == 1
-        assert workers.is_interrupted(worker.messages[-1])
+        assert session.messages[-1].provider_metadata == {
+            "worker": {"stop_reason": "interrupted"}
+        }
 
 
-async def test_a_crash_reaches_readers_and_start_recovers() -> None:
+async def test_a_crash_reaches_the_reader_and_start_recovers() -> None:
     worker = fakes.fake()
     async with worker.session() as session:
         feed = session.events()
@@ -546,7 +718,7 @@ async def test_a_crash_reaches_readers_and_start_recovers() -> None:
             await drain(feed, until=type(None))
         with pytest.raises(workers.WorkerError, match="stopped"):
             await session.send(ai.user_message("again"))
-        assert worker.messages[-1].provider_metadata is not None
+        assert session.messages[-1].provider_metadata is not None
         await session.start()
         assert len(worker._wires) == 2
 
@@ -562,26 +734,57 @@ async def test_close_ends_readers_and_keeps_the_state() -> None:
     rest = [e async for e in feed]
     assert [type(e) for e in rest] == [workers.MessageEvent]
     assert worker.wire.closed
-    assert worker._session is None
-    assert [msg.text for msg in worker.messages] == ["hi", "hi"]
+    assert session.id == "s1"
+    assert [msg.text for msg in session.messages] == ["hi", "hi"]
     await session.close()  # a second close does nothing
     with pytest.raises(workers.WorkerError, match="not open"):
         await session.send(ai.user_message("x"))
     with pytest.raises(workers.WorkerError, match="not open"):
-        session.events()
+        await anext(session.events())
 
 
-async def test_a_worker_has_one_open_session() -> None:
+async def test_start_and_close_are_a_pair() -> None:
     worker = fakes.fake(fakes.echo)
+    session = worker.session()
+    await session.start()  # no block
+    assert len(worker._wires) == 1
+    await session.send(ai.user_message("hi"))
+    await drain(session.events())
+    await session.close()
+    assert worker.wire.closed
+    await session.start()  # open again: the same CLI session
+    assert worker.wire.started is not None
+    assert worker.wire.started["session_id"] == "s1"
+    await session.close()
+
+
+async def test_a_closed_session_continues_without_a_block() -> None:
+    worker = fakes.fake(fakes.echo)
+    async with worker.session() as session:
+        async with ai.stream(worker, [ai.user_message("one")]) as s:
+            async for _ in s:
+                pass
+    assert worker.session_id == session.id == "s1"
+    more = [*session.messages, ai.user_message("two")]
+    async with ai.stream(worker, more) as s:
+        async for _ in s:
+            pass
+    assert worker.wire.started is not None
+    assert worker.wire.started["session_id"] == "s1"  # not a new session
+    assert [msg.text for msg in worker.wire.sent] == ["two"]
+
+
+async def test_a_session_is_open_once_in_a_context() -> None:
+    worker = fakes.fake(fakes.echo, session_id="abc")
     async with worker.session():
-        with pytest.raises(workers.WorkerError, match="open session already"):
+        with pytest.raises(workers.WorkerError, match="open already"):
             async with worker.session():
                 pass
     async with worker.session() as session:  # the first one closed
         await session.send(ai.user_message("hi"))
 
 
-async def test_readers_stay_when_new_tools_restart_the_cli() -> None:
+async def test_the_feed_stays_when_new_tools_restart_the_cli() -> None:
     worker = fakes.fake(fakes.echo)
     async with worker.session() as session:
         await session.start()
@@ -595,41 +798,52 @@ async def test_readers_stay_when_new_tools_restart_the_cli() -> None:
         seen = await drain(feed)
         assert isinstance(seen[0], workers.MessageEvent)
         assert seen[0].message.text == "one"
-        await feed.aclose()
 
 
 # -- state ---------------------------------------------------------------------
 
 
-async def test_the_state_is_plain_data() -> None:
+async def test_a_worker_is_plain_data() -> None:
     worker = workers.Codex(
         cwd="/w",
         model_name="gpt-5.5",
         sandbox="read-only",
         provider=workers.CodexProvider(executable="/bin/codex", env={"K": "v"}),
+        session_id="abc",
     )
-    worker.messages = [ai.user_message("hi")]
     data = worker.model_dump(mode="json")
+    assert data["session_id"] == "abc" and "messages" not in data
     again = workers.Worker.model_validate(data)
     assert type(again) is workers.Codex
     assert again.model_dump(mode="json") == data
     assert again.provider == worker.provider
+    assert again.session().id == "abc"
+    assert again.session("other").id == "other"
     with pytest.raises(ValueError, match="unknown worker_class_id"):
         workers.Worker.model_validate({**data, "worker_class_id": "nope"})
     with pytest.raises(TypeError):
         workers.Worker(worker_class_id="codex")
 
 
-async def test_a_copy_is_not_started_and_shares_no_list() -> None:
+async def test_a_seeded_session_starts_with_its_past() -> None:
     worker = fakes.fake(fakes.echo)
-    async with worker.session() as session:
-        await session.send(ai.user_message("hi"))
-        await asyncio.sleep(0.01)
-        copy = worker.model_copy(update={"session_id": None})
-        assert copy._session is None
-        await session.send(ai.user_message("more"))
-        await asyncio.sleep(0.01)
-        assert len(copy.messages) == 2 and len(worker.messages) == 4
+    history = [ai.user_message("one"), ai.assistant_message("done")]
+    async with worker.session(messages=history) as session:
+        await session.send(ai.user_message("two"))
+        await drain(session.events())
+        assert worker.wire.started is not None
+        assert worker.wire.started["session_id"] is None
+        assert [msg.text for msg in worker.wire.started["seed"]] == [
+            "one",
+            "done",
+        ]
+        assert len(history) == 2  # the caller's list stays as it was
+        assert worker.session_id == session.id == "s1"
+        assert [msg.id for msg in session.messages[:2]] == [
+            msg.id for msg in history
+        ]
+        # A copy of the worker has no session.
+        assert worker.model_copy()._session is None
 
 
 async def test_an_agent_context_keeps_the_worker() -> None:

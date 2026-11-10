@@ -93,6 +93,7 @@ class PiWire:
     async def start(
         self,
         *,
+        session_id: str | None,
         bridge_url: str,
         instructions: str | None,
         seed: list[messages_.Message],
@@ -107,7 +108,6 @@ class PiWire:
             cwd=self.cwd,
             env=worker.provider.env,
         )
-        session_id = worker.session_id
         if session_id is not None:
             # Checked first: `--session-id` CREATES a session it cannot
             # find, so a typo would silently start an empty conversation.

@@ -31,16 +31,15 @@ async def main(kind: str) -> None:
         )
     ]
     worker = KINDS[kind]()
-    async with worker.session():
-        async with agent.run(worker, messages) as run:
-            async for event in run:
-                match event:
-                    case ai.events.ToolEnd():  # an ai tool: the agent runs it
-                        print(f"[ai tool] {event.tool_call.tool_name}")
-                    case ai.events.TextDelta():
-                        print(event.chunk, end="", flush=True)
-        print()
-        print([message.role for message in worker.messages])
+    async with agent.run(worker, messages) as run:
+        async for event in run:
+            match event:
+                case ai.events.ToolEnd():  # an ai tool: the agent runs it
+                    print(f"[ai tool] {event.tool_call.tool_name}")
+                case ai.events.TextDelta():
+                    print(event.chunk, end="", flush=True)
+    print()
+    print([message.role for message in run.messages])
 
 
 asyncio.run(main(sys.argv[1] if len(sys.argv) > 1 else "codex"))

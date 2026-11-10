@@ -72,14 +72,15 @@ class Wire(Protocol):
     async def start(
         self,
         *,
+        session_id: str | None,
         bridge_url: str,
         instructions: str | None,
         seed: list[messages_.Message],
     ) -> str:
         """Start the CLI and open the session; return the session id.
 
-        Resume `worker.session_id` if it is set. Otherwise, start a new
-        session and give it `seed` as its history (lossy).
+        Resume `session_id` if it is set. Otherwise, start a new session
+        and give it `seed` as its history (lossy).
         """
         ...
 

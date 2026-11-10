@@ -287,7 +287,7 @@ async def test_a_turn_streams_in_the_model_view(
     server.turns = [TOOL_TURN]
     prompt = ai.user_message("say done")
     worker = make(cwd, agent_dir)
-    async with worker.session():
+    async with worker.session() as session:
         s = await run(worker, [prompt])
     message = s.message
     assert message.reasoning == "plan"
@@ -306,9 +306,9 @@ async def test_a_turn_streams_in_the_model_view(
     assert usage.cache_read_tokens == 200
     assert usage.raw == {"cost_usd": 0.02}
     # Acceptance came first, although the run came before the response.
-    assert [msg.role for msg in worker.messages] == ["user", "assistant"]
-    assert worker.messages[0].id == prompt.id
-    assert worker.session_id == server.session_id
+    assert [msg.role for msg in session.messages] == ["user", "assistant"]
+    assert session.messages[0].id == prompt.id
+    assert session.id == server.session_id
     (sent,) = server.sent("prompt")
     assert sent["message"] == "say done"
     assert sent["streamingBehavior"] == "steer"
@@ -344,7 +344,7 @@ async def test_start_runs_pi_with_the_extension_and_the_bridge(
         assert argv[:3] == ["/custom/pi", "--mode", "rpc"]
         assert argv[argv.index("-e") + 1] == wire_.EXTENSION
         assert Path(wire_.EXTENSION).is_file()
-        assert argv[argv.index("--session-id") + 1] == worker.session_id
+        assert argv[argv.index("--session-id") + 1] == session.id
         for flag, value in [
             ("--model", "claude-test"),
             ("--provider", "anthropic"),
@@ -467,21 +467,21 @@ async def test_bridge_calls_are_ai_tool_calls_not_builtin(
     server.on_prompt = turn
     worker = make(cwd, agent_dir)
     try:
-        async with worker.session():
+        async with worker.session() as session:
             async with asyncio.timeout(5):
                 async with ai.Agent(tools=[lookup]).run(
                     worker, [ai.user_message("go")]
                 ) as agent_run:
                     async for _ in agent_run:
                         pass
-            roles = [msg.role for msg in worker.messages]
+            roles = [msg.role for msg in session.messages]
             assert roles == ["user", "assistant", "tool", "assistant"]
-            (call,) = worker.messages[1].tool_calls
+            (call,) = session.messages[1].tool_calls
             assert call.tool_name == "lookup"
-            for message in worker.messages:
+            for message in session.messages:
                 assert message.builtin_tool_calls == []
                 assert message.builtin_tool_returns == []
-            assert worker.messages[3].text == "got HERON"
+            assert session.messages[3].text == "got HERON"
             assert answers[0]["result"]["isError"] is False
     finally:
         for task in tasks:
@@ -509,7 +509,7 @@ async def test_a_send_during_a_run_steers_it(
         assert steer["message"] == "skip slow ones"
         assert steer["streamingBehavior"] == "steer"
         # Queued, not delivered: pi did not put it in the conversation yet.
-        assert "skip slow ones" not in [msg.text for msg in worker.messages]
+        assert "skip slow ones" not in [msg.text for msg in session.messages]
         server.says(
             update("text_end", content="Look"),
             {
@@ -524,15 +524,14 @@ async def test_a_send_during_a_run_steers_it(
             *SETTLED,
         )
         async with asyncio.timeout(5):
-            while len(worker.messages) < 4:
+            while len(session.messages) < 4:
                 await anext(feed)
-        assert [(msg.role, msg.text) for msg in worker.messages] == [
+        assert [(msg.role, msg.text) for msg in session.messages] == [
             ("user", "fix"),
             ("assistant", "Look"),
             ("user", "skip slow ones"),
             ("assistant", "OK"),
         ]
-        await feed.aclose()
 
 
 async def test_interrupt_ends_the_run_as_interrupted(
@@ -556,9 +555,10 @@ async def test_interrupt_ends_the_run_as_interrupted(
                     break
             await session.interrupt()
         assert len(server.sent("abort")) == 1
-        assert workers.is_interrupted(worker.messages[-1])
-        assert worker.messages[-1].text == "work"
-        await feed.aclose()
+        assert (session.messages[-1].provider_metadata or {}).get("worker") == {
+            "stop_reason": "interrupted"
+        }
+        assert session.messages[-1].text == "work"
 
 
 async def test_a_rejected_prompt_without_a_key_is_not_authenticated(
@@ -590,10 +590,10 @@ async def test_a_failed_run_without_a_key_is_not_authenticated(
         ]
     ]
     worker = make(cwd, agent_dir)
-    async with worker.session():
+    async with worker.session() as session:
         with pytest.raises(workers.NotAuthenticatedError):
             await run(worker, [ai.user_message("go")])
-        assert "error" in (worker.messages[-1].provider_metadata or {}).get(
+        assert "error" in (session.messages[-1].provider_metadata or {}).get(
             "worker", {}
         )
 
@@ -623,10 +623,12 @@ async def test_a_new_session_is_seeded_with_the_past(
     ]
     worker = make(cwd, agent_dir)
     with pytest.warns(UserWarning, match="reasoning"):
-        async with worker.session():  # the first call starts pi, seeded
+        async with (
+            worker.session() as session
+        ):  # the first call starts pi, seeded
             s = await run(worker, history)
     assert s.text == "fine"
-    session_id = worker.session_id
+    session_id = session.id
     assert session_id is not None
     assert session_id == server.session_id
     path = session_file(agent_dir, session_id)
@@ -663,28 +665,28 @@ async def test_an_existing_session_opens_here_only(
     server.turns = [[*begin("one"), *said("ok"), *SETTLED]]
     first = make(cwd, agent_dir)
     past = [ai.user_message("zero"), ai.assistant_message("fine")]
-    async with first.session():
+    async with first.session() as opened:
         await run(first, [*past, ai.user_message("one")])
-    session_id = first.session_id
+    session_id = opened.id
     assert session_id is not None
     assert server.process.terminated
     # The seed made the session file (a real pi also writes it itself).
     path = session_file(agent_dir, session_id)
 
-    again = make(cwd, agent_dir, session_id=session_id)
+    again = make(cwd, agent_dir)
 
-    async with again.session() as session:
+    async with again.session(session_id) as session:
         await session.start()
         assert server.session_id == session_id
-        assert again.session_id == session_id
+        assert session.id == session_id
 
     with pytest.raises(workers.WorkerError, match="no session"):
-        unknown = make(cwd, agent_dir, session_id="0000-unknown")
-        async with unknown.session() as session:
+        unknown = make(cwd, agent_dir)
+        async with unknown.session("0000-unknown") as session:
             await session.start()
     with pytest.raises(workers.WorkerError, match="not a pi session id"):
-        escape = make(cwd, agent_dir, session_id="../escape")
-        async with escape.session() as session:
+        escape = make(cwd, agent_dir)
+        async with escape.session("../escape") as session:
             await session.start()
     # A session that names another directory is not this one's.
     entries = path.read_text().splitlines()
@@ -697,8 +699,8 @@ async def test_an_existing_session_opens_here_only(
         + "\n"
     )
     with pytest.raises(workers.WorkerError, match="belongs to"):
-        moved = make(cwd, agent_dir, session_id=f"{session_id}-moved")
-        async with moved.session() as session:
+        moved = make(cwd, agent_dir)
+        async with moved.session(f"{session_id}-moved") as session:
             await session.start()
     assert len(server.spawned) == 2
 
@@ -757,10 +759,10 @@ async def test_a_command_that_starts_nothing_ends_the_turn_empty(
 
     server.on_prompt = turn
     worker = make(cwd, agent_dir)
-    async with worker.session():
+    async with worker.session() as session:
         s = await run(worker, [ai.user_message("/noop")])
     assert s.message.parts == []
-    assert [msg.role for msg in worker.messages] == ["user", "assistant"]
+    assert [msg.role for msg in session.messages] == ["user", "assistant"]
 
 
 async def test_a_crash_reaches_the_stream(

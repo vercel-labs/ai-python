@@ -19,13 +19,12 @@ KINDS: dict[str, type[workers.Worker]] = {
 async def main(kind: str) -> None:
     worker = KINDS[kind]()
     async with worker.session() as session:
-        feed = session.events()  # subscribe before send: see everything
         await session.send(
             ai.user_message("Count from 1 to 20 slowly, one number per line.")
         )
 
         steered = False
-        async for event in feed:
+        async for event in session.events():
             match event:
                 case ai.events.TextDelta():
                     print(event.chunk, end="", flush=True)
@@ -45,8 +44,8 @@ async def main(kind: str) -> None:
         )
         await asyncio.sleep(3)
         await session.interrupt()  # stop the turn; the session stays
-        print(f"\ninterrupted: {workers.is_interrupted(worker.messages[-1])}")
-        await feed.aclose()
+        # The cut reply is in the conversation, with the reason in its data.
+        print(f"\n{session.messages[-1].provider_metadata}")
 
 
 asyncio.run(main(sys.argv[1] if len(sys.argv) > 1 else "codex"))

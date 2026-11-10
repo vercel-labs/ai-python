@@ -44,10 +44,13 @@ class NotAuthenticatedError(WorkerError):
 
 
 class TranscriptMismatchError(WorkerError):
-    """The messages given to `stream()` do not continue this conversation.
+    """A session cannot take the messages given to `stream()`.
 
-    A worker holds a conversation in its CLI. It can continue it, or begin a
-    new one from a history, but it cannot rewrite it. Use a new worker.
+    A session holds a conversation in its CLI. It can continue it, but it
+    cannot rewrite it: use `session.messages` as the history. For another
+    conversation, use a worker with no `session_id`. A history must always
+    end with a user message, or with the results of tool calls that the
+    session made.
     """
 
 

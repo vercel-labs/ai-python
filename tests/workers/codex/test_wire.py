@@ -154,7 +154,7 @@ async def test_a_turn_streams_in_the_model_view(
     server.turns = [TURN]
     user = ai.user_message("go")
     worker = workers.Codex(cwd=cwd)
-    async with worker.session():
+    async with worker.session() as session:
         s = await run(worker, [user])
     message = s.message
     assert message.reasoning == "plan"
@@ -166,9 +166,9 @@ async def test_a_turn_streams_in_the_model_view(
     assert result.result == "the word is HERON\n"
     assert message.usage is not None and message.usage.input_tokens == 10
     # Acceptance came first, although the notes came before the response.
-    assert [msg.role for msg in worker.messages] == ["user", "assistant"]
-    assert worker.messages[0].id == user.id
-    assert worker.session_id == THREAD
+    assert [msg.role for msg in session.messages] == ["user", "assistant"]
+    assert session.messages[0].id == user.id
+    assert session.id == THREAD
 
 
 async def test_start_runs_app_server_with_the_bridge(
@@ -227,12 +227,12 @@ async def test_a_new_thread_is_seeded_with_the_past(
 
 
 async def test_a_session_resumes_here_only(server: AppServer, cwd: str) -> None:
-    async with workers.Codex(cwd=cwd, session_id=THREAD).session() as session:
+    async with workers.Codex(cwd=cwd).session(THREAD) as session:
         await session.start()
         assert server.sent("thread/resume")[0]["params"]["threadId"] == THREAD
-    elsewhere = workers.Codex(cwd=cwd, session_id="elsewhere")
+    elsewhere = workers.Codex(cwd=cwd)
     with pytest.raises(workers.WorkerError, match="belongs to /other"):
-        async with elsewhere.session() as session:
+        async with elsewhere.session("elsewhere") as session:
             await session.start()
 
 
@@ -317,9 +317,10 @@ async def test_interrupt_ends_the_turn_as_interrupted(
             await session.interrupt()
         (interrupt,) = server.sent("turn/interrupt")
         assert interrupt["params"] == {"threadId": THREAD, "turnId": "turn-1"}
-        assert workers.is_interrupted(worker.messages[-1])
-        assert worker.messages[-1].text == "work"
-        await feed.aclose()
+        assert (session.messages[-1].provider_metadata or {}).get("worker") == {
+            "stop_reason": "interrupted"
+        }
+        assert session.messages[-1].text == "work"
 
 
 async def test_a_send_during_a_turn_steers_it(
@@ -351,15 +352,14 @@ async def test_a_send_during_a_turn_steers_it(
             note("turn/completed", turn={"id": "turn-1", "status": "completed"})
         )
         async with asyncio.timeout(5):
-            while len(worker.messages) < 4:
+            while len(session.messages) < 4:
                 await anext(feed)
-        assert [(msg.role, msg.text) for msg in worker.messages] == [
+        assert [(msg.role, msg.text) for msg in session.messages] == [
             ("user", "fix"),
             ("assistant", "Look"),
             ("user", "skip slow ones"),
             ("assistant", "OK"),
         ]
-        await feed.aclose()
 
 
 async def test_a_steer_that_lost_the_race_starts_a_turn(

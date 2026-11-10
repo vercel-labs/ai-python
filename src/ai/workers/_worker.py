@@ -1,15 +1,14 @@
-"""`Worker` and `WorkerProvider`: a CLI session in the shape of a model.
+"""`Worker` and `WorkerProvider`: a coding-agent CLI in the shape of a model.
 
 An `ai.Model` is an id and a provider, and `ai.stream` calls
 `model.provider.stream(model, messages)`. A worker has the same shape:
 
-- `Worker` is plain data: the settings of one CLI session and its state,
-  `session_id` and `messages`. It matches the history that a model call
-  gets with that state.
+- `Worker` is plain data: the settings of the CLI, and `session_id`, the
+  CLI session that its model calls continue.
 - `WorkerProvider` is the CLI behind it: where it is and how it runs. Its
-  `stream` makes one model call on the worker's open session.
+  `stream` makes one model call.
 
-Direct control is `Session`: `worker.session()` makes one.
+The state and direct control are `Session`: `worker.session()` makes one.
 """
 
 from __future__ import annotations
@@ -63,39 +62,69 @@ class WorkerProvider(pydantic.BaseModel):
     ) -> AsyncGenerator[events_.Event]:
         """Answer `messages` with one assistant message, as a model does.
 
-        Use `ai.stream(worker, messages)` or `ai.Agent.run(worker, ...)`,
-        inside `async with worker.session()`. The message ends with
-        `finish_reason="tool_call"` when the CLI calls `ai` tools from
-        `tools=`; the CLI waits for the results, which come with the next
-        call. To cancel the stream or to stop reading it interrupts the
-        turn. `params` has no effect: use worker settings.
+        Use `ai.stream(worker, messages)` or `ai.Agent.run(worker, ...)`.
+        In an open session (`async with worker.session()`), the call runs on
+        the live CLI. Without one, the call starts the CLI, continues
+        `worker.session_id`, and stops the CLI when the turn ends. A worker
+        with no `session_id` starts a new session, seeded with the past in
+        `messages` (lossy), and remembers its id.
+
+        The message ends with `finish_reason="tool_call"` when the CLI calls
+        `ai` tools from `tools=`; the CLI waits for the results, which come
+        with the next call. To cancel the stream or to stop reading it
+        interrupts the turn. `params` has no effect: use worker settings.
         """
         if output_type is not None:
             raise errors.UnsupportedError(
                 "workers do not support output_type yet"
             )
-        session = worker._session
+        pin = worker.session_id
+        # A session of this worker that is open here: the live CLI.
+        session = next(
+            (
+                s
+                for s in reversed(session_._OPEN.get())
+                if s._open
+                and (s.worker is worker or (pin is not None and s.id == pin))
+            ),
+            None,
+        )
+        stale = None
         if session is None:
-            raise errors.WorkerError(
-                "the worker has no open session: "
-                "use `async with worker.session()`"
-            )
+            # No block: the session that the last call made, if it is still
+            # the worker's session.
+            session = worker._session
+            if session is None or session.id != pin:
+                stale, session = session, session_.Session(worker)
         if session._stream_lock.locked():
             raise errors.WorkerError("a worker runs one stream() at a time")
+        seeds = not session.messages
+        new = session._sync(messages)
+        seeds = seeds and bool(session.messages)
         async with session._stream_lock:
-            seeds = not worker.messages
-            new = worker._sync(messages)
-            seeds = seeds and bool(worker.messages)
+            if not session._open:
+                worker._session = session
+            if stale is not None:
+                # Its CLI can wait in a turn that nobody continues.
+                await stale._end_run()
             if tools is not None:
                 worker.tools = [t for t in tools if t.kind == "function"]
             run = await session._start_for_stream(seeds=seeds)
-            feed = session.events()
-            ended = False
+            queue: asyncio.Queue[Any] = asyncio.Queue()
+            session._taps.add(queue)
+            ended = waits = False
             try:
                 for message in new:
-                    await session.send(message)
+                    await session._send(message)
                 started = False
-                async for event in feed:
+                while True:
+                    event = await queue.get()
+                    if event is session_._END:
+                        raise errors.WorkerError(
+                            "the worker closed during stream()"
+                        )
+                    if isinstance(event, BaseException):
+                        raise event
                     if isinstance(event, session_.MessageEvent):
                         continue
                     if isinstance(event, events_.StreamStart):
@@ -104,13 +133,13 @@ class WorkerProvider(pydantic.BaseModel):
                         continue  # the end of a message that began earlier
                     if isinstance(event, events_.StreamEnd):
                         ended = True
+                        waits = event.finish_reason == "tool_call"
                         error = run.failures.pop(event.message.id, None)
                         if error is not None:
                             raise error
                         yield event
                         return
                     yield event
-                raise errors.WorkerError("the worker closed during stream()")
             except (asyncio.CancelledError, GeneratorExit) as exc:
                 if not ended:
                     # Shielded: a second cancel must not cut the interrupt.
@@ -124,7 +153,11 @@ class WorkerProvider(pydantic.BaseModel):
                         pass
                 raise
             finally:
-                await feed.aclose()
+                session._taps.discard(queue)
+                if not session._open and not waits:
+                    # Nobody holds the session open: the CLI runs for one
+                    # turn. After `tool_call` it waits for the results.
+                    await session._end_run()
 
     async def generate(
         self,
@@ -140,27 +173,34 @@ class WorkerProvider(pydantic.BaseModel):
 
 
 class Worker(pydantic.BaseModel):
-    """One session of a coding-agent CLI, in the shape of an `ai.Model`.
+    """A coding-agent CLI, in the shape of an `ai.Model`.
 
-    Open a session, then use the worker as a model or control it directly::
+    Use it where a model goes. As with a model, give the whole history::
+
+        async with ai.stream(worker, messages) as s: ...
+        async with ai.Agent(tools=[...]).run(worker, messages) as run: ...
+
+    Each call starts the CLI, continues the session `session_id`, and stops
+    the CLI when the turn ends. A worker with no `session_id` starts a new
+    session and remembers its id. In a session block the same calls run on
+    one live CLI, and the session gives direct control::
 
         async with worker.session() as session:
             async with ai.stream(worker, messages) as s: ...
             await session.send(ai.user_message("And the tests?"))
 
-    The fields are plain data. `model_dump()` saves the worker, and
-    `Worker.model_validate(data)` makes the correct subclass again; it
-    continues the same CLI session when a session starts. `model_copy()`
-    makes a worker with no open session. Two open workers on one
-    `session_id` are two writers on one CLI session: set `session_id=None`
-    on the copy to start a new session that is seeded from `messages`.
+    The fields are plain data. `model_dump()` saves the worker with its
+    `session_id`, and `Worker.model_validate(data)` makes the correct
+    subclass again; it continues the same CLI session. Two workers with one
+    `session_id` are two writers on one CLI session: for a new conversation,
+    use `worker.model_copy(update={"session_id": None})`.
     """
 
     model_config = pydantic.ConfigDict(extra="forbid")
 
     worker_class_id: str
     provider: WorkerProvider
-    """The CLI that runs the session."""
+    """The CLI that runs the sessions."""
     model_name: str | None = None
     """The CLI's model. None: the CLI default."""
     cwd: str = pydantic.Field(default_factory=os.getcwd)
@@ -170,9 +210,10 @@ class Worker(pydantic.BaseModel):
     tools: list[tools_.Tool] = pydantic.Field(default_factory=list)
     """`ai` function tools that the CLI can call through the MCP bridge."""
     session_id: str | None = None
-    """The CLI's id for the session. Set it to continue a session."""
-    messages: list[messages_.Message] = pydantic.Field(default_factory=list)
-    """The conversation, in `ai` messages. The session keeps it current."""
+    """The CLI's id for the session that the model calls continue.
+
+    None: the first new session of the worker sets it.
+    """
 
     _classes: ClassVar[dict[str, type[Worker]]] = {}
     _session: session_.Session | None = pydantic.PrivateAttr(default=None)
@@ -225,48 +266,17 @@ class Worker(pydantic.BaseModel):
     def id(self) -> str:
         return self.model_name or "default"
 
-    def session(self) -> session_.Session:
-        """Return a session of the CLI: `async with worker.session()`."""
-        return session_.Session(self)
+    def session(
+        self,
+        session_id: str | None = None,
+        *,
+        messages: list[messages_.Message] | None = None,
+    ) -> session_.Session:
+        """Return a session of the CLI.
 
-    def _sync(
-        self, messages: list[messages_.Message]
-    ) -> list[messages_.Message]:
-        """Match a whole history with the conversation; return the new part.
-
-        First use: the history up to its last user messages becomes the
-        conversation. After that, the history must continue the
-        conversation.
+        No argument: the worker's session (`worker.session_id`), or a new
+        session if the worker has none. `session_id`: another session that
+        the CLI has with this id. `messages`: the conversation so far. A new
+        session starts with it (lossy); a session with an id has it already.
         """
-        if not self.messages:
-            # Without a session_id the past seeds the new CLI session; with
-            # one, the CLI has it already.
-            start = len(messages)
-            while start and messages[start - 1].role == "user":
-                start -= 1
-            if start == len(messages):
-                raise errors.TranscriptMismatchError(
-                    "the last message must be a user message: a worker "
-                    "cannot continue tool calls that it did not make"
-                )
-            self.messages = list(messages[:start])
-            return list(messages[start:])
-        skipped = {m.id for m in self.messages if session_.is_interrupted(m)}
-        known = [m.id for m in self.messages if m.id not in skipped]
-        given = [m for m in messages if m.id not in skipped]
-        if [m.id for m in given[: len(known)]] != known:
-            raise errors.TranscriptMismatchError(
-                "the messages do not continue this worker's "
-                "conversation; use worker.messages as the history, "
-                "or a new worker"
-            )
-        new = given[len(known) :]
-        if not new:
-            raise ValueError("stream(): no new message to send")
-        for message in new:
-            if message.role not in ("user", "tool"):
-                raise errors.TranscriptMismatchError(
-                    f"a new {message.role} message cannot go to the "
-                    "CLI: only user and tool messages can"
-                )
-        return new
+        return session_.Session(self, session_id, messages)

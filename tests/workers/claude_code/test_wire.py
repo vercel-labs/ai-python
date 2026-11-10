@@ -266,7 +266,7 @@ async def test_a_turn_streams_in_the_model_view(cli: FakeCLI, cwd: str) -> None:
     ]
     user = ai.user_message("go")
     worker = ClaudeCode(cwd=cwd)
-    async with worker.session():
+    async with worker.session() as session:
         s, end = await run(worker, [user])
     message = s.message
     assert message.reasoning == "plan"
@@ -283,8 +283,8 @@ async def test_a_turn_streams_in_the_model_view(cli: FakeCLI, cwd: str) -> None:
     assert message.usage.cache_write_tokens == 5
     assert end.finish_reason == "stop"
     # The echo came at once, but acceptance still comes first.
-    assert [msg.role for msg in worker.messages] == ["user", "assistant"]
-    assert worker.messages[0].id == user.id
+    assert [msg.role for msg in session.messages] == ["user", "assistant"]
+    assert session.messages[0].id == user.id
     # The uuid the echo matched is the one written.
     (written,) = cli.client.written
     assert written["message"]["content"] == [{"type": "text", "text": "go"}]
@@ -334,18 +334,18 @@ async def test_start_connects_with_the_bridge_and_no_approvals(
         assert options.max_turns == 3
         # A new session: the id we chose is the CLI's.
         assert options.resume is None
-        assert options.session_id == worker.session_id
+        assert options.session_id == session.id
 
 
 async def test_a_resumed_session_must_exist(cli: FakeCLI, cwd: str) -> None:
-    worker = ClaudeCode(cwd=cwd, session_id=SESSION)
-    async with worker.session() as session:
+    worker = ClaudeCode(cwd=cwd)
+    async with worker.session(SESSION) as session:
         await session.start()
         assert cli.client.options.resume == SESSION
         assert cli.client.options.session_id is None
-        assert worker.session_id == SESSION
+        assert session.id == SESSION
     with pytest.raises(workers.WorkerError, match="no session"):
-        async with ClaudeCode(cwd=cwd, session_id="ghost").session() as session:
+        async with ClaudeCode(cwd=cwd).session("ghost") as session:
             await session.start()
 
 
@@ -382,12 +382,12 @@ async def test_a_new_session_is_seeded_from_the_past(
         ),
     )
     with pytest.warns(UserWarning, match="1 reasoning part"):
-        async with worker.session():
+        async with worker.session() as session:
             await run(worker, history)
     options = cli.client.options
-    assert options.resume == worker.session_id
+    assert options.resume == session.id
     key = sdk.project_key_for_directory(cwd)
-    path = config / "projects" / key / f"{worker.session_id}.jsonl"
+    path = config / "projects" / key / f"{session.id}.jsonl"
     records = [json.loads(line) for line in path.read_text().splitlines()]
     assert [(r["type"], r["message"]["content"]) for r in records] == [
         ("user", [{"type": "text", "text": "one"}]),
@@ -409,7 +409,7 @@ async def test_a_new_session_is_seeded_from_the_past(
         ),
     ]
     assert records[1]["parentUuid"] == records[0]["uuid"]
-    assert {r["sessionId"] for r in records} == {worker.session_id}
+    assert {r["sessionId"] for r in records} == {session.id}
     # Only the new message went to the CLI.
     (written,) = cli.client.written
     assert written["message"]["content"] == [{"type": "text", "text": "two"}]
@@ -459,7 +459,7 @@ async def test_bridge_calls_are_ai_tool_calls_not_builtin(
 
     cli.on_query = on_query
     worker = ClaudeCode(cwd=cwd)
-    async with worker.session():
+    async with worker.session() as session:
         async with asyncio.timeout(5):
             async with ai.Agent(tools=[lookup]).run(
                 worker, [ai.user_message("go")]
@@ -467,17 +467,17 @@ async def test_bridge_calls_are_ai_tool_calls_not_builtin(
                 async for _ in agent_run:
                     pass
         await asyncio.gather(*tasks)
-    assert [msg.role for msg in worker.messages] == [
+    assert [msg.role for msg in session.messages] == [
         "user",
         "assistant",
         "tool",
         "assistant",
     ]
-    (call,) = worker.messages[1].tool_calls
+    (call,) = session.messages[1].tool_calls
     assert call.tool_name == "lookup"
-    assert all(not msg.builtin_tool_calls for msg in worker.messages)
-    assert all(not msg.builtin_tool_returns for msg in worker.messages)
-    assert worker.messages[3].text == "got HERON"
+    assert all(not msg.builtin_tool_calls for msg in session.messages)
+    assert all(not msg.builtin_tool_returns for msg in session.messages)
+    assert session.messages[3].text == "got HERON"
     assert answers[0]["content"][0]["text"] == "HERON"
 
 
@@ -509,16 +509,15 @@ async def test_a_send_during_a_turn_steers_it(cli: FakeCLI, cwd: str) -> None:
             result(),
         )
         async with asyncio.timeout(5):
-            while len(worker.messages) < 4:
+            while len(session.messages) < 4:
                 await anext(feed)
-        await feed.aclose()
-    assert [(msg.role, msg.text) for msg in worker.messages] == [
+    assert [(msg.role, msg.text) for msg in session.messages] == [
         ("user", "fix"),
         ("assistant", "Look"),
         ("user", "skip slow ones"),
         ("assistant", "OK"),
     ]
-    assert len(worker.messages[1].builtin_tool_returns) == 1
+    assert len(session.messages[1].builtin_tool_returns) == 1
 
 
 async def test_interrupt_ends_the_turn_as_interrupted(
@@ -550,16 +549,19 @@ async def test_interrupt_ends_the_turn_as_interrupted(
                     break
             await session.interrupt()
         assert cli.client.interrupts == 1
-        assert workers.is_interrupted(worker.messages[-1])
-        assert worker.messages[-1].text == "work"
-        await feed.aclose()
+        assert (session.messages[-1].provider_metadata or {}).get("worker") == {
+            "stop_reason": "interrupted"
+        }
+        assert session.messages[-1].text == "work"
         # The next turn is a normal one: the interrupt was used up.
         cli.on_query = lambda record: [
             echo(record),
             *stream("m2", *block(0, "text", "OK")),
             result(),
         ]
-        s, end = await run(worker, [*worker.messages, ai.user_message("again")])
+        s, end = await run(
+            worker, [*session.messages, ai.user_message("again")]
+        )
     assert s.text == "OK"
     assert end.finish_reason == "stop"
 
@@ -579,10 +581,10 @@ async def test_a_failed_turn_without_a_key_is_not_authenticated(
         result(is_error=True, result=detail),
     ]
     worker = ClaudeCode(cwd=cwd)
-    async with worker.session():
+    async with worker.session() as session:
         with pytest.raises(workers.NotAuthenticatedError):
             await run(worker, [ai.user_message("go")])
-    assert worker.messages[-1].text == detail
+    assert session.messages[-1].text == detail
 
 
 async def test_max_turns_ends_with_length(cli: FakeCLI, cwd: str) -> None:
@@ -656,8 +658,8 @@ async def test_close_is_idempotent(cli: FakeCLI, cwd: str) -> None:
     assert cli.client.disconnects == 1
 
 
-async def test_the_state_round_trips(cli: FakeCLI, cwd: str) -> None:
-    worker = ClaudeCode(cwd=cwd, session_id=SESSION, max_turns=2)
+async def test_the_settings_round_trip(cli: FakeCLI, cwd: str) -> None:
+    worker = ClaudeCode(cwd=cwd, max_turns=2)
     again = workers.Worker.model_validate(worker.model_dump())
     assert isinstance(again, ClaudeCode)
     assert again.max_turns == 2

@@ -67,6 +67,7 @@ class ClaudeCodeWire:
     async def start(
         self,
         *,
+        session_id: str | None,
         bridge_url: str,
         instructions: str | None,
         seed: list[messages_.Message],
@@ -81,7 +82,6 @@ class ClaudeCodeWire:
             env=worker.provider.env,
         )
         claude_agent_sdk = _sdk()
-        session_id = worker.session_id
         if session_id is not None:
             await self._require_known(session_id)
             resume: str | None = session_id

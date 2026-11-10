@@ -92,6 +92,7 @@ class FakeWire:
     async def start(
         self,
         *,
+        session_id: str | None,
         bridge_url: str,
         instructions: str | None,
         seed: list[m.Message],
@@ -100,9 +101,9 @@ class FakeWire:
             "bridge_url": bridge_url,
             "instructions": instructions,
             "seed": seed,
-            "session_id": self.worker.session_id,
+            "session_id": session_id,
         }
-        return self.worker.session_id or "s1"
+        return session_id or "s1"
 
     async def send(self, message: m.Message) -> None:
         self.sent.append(message)
