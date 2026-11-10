@@ -1,4 +1,4 @@
-"""Codex: the settings. `wire.py` drives `codex app-server`."""
+"""Codex: the provider and the settings. `wire.py` drives `codex app-server`."""
 
 from __future__ import annotations
 
@@ -8,6 +8,15 @@ import pydantic
 
 from .. import _worker
 from . import wire
+
+
+class CodexProvider(_worker.WorkerProvider):
+    """The Codex CLI."""
+
+    name: str = "codex"
+
+    def _make_wire(self, worker: Codex) -> wire.CodexWire:
+        return wire.CodexWire(worker)
 
 
 class Codex(_worker.Worker):
@@ -20,10 +29,8 @@ class Codex(_worker.Worker):
     """
 
     worker_class_id: Literal["codex"] = "codex"
+    provider: CodexProvider = pydantic.Field(default_factory=CodexProvider)
     sandbox: (
         Literal["read-only", "workspace-write", "danger-full-access"] | None
     ) = None
     config: dict[str, Any] = pydantic.Field(default_factory=dict)
-
-    def _make_wire(self) -> wire.CodexWire:
-        return wire.CodexWire(self)

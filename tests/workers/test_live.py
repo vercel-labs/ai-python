@@ -1,6 +1,6 @@
 """Live tests against the real CLIs.
 
-Opt-in: `uv run pytest -m live tests/workers`.
+Opt-in: `AI_WORKERS_LIVE=1 uv run pytest tests/workers/test_live.py`.
 
 Each test skips when its CLI is not installed. They spend tokens on the
 local login of each CLI, so the prompts are small.
@@ -21,7 +21,10 @@ import pytest
 import ai
 from ai import workers
 
-pytestmark = pytest.mark.live
+pytestmark = pytest.mark.skipif(
+    not os.environ.get("AI_WORKERS_LIVE"),
+    reason="drives real CLIs: set AI_WORKERS_LIVE=1 to run",
+)
 
 KINDS: dict[str, tuple[type[workers.Worker], str]] = {
     "claude-code": (workers.ClaudeCode, "claude"),
@@ -50,7 +53,7 @@ async def test_a_turn_with_a_cli_tool_and_a_resume(
     make: Callable[..., workers.Worker],
 ) -> None:
     worker = make()
-    async with asyncio.timeout(240), worker:
+    async with asyncio.timeout(240), worker.session():
         async with ai.stream(
             worker,
             [
@@ -65,7 +68,7 @@ async def test_a_turn_with_a_cli_tool_and_a_resume(
         assert s.message.builtin_tool_calls
     saved = worker.model_dump_json()
     again = workers.Worker.model_validate_json(saved)
-    async with asyncio.timeout(240), again:
+    async with asyncio.timeout(240), again.session():
         reply = await ai.experimental_generate(
             again,
             [
@@ -86,7 +89,7 @@ async def test_an_agent_gives_its_tools_to_the_cli(
         return "PELICAN" if topic == "birds" else "UNKNOWN"
 
     worker = make()
-    async with asyncio.timeout(240), worker:
+    async with asyncio.timeout(240), worker.session():
         async with ai.Agent(tools=[secret_word]).run(
             worker,
             [
@@ -108,7 +111,7 @@ async def test_cancel_interrupts_and_the_session_continues(
 ) -> None:
     worker = make()
     history = [ai.user_message("Write the numbers 1 to 300, one per line.")]
-    async with asyncio.timeout(240), worker:
+    async with asyncio.timeout(240), worker.session():
         async with ai.stream(worker, history) as s:
             async for event in s:
                 if isinstance(event, ai.events.TextDelta):
@@ -124,16 +127,21 @@ async def test_a_steer_lands_in_the_conversation(
     make: Callable[..., workers.Worker],
 ) -> None:
     worker = make()
-    async with asyncio.timeout(240), worker:
-        feed = worker.events()
-        await worker.send(
-            "Run `sleep 5` with a shell tool, then reply with the word DONE."
+    async with asyncio.timeout(240), worker.session() as session:
+        feed = session.events()
+        await session.send(
+            ai.user_message(
+                "Run `sleep 5` with a shell tool, "
+                "then reply with the word DONE."
+            )
         )
         steered = False
         async for event in feed:
             if not steered and isinstance(event, ai.events.BuiltinToolStart):
                 steered = True
-                await worker.send("After that, also say the word STEERED.")
+                await session.send(
+                    ai.user_message("After that, also say the word STEERED.")
+                )
             if (
                 isinstance(event, ai.events.StreamEnd)
                 and event.finish_reason == "stop"

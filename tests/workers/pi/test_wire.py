@@ -261,8 +261,11 @@ def server(monkeypatch: pytest.MonkeyPatch) -> PiServer:
 
 
 def make(cwd: str, agent_dir: Path, **fields: Any) -> Pi:
-    env = {"PI_CODING_AGENT_DIR": str(agent_dir), **fields.pop("env", {})}
-    return Pi(cwd=cwd, env=env, **fields)
+    provider = workers.PiProvider(
+        executable=fields.pop("executable", None),
+        env={"PI_CODING_AGENT_DIR": str(agent_dir), **fields.pop("env", {})},
+    )
+    return Pi(cwd=cwd, provider=provider, **fields)
 
 
 async def run(worker: Pi, messages: list[m.Message]) -> ai.Stream[str]:
@@ -283,7 +286,8 @@ async def test_a_turn_streams_in_the_model_view(
 ) -> None:
     server.turns = [TOOL_TURN]
     prompt = ai.user_message("say done")
-    async with make(cwd, agent_dir) as worker:
+    worker = make(cwd, agent_dir)
+    async with worker.session():
         s = await run(worker, [prompt])
     message = s.message
     assert message.reasoning == "plan"
@@ -327,14 +331,15 @@ async def test_start_runs_pi_with_the_extension_and_the_bridge(
         executable="/custom/pi",
         env={"ANTHROPIC_API_KEY": "k"},
         model_name="claude-test",
-        provider="anthropic",
+        model_provider="anthropic",
         thinking="high",
         instructions="Be brief.",
         allowed_tools=[],
         disallowed_tools=["write"],
         args=["--no-skills"],
     )
-    async with worker:
+    async with worker.session() as session:
+        await session.start()
         (argv, kwargs) = server.spawned[0]
         assert argv[:3] == ["/custom/pi", "--mode", "rpc"]
         assert argv[argv.index("-e") + 1] == wire_.EXTENSION
@@ -355,11 +360,11 @@ async def test_start_runs_pi_with_the_extension_and_the_bridge(
         assert kwargs["cwd"] == cwd
         env = kwargs["env"]
         assert env["ANTHROPIC_API_KEY"] == "k"
-        assert worker._session is not None
+        assert session._run is not None
         assert json.loads(env[wire_.CONFIG_VAR]) == {
             "mcp": {
                 "ai_sdk": {
-                    "url": worker._session.bridge.url,
+                    "url": session._run.bridge.url,
                     "exposure": "direct",
                     "timeout": 86400,
                 }
@@ -374,7 +379,8 @@ async def test_a_pi_without_the_extension_is_refused(
     server.loaded = False
     worker = make(cwd, agent_dir)
     with pytest.raises(workers.WorkerError, match="did not load"):
-        await worker.start()
+        async with worker.session() as session:
+            await session.start()
     assert server.process.terminated
 
 
@@ -382,11 +388,12 @@ async def test_close_is_idempotent(
     server: PiServer, cwd: str, agent_dir: Path
 ) -> None:
     worker = make(cwd, agent_dir)
-    await worker.start()
-    await worker.close()
-    await worker.close()
+    session = worker.session()
+    async with session:
+        await session.start()
+    await session.close()
     assert server.process.terminated
-    wire = worker._make_wire()
+    wire = worker.provider._make_wire(worker)
     await wire.close()
     await wire.close()
 
@@ -460,23 +467,23 @@ async def test_bridge_calls_are_ai_tool_calls_not_builtin(
     server.on_prompt = turn
     worker = make(cwd, agent_dir)
     try:
-        async with asyncio.timeout(5):
-            async with ai.Agent(tools=[lookup]).run(
-                worker, [ai.user_message("go")]
-            ) as agent_run:
-                async for _ in agent_run:
-                    pass
-        roles = [msg.role for msg in worker.messages]
-        assert roles == ["user", "assistant", "tool", "assistant"]
-        (call,) = worker.messages[1].tool_calls
-        assert call.tool_name == "lookup"
-        for message in worker.messages:
-            assert message.builtin_tool_calls == []
-            assert message.builtin_tool_returns == []
-        assert worker.messages[3].text == "got HERON"
-        assert answers[0]["result"]["isError"] is False
+        async with worker.session():
+            async with asyncio.timeout(5):
+                async with ai.Agent(tools=[lookup]).run(
+                    worker, [ai.user_message("go")]
+                ) as agent_run:
+                    async for _ in agent_run:
+                        pass
+            roles = [msg.role for msg in worker.messages]
+            assert roles == ["user", "assistant", "tool", "assistant"]
+            (call,) = worker.messages[1].tool_calls
+            assert call.tool_name == "lookup"
+            for message in worker.messages:
+                assert message.builtin_tool_calls == []
+                assert message.builtin_tool_returns == []
+            assert worker.messages[3].text == "got HERON"
+            assert answers[0]["result"]["isError"] is False
     finally:
-        await worker.close()
         for task in tasks:
             await task
 
@@ -492,10 +499,11 @@ async def test_a_send_during_a_run_steers_it(
             update("text_delta", delta="Look"),
         ]
     ]
-    async with make(cwd, agent_dir) as worker:
-        feed = worker.events()
-        await worker.send("fix")
-        await worker.send("skip slow ones")
+    worker = make(cwd, agent_dir)
+    async with worker.session() as session:
+        feed = session.events()
+        await session.send(ai.user_message("fix"))
+        await session.send(ai.user_message("skip slow ones"))
         assert len(server.sent("prompt")) == 2
         steer = server.sent("prompt")[-1]
         assert steer["message"] == "skip slow ones"
@@ -538,14 +546,15 @@ async def test_interrupt_ends_the_run_as_interrupted(
             update("text_delta", delta="work"),
         ]
     ]
-    async with make(cwd, agent_dir) as worker:
-        feed = worker.events()
-        await worker.send("long job")
+    worker = make(cwd, agent_dir)
+    async with worker.session() as session:
+        feed = session.events()
+        await session.send(ai.user_message("long job"))
         async with asyncio.timeout(5):
             async for event in feed:
                 if isinstance(event, ai.events.TextDelta):
                     break
-            await worker.interrupt()
+            await session.interrupt()
         assert len(server.sent("abort")) == 1
         assert workers.is_interrupted(worker.messages[-1])
         assert worker.messages[-1].text == "work"
@@ -557,7 +566,8 @@ async def test_a_rejected_prompt_without_a_key_is_not_authenticated(
 ) -> None:
     """Measured: pi refuses the prompt itself when it has no credentials."""
     server.prompt_error = "No API key found for anthropic.\n\nUse /login"
-    async with make(cwd, agent_dir) as worker:
+    worker = make(cwd, agent_dir)
+    async with worker.session():
         with pytest.raises(workers.NotAuthenticatedError):
             await run(worker, [ai.user_message("go")])
 
@@ -579,7 +589,8 @@ async def test_a_failed_run_without_a_key_is_not_authenticated(
             *SETTLED,
         ]
     ]
-    async with make(cwd, agent_dir) as worker:
+    worker = make(cwd, agent_dir)
+    async with worker.session():
         with pytest.raises(workers.NotAuthenticatedError):
             await run(worker, [ai.user_message("go")])
         assert "error" in (worker.messages[-1].provider_metadata or {}).get(
@@ -610,10 +621,10 @@ async def test_a_new_session_is_seeded_with_the_past(
         ),
         ai.user_message("two"),
     ]
-    worker = make(cwd, agent_dir)  # not started: stream() seeds the start
+    worker = make(cwd, agent_dir)
     with pytest.warns(UserWarning, match="reasoning"):
-        s = await run(worker, history)
-    await worker.close()
+        async with worker.session():  # the first call starts pi, seeded
+            s = await run(worker, history)
     assert s.text == "fine"
     session_id = worker.session_id
     assert session_id is not None
@@ -652,22 +663,29 @@ async def test_an_existing_session_opens_here_only(
     server.turns = [[*begin("one"), *said("ok"), *SETTLED]]
     first = make(cwd, agent_dir)
     past = [ai.user_message("zero"), ai.assistant_message("fine")]
-    await run(first, [*past, ai.user_message("one")])
-    await first.close()
+    async with first.session():
+        await run(first, [*past, ai.user_message("one")])
     session_id = first.session_id
     assert session_id is not None
     assert server.process.terminated
     # The seed made the session file (a real pi also writes it itself).
     path = session_file(agent_dir, session_id)
 
-    async with make(cwd, agent_dir, session_id=session_id) as again:
+    again = make(cwd, agent_dir, session_id=session_id)
+
+    async with again.session() as session:
+        await session.start()
         assert server.session_id == session_id
         assert again.session_id == session_id
 
     with pytest.raises(workers.WorkerError, match="no session"):
-        await make(cwd, agent_dir, session_id="0000-unknown").start()
+        unknown = make(cwd, agent_dir, session_id="0000-unknown")
+        async with unknown.session() as session:
+            await session.start()
     with pytest.raises(workers.WorkerError, match="not a pi session id"):
-        await make(cwd, agent_dir, session_id="../escape").start()
+        escape = make(cwd, agent_dir, session_id="../escape")
+        async with escape.session() as session:
+            await session.start()
     # A session that names another directory is not this one's.
     entries = path.read_text().splitlines()
     header = json.loads(entries[0])
@@ -679,14 +697,17 @@ async def test_an_existing_session_opens_here_only(
         + "\n"
     )
     with pytest.raises(workers.WorkerError, match="belongs to"):
-        await make(cwd, agent_dir, session_id=f"{session_id}-moved").start()
+        moved = make(cwd, agent_dir, session_id=f"{session_id}-moved")
+        async with moved.session() as session:
+            await session.start()
     assert len(server.spawned) == 2
 
 
 async def test_a_dialog_is_answered_without_a_person(
     server: PiServer, cwd: str, agent_dir: Path
 ) -> None:
-    async with make(cwd, agent_dir):
+    async with make(cwd, agent_dir).session() as session:
+        await session.start()
         server.says(
             {
                 "type": "extension_ui_request",
@@ -716,11 +737,12 @@ async def test_images_travel_as_base64(
     server.turns = [[*begin("look"), *said("a dot"), *SETTLED]]
     png = m.FilePart(data=b"\x89PNG", media_type="image/png")
     message = m.Message(role="user", parts=[m.TextPart(text="look"), png])
-    async with make(cwd, agent_dir) as worker:
+    worker = make(cwd, agent_dir)
+    async with worker.session() as session:
         await run(worker, [message])
         with pytest.raises(workers.UnsupportedError):
             pdf = m.FilePart(data=b"%PDF", media_type="application/pdf")
-            await worker.send(m.Message(role="user", parts=[pdf]))
+            await session.send(m.Message(role="user", parts=[pdf]))
     (prompt,) = server.sent("prompt")
     assert prompt["images"] == [
         {"type": "image", "data": "iVBORw==", "mimeType": "image/png"}
@@ -734,7 +756,8 @@ async def test_a_command_that_starts_nothing_ends_the_turn_empty(
         server.respond(command, data={"disposition": "handled"})
 
     server.on_prompt = turn
-    async with make(cwd, agent_dir) as worker:
+    worker = make(cwd, agent_dir)
+    async with worker.session():
         s = await run(worker, [ai.user_message("/noop")])
     assert s.message.parts == []
     assert [msg.role for msg in worker.messages] == ["user", "assistant"]
@@ -756,7 +779,9 @@ async def test_a_crash_reaches_the_stream(
         await asyncio.sleep(0.05)
         await server.process.terminate()
 
-    async with make(cwd, agent_dir) as worker:
+    worker = make(cwd, agent_dir)
+
+    async with worker.session():
         task = asyncio.create_task(die())
         with pytest.raises(workers.WorkerError, match=r"crashed|stopped"):
             await run(worker, [ai.user_message("go")])

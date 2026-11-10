@@ -39,7 +39,8 @@ from .core.api import (
     probe,
     stream,
 )
-from .core.model import Model, ModelLike, get_model
+from .core.model import Model, get_model
+from .core.model_like import ModelLike, ProviderLike
 from .core.params import (
     DEFAULT,
     GLOBAL,
@@ -89,6 +90,7 @@ __all__ = [
     "ModelProviderDefault",
     "OutputParams",
     "Provider",
+    "ProviderLike",
     "ProviderProtocol",
     "ProviderRankingStrategy",
     "ProviderServiceParams",

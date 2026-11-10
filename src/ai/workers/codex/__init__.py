@@ -1,3 +1,3 @@
-from .worker import Codex
+from .worker import Codex, CodexProvider
 
-__all__ = ["Codex"]
+__all__ = ["Codex", "CodexProvider"]

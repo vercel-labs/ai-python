@@ -8,7 +8,6 @@ from . import (
     testing,
     ui,
     util,
-    workers,
 )
 from .agents import (
     Agent,
@@ -75,7 +74,6 @@ from .models import (
     InferenceRequestParams,
     MinPSamplerParams,
     Model,
-    ModelLike,
     ModelProviderDefault,
     OutputParams,
     Provider,
@@ -140,7 +138,6 @@ __all__ = [
     "InstallationError",
     "MinPSamplerParams",
     "Model",
-    "ModelLike",
     "ModelProviderDefault",
     "OutputParams",
     "Provider",
@@ -230,6 +227,5 @@ __all__ = [
     "ui",
     "user_message",
     "util",
-    "workers",
     "yield_from",
 ]

@@ -17,7 +17,8 @@ KINDS: dict[str, type[workers.Worker]] = {
 
 
 async def main(kind: str) -> None:
-    async with KINDS[kind]() as worker:
+    worker = KINDS[kind]()
+    async with worker.session():
         messages = [
             ai.user_message(
                 "List the files here with a shell command, then say DONE."
@@ -43,7 +44,7 @@ async def main(kind: str) -> None:
     # A worker is data: save it, and continue the conversation later.
     saved = worker.model_dump_json()
     again = workers.Worker.model_validate_json(saved)
-    async with again:
+    async with again.session():
         reply = await ai.experimental_generate(
             again, [*again.messages, ai.user_message("And the largest one?")]
         )

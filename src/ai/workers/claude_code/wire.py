@@ -51,7 +51,7 @@ class ClaudeCodeWire:
         self.worker = worker
         # The CLI keys its store by the real path of its directory.
         self.cwd = os.path.realpath(worker.cwd)
-        self.executable = worker.executable or "claude"
+        self.executable = worker.provider.executable or "claude"
         self.client: Any = None
         # Messages written to the CLI and not yet echoed, by the uuid we gave
         # them. See `send()`.
@@ -78,7 +78,7 @@ class ClaudeCodeWire:
             install=INSTALL,
             verified=VERIFIED_VERSION,
             cwd=self.cwd,
-            env=worker.env,
+            env=worker.provider.env,
         )
         claude_agent_sdk = _sdk()
         session_id = worker.session_id
@@ -115,7 +115,7 @@ class ClaudeCodeWire:
         # timeout; the user's env wins.
         options["env"] = {
             "MCP_TOOL_TIMEOUT": str(24 * 3600 * 1000),
-            **worker.env,
+            **worker.provider.env,
         }
         if worker.model_name:
             options["model"] = worker.model_name
@@ -164,7 +164,7 @@ class ClaudeCodeWire:
         # Where the CLI keeps transcripts:
         # `$CLAUDE_CONFIG_DIR/projects/<key>/<session>.jsonl`.
         config = (
-            self.worker.env.get("CLAUDE_CONFIG_DIR")
+            self.worker.provider.env.get("CLAUDE_CONFIG_DIR")
             or os.environ.get("CLAUDE_CONFIG_DIR")
             or str(pathlib.Path.home() / ".claude")
         )

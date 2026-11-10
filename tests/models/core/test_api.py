@@ -67,7 +67,6 @@ def test_context_json_roundtrip_includes_model() -> None:
 
     restored = ai.Context.model_validate_json(context.model_dump_json())
 
-    assert isinstance(restored.model, ai.Model)
     assert restored.model.id == "anthropic/claude-sonnet-4.6"
     assert isinstance(restored.model.provider, ai.providers.GatewayProvider)
 

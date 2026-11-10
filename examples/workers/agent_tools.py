@@ -30,7 +30,8 @@ async def main(kind: str) -> None:
             "Reply with the word only."
         )
     ]
-    async with KINDS[kind]() as worker:
+    worker = KINDS[kind]()
+    async with worker.session():
         async with agent.run(worker, messages) as run:
             async for event in run:
                 match event:

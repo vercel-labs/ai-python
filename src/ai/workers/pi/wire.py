@@ -98,14 +98,14 @@ class PiWire:
         seed: list[messages_.Message],
     ) -> str:
         worker = self.worker
-        executable = worker.executable or "pi"
+        executable = worker.provider.executable or "pi"
         await _process.probe(
             KIND,
             executable,
             install=INSTALL,
             verified=VERIFIED_VERSION,
             cwd=self.cwd,
-            env=worker.env,
+            env=worker.provider.env,
         )
         session_id = worker.session_id
         if session_id is not None:
@@ -127,8 +127,8 @@ class PiWire:
         ]
         if worker.model_name:
             argv += ["--model", worker.model_name]
-        if worker.provider:
-            argv += ["--provider", worker.provider]
+        if worker.model_provider:
+            argv += ["--provider", worker.model_provider]
         if worker.thinking:
             argv += ["--thinking", worker.thinking]
         if instructions:
@@ -158,7 +158,7 @@ class PiWire:
         self.process = await _process.spawn(
             argv,
             cwd=self.cwd,
-            env={**worker.env, CONFIG_VAR: json.dumps(config)},
+            env={**worker.provider.env, CONFIG_VAR: json.dumps(config)},
         )
         self.reader = asyncio.create_task(self._read(self.process))
         try:
@@ -446,7 +446,7 @@ class PiWire:
         The environment, then project settings, then global ones; else one
         directory per working directory under the agent dir.
         """
-        env = {**os.environ, **self.worker.env}
+        env = {**os.environ, **self.worker.provider.env}
         agent = pathlib.Path(
             os.path.expanduser(env.get("PI_CODING_AGENT_DIR") or "~/.pi/agent")
         )

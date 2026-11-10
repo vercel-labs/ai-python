@@ -17,9 +17,12 @@ KINDS: dict[str, type[workers.Worker]] = {
 
 
 async def main(kind: str) -> None:
-    async with KINDS[kind]() as worker:
-        feed = worker.events()  # subscribe before send: see everything
-        await worker.send("Count from 1 to 20 slowly, one number per line.")
+    worker = KINDS[kind]()
+    async with worker.session() as session:
+        feed = session.events()  # subscribe before send: see everything
+        await session.send(
+            ai.user_message("Count from 1 to 20 slowly, one number per line.")
+        )
 
         steered = False
         async for event in feed:
@@ -29,15 +32,19 @@ async def main(kind: str) -> None:
                     if not steered and "5" in event.chunk:
                         steered = True
                         # A steer: the CLI decides how to fit it in.
-                        await worker.send("Stop at 8 instead.")
+                        await session.send(
+                            ai.user_message("Stop at 8 instead.")
+                        )
                 case workers.MessageEvent(message=message):
                     print(f"\n[{message.role}] {message.text[:40]!r}")
                 case ai.events.StreamEnd(finish_reason="stop"):
                     break
 
-        await worker.send("Now count from 100 down to 1, slowly.")
+        await session.send(
+            ai.user_message("Now count from 100 down to 1, slowly.")
+        )
         await asyncio.sleep(3)
-        await worker.interrupt()  # stop the turn; the session stays
+        await session.interrupt()  # stop the turn; the session stays
         print(f"\ninterrupted: {workers.is_interrupted(worker.messages[-1])}")
         await feed.aclose()
 

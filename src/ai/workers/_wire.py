@@ -1,14 +1,14 @@
-"""The private contract between `Worker` and one CLI.
+"""The private contract between a session and one CLI.
 
 A wire speaks one CLI's native protocol and nothing else. It turns native
 records into `ai` events. It keeps no conversation state, knows no
-subscribers, and does not know about `ai.Agent`: the worker does all that.
+subscribers, and does not know about `ai.Agent`: the session does all that.
 
 A wire yields three kinds of items:
 
 - `Content`: `ai` model events for what the assistant says and does. The CLI's
   own tools are `BuiltinTool*` events. Calls to the MCP bridge (`ai` tools)
-  must NOT appear: the bridge reports them to the worker itself.
+  must NOT appear: the bridge reports them to the session itself.
 - `Accepted`: the CLI took a message from `send()`. It must come before any
   content that the message causes.
 - `TurnEnd`: the CLI finished a turn.
@@ -52,7 +52,7 @@ class Accepted:
 class TurnEnd:
     """The CLI finished a turn.
 
-    `error` is set when the turn failed; the worker raises it from `stream()`.
+    `error` is set when the turn failed; a model call raises it.
     `metadata` goes into the `provider_metadata` of the turn's last
     assistant message, for example which model wrote it.
     """

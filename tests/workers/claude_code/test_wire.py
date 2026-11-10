@@ -265,7 +265,8 @@ async def test_a_turn_streams_in_the_model_view(cli: FakeCLI, cwd: str) -> None:
         result(),
     ]
     user = ai.user_message("go")
-    async with ClaudeCode(cwd=cwd) as worker:
+    worker = ClaudeCode(cwd=cwd)
+    async with worker.session():
         s, end = await run(worker, [user])
     message = s.message
     assert message.reasoning == "plan"
@@ -295,19 +296,21 @@ async def test_start_connects_with_the_bridge_and_no_approvals(
 ) -> None:
     worker = ClaudeCode(
         cwd=cwd,
-        executable="/custom/claude",
-        env={"ANTHROPIC_API_KEY": "k"},
+        provider=workers.ClaudeCodeProvider(
+            executable="/custom/claude", env={"ANTHROPIC_API_KEY": "k"}
+        ),
         model_name="haiku",
         instructions="Be brief.",
         allowed_tools=["Read"],
         disallowed_tools=["Bash"],
         max_turns=3,
     )
-    async with worker:
+    async with worker.session() as session:
+        await session.start()
         options = cli.client.options
-        assert worker._session is not None
+        assert session._run is not None
         assert options.mcp_servers == {
-            "ai_sdk": {"type": "http", "url": worker._session.bridge.url}
+            "ai_sdk": {"type": "http", "url": session._run.bridge.url}
         }
         assert options.permission_mode == "bypassPermissions"
         assert options.can_use_tool is None
@@ -335,12 +338,15 @@ async def test_start_connects_with_the_bridge_and_no_approvals(
 
 
 async def test_a_resumed_session_must_exist(cli: FakeCLI, cwd: str) -> None:
-    async with ClaudeCode(cwd=cwd, session_id=SESSION) as worker:
+    worker = ClaudeCode(cwd=cwd, session_id=SESSION)
+    async with worker.session() as session:
+        await session.start()
         assert cli.client.options.resume == SESSION
         assert cli.client.options.session_id is None
         assert worker.session_id == SESSION
     with pytest.raises(workers.WorkerError, match="no session"):
-        await ClaudeCode(cwd=cwd, session_id="ghost").start()
+        async with ClaudeCode(cwd=cwd, session_id="ghost").session() as session:
+            await session.start()
 
 
 async def test_a_new_session_is_seeded_from_the_past(
@@ -369,10 +375,15 @@ async def test_a_new_session_is_seeded_from_the_past(
         ),
         ai.user_message("two"),
     ]
-    worker = ClaudeCode(cwd=cwd, env={"CLAUDE_CONFIG_DIR": str(config)})
+    worker = ClaudeCode(
+        cwd=cwd,
+        provider=workers.ClaudeCodeProvider(
+            env={"CLAUDE_CONFIG_DIR": str(config)}
+        ),
+    )
     with pytest.warns(UserWarning, match="1 reasoning part"):
-        await run(worker, history)
-    await worker.close()
+        async with worker.session():
+            await run(worker, history)
     options = cli.client.options
     assert options.resume == worker.session_id
     key = sdk.project_key_for_directory(cwd)
@@ -447,7 +458,8 @@ async def test_bridge_calls_are_ai_tool_calls_not_builtin(
         ]
 
     cli.on_query = on_query
-    async with ClaudeCode(cwd=cwd) as worker:
+    worker = ClaudeCode(cwd=cwd)
+    async with worker.session():
         async with asyncio.timeout(5):
             async with ai.Agent(tools=[lookup]).run(
                 worker, [ai.user_message("go")]
@@ -483,10 +495,11 @@ async def test_a_send_during_a_turn_steers_it(cli: FakeCLI, cwd: str) -> None:
         return []  # the CLI holds a steer until the next step
 
     cli.on_query = on_query
-    async with ClaudeCode(cwd=cwd) as worker:
-        feed = worker.events()
-        await worker.send("fix")
-        await worker.send("skip slow ones")
+    worker = ClaudeCode(cwd=cwd)
+    async with worker.session() as session:
+        feed = session.events()
+        await session.send(ai.user_message("fix"))
+        await session.send(ai.user_message("skip slow ones"))
         steer = cli.client.written[1]
         # The step ends, then the CLI echoes the steer where it injects it.
         cli.say(
@@ -527,14 +540,15 @@ async def test_interrupt_ends_the_turn_as_interrupted(
             },
         ),
     ]
-    async with ClaudeCode(cwd=cwd) as worker:
-        feed = worker.events()
-        await worker.send("long job")
+    worker = ClaudeCode(cwd=cwd)
+    async with worker.session() as session:
+        feed = session.events()
+        await session.send(ai.user_message("long job"))
         async with asyncio.timeout(5):
             async for event in feed:
                 if isinstance(event, ai.events.TextDelta):
                     break
-            await worker.interrupt()
+            await session.interrupt()
         assert cli.client.interrupts == 1
         assert workers.is_interrupted(worker.messages[-1])
         assert worker.messages[-1].text == "work"
@@ -564,7 +578,8 @@ async def test_a_failed_turn_without_a_key_is_not_authenticated(
         ),
         result(is_error=True, result=detail),
     ]
-    async with ClaudeCode(cwd=cwd) as worker:
+    worker = ClaudeCode(cwd=cwd)
+    async with worker.session():
         with pytest.raises(workers.NotAuthenticatedError):
             await run(worker, [ai.user_message("go")])
     assert worker.messages[-1].text == detail
@@ -575,7 +590,8 @@ async def test_max_turns_ends_with_length(cli: FakeCLI, cwd: str) -> None:
         echo(record),
         result(subtype="error_max_turns", is_error=True),
     ]
-    async with ClaudeCode(cwd=cwd, max_turns=1) as worker:
+    worker = ClaudeCode(cwd=cwd, max_turns=1)
+    async with worker.session():
         _, end = await run(worker, [ai.user_message("go")])
     assert end.finish_reason == "length"
 
@@ -585,7 +601,8 @@ async def test_a_crash_reaches_the_stream(cli: FakeCLI, cwd: str) -> None:
         echo(record),
         sdk.ProcessError("boom", exit_code=1),
     ]
-    async with ClaudeCode(cwd=cwd) as worker:
+    worker = ClaudeCode(cwd=cwd)
+    async with worker.session():
         with pytest.raises(workers.WorkerError, match="crashed"):
             await run(worker, [ai.user_message("go")])
 
@@ -593,9 +610,10 @@ async def test_a_crash_reaches_the_stream(cli: FakeCLI, cwd: str) -> None:
 async def test_unsupported_parts_are_refused_before_writing(
     cli: FakeCLI, cwd: str
 ) -> None:
-    async with ClaudeCode(cwd=cwd) as worker:
+    worker = ClaudeCode(cwd=cwd)
+    async with worker.session() as session:
         with pytest.raises(workers.UnsupportedError):
-            await worker.send(
+            await session.send(
                 ai.user_message(
                     m.FilePart(data=b"x", media_type="audio/wav"),
                 )
@@ -605,7 +623,8 @@ async def test_unsupported_parts_are_refused_before_writing(
 
 async def test_images_go_as_base64_blocks(cli: FakeCLI, cwd: str) -> None:
     cli.on_query = lambda record: [echo(record), result()]
-    async with ClaudeCode(cwd=cwd) as worker:
+    worker = ClaudeCode(cwd=cwd)
+    async with worker.session():
         await run(
             worker,
             [
@@ -627,12 +646,12 @@ async def test_images_go_as_base64_blocks(cli: FakeCLI, cwd: str) -> None:
 
 
 async def test_close_is_idempotent(cli: FakeCLI, cwd: str) -> None:
-    worker = ClaudeCode(cwd=cwd)
-    await worker.start()
-    wire = worker._session.wire if worker._session else None
-    await worker.close()
-    await worker.close()
-    assert wire is not None
+    session = ClaudeCode(cwd=cwd).session()
+    async with session:
+        await session.start()
+        assert session._run is not None
+        wire = session._run.wire
+    await session.close()
     await wire.close()  # the wire itself too
     assert cli.client.disconnects == 1
 

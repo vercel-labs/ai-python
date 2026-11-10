@@ -1,61 +1,19 @@
 """Model metadata types."""
 
-from __future__ import annotations
-
 import os
 import weakref
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Protocol,
-    Self,
-    cast,
-    runtime_checkable,
-)
+from typing import TYPE_CHECKING, Any, Self, cast
 
 import pydantic
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Callable, Sequence
-
-    from ... import types
-    from . import params as params_
+    from collections.abc import Callable
 
 from ... import _modelsdev
 from ...errors import ConfigurationError
 from ...providers import base
 
 _DEFAULT_MODEL_ENV = "AI_SDK_DEFAULT_MODEL"
-
-
-@runtime_checkable
-class ModelLike(Protocol):
-    """Anything that answers a conversation the way a model does.
-
-    `ai.stream`, `ai.experimental_generate` and `ai.Agent.run` take a
-    `ModelLike`. `ai.Model` is one; anything with the same `stream` is
-    another.
-
-    `stream` receives the WHOLE conversation on every call and yields the
-    events of ONE assistant message, ending with `StreamEnd`.
-    """
-
-    @property
-    def id(self) -> str: ...
-
-    @property
-    def provider_name(self) -> str:
-        """Who answers, for telemetry: for `ai.Model`, the provider name."""
-        ...
-
-    def stream(
-        self,
-        messages: list[types.messages.Message],
-        *,
-        tools: Sequence[types.tools.Tool] | None = None,
-        output_type: type[pydantic.BaseModel] | None = None,
-        params: params_.InferenceRequestParams | None = None,
-    ) -> AsyncGenerator[types.events.Event]: ...
 
 
 def _exclude_if_none(v: Any) -> bool:
@@ -91,27 +49,6 @@ class Model(pydantic.BaseModel):
 
     def with_protocol(self, protocol: base.ProviderProtocol[Any]) -> Self:
         return self.model_copy(update={"protocol": protocol})
-
-    @property
-    def provider_name(self) -> str:
-        return self.provider.name
-
-    def stream(
-        self,
-        messages: list[types.messages.Message],
-        *,
-        tools: Sequence[types.tools.Tool] | None = None,
-        output_type: type[pydantic.BaseModel] | None = None,
-        params: params_.InferenceRequestParams | None = None,
-    ) -> AsyncGenerator[types.events.Event]:
-        """Return the raw provider stream. Use `ai.stream(model, ...)`."""
-        return self.provider.stream(
-            self,
-            messages,
-            tools=tools,
-            output_type=output_type,
-            params=params,
-        )
 
 
 def get_model(

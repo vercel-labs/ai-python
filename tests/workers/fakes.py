@@ -144,15 +144,20 @@ class FakeWire:
         self.closed = True
 
 
+class FakeProvider(workers.WorkerProvider):
+    name: str = "fake"
+
+    def _make_wire(self, worker: FakeWorker) -> FakeWire:
+        return FakeWire(worker)
+
+
 class FakeWorker(workers.Worker):
     worker_class_id: Literal["fake"] = "fake"
+    provider: FakeProvider = pydantic.Field(default_factory=FakeProvider)
 
     # Test controls, not settings.
     _reply: Reply | None = pydantic.PrivateAttr(default=None)
     _wires: list[FakeWire] = pydantic.PrivateAttr(default_factory=list)
-
-    def _make_wire(self) -> FakeWire:
-        return FakeWire(self)
 
     @property
     def wire(self) -> FakeWire:

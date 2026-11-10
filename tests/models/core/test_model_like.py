@@ -1,4 +1,4 @@
-"""`ai.ModelLike`: anything with a model's `stream` goes where a model goes."""
+"""`ModelLike`: an id and a provider go where a model goes."""
 
 from __future__ import annotations
 
@@ -13,29 +13,19 @@ from ai.types import messages as m
 from ai.types import tools as tools_
 
 
-class Echo:
-    """Not an `ai.Model`: it answers with the last user message's text."""
-
-    def __init__(self) -> None:
-        self.calls: list[list[m.Message]] = []
-
-    @property
-    def id(self) -> str:
-        return "echo"
-
-    @property
-    def provider_name(self) -> str:
-        return "echo"
+class EchoProvider:
+    name = "echo"
 
     async def stream(
         self,
+        model: Echo,
         messages: list[m.Message],
         *,
         tools: Sequence[tools_.Tool] | None = None,
         output_type: type[pydantic.BaseModel] | None = None,
         params: Any = None,
     ) -> AsyncGenerator[events.Event]:
-        self.calls.append(list(messages))
+        model.calls.append(list(messages))
         text = next(x.text for x in reversed(messages) if x.role == "user")
         yield events.StreamStart()
         yield events.TextStart(block_id="t")
@@ -43,10 +33,31 @@ class Echo:
         yield events.TextEnd(block_id="t")
         yield events.StreamEnd(finish_reason="stop")
 
+    async def generate(
+        self,
+        model: Echo,
+        messages: list[m.Message],
+        *,
+        tools: Sequence[tools_.Tool] | None = None,
+        output_type: type[pydantic.BaseModel] | None = None,
+        params: Any = None,
+    ) -> m.Message:
+        raise NotImplementedError
+
+
+class Echo:
+    """Not an `ai.Model`: it answers with the last user message's text."""
+
+    id = "echo"
+
+    def __init__(self) -> None:
+        self.calls: list[list[m.Message]] = []
+        self.provider = EchoProvider()
+
 
 def test_a_model_and_a_stand_in_are_model_like() -> None:
-    assert isinstance(Echo(), ai.ModelLike)
-    assert isinstance(ai.get_model("openai/gpt-5"), ai.ModelLike)
+    assert isinstance(Echo(), ai.models.ModelLike)
+    assert isinstance(ai.get_model("openai/gpt-5"), ai.models.ModelLike)
 
 
 async def test_stream_takes_a_model_like() -> None:

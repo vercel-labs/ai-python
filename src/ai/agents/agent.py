@@ -1039,29 +1039,10 @@ class ToolRunner:
             yield res
 
 
-def _validate_model(value: Any) -> models.ModelLike:
-    # Another model-like is kept as it is. Data is an ai.Model.
-    if isinstance(value, models.ModelLike) and not isinstance(
-        value, models.Model
-    ):
-        return value
-    return models.Model.model_validate(value)
-
-
-def _serialize_model(value: Any, info: pydantic.SerializationInfo) -> Any:
-    if isinstance(value, pydantic.BaseModel):
-        return value.model_dump(mode=info.mode)
-    return {"id": value.id, "provider_name": value.provider_name}
-
-
 class Context(pydantic.BaseModel):
     """Everything that goes into the LLM."""
 
-    model: Annotated[
-        models.ModelLike,
-        pydantic.PlainValidator(_validate_model),
-        pydantic.PlainSerializer(_serialize_model),
-    ]
+    model: pydantic.SerializeAsAny[models.Model | models.ModelLike]
     messages: list[types.messages.Message]
     tools: list[Tool]
     output_type: type[pydantic.BaseModel] | None = pydantic.Field(
@@ -1629,7 +1610,7 @@ class Agent:
                     agent=type(self).__name__,
                     model=model.id,
                     messages=list(messages),
-                    provider=model.provider_name,
+                    provider=model.provider.name,
                     tool_names=[t.name for t in context.tools],
                     output_type=(
                         output_type.__name__

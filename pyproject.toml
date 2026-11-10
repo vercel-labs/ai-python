@@ -117,12 +117,6 @@ exclude = [
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-# Live worker tests drive real agent CLIs, so they are opt-in:
-# `uv run pytest -m live tests/workers` (a later -m overrides this one).
-addopts = "-m 'not live'"
-markers = [
-    "live: drives a real Claude Code, Codex or Pi (deselect with -m 'not live')",
-]
 filterwarnings = [
     "ignore:'asyncio\\.DefaultEventLoopPolicy' is deprecated.*:DeprecationWarning:async_solipsism\\.loop",
 ]

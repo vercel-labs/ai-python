@@ -1,4 +1,4 @@
-"""Claude Code: the settings. `wire.py` drives the CLI."""
+"""Claude Code: the provider and the settings. `wire.py` drives the CLI."""
 
 from __future__ import annotations
 
@@ -8,6 +8,15 @@ import pydantic
 
 from .. import _worker
 from . import wire
+
+
+class ClaudeCodeProvider(_worker.WorkerProvider):
+    """The Claude Code CLI."""
+
+    name: str = "claude-code"
+
+    def _make_wire(self, worker: ClaudeCode) -> wire.ClaudeCodeWire:
+        return wire.ClaudeCodeWire(worker)
 
 
 class ClaudeCode(_worker.Worker):
@@ -21,9 +30,9 @@ class ClaudeCode(_worker.Worker):
     """
 
     worker_class_id: Literal["claude-code"] = "claude-code"
+    provider: ClaudeCodeProvider = pydantic.Field(
+        default_factory=ClaudeCodeProvider
+    )
     allowed_tools: list[str] | None = None
     disallowed_tools: list[str] = pydantic.Field(default_factory=list)
     max_turns: int | None = None
-
-    def _make_wire(self) -> wire.ClaudeCodeWire:
-        return wire.ClaudeCodeWire(self)

@@ -92,7 +92,7 @@ class CodexWire:
         seed: list[messages_.Message],
     ) -> str:
         worker = self.worker
-        executable = worker.executable or "codex"
+        executable = worker.provider.executable or "codex"
         self.instructions = instructions
         await _process.probe(
             KIND,
@@ -100,7 +100,7 @@ class CodexWire:
             install=INSTALL,
             verified=VERIFIED_VERSION,
             cwd=self.cwd,
-            env=worker.env,
+            env=worker.provider.env,
         )
         config = {
             f"mcp_servers.{_bridge.SERVER_NAME}.url": bridge_url,
@@ -111,7 +111,7 @@ class CodexWire:
         self.process = await _process.spawn(
             [executable, "app-server", *config_args(config)],
             cwd=self.cwd,
-            env=worker.env,
+            env=worker.provider.env,
         )
         self.peer = jsonrpc.JsonRpcPeer(self.process, kind=KIND)
         self.peer.start(

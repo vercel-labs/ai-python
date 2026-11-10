@@ -1,3 +1,3 @@
-from .worker import Pi
+from .worker import Pi, PiProvider
 
-__all__ = ["Pi"]
+__all__ = ["Pi", "PiProvider"]
