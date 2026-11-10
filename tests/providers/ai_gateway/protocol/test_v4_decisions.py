@@ -335,3 +335,31 @@ async def test_decide_maps_authentication_error() -> None:
             ),
             output_type=PredicateAnswers,
         )
+
+
+@pytest.mark.parametrize("where", ["state", "instructions", "criteria"])
+async def test_decide_rejects_files(where: str) -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(500)
+
+    photo = ai.file_part(b"\x89PNG\r\n\x1a\n")
+    state: ops.experimental.DecisionInput = (
+        {"photo": photo} if where == "state" else "state"
+    )
+    question = ops.experimental.PredicateQuestion(
+        instructions=["Is this damaged?", photo]
+        if where == "instructions"
+        else "Is this damaged?",
+        criteria={"true": photo} if where == "criteria" else None,
+    )
+
+    with pytest.raises(ValueError, match="do not support files"):
+        await ops.experimental.decide(
+            mock_model(httpx.MockTransport(handler), model_id=_MODEL_ID),
+            state,
+            {"damaged": question},
+        )
+    assert requests == []

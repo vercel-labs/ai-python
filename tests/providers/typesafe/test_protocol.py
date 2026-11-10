@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 from typing import Any
 
@@ -14,11 +15,13 @@ from ai.providers.typesafe import TypeSafeProvider
 
 
 def _model(handler: Any) -> ai.Model:
-    # Disable SDK retries so error tests don't back off.
+    # Disable SDK retries so error tests don't back off, and compression so
+    # tests can read large request bodies.
     provider = TypeSafeProvider(
         client=typesafe_sdk.AsyncTypeSafeClient(
             api_key="ts-test",
             retry=typesafe_sdk.RetryPolicy(max_retries=0),
+            compression=False,
             transport=httpx2.MockTransport(handler),
         ),
     )
@@ -94,6 +97,7 @@ async def test_decide_sends_native_request_and_parses_answers() -> None:
     [request] = requests
     assert request.url == "https://api.typesafe.ai/v1/systemone"
     assert request.headers["authorization"] == "Bearer ts-test"
+    assert "typesafe-danger-zone-images" not in request.headers
     assert json.loads(request.content) == {
         "state": "Help! My payouts have been failing for 3 days.",
         "model": "jev-latest",
@@ -166,6 +170,99 @@ async def test_decide_sends_predicate_criteria_and_provider_options() -> None:
         "urgent": decisions.PredicateAnswer(probability=0.1)
     }
     assert result.provider_metadata == {"typesafe": {"model": "jev-1.13.0"}}
+
+
+_PNG = b"\x89PNG\r\n\x1a\n-photo"
+_JPEG = b"\xff\xd8\xff-reference"
+
+
+def _multipart(request: httpx2.Request) -> tuple[dict[str, Any], list[bytes]]:
+    """Return the JSON request part and the asset bodies, in order."""
+    boundary = request.headers["content-type"].split("boundary=")[1]
+    sections = request.content.split(b"--" + boundary.encode())[1:-1]
+    bodies = [section.split(b"\r\n\r\n", 1)[1][:-2] for section in sections]
+    return json.loads(bodies[0]), bodies[1:]
+
+
+async def test_decide_sends_images_as_assets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requests: list[httpx2.Request] = []
+    downloads: list[str] = []
+
+    async def download(url: str) -> tuple[bytes, str | None]:
+        downloads.append(url)
+        return _JPEG, "image/jpeg"
+
+    monkeypatch.setattr(ai.models.core.helpers.files, "download", download)
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        requests.append(request)
+        return httpx2.Response(
+            200,
+            json=_response(
+                {
+                    "same": {"type": "noul", "noul": 0.9},
+                    "coat": {
+                        "type": "choice",
+                        "choice": "short",
+                        "probabilities": {"short": 0.7, "long": 0.3},
+                        "confidence": 0.8,
+                    },
+                }
+            ),
+        )
+
+    # The same photo appears twice and as base64 text in a data URL.
+    photo = ai.file_part(_PNG)
+    inline = ai.file_part(
+        "data:image/png;base64," + base64.b64encode(_PNG).decode()
+    )
+    reference = ai.file_part("https://example.com/reference.jpg")
+
+    await decisions.decide(
+        _model(handler),
+        {"photo": photo, "notes": ["Found today.", photo, inline]},
+        {
+            "same": decisions.PredicateQuestion(
+                instructions=["Is `photo` the same dog as this?", reference],
+            ),
+            "coat": decisions.ChoiceQuestion(
+                instructions="What is the coat like?",
+                criteria={"short": reference, "long": None},
+            ),
+        },
+    )
+
+    [request] = requests
+    assert request.headers["typesafe-danger-zone-images"] == "true"
+    body, assets = _multipart(request)
+
+    # One asset per file part; each reference stands where its file was.
+    photo_ref = body["state"]["photo"]
+    inline_ref = body["state"]["notes"][2]
+    reference_ref = body["questions"]["same"]["instructions"][1]
+    assert body["state"]["notes"] == ["Found today.", photo_ref, inline_ref]
+    assert body["questions"]["coat"]["criteria"] == {
+        "short": reference_ref,
+        "long": None,
+    }
+    assert body["questions"]["same"]["type"] == "noul"
+    assert set(body["assets"]) == {photo_ref, inline_ref, reference_ref}
+    assert sorted(assets) == sorted([_PNG, _PNG, _JPEG])
+    assert downloads == ["https://example.com/reference.jpg"]
+
+
+async def test_decide_rejects_non_image_files() -> None:
+    model = _model(lambda request: httpx2.Response(500))
+    document = ai.file_part(b"%PDF-1.7", media_type="application/pdf")
+
+    with pytest.raises(ValueError, match="application/pdf"):
+        await decisions.decide(
+            model,
+            {"contract": document},
+            {"q": decisions.PredicateQuestion(instructions="Signed?")},
+        )
 
 
 async def test_decide_rejects_non_mapping_provider_options() -> None:
