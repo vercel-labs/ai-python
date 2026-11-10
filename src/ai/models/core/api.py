@@ -27,6 +27,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, AsyncIterator, Sequence
 
     from . import model as model_
+    from . import model_like
     from . import params as params_
 
 # Stream output type.  Defaults to ``str``: when the stream was opened
@@ -37,7 +38,7 @@ StreamOutputT = TypeVar("StreamOutputT", default=str)
 
 @dataclasses.dataclass(frozen=True)
 class _StreamRequest:
-    model: model_.Model
+    model: model_like.ModelLike
     messages: list[types.messages.Message]
     tools: Sequence[types.tools.Tool] | None = None
     output_type: type[pydantic.BaseModel] | None = None
@@ -66,14 +67,19 @@ class _Executor:
         self,
         request: _StreamRequest,
     ) -> AsyncGenerator[types.events.Event]:
-        async for ev in request.model.provider.stream(
-            request.model,
-            request.messages,
-            tools=request.tools,
-            output_type=request.output_type,
-            params=request.params,
-        ):
-            yield ev
+        # Closed with the outer generator, not left to the garbage
+        # collector: a provider with state cleans up in it.
+        async with contextlib.aclosing(
+            request.model.provider.stream(
+                request.model,
+                request.messages,
+                tools=request.tools,
+                output_type=request.output_type,
+                params=request.params,
+            )
+        ) as inner:
+            async for ev in inner:
+                yield ev
 
     async def _do_generate(
         self, request: _StreamRequest
@@ -307,7 +313,7 @@ class StreamContext(Protocol):
     """
 
     @property
-    def model(self) -> model_.Model: ...
+    def model(self) -> model_like.ModelLike: ...
     @property
     def messages(self) -> list[types.messages.Message]: ...
     @property
@@ -333,7 +339,7 @@ def stream[T: pydantic.BaseModel](
 ) -> AbstractAsyncContextManager[Stream[T]]: ...
 @overload
 def stream(
-    model: model_.Model,
+    model: model_like.ModelLike,
     messages: list[types.messages.Message],
     *,
     tools: Sequence[types.tools.Tool] | None = None,
@@ -341,7 +347,7 @@ def stream(
 ) -> AbstractAsyncContextManager[Stream[str]]: ...
 @overload
 def stream[T: pydantic.BaseModel](
-    model: model_.Model,
+    model: model_like.ModelLike,
     messages: list[types.messages.Message],
     *,
     tools: Sequence[types.tools.Tool] | None = None,
@@ -349,7 +355,7 @@ def stream[T: pydantic.BaseModel](
     params: params_.InferenceRequestParams | None = None,
 ) -> AbstractAsyncContextManager[Stream[T]]: ...
 def stream(
-    model: model_.Model | None = None,
+    model: model_like.ModelLike | None = None,
     messages: list[types.messages.Message] | None = None,
     *,
     context: StreamContext | None = None,
@@ -401,7 +407,7 @@ def stream(
 @contextlib.asynccontextmanager
 async def _stream(
     *,
-    model: model_.Model,
+    model: model_like.ModelLike,
     messages: list[types.messages.Message],
     tools: Sequence[types.tools.Tool] | None,
     output_type: type[pydantic.BaseModel] | None,
@@ -467,7 +473,7 @@ async def experimental_generate(
 ) -> types.messages.Message: ...
 @overload
 async def experimental_generate(
-    model: model_.Model,
+    model: model_like.ModelLike,
     messages: list[types.messages.Message],
     *,
     tools: Sequence[types.tools.Tool] | None = None,
@@ -475,7 +481,7 @@ async def experimental_generate(
     params: params_.InferenceRequestParams | None = None,
 ) -> types.messages.Message: ...
 async def experimental_generate(
-    model: model_.Model | None = None,
+    model: model_like.ModelLike | None = None,
     messages: list[types.messages.Message] | None = None,
     *,
     context: StreamContext | None = None,

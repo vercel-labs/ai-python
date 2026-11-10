@@ -1042,7 +1042,7 @@ class ToolRunner:
 class Context(pydantic.BaseModel):
     """Everything that goes into the LLM."""
 
-    model: models.Model
+    model: pydantic.SerializeAsAny[models.Model | models.ModelLike]
     messages: list[types.messages.Message]
     tools: list[Tool]
     output_type: type[pydantic.BaseModel] | None = pydantic.Field(
@@ -1493,7 +1493,7 @@ class Agent:
     @overload
     def run(
         self,
-        model: models.Model,
+        model: models.ModelLike,
         messages: list[types.messages.Message],
         *,
         params: models.InferenceRequestParams | None = None,
@@ -1502,7 +1502,7 @@ class Agent:
     @overload
     def run[T: pydantic.BaseModel](
         self,
-        model: models.Model,
+        model: models.ModelLike,
         messages: list[types.messages.Message],
         *,
         output_type: type[T],
@@ -1511,7 +1511,7 @@ class Agent:
     ) -> AbstractAsyncContextManager[AgentStream[T]]: ...
     def run(
         self,
-        model: models.Model,
+        model: models.ModelLike,
         messages: list[types.messages.Message],
         *,
         output_type: type[pydantic.BaseModel] | None = None,
@@ -1556,7 +1556,7 @@ class Agent:
     @contextlib.asynccontextmanager
     async def _run(
         self,
-        model: models.Model,
+        model: models.ModelLike,
         messages: list[types.messages.Message],
         *,
         output_type: type[pydantic.BaseModel] | None,

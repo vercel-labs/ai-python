@@ -40,6 +40,7 @@ from .core.api import (
     stream,
 )
 from .core.model import Model, get_model
+from .core.model_like import ModelLike, ProviderLike
 from .core.params import (
     DEFAULT,
     GLOBAL,
@@ -85,9 +86,11 @@ __all__ = [
     "InferenceRequestParams",
     "MinPSamplerParams",
     "Model",
+    "ModelLike",
     "ModelProviderDefault",
     "OutputParams",
     "Provider",
+    "ProviderLike",
     "ProviderProtocol",
     "ProviderRankingStrategy",
     "ProviderServiceParams",
