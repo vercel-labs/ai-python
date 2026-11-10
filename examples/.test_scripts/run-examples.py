@@ -6,6 +6,8 @@ Usage (from repo root):
     uv run examples/.test_scripts/run-examples.py --image  # also image samples
     uv run examples/.test_scripts/run-examples.py --video  # also video samples
     uv run examples/.test_scripts/run-examples.py --e2e  # also e2e test scripts
+    uv run examples/.test_scripts/run-examples.py --workers
+        # also worker samples: need logged-in `claude` and `codex` CLIs
     uv run examples/.test_scripts/run-examples.py --all  # everything
     uv run examples/.test_scripts/run-examples.py --parallel  # in parallel
     uv run examples/.test_scripts/run-examples.py models/stream.py
@@ -74,6 +76,22 @@ AUDIO_SAMPLES: list[Sample] = [
     Sample("media/speech_generation.py"),
 ]
 
+# These drive real coding-agent CLIs, so --model and --protocol do not apply
+# to the worker. The CLIs must be installed and logged in.
+WORKER_SAMPLES: list[Sample] = [
+    Sample("workers/basic.py", timeout=300.0),
+    Sample("workers/streaming.py", timeout=300.0),
+    Sample("workers/agent_tools.py", timeout=300.0),
+    Sample("workers/direct_control.py", timeout=300.0),
+    Sample("workers/steering.py", timeout=300.0),
+    Sample("workers/resume.py", timeout=300.0),
+    Sample("workers/combine.py", timeout=300.0),
+    Sample("workers/as_tool.py", timeout=300.0),
+    Sample("workers/custom_loop.py", timeout=300.0),
+    Sample("workers/until_done.py", timeout=600.0),
+    Sample("workers/handoff.py", timeout=600.0),
+]
+
 BROKEN_SAMPLES: list[Sample] = []
 
 # E2E tests pick non-default ports so they don't collide with a running
@@ -104,6 +122,7 @@ KNOWN_SAMPLES = [
     *IMAGE_SAMPLES,
     *VIDEO_SAMPLES,
     *AUDIO_SAMPLES,
+    *WORKER_SAMPLES,
     *BROKEN_SAMPLES,
     *E2E_TESTS,
 ]
@@ -249,6 +268,11 @@ def main() -> None:
         "--audio", action="store_true", help="include audio samples"
     )
     parser.add_argument(
+        "--workers",
+        action="store_true",
+        help="include worker samples (real claude/codex CLIs)",
+    )
+    parser.add_argument(
         "--broken", action="store_true", help="include broken samples"
     )
     parser.add_argument(
@@ -290,6 +314,7 @@ def main() -> None:
         or args.image
         or args.video
         or args.audio
+        or args.workers
         or args.broken
         or args.e2e
     )
@@ -310,6 +335,8 @@ def main() -> None:
         samples.extend(VIDEO_SAMPLES)
     if not args.examples and (args.audio or args.all):
         samples.extend(AUDIO_SAMPLES)
+    if not args.examples and (args.workers or args.all):
+        samples.extend(WORKER_SAMPLES)
     if not args.examples and (args.broken or args.all):
         samples.extend(BROKEN_SAMPLES)
     if not args.examples and (args.e2e or args.all):

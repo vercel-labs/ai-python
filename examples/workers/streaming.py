@@ -1,54 +1,69 @@
-"""A worker where a model goes: stream it, then continue the conversation.
-
-uv run python examples/workers/streaming.py [claude-code|codex|pi]
-"""
+"""Watch a worker's turn as it happens, then continue the conversation."""
 
 import asyncio
-import sys
+import tempfile
 
 import ai
 from ai import workers
 
-KINDS: dict[str, type[workers.Worker]] = {
-    "claude-code": workers.ClaudeCode,
-    "codex": workers.Codex,
-    "pi": workers.Pi,
-}
 
+async def main() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        worker = workers.ClaudeCode(cwd=tmp)
 
-async def main(kind: str) -> None:
-    worker = KINDS[kind]()
-    messages = [
-        ai.user_message(
-            "List the files here with a shell command, then say DONE."
-        )
-    ]
-    async with ai.stream(worker, messages) as s:
-        async for event in s:
-            match event:
-                case ai.events.TextDelta():
+        messages = [
+            ai.user_message(
+                "Write the word HELLO into greeting.txt, then read it back "
+                "and reply with what it contains."
+            )
+        ]
+
+        async with ai.stream(worker, messages) as stream:
+            async for event in stream:
+                if isinstance(event, ai.events.TextDelta):
+                    # Live output: print text as it is generated.
                     print(event.chunk, end="", flush=True)
-                case ai.events.BuiltinToolEnd():  # the CLI's own tool
+                elif isinstance(event, ai.events.TextEnd):
+                    # The whole block, already assembled on the message.
+                    part = next(
+                        p
+                        for p in event.message.parts
+                        if isinstance(p, ai.messages.TextPart)
+                        and p.id == event.block_id
+                    )
+                    print(f"\n[text done: {len(part.text)} chars]")
+                elif isinstance(event, ai.events.BuiltinToolEnd):
+                    # The CLI's own tool: the complete call, with the native
+                    # name and the arguments as a JSON string.
                     call = event.tool_call
-                    print(f"\n[{call.tool_name}] {call.tool_args[:60]}")
-    print(f"\nusage: {s.message.usage}")
+                    print(f"[tool call] {call.tool_name} {call.tool_args[:60]}")
+                elif isinstance(event, ai.events.BuiltinToolResult):
+                    # The CLI ran the tool: the result is a part of the same
+                    # assistant message, not a tool message.
+                    result = event.result
+                    print(
+                        f"[tool result] {result.tool_name}: "
+                        f"{str(result.result)[:80]}"
+                    )
+                elif isinstance(event, ai.events.StreamEnd):
+                    print(f"[turn over] finish={event.finish_reason}")
 
-    # As with a model: send the history back with what is new. The worker
-    # continues the same CLI session.
-    messages = [
-        *messages,
-        s.message,
-        ai.user_message("How many files? Reply with a number only."),
-    ]
-    print((await ai.experimental_generate(worker, messages)).text)
+        # Everything above is also on the message.
+        print(f"\ntext: {stream.text.strip()!r}")
+        print(f"usage: {stream.usage}")
+        print(f"parts in the message: {len(stream.message.parts)}")
 
-    # The worker remembers its session: save it, and continue later. A
-    # session block keeps the CLI alive between the calls.
-    again = workers.Worker.model_validate_json(worker.model_dump_json())
-    async with again.session() as session:
-        for question in ("Name one file here.", "And the largest one?"):
-            messages = [*session.messages, ai.user_message(question)]
-            print((await ai.experimental_generate(again, messages)).text)
+        # As with a model: send the history back with what is new. The
+        # worker continues the same CLI session.
+        messages = [
+            *messages,
+            stream.message,
+            ai.user_message(
+                "Which file did you write? Reply with its name only."
+            ),
+        ]
+        print((await ai.experimental_generate(worker, messages)).text)
 
 
-asyncio.run(main(sys.argv[1] if len(sys.argv) > 1 else "codex"))
+if __name__ == "__main__":
+    asyncio.run(main())
