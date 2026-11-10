@@ -6,7 +6,6 @@ import json
 import os
 import weakref
 from collections.abc import Mapping
-from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Generic, Self, cast
 
 import pydantic
@@ -14,7 +13,7 @@ from typing_extensions import (
     TypeVar,
 )
 
-from .. import _modelsdev
+from .. import _modelsdev, util
 from ..errors import UnsupportedProviderError
 
 if TYPE_CHECKING:
@@ -382,7 +381,7 @@ class Provider(pydantic.BaseModel, Generic[ClientT]):
         cls,
         value: Mapping[str, str],
     ) -> Mapping[str, str]:
-        return MappingProxyType(dict(value))
+        return util.FrozenMapping(value)
 
     @pydantic.field_serializer("headers", "env")
     def _serialize_config_mapping(

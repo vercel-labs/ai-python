@@ -6,7 +6,7 @@ import asyncio
 import contextlib
 import dataclasses
 import weakref
-from collections.abc import AsyncGenerator, Callable, MutableSet
+from collections.abc import AsyncGenerator, Callable, Mapping, MutableSet
 from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
@@ -151,6 +151,27 @@ class OrderedSet[T](MutableSet[T]):
 
     def __len__(self) -> int:
         return len(self._items)
+
+
+class FrozenMapping[K, V](Mapping[K, V]):
+    """A read-only mapping; unlike ``MappingProxyType``, picklable."""
+
+    __slots__ = ("_data",)
+
+    def __init__(self, data: Mapping[K, V]) -> None:
+        self._data = dict(data)
+
+    def __getitem__(self, key: K) -> V:
+        return self._data[key]
+
+    def __iter__(self) -> Iterator[K]:
+        return iter(self._data)
+
+    def __len__(self) -> int:
+        return len(self._data)
+
+    def __repr__(self) -> str:
+        return repr(self._data)
 
 
 class TaskGroup(asyncio.TaskGroup):
