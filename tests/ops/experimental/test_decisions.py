@@ -200,7 +200,8 @@ async def test_decide_dynamic_questions() -> None:
                 str,
                 ops.experimental.ChoiceAnswer
                 | ops.experimental.ScoreAnswer
-                | ops.experimental.PredicateAnswer,
+                | ops.experimental.PredicateAnswer
+                | ops.experimental.RefusalAnswer,
             ]
         ],
     )
@@ -215,7 +216,11 @@ async def test_decide_dynamic_questions() -> None:
 
 async def test_decide_raises_not_implemented() -> None:
     provider = ai.get_provider("openai", api_key="[redacted]")
-    model = ai.Model(id="decision-test", provider=provider)
+    model = ai.Model(
+        id="decision-test",
+        provider=provider,
+        protocol=ai.providers.openai.OpenAIChatCompletionsProtocol(),
+    )
 
     class PredicateQuestions(pydantic.BaseModel):
         answer: ops.experimental.PredicateQuestion
@@ -455,6 +460,81 @@ async def test_decide_requires_matching_answer_fields() -> None:
             "state",
             questions(),
             output_type=Answers,
+        )
+
+
+def refusal_model() -> models.Model:
+    return models.Model(
+        id="mock-decision-model",
+        provider=StaticDecisionProvider(
+            answers={
+                "department": {"type": "refusal"},
+                "severity": {"type": "score", "score": 1.5},
+                "refund": {"type": "predicate", "probability": 0.98},
+            }
+        ),
+    )
+
+
+async def test_decide_accepts_refusals_in_opted_in_fields() -> None:
+    class RefusableAnswers(pydantic.BaseModel):
+        department: (
+            ops.experimental.ChoiceAnswer | ops.experimental.RefusalAnswer
+        )
+        severity: ops.experimental.ScoreAnswer
+        refund: ops.experimental.PredicateAnswer
+
+    result = await ops.experimental.decide(
+        refusal_model(),
+        "state",
+        questions(),
+        output_type=RefusableAnswers,
+    )
+
+    assert result.value.department == ops.experimental.RefusalAnswer()
+    assert result.value.severity.score == 1.5
+    assert result.value.refund.probability == 0.98
+
+
+async def test_decide_rejects_refusals_in_other_fields() -> None:
+    with pytest.raises(ValueError, match="refused question 'department'"):
+        await ops.experimental.decide(
+            refusal_model(),
+            "state",
+            questions(),
+            output_type=Answers,
+        )
+
+
+async def test_decide_returns_refusals_in_dynamic_mode() -> None:
+    dynamic_questions: dict[str, DecisionQuestion] = {
+        "department": questions().department,
+        "severity": questions().severity,
+        "refund": questions().refund,
+    }
+
+    result = await ops.experimental.decide(
+        refusal_model(), "state", dynamic_questions
+    )
+
+    assert result.value["department"] == ops.experimental.RefusalAnswer()
+    assert isinstance(result.value["severity"], ops.experimental.ScoreAnswer)
+
+
+async def test_decide_requires_refusal_union_with_matching_answer() -> None:
+    class WrongAnswers(pydantic.BaseModel):
+        department: (
+            ops.experimental.PredicateAnswer | ops.experimental.RefusalAnswer
+        )
+        severity: ops.experimental.ScoreAnswer
+        refund: ops.experimental.PredicateAnswer
+
+    with pytest.raises(TypeError, match=r"ChoiceAnswer \| RefusalAnswer"):
+        await ops.experimental.decide(
+            refusal_model(),
+            "state",
+            questions(),
+            output_type=WrongAnswers,
         )
 
 
