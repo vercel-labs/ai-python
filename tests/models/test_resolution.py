@@ -1,3 +1,4 @@
+import pickle
 from typing import Any, Literal, cast
 
 import pydantic
@@ -123,6 +124,23 @@ def test_provider_config_is_frozen() -> None:
 
     with pytest.raises(TypeError):
         cast("dict[str, str]", provider.env)["OPENAI_API_KEY"] = "sk-other"
+
+
+def test_provider_and_model_pickle_round_trip() -> None:
+    provider = ai.get_provider(
+        "openai",
+        headers={"X-Test": "1"},
+        env={"OPENAI_API_KEY": "sk-test"},
+    )
+    model = ai.Model(id="gpt-5", provider=provider)
+
+    restored = pickle.loads(pickle.dumps(model))
+
+    assert restored == model
+    assert hash(restored) == hash(model)
+    assert dict(restored.provider.headers) == {"X-Test": "1"}
+    with pytest.raises(TypeError):
+        cast("dict[str, str]", restored.provider.headers)["X-Test"] = "2"
 
 
 def test_provider_protocol_and_model_hashes_are_content_based() -> None:
