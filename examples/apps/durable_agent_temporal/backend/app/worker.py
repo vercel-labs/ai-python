@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import datetime
 import os
+import signal
 import traceback
 from collections.abc import AsyncGenerator
 from typing import Any, ClassVar
@@ -78,11 +79,15 @@ async def bash_activity(command: str, timeout: int | None = None) -> str:
         command,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
+        start_new_session=True,
     )
     try:
         stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
     except TimeoutError:
-        proc.kill()
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
         await proc.communicate()
         return f"Command timed out after {timeout}s."
 
