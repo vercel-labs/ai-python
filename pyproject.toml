@@ -183,6 +183,9 @@ extend-ignore = [
     "RUF029",  # example async tools often demonstrate async entry points
     "T201",    # examples are command-line scripts and demos
 ]
+"src/ai/harness/__main__.py" = [
+    "T201",    # the harness REPL prints to the terminal
+]
 "tests/**/*.py" = [
     "D",       # docstrings not required in tests
     "FBT",     # tests intentionally cover boolean-typed tool parameters
