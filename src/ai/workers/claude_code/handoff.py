@@ -1,6 +1,6 @@
 """Seeding Claude Code with a past: records for its transcript store.
 
-The rule for what becomes what is the same for every CLI: see `_convert`.
+The rule for what becomes what is the same for every CLI: see `_utils`.
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ import uuid
 from typing import Any
 
 from ...types import messages as messages_
-from .. import _convert
+from .. import _utils
 
 
 async def to_claude_records(
@@ -20,8 +20,9 @@ async def to_claude_records(
 ) -> list[dict[str, Any]]:
     """Build Claude Code transcript records for the CLI's store.
 
-    Chained by parentUuid. Reasoning parts are omitted: see `_convert`.
-    Callers report the omission; `_convert.reasoning_count()` says how many.
+    Chained by parentUuid. Reasoning parts are omitted: see `_utils`.
+    Callers report the omission; `_utils.count_reasoning_parts()` says how
+    many.
     Files go in as base64, a URL downloaded first: Claude Code drops an
     image given by URL without a word (measured on prompts).
     """
@@ -66,7 +67,9 @@ async def to_claude_records(
                     {
                         "type": "tool_result",
                         "tool_use_id": p.tool_call_id,
-                        "content": _convert.result_text(p.result),
+                        "content": p.result
+                        if isinstance(p.result, str)
+                        else json.dumps(p.result),
                         **({"is_error": True} if p.is_error else {}),
                     }
                 )
@@ -82,8 +85,10 @@ async def to_claude_records(
                 elif p.media_type == "application/pdf":
                     kind = "document"
                 else:
-                    continue  # counted by `_convert.warn_unsupported_files`
-                encoded = base64.b64encode(await _convert.data(p)).decode()
+                    continue  # counted by `_utils.warn_unsupported_files`
+                encoded = base64.b64encode(
+                    await _utils.extract_data(p)
+                ).decode()
                 blocks.append(
                     {
                         "type": kind,
@@ -116,7 +121,9 @@ async def to_claude_records(
                     {
                         "type": "tool_result",
                         "tool_use_id": p.tool_call_id,
-                        "content": _convert.result_text(p.result),
+                        "content": p.result
+                        if isinstance(p.result, str)
+                        else json.dumps(p.result),
                         **(
                             {"is_error": True}
                             if p.result_kind == "error"

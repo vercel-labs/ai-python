@@ -37,7 +37,6 @@ has the context, and the rule for what becomes what is the same everywhere:
 from __future__ import annotations
 
 import base64
-import json
 import warnings
 from collections.abc import Sequence
 from typing import Any
@@ -54,7 +53,7 @@ from . import _errors as errors
 # an image given by URL without a word.
 
 
-async def data(part: messages_.FilePart) -> bytes:
+async def extract_data(part: messages_.FilePart) -> bytes:
     """Return a file's bytes, downloading a URL first."""
     if isinstance(part.data, bytes):
         return part.data
@@ -64,67 +63,68 @@ async def data(part: messages_.FilePart) -> bytes:
     return base64.b64decode(media.data_to_base64(part.data))
 
 
-async def as_text(part: messages_.FilePart) -> str:
+async def format_text_file(part: messages_.FilePart) -> str:
     """Return a text file as text a CLI reads inline, named if it has one."""
-    body = (await data(part)).decode("utf-8", errors="replace")
+    body = (await extract_data(part)).decode("utf-8", errors="replace")
     name = part.filename or "attached file"
     return f"<file name={name!r}>\n{body}\n</file>"
 
 
-def check_parts(
-    message: messages_.Message, kind: str, accepts: Sequence[str]
+def raise_for_unsupported_parts(
+    message: messages_.Message,
+    cli_name: str,
+    accepted_media_types: Sequence[str],
 ) -> None:
     """Refuse a part the CLI cannot take, before anything runs.
 
     Text parts go everywhere. Text files (`text/*`) go everywhere, as text.
-    `accepts` lists the other media type prefixes the CLI takes.
+    `accepted_media_types` lists the other media type prefixes the CLI takes.
     """
     for part in message.parts:
         if isinstance(part, messages_.TextPart):
             continue
         if not isinstance(part, messages_.FilePart):
             raise errors.UnsupportedError(
-                f"{kind} does not take {part.kind} parts in a user message"
+                f"{cli_name} does not take {part.kind} parts in a user message"
             )
-        if not any(part.media_type.startswith(p) for p in ("text/", *accepts)):
+        if not any(
+            part.media_type.startswith(p)
+            for p in ("text/", *accepted_media_types)
+        ):
             raise errors.UnsupportedError(
-                f"{kind} does not take {part.media_type} files"
+                f"{cli_name} does not take {part.media_type} files"
             )
 
 
 # -- the CLI's own tools as events --------------------------------------------
 
 
-def builtin_call(
+def get_builtin_call_events(
     tool_call_id: str,
     tool_name: str,
     tool_args: str,
     *,
-    started: set[str],
+    started_call_ids: set[str],
 ) -> list[
     events.BuiltinToolStart | events.BuiltinToolDelta | events.BuiltinToolEnd
 ]:
     """Return the events of one finished CLI tool call.
 
-    `started` holds the calls whose start was already sent: the start is
-    sent here otherwise, because the hydrator only completes a call it saw
-    start. The arguments travel as a delta: the hydrator builds a call's
-    arguments only from its deltas.
+    `started_call_ids` holds the calls whose start was already sent: the
+    start is sent here otherwise, because the hydrator only completes a call
+    it saw start. The arguments travel as a delta: the hydrator builds a
+    call's arguments only from its deltas.
     """
-    out: list[
-        events.BuiltinToolStart
-        | events.BuiltinToolDelta
-        | events.BuiltinToolEnd
-    ] = []
-    if tool_call_id not in started:
-        started.add(tool_call_id)
-        out.append(
+    start_events: list[events.BuiltinToolStart] = []
+    if tool_call_id not in started_call_ids:
+        started_call_ids.add(tool_call_id)
+        start_events.append(
             events.BuiltinToolStart(
                 tool_call_id=tool_call_id, tool_name=tool_name
             )
         )
     return [
-        *out,
+        *start_events,
         events.BuiltinToolDelta(tool_call_id=tool_call_id, chunk=tool_args),
         events.BuiltinToolEnd(
             tool_call_id=tool_call_id,
@@ -137,7 +137,7 @@ def builtin_call(
     ]
 
 
-def builtin_result(
+def get_builtin_result_event(
     tool_call_id: str, tool_name: str, result: Any, *, is_error: bool
 ) -> events.BuiltinToolResult:
     return events.BuiltinToolResult(
@@ -154,40 +154,36 @@ def builtin_result(
 # -- seeding a CLI with a past -------------------------------------------------
 
 
-def result_text(value: Any) -> str:
-    """Return a tool result as the text a CLI's store holds."""
-    return value if isinstance(value, str) else json.dumps(value)
-
-
 def warn_unsupported_files(
     messages: list[messages_.Message],
-    kind: str,
+    cli_name: str,
     *,
-    accepts: Sequence[str],
-    takes: str,
+    accepted_media_types: Sequence[str],
+    accepted_description: str,
 ) -> None:
-    """Say how many files a history held that `kind` was not given.
+    """Say how many files a history held that `cli_name` was not given.
 
-    `accepts` lists the media type prefixes `kind` takes from a history, and
-    `takes` names them for the warning.
+    `accepted_media_types` lists the media type prefixes `cli_name` takes
+    from a history, and `accepted_description` names them for the warning.
     """
     left = sum(
         1
         for m in messages
         for p in m.parts
         if isinstance(p, messages_.FilePart)
-        and not any(p.media_type.startswith(a) for a in accepts)
+        and not any(p.media_type.startswith(a) for a in accepted_media_types)
     )
     if left:
         warnings.warn(
-            f"{left} file(s) in the history were not carried into {kind}: "
-            f"it takes {takes} from a history. Text, tool calls and images "
+            f"{left} file(s) in the history were not carried into "
+            f"{cli_name}: it takes {accepted_description} from a history. "
+            "Text, tool calls and images "
             "were carried.",
             stacklevel=3,
         )
 
 
-def reasoning_count(messages: list[messages_.Message]) -> int:
+def count_reasoning_parts(messages: list[messages_.Message]) -> int:
     return sum(
         1
         for m in messages

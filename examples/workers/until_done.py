@@ -7,7 +7,6 @@ import tempfile
 from collections.abc import AsyncGenerator
 
 import ai
-from ai import workers
 
 EXPECTED = (
     "1\n2\nFizz\n4\nBuzz\nFizz\n7\n8\nFizz\nBuzz\n11\nFizz\n13\n14\nFizzBuzz"
@@ -25,7 +24,7 @@ class Checked:
 # Python: run a turn, check the result in the directory, and send the failure
 # back until the check passes.
 async def until_passes(
-    worker: workers.Worker, task: str, *, attempts: int = 3
+    worker: ai.workers.Worker, task: str, *, attempts: int = 3
 ) -> AsyncGenerator[ai.events.Event | Checked]:
     async with worker.session() as session:
         prompt = task
@@ -62,7 +61,7 @@ async def until_passes(
 
 async def main() -> None:
     with tempfile.TemporaryDirectory() as tmp:
-        worker = workers.ClaudeCode(cwd=tmp)
+        worker = ai.workers.ClaudeCode(cwd=tmp)
 
         # Deliberately vague, so the check has something to catch.
         task = "Write fizzbuzz.py: a FizzBuzz program."

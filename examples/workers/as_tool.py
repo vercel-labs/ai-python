@@ -4,14 +4,13 @@ import asyncio
 import tempfile
 
 import ai
-from ai import workers
 
 model = ai.get_model("anthropic/claude-sonnet-4.6")
 
 
 async def main() -> None:
     with tempfile.TemporaryDirectory() as tmp:
-        worker = workers.ClaudeCode(cwd=tmp)
+        worker = ai.workers.ClaudeCode(cwd=tmp)
 
         # One session for the whole run: each call of the tool continues the
         # same conversation, on one live CLI.
@@ -41,13 +40,14 @@ async def main() -> None:
 
             async with orchestrator.run(model, messages) as stream:
                 async for event in stream:
-                    if isinstance(event, ai.events.PartialToolCallResult):
-                        # The worker at work, inside the tool call.
-                        inner = event.value
-                        if isinstance(inner, ai.events.BuiltinToolEnd):
-                            print(f"  [worker] {inner.tool_call.tool_name}")
-                    elif isinstance(event, ai.events.TextDelta):
-                        print(event.chunk, end="", flush=True)
+                    match event:
+                        case ai.events.PartialToolCallResult(
+                            value=ai.events.BuiltinToolEnd(tool_call=call)
+                        ):
+                            # The worker at work, inside the tool call.
+                            print(f"  [worker] {call.tool_name}")
+                        case ai.events.TextDelta():
+                            print(event.chunk, end="", flush=True)
             print()
 
             # The session has the worker's own conversation.

@@ -14,7 +14,7 @@ import pydantic
 from ai import workers
 from ai.types import events
 from ai.types import messages as m
-from ai.workers import _convert, _wire
+from ai.workers import _utils, _wire
 
 
 @dataclasses.dataclass
@@ -49,8 +49,10 @@ def builtin(
 ) -> list[_wire.Item]:
     """One of the CLI's own tool calls, from start to result."""
     return [
-        *_convert.builtin_call(call_id, name, args, started=set()),
-        _convert.builtin_result(call_id, name, result, is_error=False),
+        *_utils.get_builtin_call_events(
+            call_id, name, args, started_call_ids=set()
+        ),
+        _utils.get_builtin_result_event(call_id, name, result, is_error=False),
     ]
 
 

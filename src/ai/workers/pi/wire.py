@@ -31,7 +31,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from ...types import events as events_
 from ...types import messages as messages_
 from ...types import usage as usage_
-from .. import _bridge, _convert, _process, _wire
+from .. import _bridge, _process, _utils, _wire
 from .. import _errors as errors
 from . import handoff
 
@@ -200,7 +200,7 @@ class PiWire:
     # -- input ----------------------------------------------------------------
 
     async def send(self, message: messages_.Message) -> None:
-        _convert.check_parts(message, KIND, ("image/",))
+        _utils.raise_for_unsupported_parts(message, KIND, ("image/",))
         command = await _prompt_command(message)
         # `Accepted` comes from pi's own record of the message: the
         # `message_start` of a user message, which pi emits when the message
@@ -402,7 +402,7 @@ class PiWire:
                 and call_id not in run.hidden
                 and not name.startswith(BRIDGE_PREFIX)
             ):
-                yield _convert.builtin_result(
+                yield _utils.get_builtin_result_event(
                     call_id,
                     name,
                     _tool_result(record.get("result") or {}),
@@ -502,10 +502,13 @@ class PiWire:
 
     def _stage(self, session_id: str, seed: list[messages_.Message]) -> None:
         """Write a session file with this past; start nothing on it."""
-        _convert.warn_unsupported_files(
-            seed, KIND, accepts=("image/",), takes="images"
+        _utils.warn_unsupported_files(
+            seed,
+            KIND,
+            accepted_media_types=("image/",),
+            accepted_description="images",
         )
-        dropped = _convert.reasoning_count(seed)
+        dropped = _utils.count_reasoning_parts(seed)
         if dropped:
             # pi drops thinking another model produced, and replaying it as
             # user text is refused by Anthropic's safeguards.
@@ -610,9 +613,9 @@ async def _prompt_command(message: messages_.Message) -> dict[str, Any]:
             texts.append(part.text)
         elif isinstance(part, messages_.FilePart):
             if part.media_type.startswith("text/"):
-                texts.append(await _convert.as_text(part))
+                texts.append(await _utils.format_text_file(part))
             else:
-                encoded = base64.b64encode(await _convert.data(part))
+                encoded = base64.b64encode(await _utils.extract_data(part))
                 images.append(
                     {
                         "type": "image",
@@ -709,7 +712,11 @@ def _builtin_call(block: dict[str, Any], run: _Run) -> list[_wire.Content]:
         run.hidden.add(call_id)
         return []
     args = json.dumps(block.get("arguments") or {})
-    return list(_convert.builtin_call(call_id, name, args, started=run.started))
+    return list(
+        _utils.get_builtin_call_events(
+            call_id, name, args, started_call_ids=run.started
+        )
+    )
 
 
 def _close_blocks(run: _Run, only: str | None = None) -> list[_wire.Content]:

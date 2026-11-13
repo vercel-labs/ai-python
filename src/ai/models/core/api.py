@@ -27,7 +27,6 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, AsyncIterator, Sequence
 
     from . import model as model_
-    from . import model_like
     from . import params as params_
 
 # Stream output type.  Defaults to ``str``: when the stream was opened
@@ -38,7 +37,7 @@ StreamOutputT = TypeVar("StreamOutputT", default=str)
 
 @dataclasses.dataclass(frozen=True)
 class _StreamRequest:
-    model: model_like.ModelLike
+    model: model_.ModelLike
     messages: list[types.messages.Message]
     tools: Sequence[types.tools.Tool] | None = None
     output_type: type[pydantic.BaseModel] | None = None
@@ -313,7 +312,7 @@ class StreamContext(Protocol):
     """
 
     @property
-    def model(self) -> model_like.ModelLike: ...
+    def model(self) -> model_.ModelLike: ...
     @property
     def messages(self) -> list[types.messages.Message]: ...
     @property
@@ -339,7 +338,7 @@ def stream[T: pydantic.BaseModel](
 ) -> AbstractAsyncContextManager[Stream[T]]: ...
 @overload
 def stream(
-    model: model_like.ModelLike,
+    model: model_.ModelLike,
     messages: list[types.messages.Message],
     *,
     tools: Sequence[types.tools.Tool] | None = None,
@@ -347,7 +346,7 @@ def stream(
 ) -> AbstractAsyncContextManager[Stream[str]]: ...
 @overload
 def stream[T: pydantic.BaseModel](
-    model: model_like.ModelLike,
+    model: model_.ModelLike,
     messages: list[types.messages.Message],
     *,
     tools: Sequence[types.tools.Tool] | None = None,
@@ -355,7 +354,7 @@ def stream[T: pydantic.BaseModel](
     params: params_.InferenceRequestParams | None = None,
 ) -> AbstractAsyncContextManager[Stream[T]]: ...
 def stream(
-    model: model_like.ModelLike | None = None,
+    model: model_.ModelLike | None = None,
     messages: list[types.messages.Message] | None = None,
     *,
     context: StreamContext | None = None,
@@ -407,7 +406,7 @@ def stream(
 @contextlib.asynccontextmanager
 async def _stream(
     *,
-    model: model_like.ModelLike,
+    model: model_.ModelLike,
     messages: list[types.messages.Message],
     tools: Sequence[types.tools.Tool] | None,
     output_type: type[pydantic.BaseModel] | None,
@@ -473,7 +472,7 @@ async def experimental_generate(
 ) -> types.messages.Message: ...
 @overload
 async def experimental_generate(
-    model: model_like.ModelLike,
+    model: model_.ModelLike,
     messages: list[types.messages.Message],
     *,
     tools: Sequence[types.tools.Tool] | None = None,
@@ -481,7 +480,7 @@ async def experimental_generate(
     params: params_.InferenceRequestParams | None = None,
 ) -> types.messages.Message: ...
 async def experimental_generate(
-    model: model_like.ModelLike | None = None,
+    model: model_.ModelLike | None = None,
     messages: list[types.messages.Message] | None = None,
     *,
     context: StreamContext | None = None,

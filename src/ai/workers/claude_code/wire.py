@@ -24,7 +24,7 @@ from ...providers import _optional
 from ...types import events as events_
 from ...types import messages as messages_
 from ...types import usage as usage_
-from .. import _bridge, _convert, _process, _wire
+from .. import _bridge, _process, _utils, _wire
 from .. import _errors as errors
 from . import handoff
 
@@ -146,13 +146,13 @@ class ClaudeCodeWire:
         """Write a past into the CLI's store under a new id; run nothing."""
         claude_agent_sdk = _sdk()
         session_id = str(uuid.uuid4())
-        _convert.warn_unsupported_files(
+        _utils.warn_unsupported_files(
             seed,
             KIND,
-            accepts=("image/", "application/pdf"),
-            takes="images and PDFs",
+            accepted_media_types=("image/", "application/pdf"),
+            accepted_description="images and PDFs",
         )
-        dropped = _convert.reasoning_count(seed)
+        dropped = _utils.count_reasoning_parts(seed)
         if dropped:
             warnings.warn(
                 f"{dropped} reasoning part(s) in the history were not carried "
@@ -215,7 +215,9 @@ class ClaudeCodeWire:
         write would split the reply at the wrong place.
         """
         claude_agent_sdk = _sdk()
-        _convert.check_parts(message, KIND, ("image/", "application/pdf"))
+        _utils.raise_for_unsupported_parts(
+            message, KIND, ("image/", "application/pdf")
+        )
         content = await _content(message)
         client = self._client()
         uid = str(uuid.uuid4())
@@ -279,11 +281,11 @@ class ClaudeCodeWire:
                     if block.name.startswith(BRIDGE_PREFIX):
                         continue  # an `ai` tool: the bridge reports it
                     turn.names[block.id] = block.name
-                    yield from _convert.builtin_call(
+                    yield from _utils.get_builtin_call_events(
                         block.id,
                         block.name,
                         json.dumps(block.input),
-                        started=turn.started,
+                        started_call_ids=turn.started,
                     )
                 elif (
                     isinstance(block, claude_agent_sdk.TextBlock)
@@ -311,7 +313,7 @@ class ClaudeCodeWire:
                     isinstance(block, claude_agent_sdk.ToolResultBlock)
                     and block.tool_use_id in turn.names
                 ):
-                    yield _convert.builtin_result(
+                    yield _utils.get_builtin_result_event(
                         block.tool_use_id,
                         turn.names[block.tool_use_id],
                         block.content,
@@ -441,13 +443,16 @@ async def _content(message: messages_.Message) -> list[dict[str, Any]]:
         elif isinstance(part, messages_.FilePart):
             if part.media_type.startswith("text/"):
                 blocks.append(
-                    {"type": "text", "text": await _convert.as_text(part)}
+                    {
+                        "type": "text",
+                        "text": await _utils.format_text_file(part),
+                    }
                 )
                 continue
             kind = (
                 "image" if part.media_type.startswith("image/") else "document"
             )
-            encoded = base64.b64encode(await _convert.data(part)).decode()
+            encoded = base64.b64encode(await _utils.extract_data(part)).decode()
             blocks.append(
                 {
                     "type": kind,

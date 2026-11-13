@@ -133,27 +133,27 @@ class Session:
         self.messages = list(messages or [])
         # Open: the CLI stays alive between turns, and `send()` works.
         self._open = False
-        self._run: _Run | None = None
+        self._run: _CliRun | None = None
         # What `events()` did not give yet.
-        self._feed: collections.deque[Any] = collections.deque()
-        self._feed_wake = asyncio.Event()
+        self._pending_events: collections.deque[Any] = collections.deque()
+        self._pending_events_wake = asyncio.Event()
         # `events()` gave something since the last turn began.
-        self._feed_read = False
+        self._pending_events_read = False
         # The queues of the model calls that read. See the provider's
         # `stream()`.
-        self._taps: set[asyncio.Queue[Any]] = set()
+        self._stream_queues: set[asyncio.Queue[Any]] = set()
         self._start_lock = asyncio.Lock()
         # Held by the provider's `stream()`: one model call at a time.
         self._stream_lock = asyncio.Lock()
 
     async def __aenter__(self) -> Self:
-        await self._hold()
+        await self._mark_open()
         return self
 
     async def __aexit__(self, *exc_info: object) -> None:
         await self.close()
 
-    async def _hold(self) -> None:
+    async def _mark_open(self) -> None:
         """Open the session: here, the worker's model calls run on it."""
         if self._open:
             return
@@ -172,7 +172,7 @@ class Session:
         _OPEN.set((*opened, self))
         if last is not None and last.id == self.id:
             # Its CLI can wait in a turn that nobody continues.
-            await last._end_run()
+            await last._stop_cli()
 
     async def start(self) -> None:
         """Open the session and start the CLI now. `close()` ends both.
@@ -181,7 +181,7 @@ class Session:
         seeded with `messages` (lossy). Started already: nothing happens.
         After the CLI stopped, start it again.
         """
-        await self._hold()
+        await self._mark_open()
         await self._start()
 
     async def _start(self) -> None:
@@ -191,7 +191,7 @@ class Session:
             if self._run is not None:
                 run, self._run = self._run, None
                 await run.close()
-            run = _Run(self, self.worker.provider._make_wire(self.worker))
+            run = _CliRun(self, self.worker.provider._make_wire(self.worker))
             await run.start()
             self._run = run
 
@@ -220,21 +220,23 @@ class Session:
         if run.stopped is not None:
             raise errors.WorkerError(f"the worker stopped: {run.stopped}")
         if message.role == "tool":
-            await run.do(functools.partial(run.answer, message))
+            await run.run_in_pump(
+                functools.partial(run.send_tool_results, message)
+            )
             return
-        await run.do(functools.partial(run.fail_calls, NEW_MESSAGE))
+        await run.run_in_pump(functools.partial(run.fail_calls, NEW_MESSAGE))
         if run.idle.is_set():
             # A new turn. Nobody read `events()` during the last one: nobody
             # reads, so the feed must not grow.
-            if not self._feed_read:
-                self._feed.clear()
-            self._feed_read = False
+            if not self._pending_events_read:
+                self._pending_events.clear()
+            self._pending_events_read = False
         run.idle.clear()
         run.used = True
         try:
             await run.wire.send(message)
         except BaseException:
-            if run.hydrator is None and not run.calls:
+            if run.hydrator is None and not run.waiting_calls:
                 run.idle.set()
             raise
 
@@ -250,19 +252,19 @@ class Session:
         If nobody reads during a whole turn, the events before the latest
         turn are dropped. The messages stay in `messages`.
         """
-        if not self._open and not self._feed:
+        if not self._open and not self._pending_events:
             raise errors.WorkerError(NOT_OPEN)
         while True:
-            while self._feed:
-                item = self._feed.popleft()
+            while self._pending_events:
+                item = self._pending_events.popleft()
                 if isinstance(item, BaseException):
                     raise item
-                self._feed_read = True
+                self._pending_events_read = True
                 yield item
             if not self._open:
                 return
-            self._feed_wake.clear()
-            await self._feed_wake.wait()
+            self._pending_events_wake.clear()
+            await self._pending_events_wake.wait()
 
     async def interrupt(self) -> None:
         """Stop the current turn. The CLI keeps the session.
@@ -274,7 +276,7 @@ class Session:
         run = self._run
         if run is None or run.stopped is not None:
             return
-        await run.do(functools.partial(run.fail_calls, INTERRUPTED))
+        await run.run_in_pump(functools.partial(run.fail_calls, INTERRUPTED))
         if run.idle.is_set():
             return
         run.interrupting = True
@@ -283,37 +285,37 @@ class Session:
                 await run.wire.interrupt()
                 await run.idle.wait()
         except TimeoutError:
-            await self._end_run()
+            await self._stop_cli()
 
     async def close(self) -> None:
         """Stop the CLI and close the session. `id` and `messages` stay.
 
         A second close does nothing. `start()` opens the session again.
         """
-        await self._end_run()
+        await self._stop_cli()
         self._open = False
         _OPEN.set(tuple(s for s in _OPEN.get() if s is not self))
-        self._feed_wake.set()
+        self._pending_events_wake.set()
 
-    async def _end_run(self) -> None:
+    async def _stop_cli(self) -> None:
         """Stop the CLI. The session stays as it is, open or not."""
         async with self._start_lock:
             run, self._run = self._run, None
             if run is not None:
                 await run.close()
             # A model call that got the end takes nothing after it.
-            for tap in self._taps:
-                tap.put_nowait(_END)
-            self._taps.clear()
+            for queue in self._stream_queues:
+                queue.put_nowait(_END)
+            self._stream_queues.clear()
 
-    def _put(self, item: Any) -> None:
+    def _publish_event(self, item: Any) -> None:
         """Give an event, or an error, to `events()` and to the model calls."""
-        self._feed.append(item)
-        self._feed_wake.set()
-        for tap in self._taps:
-            tap.put_nowait(item)
+        self._pending_events.append(item)
+        self._pending_events_wake.set()
+        for queue in self._stream_queues:
+            queue.put_nowait(item)
 
-    async def _start_for_stream(self, *, seeds: bool) -> _Run:
+    async def _start_for_stream(self, *, seeds: bool) -> _CliRun:
         """Start the CLI for a model call. For the provider's `stream()`.
 
         A CLI reads the tool list once, when it connects to the bridge, and
@@ -325,9 +327,9 @@ class Session:
         run = self._run
         if run is not None and run.stopped is None:
             restart = (seeds and run.fresh) or (
-                _tool_specs(worker.tools) != run.served
+                _dump_tool_specs(worker.tools) != run.served_tool_specs
             )
-            if restart and run.idle.is_set() and not run.calls:
+            if restart and run.idle.is_set() and not run.waiting_calls:
                 async with self._start_lock:
                     self._run = None
                     await run.close()
@@ -429,7 +431,7 @@ class _Stopped:
 _END = object()  # put on a model call's queue when the CLI stops
 
 
-class _Run:
+class _CliRun:
     """One run of the CLI process: the wire, the bridge and the pump.
 
     The pump is the only task that changes the conversation state. Other
@@ -441,7 +443,7 @@ class _Run:
         self.session = session
         self.worker = worker = session.worker
         self.wire = wire
-        self.bridge = _bridge.Bridge(self._on_call)
+        self.bridge = _bridge.Bridge(self._handle_bridge_call)
         self.queue: asyncio.Queue[Any] = asyncio.Queue()
         self.tasks: list[asyncio.Task[None]] = []
         self.span: telemetry.Span[WorkerSessionSpanData] = (
@@ -466,7 +468,7 @@ class _Run:
         # A new CLI session, not one that continues `session_id`.
         self.fresh = session.id is None
         # The tools the CLI saw when it connected to the bridge.
-        self.served: list[dict[str, Any]] = []
+        self.served_tool_specs: list[dict[str, Any]] = []
         # True after the first user message went to the CLI.
         self.used = False
         # Turn errors, by the id of the assistant message they ended.
@@ -486,9 +488,9 @@ class _Run:
         # User messages that the CLI took while the message was busy.
         self.inputs: list[messages_.Message] = []
         # `ai` tool calls without a result. While there are some, other items
-        # wait in `held`: they come after the results.
-        self.calls: dict[str, _Call] = {}
-        self.held: list[Any] = []
+        # wait in `held_items`: they come after the results.
+        self.waiting_calls: dict[str, _Call] = {}
+        self.held_items: list[Any] = []
         # When the message with `ai` tool calls ends, if no call comes first.
         self.close_at: float | None = None
 
@@ -500,7 +502,7 @@ class _Run:
         await self.span.push()
         await self.bridge.start()
         self.bridge.set_tools(worker.tools)
-        self.served = _tool_specs(worker.tools)
+        self.served_tool_specs = _dump_tool_specs(worker.tools)
         session = self.session
         system = [m.text for m in session.messages if m.role == "system"]
         instructions = "\n\n".join(
@@ -530,15 +532,15 @@ class _Run:
             worker.session_id = session.id
         self.span.data.session_id = session.id
         self.tasks = [
-            asyncio.create_task(self._read()),
-            asyncio.create_task(self._pump()),
+            asyncio.create_task(self._read_wire()),
+            asyncio.create_task(self._run_pump()),
         ]
 
     async def close(self) -> None:
         if self.stopped is None:
             # End what is open, so the state stays valid.
             with contextlib.suppress(Exception):
-                await self.do(self._shut)
+                await self.run_in_pump(self._end_open_work)
         for task in self.tasks:
             task.cancel()
         for task in self.tasks:
@@ -555,12 +557,12 @@ class _Run:
         self._fail_commands()
         await self.span.stamp_end().push()
 
-    async def _shut(self) -> None:
+    async def _end_open_work(self) -> None:
         await self.fail_calls(CLOSED)
         if self.hydrator is not None:
             await self._end_message("other", interrupted=True)
 
-    async def do(self, run: Callable[[], Awaitable[None]]) -> None:
+    async def run_in_pump(self, run: Callable[[], Awaitable[None]]) -> None:
         """Run `run` in the pump task and wait for it."""
         if self.stopped is not None:
             raise errors.WorkerError(f"the worker stopped: {self.stopped}")
@@ -578,7 +580,7 @@ class _Run:
 
     # -- tasks ----------------------------------------------------------------
 
-    async def _read(self) -> None:
+    async def _read_wire(self) -> None:
         error: BaseException
         try:
             async for item in self.wire.events():
@@ -592,14 +594,14 @@ class _Run:
             error = exc
         self.queue.put_nowait(_Stopped(error))
 
-    async def _pump(self) -> None:
+    async def _run_pump(self) -> None:
         while True:
             try:
                 async with asyncio.timeout_at(self.close_at):
                     item = await self.queue.get()
             except TimeoutError:
                 self.close_at = None
-                if self.hydrator is not None and self.calls:
+                if self.hydrator is not None and self.waiting_calls:
                     await self._end_message("tool_call")
                 continue
             if isinstance(item, _Command):
@@ -615,32 +617,32 @@ class _Run:
             try:
                 if isinstance(item, _Stopped):
                     raise item.error
-                await self._handle(item)
+                await self._handle_item(item)
             except Exception as exc:
-                await self._stop(exc)
+                await self._mark_stopped(exc)
                 return
 
-    async def _stop(self, error: BaseException) -> None:
+    async def _mark_stopped(self, error: BaseException) -> None:
         if not isinstance(error, errors.WorkerError):
             wrapped = errors.WorkerError(
                 f"{self.worker.worker_class_id} failed: {error}"
             )
             wrapped.__cause__ = error
             error = wrapped
-        for call in self.calls.values():
+        for call in self.waiting_calls.values():
             if not call.answer.done():
                 call.answer.set_result((str(error), True))
-        self.calls.clear()
+        self.waiting_calls.clear()
         if self.hydrator is not None:
             with contextlib.suppress(Exception):
                 await self._end_message("error", error=error)
         self.stopped = error
         self.idle.set()
         self._fail_commands()
-        self.session._put(error)
-        self.session._taps.clear()
+        self.session._publish_event(error)
+        self.session._stream_queues.clear()
 
-    async def _on_call(
+    async def _handle_bridge_call(
         self, name: str, arguments: dict[str, Any]
     ) -> tuple[Any, bool]:
         """Report a bridge call to an `ai` tool; wait for its result."""
@@ -657,26 +659,26 @@ class _Run:
 
     # -- the conversation (pump task only) ------------------------------------
 
-    async def _handle(self, item: Any) -> None:
-        if self.calls and (
+    async def _handle_item(self, item: Any) -> None:
+        if self.waiting_calls and (
             self.hydrator is None or not isinstance(item, _Call)
         ):
             # Waiting for `ai` tool results: what comes now goes after them.
             if self.hydrator is not None:
                 await self._end_message("tool_call")
-            self.held.append(item)
+            self.held_items.append(item)
             return
         match item:
             case _Call():
-                await self._call(item)
+                await self._handle_tool_call(item)
             case _wire.Accepted(message=message):
-                await self._accept(message)
+                await self._handle_accepted(message)
             case _wire.TurnEnd():
-                await self._turn_end(item)
+                await self._handle_turn_end(item)
             case _:
-                await self._content(item)
+                await self._handle_content(item)
 
-    async def _content(self, event: _wire.Content) -> None:
+    async def _handle_content(self, event: _wire.Content) -> None:
         if self.hydrator is None:
             await self._begin_message()
         self.idle.clear()
@@ -723,10 +725,10 @@ class _Run:
         if self.inputs and not self.open:
             await self._end_message("other")
 
-    async def _accept(self, message: messages_.Message) -> None:
+    async def _handle_accepted(self, message: messages_.Message) -> None:
         self.idle.clear()
         if self.hydrator is None:
-            await self._append(message)
+            await self._append_message(message)
             return
         # A steer: the assistant message ends, the user message follows,
         # and a new assistant message starts.
@@ -734,10 +736,10 @@ class _Run:
         if not self.open:
             await self._end_message("other")
 
-    async def _call(self, call: _Call) -> None:
+    async def _handle_tool_call(self, call: _Call) -> None:
         if self.hydrator is None:
             await self._begin_message()
-        self.calls[call.tool_call_id] = call
+        self.waiting_calls[call.tool_call_id] = call
         args = json.dumps(call.arguments)
         part = messages_.ToolCallPart(
             tool_call_id=call.tool_call_id, tool_name=call.name, tool_args=args
@@ -755,7 +757,7 @@ class _Run:
         )
         self.close_at = asyncio.get_running_loop().time() + BATCH_WINDOW
 
-    async def _turn_end(self, end: _wire.TurnEnd) -> None:
+    async def _handle_turn_end(self, end: _wire.TurnEnd) -> None:
         interrupted = end.error is None and (
             end.reason == "interrupted" or self.interrupting
         )
@@ -771,37 +773,39 @@ class _Run:
         self.interrupting = False
         self.idle.set()
 
-    async def answer(self, message: messages_.Message) -> None:
+    async def send_tool_results(self, message: messages_.Message) -> None:
         """Give `ai` tool results to the CLI calls that wait for them."""
         results = message.tool_results
         if not results:
             raise ValueError("a tool message needs at least one tool result")
         unknown = [
-            p.tool_call_id for p in results if p.tool_call_id not in self.calls
+            p.tool_call_id
+            for p in results
+            if p.tool_call_id not in self.waiting_calls
         ]
         if unknown:
             raise ValueError(f"no tool call waits for these results: {unknown}")
         if self.hydrator is not None:
             await self._end_message("tool_call")
         for part in results:
-            call = self.calls.pop(part.tool_call_id)
+            call = self.waiting_calls.pop(part.tool_call_id)
             value = part.model_input
             if value is messages_.MODEL_INPUT_UNSET:
                 value = part.result
             if not call.answer.done():
                 call.answer.set_result((value, part.result_kind == "error"))
-        await self._append(message)
-        if not self.calls:
-            await self._release()
+        await self._append_message(message)
+        if not self.waiting_calls:
+            await self._handle_held_items()
 
     async def fail_calls(self, reason: str) -> None:
         """Answer the waiting `ai` tool calls with an error."""
-        if not self.calls:
+        if not self.waiting_calls:
             return
         if self.hydrator is not None:
             await self._end_message("tool_call")
         parts: list[messages_.Part] = []
-        for call in self.calls.values():
+        for call in self.waiting_calls.values():
             if not call.answer.done():
                 call.answer.set_result((reason, True))
             parts.append(
@@ -812,21 +816,21 @@ class _Run:
                     result_kind="error",
                 )
             )
-        self.calls.clear()
+        self.waiting_calls.clear()
         # A tool message must follow the calls, or no model takes the history.
-        await self._append(
+        await self._append_message(
             messages_.Message(
                 role="tool",
                 parts=parts,
                 provider_metadata={METADATA_KEY: {"synthetic": True}},
             )
         )
-        await self._release()
+        await self._handle_held_items()
 
-    async def _release(self) -> None:
-        held, self.held = self.held, []
+    async def _handle_held_items(self) -> None:
+        held, self.held_items = self.held_items, []
         for item in held:
-            await self._handle(item)
+            await self._handle_item(item)
 
     async def _begin_message(self) -> None:
         worker = self.worker
@@ -884,29 +888,29 @@ class _Run:
             self.message_span.data.finish_reason = reason
             await self.message_span.stamp_end(error=error).push()
             self.message_span = None
-        await self._append(message)
+        await self._append_message(message)
         inputs, self.inputs = self.inputs, []
         if reason == "tool_call":
             # The tool results must follow the calls: steers wait for them.
-            self.held[:0] = [_wire.Accepted(m) for m in inputs]
+            self.held_items[:0] = [_wire.Accepted(m) for m in inputs]
         else:
             for m in inputs:
-                await self._append(m)
+                await self._append_message(m)
 
     def _emit(self, event: events_.Event) -> None:
         assert self.hydrator is not None
         stamp = messages_.Message(
             id=self.message_id, role="assistant", parts=[]
         )
-        self.session._put(
+        self.session._publish_event(
             self.hydrator.feed(event.model_copy(update={"message": stamp}))
         )
 
-    async def _append(self, message: messages_.Message) -> None:
+    async def _append_message(self, message: messages_.Message) -> None:
         # A new list, not append: a caller can hold the old one.
         self.session.messages = [*self.session.messages, message]
-        self.session._put(MessageEvent(message=message))
+        self.session._publish_event(MessageEvent(message=message))
 
 
-def _tool_specs(tools: list[tools_.Tool]) -> list[dict[str, Any]]:
+def _dump_tool_specs(tools: list[tools_.Tool]) -> list[dict[str, Any]]:
     return [t.model_dump(mode="json") for t in tools]

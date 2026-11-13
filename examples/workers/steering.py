@@ -5,12 +5,11 @@ import pathlib
 import tempfile
 
 import ai
-from ai import workers
 
 
 async def main() -> None:
     with tempfile.TemporaryDirectory() as tmp:
-        worker = workers.ClaudeCode(cwd=tmp)
+        worker = ai.workers.ClaudeCode(cwd=tmp)
 
         steer = ai.user_message(
             "Stop creating numbered files. Write the word STEERED into "
@@ -27,18 +26,21 @@ async def main() -> None:
 
             sent = accepted = False
             async for event in session.events():
-                if isinstance(event, ai.events.BuiltinToolStart) and not sent:
-                    sent = True
-                    print(f"it started working ({event.tool_name}): steering")
-                    # A message during a turn steers it. The CLI takes it at
-                    # its next step, between tool calls.
-                    await session.send(steer)
-                elif isinstance(event, workers.MessageEvent):
-                    # The steer is in the conversation: the reply before it
-                    # ended, and a new reply starts.
-                    accepted = accepted or event.message.id == steer.id
-                elif isinstance(event, ai.events.StreamEnd) and accepted:
-                    break
+                match event:
+                    case ai.events.BuiltinToolStart() if not sent:
+                        sent = True
+                        print(
+                            f"it started working ({event.tool_name}): steering"
+                        )
+                        # A message during a turn steers it. The CLI takes it
+                        # at its next step, between tool calls.
+                        await session.send(steer)
+                    case ai.workers.MessageEvent():
+                        # The steer is in the conversation: the reply before
+                        # it ended, and a new reply starts.
+                        accepted = accepted or event.message.id == steer.id
+                    case ai.events.StreamEnd() if accepted:
+                        break
 
             print([message.role for message in session.messages])
 

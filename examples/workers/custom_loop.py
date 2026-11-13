@@ -7,7 +7,6 @@ import tempfile
 from collections.abc import AsyncGenerator
 
 import ai
-from ai import workers
 
 REASONING = (
     ai.events.ReasoningStart,
@@ -17,7 +16,7 @@ REASONING = (
 
 
 class CodeThenReview(ai.Agent):
-    def __init__(self, worker: workers.Worker) -> None:
+    def __init__(self, worker: ai.workers.Worker) -> None:
         super().__init__()
         self.worker = worker
 
@@ -69,7 +68,7 @@ async def main() -> None:
     model = ai.get_model("anthropic/claude-sonnet-4.6")
 
     with tempfile.TemporaryDirectory() as tmp:
-        my_agent = CodeThenReview(workers.ClaudeCode(cwd=tmp))
+        my_agent = CodeThenReview(ai.workers.ClaudeCode(cwd=tmp))
 
         async with my_agent.run(
             model,
@@ -80,12 +79,13 @@ async def main() -> None:
             ],
         ) as stream:
             async for event in stream:
-                if isinstance(event, ai.events.BuiltinToolEnd):
-                    print(f"[worker] {event.tool_call.tool_name}")
-                elif isinstance(event, ai.events.TextDelta):
-                    print(event.chunk, end="", flush=True)
-                elif isinstance(event, ai.events.StreamEnd):
-                    print()
+                match event:
+                    case ai.events.BuiltinToolEnd():
+                        print(f"[worker] {event.tool_call.tool_name}")
+                    case ai.events.TextDelta():
+                        print(event.chunk, end="", flush=True)
+                    case ai.events.StreamEnd():
+                        print()
 
         print(f"review: {stream.output}")
 

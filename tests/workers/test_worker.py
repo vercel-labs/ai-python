@@ -585,7 +585,7 @@ async def test_events_that_nobody_reads_do_not_pile_up() -> None:
             async with ai.stream(worker, history) as s:
                 async for _ in s:
                     pass
-            sizes.append(len(session._feed))
+            sizes.append(len(session._pending_events))
         assert sizes[0] == sizes[1] == sizes[2]  # the latest turn only
         # A reader that reads keeps everything.
         seen = await drain(session.events())

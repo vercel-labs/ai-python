@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Any
 from ...types import events as events_
 from ...types import messages as messages_
 from ...types import usage as usage_
-from .. import _bridge, _convert, _process, _wire
+from .. import _bridge, _process, _utils, _wire
 from .. import _errors as errors
 from . import handoff, jsonrpc
 
@@ -180,8 +180,11 @@ class CodexWire:
             )
         if seed:
             # The thread's model-visible history, before the first turn.
-            _convert.warn_unsupported_files(
-                seed, KIND, accepts=("image/",), takes="images"
+            _utils.warn_unsupported_files(
+                seed,
+                KIND,
+                accepted_media_types=("image/",),
+                accepted_description="images",
             )
             await self._rpc().call(
                 "thread/inject_items",
@@ -217,7 +220,7 @@ class CodexWire:
             )
 
     async def send(self, message: messages_.Message) -> None:
-        _convert.check_parts(message, KIND, ("image/",))
+        _utils.raise_for_unsupported_parts(message, KIND, ("image/",))
         items = await _input_items(message)
         turn = self.running
         if turn is not None:
@@ -432,10 +435,13 @@ def _completed(item: dict[str, Any], state: _TurnState) -> Iterator[_wire.Item]:
             yield events_.ReasoningEnd(block_id=item_id)
     elif kind in TOOL_ITEMS and not _is_bridge(item):
         name = _tool_name(item)
-        yield from _convert.builtin_call(
-            item_id, name, json.dumps(_tool_args(item)), started=state.tools
+        yield from _utils.get_builtin_call_events(
+            item_id,
+            name,
+            json.dumps(_tool_args(item)),
+            started_call_ids=state.tools,
         )
-        yield _convert.builtin_result(
+        yield _utils.get_builtin_result_event(
             item_id,
             name,
             _item_result(item),
@@ -463,12 +469,15 @@ async def _input_items(message: messages_.Message) -> list[dict[str, Any]]:
         elif isinstance(part, messages_.FilePart):
             if part.media_type.startswith("text/"):
                 items.append(
-                    {"type": "text", "text": await _convert.as_text(part)}
+                    {
+                        "type": "text",
+                        "text": await _utils.format_text_file(part),
+                    }
                 )
             else:
-                encoded = base64.b64encode(await _convert.data(part)).decode(
-                    "ascii"
-                )
+                encoded = base64.b64encode(
+                    await _utils.extract_data(part)
+                ).decode("ascii")
                 items.append(
                     {
                         "type": "image",

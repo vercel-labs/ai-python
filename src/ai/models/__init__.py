@@ -39,8 +39,7 @@ from .core.api import (
     probe,
     stream,
 )
-from .core.model import Model, get_model
-from .core.model_like import ModelLike, ProviderLike
+from .core.model import Model, ModelLike, ProviderLike, get_model
 from .core.params import (
     DEFAULT,
     GLOBAL,

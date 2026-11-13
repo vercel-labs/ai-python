@@ -6,9 +6,8 @@ A worker is a CLI in the shape of a model: plain data and a provider. Use
 it where a model goes, with the whole history::
 
     import ai
-    from ai import workers
 
-    worker = workers.Codex(cwd=".")
+    worker = ai.workers.Codex(cwd=".")
     messages = [ai.user_message("Fix the tests")]
     async with ai.stream(worker, messages) as s:
         async for event in s:
@@ -34,7 +33,7 @@ one, and `worker.session(messages=history)` makes one that starts with a
 past. The CLI's own tools come as `ai.events.BuiltinTool*` events. The state
 is plain data: `session.id` is the CLI's id for the session, and
 `session.messages` holds the conversation in `ai` messages. The provider
-says where the CLI is: `workers.CodexProvider(executable=..., env=...)`.
+says where the CLI is: `ai.workers.CodexProvider(executable=..., env=...)`.
 """
 
 from ._errors import (

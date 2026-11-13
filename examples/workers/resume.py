@@ -4,12 +4,11 @@ import asyncio
 import tempfile
 
 import ai
-from ai import workers
 
 
 async def main() -> None:
     with tempfile.TemporaryDirectory() as tmp:
-        worker = workers.ClaudeCode(cwd=tmp)
+        worker = ai.workers.ClaudeCode(cwd=tmp)
 
         await ai.experimental_generate(
             worker,
@@ -21,7 +20,7 @@ async def main() -> None:
 
         # ... later, another process entirely ...
 
-        again = workers.Worker.model_validate_json(saved)
+        again = ai.workers.Worker.model_validate_json(saved)
 
         # The CLI has the conversation: send what is new. A session block
         # keeps the CLI alive between the calls.

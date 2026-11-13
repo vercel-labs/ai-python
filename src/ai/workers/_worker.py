@@ -106,12 +106,12 @@ class WorkerProvider(pydantic.BaseModel):
                 worker._session = session
             if stale is not None:
                 # Its CLI can wait in a turn that nobody continues.
-                await stale._end_run()
+                await stale._stop_cli()
             if tools is not None:
                 worker.tools = [t for t in tools if t.kind == "function"]
             run = await session._start_for_stream(seeds=seeds)
             queue: asyncio.Queue[Any] = asyncio.Queue()
-            session._taps.add(queue)
+            session._stream_queues.add(queue)
             ended = waits = False
             try:
                 for message in new:
@@ -153,11 +153,11 @@ class WorkerProvider(pydantic.BaseModel):
                         pass
                 raise
             finally:
-                session._taps.discard(queue)
+                session._stream_queues.discard(queue)
                 if not session._open and not waits:
                     # Nobody holds the session open: the CLI runs for one
                     # turn. After `tool_call` it waits for the results.
-                    await session._end_run()
+                    await session._stop_cli()
 
     async def generate(
         self,
@@ -221,7 +221,7 @@ class Worker(pydantic.BaseModel):
     def __init__(self, **data: Any) -> None:
         if type(self) is Worker:
             raise TypeError(
-                "Worker must be subclassed, for example workers.Codex"
+                "Worker must be subclassed, for example ai.workers.Codex"
             )
         super().__init__(**data)
 

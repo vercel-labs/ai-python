@@ -7,12 +7,11 @@ import asyncio
 import sys
 
 import ai
-from ai import workers
 
-KINDS: dict[str, type[workers.Worker]] = {
-    "claude-code": workers.ClaudeCode,
-    "codex": workers.Codex,
-    "pi": workers.Pi,
+KINDS: dict[str, type[ai.workers.Worker]] = {
+    "claude-code": ai.workers.ClaudeCode,
+    "codex": ai.workers.Codex,
+    "pi": ai.workers.Pi,
 }
 
 
@@ -34,7 +33,7 @@ async def main(kind: str) -> None:
                         await session.send(
                             ai.user_message("Stop at 8 instead.")
                         )
-                case workers.MessageEvent(message=message):
+                case ai.workers.MessageEvent(message=message):
                     print(f"\n[{message.role}] {message.text[:40]!r}")
                 case ai.events.StreamEnd(finish_reason="stop"):
                     break

@@ -1,15 +1,15 @@
 """Seeding Codex with a past: Responses API items for `thread/inject_items`.
 
-The rule for what becomes what is the same for every CLI: see `_convert`.
+The rule for what becomes what is the same for every CLI: see `_utils`.
 """
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from ...types import media
 from ...types import messages as messages_
-from .. import _convert
 
 NOTE_PREFIX = "[Handoff from a previous session — earlier reasoning: "
 
@@ -87,7 +87,9 @@ def to_codex_items(messages: list[messages_.Message]) -> list[dict[str, Any]]:
                     {
                         "type": "function_call_output",
                         "call_id": p.tool_call_id,
-                        "output": _convert.result_text(p.result),
+                        "output": p.result
+                        if isinstance(p.result, str)
+                        else json.dumps(p.result),
                     }
                 )
             elif isinstance(p, messages_.ReasoningPart) and p.text.strip():

@@ -5,13 +5,12 @@ import pathlib
 import tempfile
 
 import ai
-from ai import workers
 
 
 async def main() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         # 1. A conversation with Claude Code. It does real work.
-        claude = workers.ClaudeCode(cwd=tmp)
+        claude = ai.workers.ClaudeCode(cwd=tmp)
 
         messages = [
             ai.user_message(
@@ -28,7 +27,7 @@ async def main() -> None:
         # 2. Codex continues it, in the same directory. As with a model:
         #    give the history to the new worker. It starts a new CLI session
         #    with that past, thus it knows what was said and what was done.
-        codex = workers.Codex(cwd=tmp)
+        codex = ai.workers.Codex(cwd=tmp)
 
         messages = [
             *messages,

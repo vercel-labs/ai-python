@@ -7,12 +7,11 @@ import asyncio
 import sys
 
 import ai
-from ai import workers
 
-KINDS: dict[str, type[workers.Worker]] = {
-    "claude-code": workers.ClaudeCode,
-    "codex": workers.Codex,
-    "pi": workers.Pi,
+KINDS: dict[str, type[ai.workers.Worker]] = {
+    "claude-code": ai.workers.ClaudeCode,
+    "codex": ai.workers.Codex,
+    "pi": ai.workers.Pi,
 }
 
 
