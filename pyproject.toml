@@ -41,6 +41,10 @@ otel = [
     "opentelemetry-exporter-otlp-proto-http>=1.30",
     "opentelemetry-sdk>=1.30",
 ]
+sandbox = [
+    "anyio>=4.5",
+    "vercel>=0.13.0",
+]
 vercel = [
     "vercel-oidc>=0.8.0",
 ]
@@ -83,11 +87,25 @@ dev = [
     "opentelemetry-sdk>=1.43.0",
     "opentelemetry-exporter-otlp-proto-http>=1.43.0",
     "typesafe-sdk>=0.7.5",
+    "vercel>=0.13.0",
 ]
 
 [tool.uv]
 default-groups = ["dev"]
 exclude-newer = "2 days"
+
+# vercel-sandbox 1.0.0 and the rest of its family were released 2026-11-13.
+[tool.uv.exclude-newer-package]
+vercel = false
+vercel-sandbox = false
+vercel-oidc = false
+vercel-internal-core = false
+vercel-blob = false
+vercel-cache = false
+vercel-headers = false
+vercel-internal-telemetry = false
+vercel-queue = false
+vercel-workflow = false
 
 [tool.mypy]
 python_version = "3.12"
