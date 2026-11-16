@@ -55,7 +55,6 @@ import inspect
 import io
 import itertools
 import json
-import math
 import os
 import pickle
 import runpy
@@ -505,7 +504,14 @@ class Runner:
                     pending.reply = status, value
                     pending.done.set()
                 elif stream := self._streams.get(request_id):
-                    stream.send_nowait((status, value))
+                    try:
+                        stream.send_nowait((status, value))
+                    except anyio.WouldBlock:
+                        # More than it had credit for; the iterator raises
+                        # once it finds the stream closed.
+                        del self._streams[request_id]
+                        stream.close()
+                        self._abandoned.append(("cancel", request_id))
         except (
             anyio.EndOfStream,
             anyio.IncompleteRead,
@@ -522,7 +528,10 @@ class Runner:
                 pending.error = error
                 pending.done.set()
             for stream in self._streams.values():
-                stream.send_nowait(error)
+                try:
+                    stream.send_nowait(error)
+                except anyio.WouldBlock:
+                    stream.close()
 
     async def _send(self, request_id: int, command: tuple[Any, ...]) -> None:
         data = pickle.dumps((request_id, pickle.dumps(command)))
@@ -566,7 +575,7 @@ class Runner:
         return unwrap_reply(pending.reply)
 
     async def _open_stream(
-        self, command: tuple[Any, ...]
+        self, command: tuple[Any, ...], window: int
     ) -> tuple[int, MemoryObjectReceiveStream[_Reply]]:
         """Send ``command`` and return its id and a stream of its replies.
 
@@ -577,7 +586,9 @@ class Runner:
         if self._closed:
             raise EOFError(await self._closed_message())
         request_id = next(self._request_ids)
-        send, receive = anyio.create_memory_object_stream[_Reply](math.inf)
+        # Room for a window of items, the reply that ends the stream, and
+        # an error from here; a runner that fills it has ignored its credit.
+        send, receive = anyio.create_memory_object_stream[_Reply](window + 2)
         self._streams[request_id] = send
         try:
             await self._send(request_id, command)
@@ -684,7 +695,7 @@ class RemoteIterator:
         if not self._started:
             self._started = True
             self._request_id, self._replies = await self._runner._open_stream(
-                ("stream", *self._call_args, self._window)
+                ("stream", *self._call_args, self._window), self._window
             )
         assert self._replies is not None
         # Credit is sent here, not as an item is returned, so that a failed
@@ -697,7 +708,11 @@ class RemoteIterator:
             )
         ended = False
         try:
-            reply = await self._replies.receive()
+            try:
+                reply = await self._replies.receive()
+            except anyio.EndOfStream:
+                ended = True
+                raise RuntimeError("runner sent more than its credit") from None
             if isinstance(reply, BaseException):
                 ended = True
                 raise reply

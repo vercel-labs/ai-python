@@ -5,6 +5,7 @@ import contextlib
 import functools
 import gc
 from collections.abc import AsyncGenerator, AsyncIterator, Generator
+from typing import cast
 
 import anyio
 import pydantic
@@ -194,3 +195,43 @@ def test_window_must_be_positive() -> None:
     w = runner_.local_runner()
     with pytest.raises(ValueError, match="window"):
         w.iterate(fast, 1, free_running=True, window=0)
+
+
+@contextlib.asynccontextmanager
+async def _flooding_process(items: int) -> AsyncIterator[runner_.Process]:
+    """A runner that answers its first request with ``items`` items at once."""
+    send, receive = anyio.create_memory_object_stream[bytes](items)
+
+    class Stdin:
+        async def send(self, data: bytes) -> None:
+            if not receive.statistics().current_buffer_used:
+                for i in range(items):
+                    send.send_nowait(
+                        runner_.encode_reply(0, "ok", ["yield", i])
+                    )
+
+    class Flood:
+        stdin = Stdin()
+        stdout = receive
+
+        async def exit_message(self) -> str:
+            return "flood over"
+
+    try:
+        yield cast("runner_.Process", Flood())
+    finally:
+        send.close()
+        receive.close()
+
+
+async def test_items_beyond_credit_fail_the_stream() -> None:
+    window = 4
+    async with runner_.Runner(_flooding_process(100)) as w:
+        seen = []
+        async with w.iterate(gen, 0, free_running=True, window=window) as it:
+            with pytest.raises(RuntimeError, match="credit"):
+                async for x in it:
+                    seen.append(x)
+                    await anyio.sleep(0.01)
+        assert len(seen) <= window + 3
+        assert not w._streams
