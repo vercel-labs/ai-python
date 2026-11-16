@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, Protocol, Self, cast, runtime_checkable
 import pydantic
 
 from ... import _modelsdev
-from ...errors import ConfigurationError
+from ...errors import ConfigurationError, UnsupportedProviderError
 from ...providers import base
 
 if TYPE_CHECKING:
@@ -152,7 +152,8 @@ def get_model(
         model_id = f"gateway:{model_id}"
 
     ref = _modelsdev.parse_model_id(model_id)
-    assert ref.provider_id is not None  # guaranteed to be fully-qualified here
+    if ref.provider_id is None:
+        raise UnsupportedProviderError(model_id.partition(":")[0])
     provider_id = ref.provider_id
     provider_model_id = ref.model_id
 
