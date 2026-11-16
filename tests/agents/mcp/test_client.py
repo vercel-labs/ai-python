@@ -2,15 +2,22 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import dataclasses
+import gc
 import importlib
+import weakref
+from collections.abc import AsyncIterator
+from types import SimpleNamespace
 from typing import Any
 
+import mcp.client.session
 import mcp.types
 import pytest
 
 import ai
+from ai.agents.mcp import client as mcp_client
 from ai.agents.mcp.client import _mcp_tool_to_native
 
 from ...conftest import (
@@ -148,3 +155,119 @@ def _spec(tool: ai.AgentTool) -> ai.tools.ToolSpec:
     spec = tool.tool.spec
     assert spec is not None
     return spec
+
+
+class FakeSession:
+    """Stands in for ``mcp.client.session.ClientSession``."""
+
+    call_result: mcp.types.CallToolResult | None = None
+
+    def __init__(self, read_stream: Any, write_stream: Any) -> None:
+        pass
+
+    async def __aenter__(self) -> FakeSession:
+        return self
+
+    async def __aexit__(self, *args: object) -> None:
+        return None
+
+    async def initialize(self) -> None:
+        await asyncio.sleep(0.01)
+
+    async def list_tools(self) -> SimpleNamespace:
+        tool = mcp.types.Tool(
+            name="echo",
+            description="Echo",
+            input_schema={"type": "object", "properties": {}},
+        )
+        return SimpleNamespace(tools=[tool])
+
+    async def call_tool(
+        self, name: str, arguments: dict[str, Any]
+    ) -> mcp.types.CallToolResult:
+        assert self.call_result is not None
+        return self.call_result
+
+
+@pytest.fixture
+def fake_session(monkeypatch: pytest.MonkeyPatch) -> type[FakeSession]:
+    monkeypatch.setattr(mcp.client.session, "ClientSession", FakeSession)
+    return FakeSession
+
+
+def test_pool_lock_works_in_a_second_event_loop(
+    monkeypatch: pytest.MonkeyPatch, fake_session: type[FakeSession]
+) -> None:
+    """Concurrent MCP connects must work in more than one event loop."""
+
+    @contextlib.asynccontextmanager
+    async def transport() -> AsyncIterator[tuple[None, None]]:
+        await asyncio.sleep(0.01)
+        yield None, None
+
+    async def connect_two_servers() -> None:
+        async with mcp_client.ensure_connection_pool():
+            await asyncio.gather(
+                mcp_client._get_or_create_connection("key:a", transport),
+                mcp_client._get_or_create_connection("key:b", transport),
+            )
+
+    asyncio.run(connect_two_servers())
+    asyncio.run(connect_two_servers())
+
+
+async def test_concurrent_calls_share_one_connection(
+    fake_session: type[FakeSession],
+) -> None:
+    started = 0
+
+    @contextlib.asynccontextmanager
+    async def transport() -> AsyncIterator[tuple[None, None]]:
+        nonlocal started
+        started += 1
+        await asyncio.sleep(0.01)
+        yield None, None
+
+    async with mcp_client.ensure_connection_pool():
+        first, second = await asyncio.gather(
+            mcp_client._get_or_create_connection("key", transport),
+            mcp_client._get_or_create_connection("key", transport),
+        )
+        assert first is second
+
+    assert started == 1
+    assert len(mcp_client._pool_locks) == 0
+
+
+def test_pool_locks_release_closed_event_loops(
+    fake_session: type[FakeSession],
+) -> None:
+    loops: list[weakref.ReferenceType[asyncio.AbstractEventLoop]] = []
+    locks: list[weakref.ReferenceType[asyncio.Lock]] = []
+
+    @contextlib.asynccontextmanager
+    async def transport() -> AsyncIterator[tuple[None, None]]:
+        loop = asyncio.get_running_loop()
+        loops.append(weakref.ref(loop))
+        locks.append(weakref.ref(mcp_client._pool_locks[loop]))
+        await asyncio.sleep(0.01)
+        yield None, None
+
+    async def connect() -> None:
+        async with mcp_client.ensure_connection_pool() as pool:
+            await asyncio.gather(
+                mcp_client._get_or_create_connection("first", transport),
+                mcp_client._get_or_create_connection("second", transport),
+            )
+            assert len(pool) == 2
+        assert not pool
+
+    asyncio.run(connect())
+    gc.collect()
+    assert all(ref() is None for ref in loops + locks)
+    assert len(mcp_client._pool_locks) == 0
+
+    asyncio.run(connect())
+    gc.collect()
+    assert all(ref() is None for ref in loops + locks)
+    assert len(mcp_client._pool_locks) == 0

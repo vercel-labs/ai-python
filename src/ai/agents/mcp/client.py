@@ -6,6 +6,7 @@ import contextvars
 import dataclasses
 import importlib
 import json
+import weakref
 from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
@@ -37,7 +38,11 @@ _pool: contextvars.ContextVar[dict[str, _Connection] | None] = (
     contextvars.ContextVar("mcp_connections", default=None)
 )
 
-_pool_lock = asyncio.Lock()
+# Active operations hold each lock alive. Weak values release idle locks
+# and their event loops, including when a contended lock binds to its loop.
+_pool_locks: weakref.WeakValueDictionary[
+    asyncio.AbstractEventLoop, asyncio.Lock
+] = weakref.WeakValueDictionary()
 
 
 def _import_mcp_module(module_name: str) -> Any:
@@ -89,7 +94,8 @@ async def _get_or_create_connection(
             "The connection pool is not initialized."
         )
 
-    async with _pool_lock:
+    lock = _pool_locks.setdefault(asyncio.get_running_loop(), asyncio.Lock())
+    async with lock:
         if key in pool:
             return pool[key].client
 
@@ -323,7 +329,8 @@ async def close_connections() -> None:
     if pool is None:
         return
 
-    async with _pool_lock:
+    lock = _pool_locks.setdefault(asyncio.get_running_loop(), asyncio.Lock())
+    async with lock:
         if not pool:
             return
 
