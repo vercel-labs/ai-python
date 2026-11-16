@@ -1,6 +1,6 @@
 # web_agent
 
-Chat demo using the Python Vercel AI SDK with a FastAPI backend and React frontend.
+Chat demo using the AI SDK for Python with a FastAPI backend and React frontend.
 Includes **human-in-the-loop tool approval** — the `talk_to_mothership`
 tool is gated behind user confirmation before execution.
 
@@ -32,6 +32,8 @@ assistant tool-call message remains immutable.
 
 ## Setup
 
+From `examples/apps/web_agent`:
+
 ```bash
 # Backend
 cd backend
@@ -39,9 +41,13 @@ uv sync
 export AI_GATEWAY_API_KEY=…  # or put it in backend/.env and use `uv run --env-file .env`
 
 # Frontend
-cd frontend
+cd ../frontend
 pnpm install
 ```
+
+To use the local SDK checkout, run the backend with
+`uv run --with-editable ../../../.. fastapi dev main.py`
+from `backend/`.
 
 ## Development
 
