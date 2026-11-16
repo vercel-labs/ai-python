@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import gzip
+import pickle
 import socket
 import ssl
+import threading
 from collections.abc import AsyncIterator
 from typing import Any
 from unittest import mock
@@ -474,3 +477,67 @@ async def test_url_passthrough_and_inline_media_unchanged(network: Any) -> None:
         ] == "data:image/png;base64,aW1hZ2U="
     dns.assert_not_called()
     send.assert_not_called()
+
+
+def test_download_error_preserves_message_and_attributes() -> None:
+    """Pickle and deep copy preserve the URL, status, and formatted text."""
+    error = files.DownloadError("https://example.com/a.png", status_code=404)
+
+    assert (
+        str(error)
+        == "Failed to download 'https://example.com/a.png': status=404"
+    )
+    for restored in (pickle.loads(pickle.dumps(error)), copy.deepcopy(error)):
+        assert type(restored) is type(error)
+        assert str(restored) == str(error)
+        assert restored.args == error.args
+        assert restored.__dict__ == error.__dict__
+        assert restored.url == "https://example.com/a.png"
+        assert restored.status_code == 404
+
+
+@pytest.mark.parametrize(
+    ("status_code", "status_text"),
+    [(None, None), (404, "Not Found"), (None, "connection reset")],
+)
+def test_download_error_preserves_status_text(
+    status_code: int | None, status_text: str | None
+) -> None:
+    error = files.DownloadError(
+        "https://example.com/a.png",
+        status_code=status_code,
+        status_text=status_text,
+        cause=ValueError("connection closed"),
+    )
+
+    for restored in (pickle.loads(pickle.dumps(error)), copy.deepcopy(error)):
+        assert type(restored) is type(error)
+        assert str(restored) == str(error)
+        assert restored.args == error.args
+        assert restored.__dict__ == error.__dict__
+        assert restored.url == error.url
+        assert restored.status_code == status_code
+        assert restored.__cause__ is None
+
+
+def test_download_error_ignores_unpicklable_cause() -> None:
+    cause = ValueError(threading.Lock())
+    with pytest.raises(TypeError):
+        pickle.dumps(cause)
+    with pytest.raises(TypeError):
+        copy.deepcopy(cause)
+    error = files.DownloadError(
+        "https://example.com/a.png",
+        status_text="connection failed",
+        cause=cause,
+    )
+
+    for restored in (pickle.loads(pickle.dumps(error)), copy.deepcopy(error)):
+        assert type(restored) is type(error)
+        assert str(restored) == str(error)
+        assert restored.args == error.args
+        assert restored.__dict__ == error.__dict__
+        assert restored.url == error.url
+        assert restored.status_code == error.status_code
+        assert restored.__cause__ is None
+    assert error.__cause__ is cause
