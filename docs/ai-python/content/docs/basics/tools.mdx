@@ -95,16 +95,19 @@ tool needs an aggregator, either through its return annotation or the
 
 `ai.Tool` represents tools of all kinds in the SDK.
 
-Each tool carries an optional `spec`, which is a description consumed by the 
-model, as well as a `tool_config` that contains tool-specific execution config 
-(e.g. retry policy).
+Each tool carries an optional `spec`, which describes it to the model.
+Provider-executed tools use `tool_config` to hold the provider's tool ID and
+arguments. It does not configure retries.
 
 `AgentTool` wraps `ai.Tool` together with its corresponding Python function,
 which allows `agent.run` to find and call that function when the model requests
 to do so.
 
-Pass `ai.Tool` objects directly to `ai.stream` when you want the model to emit
-tool calls but you do not want the SDK to execute them:
+For a function decorated with `@ai.tool`, pass its `.tool` attribute to
+`ai.stream`, for example `tools=[contact_mothership.tool]`. Pass the decorated
+function itself to `ai.Agent(tools=[contact_mothership])` for execution.
+
+You can also construct an `ai.Tool` directly when you only need a schema:
 
 ```python
 tool = ai.Tool(
