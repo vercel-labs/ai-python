@@ -18,7 +18,7 @@ agent.tools
 ## resolve
 
 `Agent.resolve` converts model tool-call parts into executable `ToolCall`
-objects. Subclass `Agent` and override `loop` to change agent logic:
+objects. Use it when implementing a custom `Agent.loop`:
 
 ```python
 from collections.abc import AsyncGenerator
