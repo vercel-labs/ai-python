@@ -705,3 +705,104 @@ def test_run_span_attributes() -> None:
         {"type": "function", "name": "lookup"}
     ]
     assert "gen_ai.input.messages" in attrs
+
+
+async def test_explicit_live_parent_is_the_otel_parent(
+    otel_env: tuple[InMemorySpanExporter, TracerProvider],
+) -> None:
+    """``span(parent=...)`` overrides the ambient parent, also in OTel."""
+    exporter, _ = otel_env
+    telemetry = ai.telemetry
+    async with (
+        telemetry.span("a") as a,
+        telemetry.span("b"),
+        telemetry.span("c", parent=a) as c,
+    ):
+        assert c.parent_id == a.id  # the framework span tree is right
+
+    spans = {s.name: s for s in exporter.get_finished_spans()}
+    parent = spans["c"].parent
+    assert parent is not None
+    assert parent.span_id == spans["a"].context.span_id
+
+
+async def test_child_of_a_not_current_span_is_its_otel_child(
+    otel_env: tuple[InMemorySpanExporter, TracerProvider],
+) -> None:
+    """A span opened with ``set_as_current=False`` can still be a parent."""
+    exporter, _ = otel_env
+    telemetry = ai.telemetry
+    async with (
+        telemetry.span("outer"),
+        telemetry.span("stream", set_as_current=False) as stream,
+        telemetry.span("child", parent=stream, set_as_current=False),
+    ):
+        pass
+
+    spans = {s.name: s for s in exporter.get_finished_spans()}
+    parent = spans["child"].parent
+    assert parent is not None
+    assert parent.span_id == spans["stream"].context.span_id
+
+
+async def test_framework_span_inside_raw_span_keeps_ambient_otel_parent(
+    otel_env: tuple[InMemorySpanExporter, TracerProvider],
+) -> None:
+    exporter, provider = otel_env
+    tracer = provider.get_tracer("user-code")
+    telemetry = ai.telemetry
+    async with telemetry.span("a") as a:
+        with tracer.start_as_current_span("raw"):
+            async with telemetry.span("b") as b:
+                assert b.parent_id == a.id
+
+    spans = {s.name: s for s in exporter.get_finished_spans()}
+    raw, child = spans["raw"], spans["b"]
+    assert raw.parent is not None
+    assert raw.parent.span_id == spans["a"].context.span_id
+    assert child.parent is not None
+    assert child.parent.span_id == raw.context.span_id
+
+
+async def test_subagent_inside_tool_raw_span_keeps_ambient_otel_parent(
+    otel_env: tuple[InMemorySpanExporter, TracerProvider],
+) -> None:
+    exporter, provider = otel_env
+    tracer = provider.get_tracer("user-code")
+
+    @ai.tool
+    async def research(topic: str) -> str:
+        """Run a sub-agent inside the user's own OTel span."""
+        with tracer.start_as_current_span("user: research step"):
+            subagent = ai.Agent()
+            async with subagent.run(
+                MOCK_MODEL, [ai.user_message(topic)]
+            ) as stream:
+                async for _ in stream:
+                    pass
+        return "ok"
+
+    mock_llm(
+        [
+            [tool_call_msg(name="research", args='{"topic": "x"}')],
+            [text_msg("sub answer", id="m-sub")],
+            [text_msg("done", id="m-done")],
+        ]
+    )
+    async with ai.Agent(tools=[research]).run(
+        MOCK_MODEL, [ai.user_message("go")]
+    ) as stream:
+        async for _ in stream:
+            pass
+
+    spans = exporter.get_finished_spans()
+    raw = next(s for s in spans if s.name == "user: research step")
+    tool = next(s for s in spans if s.name == "execute_tool research")
+    assert raw.parent is not None
+    assert raw.parent.span_id == tool.context.span_id
+    children = [
+        s
+        for s in spans
+        if s.parent is not None and s.parent.span_id == raw.context.span_id
+    ]
+    assert [s.name for s in children] == ["invoke_agent Agent"]
