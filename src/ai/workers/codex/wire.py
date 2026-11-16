@@ -24,7 +24,8 @@ from ...types import messages as messages_
 from ...types import usage as usage_
 from .. import _bridge, _process, _utils, _wire
 from .. import _errors as errors
-from . import handoff, jsonrpc
+from .. import _jsonrpc as jsonrpc
+from . import handoff
 
 if TYPE_CHECKING:
     from .worker import Codex

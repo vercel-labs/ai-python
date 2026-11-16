@@ -1,8 +1,7 @@
-"""The transport to `codex app-server`: its process, and JSON-RPC over stdio.
+"""JSON-RPC over a CLI process on stdio.
 
 Line-delimited JSON, request/response futures, and two callbacks for what
-a server can start. Nothing here is protocol-specific: the Codex adapter
-supplies the meaning.
+a server can start. The wire supplies the protocol-specific meaning.
 """
 
 from __future__ import annotations
@@ -13,8 +12,8 @@ import json
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from .. import _errors as errors
-from .. import _process
+from . import _errors as errors
+from . import _process
 
 NotifyHandler = Callable[[str, dict[str, Any]], Awaitable[None]]
 RequestHandler = Callable[[Any, str, dict[str, Any]], Awaitable[None]]

@@ -1,4 +1,4 @@
-"""The JSON-RPC peer codex is driven over, offline."""
+"""The JSON-RPC peer for CLI workers, offline."""
 
 from __future__ import annotations
 
@@ -9,9 +9,9 @@ from typing import Any, cast
 import pytest
 
 from ai import workers
-from ai.workers.codex import jsonrpc
+from ai.workers import _jsonrpc as jsonrpc
 
-from .. import fakes
+from . import fakes
 
 
 def _peer(

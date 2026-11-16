@@ -12,8 +12,8 @@ import pytest
 import ai
 from ai import workers
 from ai.types import messages as m
+from ai.workers import _jsonrpc as jsonrpc
 from ai.workers import _process
-from ai.workers.codex import jsonrpc
 
 from .. import fakes
 
