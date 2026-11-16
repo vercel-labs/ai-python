@@ -11,8 +11,7 @@ export them to OpenTelemetry, send them to an observability vendor, or print
 them to the terminal.
 
 Telemetry lives in the `ai.experimental_telemetry` module. It is experimental
-and new in 0.4.0: it is not part of the stable API and may change or be
-removed.
+and is not part of the stable API. It may change or be removed.
 
 ## Turn on tracing
 
@@ -23,35 +22,62 @@ Nothing is reported until you register an adapter.
 Each span is a plain Pydantic record: a name, timestamps, a parent id, typed `data`
 describing the work, events, and an `error` field when the work failed.
 
-There is a built-in OpenTelemetry adapter:
+To print spans in the terminal, register `ConsoleAdapter`. It needs no
+collector or OpenTelemetry configuration:
+
+```python
+import ai
+from ai.experimental_telemetry.utils import console
+
+ai.experimental_telemetry.register(console.ConsoleAdapter())
+
+async with agent.run(model, messages) as run:
+    async for event in run:
+        pass
+```
+
+## Export to OpenTelemetry
+
+Install the OpenTelemetry dependencies:
 
 ```bash title="Terminal"
 uv add "ai[otel]"
 ```
 
+`OtelAdapter` uses the global tracer provider unless you pass one. Registering
+it alone does not configure an exporter. Create a tracer provider and an
+exporter before running your agent:
+
 ```python
 import ai
 from ai.experimental_telemetry import otel
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
-ai.experimental_telemetry.register(otel.OtelAdapter())
-
-agent = ai.Agent(tools=[get_weather])
-
-async with agent.run(model, messages) as run:
-    async for event in run:
-        ...
+provider = TracerProvider()
+provider.add_span_processor(
+    BatchSpanProcessor(
+        OTLPSpanExporter(endpoint="http://127.0.0.1:4318/v1/traces")
+    )
+)
+ai.experimental_telemetry.register(otel.OtelAdapter(tracer_provider=provider))
 ```
 
-`register(otel.OtelAdapter())` registers the adapter that turns framework's
-spans into OpenTelemetry spans. `OtelAdapter` uses the global tracer provider
-unless you pass one.
+Point the exporter at your collector. At application shutdown, call
+`provider.shutdown()` to flush and close it. See the
+[OpenTelemetry exporter documentation](https://opentelemetry.io/docs/languages/python/exporters/#usage)
+for other destinations and authentication.
 
-<Callout title="Note">
-  See
-  [OpenTelemetry ceremony](https://opentelemetry.io/docs/languages/python/exporters/#usage)
-  documentation page to configure the endpoint for your traces to be submitted to.
-</Callout>
+For local development, the SDK includes a terminal trace viewer. After
+installing `ai[otel]`, run this in a separate terminal:
 
+```bash title="Terminal"
+uv run python -m ai.experimental_telemetry.utils.viewer --port 4318
+```
+
+The viewer accepts OTLP/HTTP traces at the endpoint in the example above and
+prints each trace tree. It listens on localhost by default.
 
 ## Open your own spans
 
