@@ -574,9 +574,10 @@ async def my_workflow(payload):
     ...
 ```
 
-Sending traces to a remote backend is a side effect. Do not send them inside
-a workflow body. Gather spans with `DictSink` and `use_sink`, pass them into
-a step, and send them from there.
+Sending traces to a remote backend is, in fact, a side effect, and cannot be done
+inside a workflow body. Therefore, we need to gather all the spans, pass them into
+a step, and send them all at once from there. Do do this, we utilize the `DictSink`
+and the `use_sink` context manager.
 
 ```python
 @workflow.workflow
@@ -595,7 +596,7 @@ async def report_spans(spans_data):
     await ai.experimental_telemetry.push_all(spans_data)
 ```
 
-Serialize and restore spans to pass them into
+Finally, we need to be able to serialize and restore spans in order to pass them into
 workflows and steps via JSON. That way, all the spans can be nested correctly when the
 framework reports them to the vendor.
 
