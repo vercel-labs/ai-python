@@ -46,7 +46,13 @@ _runtime: contextvars.ContextVar[Runtime] = contextvars.ContextVar("runtime")
 
 def get_runtime() -> Runtime:
     """Return the active Runtime. Raises LookupError outside of run()."""
-    return _runtime.get()
+    try:
+        return _runtime.get()
+    except LookupError:
+        raise LookupError(
+            "No active agent runtime: call this inside the agent loop or a "
+            "tool during agent.run()."
+        ) from None
 
 
 def run(
