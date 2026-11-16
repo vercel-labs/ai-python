@@ -2,13 +2,13 @@ from . import (
     durable,
     errors,
     experimental_telemetry,
+    external,
     models,
     ops,
     providers,
     testing,
     ui,
     util,
-    workers,
 )
 from .agents import (
     Agent,
@@ -202,6 +202,7 @@ __all__ = [
     "events",
     "experimental_generate",
     "experimental_telemetry",
+    "external",
     "file_part",
     "get_hook_registry",
     "get_model",
@@ -228,6 +229,5 @@ __all__ = [
     "ui",
     "user_message",
     "util",
-    "workers",
     "yield_from",
 ]
