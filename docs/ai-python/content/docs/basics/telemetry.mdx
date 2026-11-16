@@ -22,23 +22,7 @@ Nothing is reported until you register an adapter.
 Each span is a plain Pydantic record: a name, timestamps, a parent id, typed `data`
 describing the work, events, and an `error` field when the work failed.
 
-To print spans in the terminal, register `ConsoleAdapter`. It needs no
-collector or OpenTelemetry configuration:
-
-```python
-import ai
-from ai.experimental_telemetry.utils import console
-
-ai.experimental_telemetry.register(console.ConsoleAdapter())
-
-async with agent.run(model, messages) as run:
-    async for event in run:
-        pass
-```
-
-## Export to OpenTelemetry
-
-Install the OpenTelemetry dependencies:
+There is a built-in OpenTelemetry adapter:
 
 ```bash title="Terminal"
 uv add "ai[otel]"
@@ -68,16 +52,6 @@ Point the exporter at your collector. At application shutdown, call
 `provider.shutdown()` to flush and close it. See the
 [OpenTelemetry exporter documentation](https://opentelemetry.io/docs/languages/python/exporters/#usage)
 for other destinations and authentication.
-
-For local development, the SDK includes a terminal trace viewer. After
-installing `ai[otel]`, run this in a separate terminal:
-
-```bash title="Terminal"
-uv run python -m ai.experimental_telemetry.utils.viewer --port 4318
-```
-
-The viewer accepts OTLP/HTTP traces at the endpoint in the example above and
-prints each trace tree. It listens on localhost by default.
 
 ## Open your own spans
 
