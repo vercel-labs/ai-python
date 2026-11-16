@@ -1,6 +1,6 @@
 """Direct control: send, steer, read the feed, interrupt.
 
-uv run python examples/workers/direct_control.py [claude-code|codex|pi]
+uv run python examples/workers/direct_control.py [claude-code|codex|fx|pi]
 """
 
 import asyncio
@@ -11,6 +11,7 @@ import ai
 KINDS: dict[str, type[ai.workers.Worker]] = {
     "claude-code": ai.workers.ClaudeCode,
     "codex": ai.workers.Codex,
+    "fx": ai.workers.Fx,
     "pi": ai.workers.Pi,
 }
 

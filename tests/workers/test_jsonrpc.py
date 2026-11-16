@@ -159,3 +159,18 @@ async def test_a_dead_process_fails_its_callers() -> None:
         await call
     assert len(crashed) == 1
     await peer.close()
+
+
+async def test_a_failed_write_removes_its_waiter() -> None:
+    class BrokenProcess(fakes.FakeProcess):
+        async def write(self, data: str) -> None:
+            raise BrokenPipeError("stdin closed")
+
+    peer = _peer(BrokenProcess())
+    try:
+        with pytest.raises(workers.WorkerError, match="stdin closed"):
+            await peer.call("ping", timeout=1)
+        assert peer._waiters == {}
+        assert peer._completions == {}
+    finally:
+        await peer.close()

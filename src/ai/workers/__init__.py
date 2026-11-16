@@ -1,4 +1,4 @@
-"""Coding-agent CLIs as workers.
+"""Claude Code, Codex, Fx and Pi coding-agent CLIs as workers.
 
 Experimental: not part of the stable API, may change or be removed.
 
@@ -53,6 +53,7 @@ from ._session import (
 from ._worker import Worker, WorkerProvider
 from .claude_code import ClaudeCode, ClaudeCodeProvider
 from .codex import Codex, CodexProvider
+from .fx import Fx, FxProvider
 from .pi import Pi, PiProvider
 
 __all__ = [
@@ -61,6 +62,8 @@ __all__ = [
     "Codex",
     "CodexProvider",
     "ExecutableMissingError",
+    "Fx",
+    "FxProvider",
     "MessageEvent",
     "NotAuthenticatedError",
     "Pi",

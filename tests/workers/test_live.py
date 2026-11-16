@@ -28,6 +28,7 @@ pytestmark = pytest.mark.skipif(
 KINDS: dict[str, tuple[type[workers.Worker], str]] = {
     "claude-code": (workers.ClaudeCode, "claude"),
     "codex": (workers.Codex, "codex"),
+    "fx": (workers.Fx, "fx"),
     "pi": (workers.Pi, "pi"),
 }
 
@@ -183,3 +184,21 @@ async def test_a_steer_lands_in_the_conversation(
             m.text for m in session.messages if m.role == "assistant"
         ).upper()
     )
+
+
+async def test_a_new_session_uses_the_given_past(
+    make: Callable[..., workers.Worker],
+) -> None:
+    worker = make()
+    assert worker.session_id is None
+    history = [
+        ai.user_message("The secret word is GENTIAN-31. Remember it."),
+        ai.assistant_message("Noted."),
+        ai.user_message(
+            "What is the secret word from our conversation? Reply with it only."
+        ),
+    ]
+    async with asyncio.timeout(240):
+        reply = await ai.experimental_generate(worker, history)
+    assert "GENTIAN-31" in reply.text.upper()
+    assert worker.session_id is not None

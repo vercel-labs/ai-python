@@ -8,7 +8,7 @@ Examples are grouped by the main API surface they demonstrate.
   and reranking examples.
 - `models/` contains model streaming, structured output, and provider examples.
 - `workers/` contains examples that use coding-agent CLIs (Claude Code, Codex,
-  pi) where a model goes (experimental; run with `run-examples.py --workers`).
+  fx, pi) where a model goes (experimental; run with `run-examples.py --workers`).
 
 Provider-specific model examples live under `models/<provider>/`, such as
 `models/gateway/`, `models/openai/`, and `models/anthropic/`.

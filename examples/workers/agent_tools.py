@@ -1,6 +1,6 @@
 """An ai.Agent gives its Python tools to a CLI, through the MCP bridge.
 
-uv run python examples/workers/agent_tools.py [claude-code|codex|pi]
+uv run python examples/workers/agent_tools.py [claude-code|codex|fx|pi]
 """
 
 import asyncio
@@ -11,6 +11,7 @@ import ai
 KINDS: dict[str, type[ai.workers.Worker]] = {
     "claude-code": ai.workers.ClaudeCode,
     "codex": ai.workers.Codex,
+    "fx": ai.workers.Fx,
     "pi": ai.workers.Pi,
 }
 

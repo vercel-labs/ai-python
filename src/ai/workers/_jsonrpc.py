@@ -32,6 +32,9 @@ class JsonRpcPeer:
         self._kind = kind
         self._next_id = 0
         self._waiters: dict[int, asyncio.Future[Any]] = {}
+        self._completions: dict[
+            int, Callable[[int, asyncio.Future[Any]], None]
+        ] = {}
         self._pump: asyncio.Task[None] | None = None
         self._closed = False
         self._on_crash: Callable[[BaseException], None] | None = None
@@ -79,7 +82,12 @@ class JsonRpcPeer:
         for future in list(self._waiters.values()):
             if not future.done():
                 future.set_exception(exc)
+                # Prompt futures have no awaiting caller: the crash callback
+                # reports the failure to their wire's stream instead.
+                if self._completions:
+                    future.exception()
         self._waiters.clear()
+        self._completions.clear()
         if crashed and self._on_crash is not None:
             with contextlib.suppress(Exception):
                 self._on_crash(exc)
@@ -87,25 +95,51 @@ class JsonRpcPeer:
     async def call(
         self, method: str, params: Any = None, *, timeout: float = 120
     ) -> Any:
+        request_id, future = await self._begin_call(method, params)
+        try:
+            async with asyncio.timeout(timeout):
+                return await future
+        finally:
+            self._waiters.pop(request_id, None)
+
+    async def _begin_call(
+        self,
+        method: str,
+        params: Any = None,
+        *,
+        prepared: Callable[[int], None] | None = None,
+        completed: Callable[[int, asyncio.Future[Any]], None] | None = None,
+    ) -> tuple[int, asyncio.Future[Any]]:
+        """Write a request and return its id and response future.
+
+        `prepared` runs before the write. `completed` runs in read order,
+        before the next record is read, not as a scheduled future callback.
+        """
         if self._closed:
             raise errors.WorkerError(f"{self._kind}: connection is closed")
         self._next_id += 1
         request_id = self._next_id
         future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
         self._waiters[request_id] = future
-        await self._send(
-            {
-                "jsonrpc": "2.0",
-                "id": request_id,
-                "method": method,
-                **({"params": params} if params is not None else {}),
-            }
-        )
+        if completed is not None:
+            self._completions[request_id] = completed
         try:
-            async with asyncio.timeout(timeout):
-                return await future
-        finally:
+            if prepared is not None:
+                prepared(request_id)
+            await self._send(
+                {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "method": method,
+                    **({"params": params} if params is not None else {}),
+                }
+            )
+        except BaseException:
             self._waiters.pop(request_id, None)
+            self._completions.pop(request_id, None)
+            future.cancel()
+            raise
+        return request_id, future
 
     async def notify(self, method: str, params: Any = None) -> None:
         await self._send(
@@ -196,12 +230,16 @@ class JsonRpcPeer:
 
     def _resolve(self, message: dict[str, Any]) -> None:
         msg_id = message.get("id")
-        future = (
-            self._waiters.pop(msg_id, None) if isinstance(msg_id, int) else None
-        )
+        if not isinstance(msg_id, int):
+            return
+        future = self._waiters.pop(msg_id, None)
         if future is None or future.done():
             return
         if "error" in message:
             future.set_exception(JsonRpcError(message["error"]))
         else:
             future.set_result(message.get("result"))
+
+        completed = self._completions.pop(msg_id, None)
+        if completed is not None:
+            completed(msg_id, future)
