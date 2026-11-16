@@ -123,3 +123,19 @@ def test_tool_message_rejects_non_result_parts() -> None:
 def test_invalid_type_raises() -> None:
     with pytest.raises(TypeError):
         builders.user_message(cast(Any, 42))
+
+
+def test_message_builders_accept_builtin_tool_parts() -> None:
+    """Builders accept built-in tool parts from stored provider-tool turns."""
+    call = messages.BuiltinToolCallPart(
+        tool_call_id="ws-1", tool_name="web_search", tool_args="{}"
+    )
+    result = messages.BuiltinToolReturnPart(
+        tool_call_id="ws-1", tool_name="web_search", result={"hits": 1}
+    )
+
+    message = builders.assistant_message(call, result, "Found it.")
+
+    assert message.builtin_tool_calls == [call]
+    assert message.builtin_tool_returns == [result]
+    assert message.text == "Found it."
