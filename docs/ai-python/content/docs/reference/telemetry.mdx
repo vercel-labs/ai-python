@@ -5,7 +5,7 @@ type: reference
 summary: Reference for ai.experimental_telemetry.
 ---
 
-The module is experimental and new in 0.4.0: it is not part of the stable API
+The module is experimental: it is not part of the stable API
 and may change or be removed.
 
 `ai.experimental_telemetry` contains instrumentation for tracing agent runs, model calls,
@@ -111,7 +111,7 @@ and `response_model` are set at span end.
 `AiGenerateSpanData` carries the same request and response fields for
 `ai.experimental_generate` calls.
 
-Each `ai.ops` function has it's own span data. All carry `model` and
+Each `ai.ops` function has its own span data. All carry `model` and
 `provider`, as well as modality-specific fields.
 
 `ToolExecutionSpanData` carries `tool_name`, `tool_call_id`,
@@ -119,7 +119,7 @@ Each `ai.ops` function has it's own span data. All carry `model` and
 set at span end. `model_input` is set only when the value the model sees
 differs from `result`.
 
-`LoopTurnSpanData` has no fields, it exists so adapters can group a turn's
+`LoopTurnSpanData` has no fields. It exists so adapters can group a turn's
 model and tool spans. Turn order is given by `started_at` and `parent_id`.
 
 ### Events and errors
@@ -189,7 +189,7 @@ Methods that are handy for custom instrumentation:
   ```
 
   `set_attrs()` only works on spans created with a string name (their data is
-  `CustomSpanData`). Framework spans carry typed data, assign their fields
+  `CustomSpanData`). Framework spans carry typed data; assign their fields
   directly.
 
 - `Span.add_event(name, attrs=None, /, **kwargs)` appends a named
@@ -205,12 +205,10 @@ Methods that are handy for custom instrumentation:
 
 ### Low-level span API
 
-Using low-level API boils down to manually creating and mutating `Span` objects (that
-are Pydantic models, as you recall), and manually pushing their current state to the
-sink with `Span.push()`.
+Use the low-level API to create and mutate `Span` objects, then push their
+state to the sink with `Span.push()`. Spans are Pydantic models.
 
-The framework provides utilities to make this less verbose, as well as to make those
-manual spans play nice with the built-in instrumentation.
+The following utilities connect manual spans to the built-in instrumentation.
 
 1. `create_span()` mints identity and takes the trace id, parentage, and a copy of
    `trace_attrs` from `parent` (default: the current span; a fresh trace when there
@@ -276,7 +274,7 @@ await ai.experimental_telemetry.push_all(payload)
 
 ## Adapters
 
-Adapters are meant to convert framework's spans into vendor spans.
+Adapters convert framework spans into vendor spans.
 
 - `register(adapter)` adds an adapter. Multiple adapters coexist
   independently.
@@ -284,14 +282,14 @@ Adapters are meant to convert framework's spans into vendor spans.
 
 Custom adapters can be built using a high-level or a low-level API.
 
-By high-level API we mean the `@adapter` decorator that converts a function or a class 
+The high-level API is the `@adapter` decorator. It converts a function or a class
 into an adapter, using a generator trick similar to pytest fixtures or FastAPI
 lifecycles.
 
 Using the low-level API means implementing `AdapterProtocol` from scratch,
 avoiding the generator trickery completely.
 
-Adapter that raises is logged and skipped: telemetry never kills the run.
+If an adapter raises an error, the SDK logs it and skips the adapter. Telemetry errors do not stop the run.
 
 ### High-level adapter API
 
@@ -375,17 +373,26 @@ extra:
 uv add "ai[otel]"
 ```
 
+Configure a tracer provider and exporter before registering the adapter:
+
 ```python
 import ai
 from ai.experimental_telemetry import otel
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
-ai.experimental_telemetry.register(otel.OtelAdapter())
+tracer_provider = TracerProvider()
+tracer_provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
+adapter = otel.OtelAdapter(tracer_provider=tracer_provider)
+ai.experimental_telemetry.register(adapter)
 ```
 
-`OtelAdapter` uses the global tracer provider unless you pass one.
-
-By default, the adapter sends traces to
-`http://localhost:4318/v1/traces`, the OTLP/HTTP default.
+`OtelAdapter` uses the global tracer provider unless you pass one. It does
+not create an exporter. Without OpenTelemetry setup, the global provider
+exports nothing. In this example, `OTLPSpanExporter` controls the endpoint;
+configure it through its arguments or the OpenTelemetry environment variables.
+Call `adapter.shutdown()` when the application stops.
 
 ### Semantic conventions
 
@@ -455,9 +462,15 @@ for durable or short-lived processes.
 
 Span timestamps come from the ambient clock, `now_ns()` — the wall clock by
 default. `use_time(now_ns)` overrides it within a context, so replayed code
-produces stable timestamps:
+produces stable timestamps. This example requires `vercel-workflow`:
 
 ```python
+import ai
+import vercel.workflow
+
+workflow = vercel.workflow.Workflows()
+
+
 @workflow.workflow
 @ai.experimental_telemetry.use_time(vercel.workflow.time_ns)
 async def run_turn(turn_input):
@@ -489,15 +502,11 @@ check to skip your own instrumentation work, as in the
 
 ### Regular tracing
 
-Regular agent tracing only requires you to register an adapter: 
+Use the `adapter` already registered in the OpenTelemetry setup above to
+trace the request. Do not register a second adapter on the same tracer provider.
 
 ```python
 import ai
-from ai.experimental_telemetry import otel
-
-...  # the OpenTelemetry ceremony
-
-ai.experimental_telemetry.register(OtelAdapter())
 
 
 async def handle(request):
@@ -508,9 +517,11 @@ async def handle(request):
                 ...
 
 
-# at shutdown:
-adapter.shutdown()
+def shutdown():
+    adapter.shutdown()
 ```
+
+Call `shutdown()` when the server stops, not after defining the handler.
 
 ### Typed spans with a matching adapter
 
@@ -538,29 +549,34 @@ observe model calls, `ToolExecutionSpanData` for tools, and so on.
 
 ### Durable execution
 
-Tracing durable execution is subject to very specific constraints.
+Tracing durable execution has specific constraints.
 
-The examples below assume shape and terminology of Vercel Workflows, but the same pattern
-would apply to Temporal and other durable execution frameworks.
+The examples below use `vercel-workflow`. The same pattern applies to
+Temporal and other durable execution frameworks.
 
 The workflow body must be deterministic and free of side-effects. 
 
-We achieve determinism by replacing `random` and `time` with their deterministic
+Replace `random` and `time` with their deterministic
 counterparts via `use_random` and `use_time` context managers. This enables the
 framework to keep stamping ids and timestamps inside the workflow body.
 
 ```python
+import ai
+import vercel.workflow
+
+workflow = vercel.workflow.Workflows()
+
+
 @workflow.workflow
-@ai.messages.use_random(workflow.random)                # span and message ids
-@ai.experimental_telemetry.use_time(workflow.time_ns)   # timestamps
+@ai.messages.use_random(vercel.workflow.random)  # span and message ids
+@ai.experimental_telemetry.use_time(vercel.workflow.time_ns)  # timestamps
 async def my_workflow(payload):
     ...
 ```
 
-Sending traces to a remote backend is, in fact, a side effect, and cannot be done
-inside a workflow body. Therefore, we need to gather all the spans, pass them into
-a step, and send them all at once from there. Do do this, we utilize the `DictSink`
-and the `use_sink` context manager.
+Sending traces to a remote backend is a side effect. Do not send them inside
+a workflow body. Gather spans with `DictSink` and `use_sink`, pass them into
+a step, and send them from there.
 
 ```python
 @workflow.workflow
@@ -579,7 +595,7 @@ async def report_spans(spans_data):
     await ai.experimental_telemetry.push_all(spans_data)
 ```
 
-Finally, we need to be able to serialize and restore spans in order to pass them into
+Serialize and restore spans to pass them into
 workflows and steps via JSON. That way, all the spans can be nested correctly when the
 framework reports them to the vendor.
 
@@ -609,7 +625,9 @@ await run_span.stamp_end().push()
 - Spans: `Span`, `SpanData`, `SpanEvent`, `SpanError`.
 - Span data types: `RunSpanData`, `LoopTurnSpanData`, `AiStreamSpanData`,
   `AiGenerateSpanData`, `ToolExecutionSpanData`, `HookSpanData`,
-  `CustomSpanData`.
+  `CustomSpanData`, `EmbedSpanData`, `GenerateAudioSpanData`,
+  `GenerateImageSpanData`, `GenerateVideoSpanData`, `RerankSpanData`,
+  `TranscribeSpanData`, `DecideSpanData`.
 - Event names: `FIRST_TOKEN`, `RESPONSE_COMPLETE`, `HOOK_DEFERRED`,
   `HOOK_RESOLVED`, `HOOK_CANCELLED`.
 - Opening spans: `span`, `create_span`, `current_span`, `use_span`.
