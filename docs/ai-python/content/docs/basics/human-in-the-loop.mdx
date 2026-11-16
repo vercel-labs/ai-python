@@ -122,13 +122,12 @@ ai.resolve_hook(
 
 ## Resume in serverless flows
 
-For an initial request that must end while a hook waits, call `ai.defer_hook`
-on each `PendingHookEvent`. The run ends in a blocked state instead of waiting
-for a resolution in the same process.
+Serverless setups can't suspend on `await` in the same way as long-running
+servers. For that reason, the SDK provides an alternative way for handling
+hook resolutions.
 
-On the first request, drain the stream and save the full runtime history,
-including internal messages. `stream.blocked` tells you whether the run needs
-external input. `stream.deferred_hooks` holds the hooks to show to the caller:
+Using the serverless flow only requires you to update the `agent.run` callsite
+(e.g. your serverless endpoint code).
 
 ```python
 from typing import Any
@@ -154,17 +153,12 @@ async def start_run(
     return state
 ```
 
-Persist the returned state in your application's store before ending the
-request. Do not read `stream.output` while the run is blocked: it has no final
-assistant output yet. The run's `stream.hook_registry` is an in-process
-registry, not the history you persist.
+When handling the hook event, call `defer_hook` to interrupt the loop
+and surface your tool approvals (or custom hook-related work) to the client.
 
-On the next request, load the saved state and accept authenticated decisions
-from the caller. Pass each stored hook ID and its payload to `ai.resolve_hook`
-inside the new run, before iteration. Supply decisions for all saved hooks
-together: a current SDK defect can leave `stream.blocked` false if a replayed
-turn defers again, so this helper can raise `ValueError` instead of returning
-state.
+The `ToolRunner` will handle multiple concurrent aborts by waiting for all
+scheduled tasks to complete or get aborted. That way you can run approval-gated
+tools on serverless concurrently.
 
 ```python
 from typing import Any
@@ -202,6 +196,10 @@ For example, an operator's approval becomes
 declared payload type instead. Check that each decision belongs to the current
 user and saved run before registering it.
 
-The loop replays saved model responses and completed tool results. It continues
-when it reaches a hook with a pre-registered resolution. Keep tools and custom
-loop behavior consistent between requests so replay can match the saved history.
+Once the client has gathered payloads for all hooks, it will re-enter via the
+same endpoint, which will then pre-register hook resolutions inside the
+`agent.run` block, before iterating the stream. The loop will replay results
+of LLM calls and tool results
+from the first run without redoing non-deterministic and duplicating side-effects.
+When it hits the hook for which it has a pre-registered resolution, it will
+continue through without suspending.
