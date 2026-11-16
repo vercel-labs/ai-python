@@ -10,7 +10,7 @@ can stream through the parent run while their final text becomes model input.
 
 ## Run a subagent as a tool
 
-To handle subagent outputs, annotate the tool's output type with `ai.SubAgentTool`:
+The SDK cannot handle subagent outputs correctly unless you annotate the tool's output type with `ai.SubAgentTool`:
 
 ```python
 mothership_model = ai.get_model("anthropic/claude-sonnet-4")
