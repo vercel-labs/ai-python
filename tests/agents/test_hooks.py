@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import copy
+import pickle
 from collections.abc import AsyncGenerator
 from typing import Any
 
@@ -18,6 +20,22 @@ from ..conftest import MOCK_MODEL, Recorder, mock_llm, text_msg
 class Confirmation(pydantic.BaseModel):
     approved: bool
     reason: str = ""
+
+
+def test_hook_deferred_exception_survives_pickle_and_copy() -> None:
+    hook: ai.messages.HookPart[Any] = ai.messages.HookPart(
+        hook_id="approve_tc-1", hook_type="ToolApproval", status="pending"
+    )
+    exc = ai.HookDeferredException(hook)
+    exc.add_note("keep exception state")
+
+    restored = pickle.loads(pickle.dumps(exc))
+    assert restored.hook == hook
+    assert copy.copy(exc).hook == hook
+    assert copy.deepcopy(exc).hook == hook
+    assert restored.args == exc.args == (hook.hook_id,)
+    assert str(restored) == str(exc) == hook.hook_id
+    assert restored.__notes__ == ["keep exception state"]
 
 
 # -- resolve_hook() with live future (long-running mode) -------------------

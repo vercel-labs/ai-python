@@ -33,7 +33,7 @@ from ..types import messages as messages_
 from . import runtime as runtime_
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncIterator, Callable
 
 
 class HookRegistry:
@@ -140,6 +140,15 @@ class HookDeferredException(Exception):  # noqa: N818
     ) -> None:
         super().__init__(hook.hook_id)
         self.hook = hook
+
+    def __reduce__(
+        self,
+    ) -> tuple[
+        Callable[..., HookDeferredException],
+        tuple[messages_.HookPart[Any]],
+        dict[str, Any],
+    ]:
+        return type(self), (self.hook,), self.__dict__
 
 
 def _label(target: str | messages_.HookPart[Any]) -> str:
