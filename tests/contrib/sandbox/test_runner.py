@@ -44,6 +44,13 @@ def endless() -> Generator[int]:
         _closed.append("closed")
 
 
+async def stuck() -> AsyncGenerator[int]:
+    try:
+        yield 1
+    finally:
+        await asyncio.sleep(3600)
+
+
 def fast(n: int) -> Generator[int]:
     for i in range(n):
         _produced[0] += 1
@@ -157,6 +164,16 @@ async def test_abandoned(free_running: bool) -> None:
         with anyio.fail_after(5):
             while not await w.run(closed):
                 await anyio.sleep(0.01)
+
+
+async def test_close_times_out(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(runner_, "_CLOSE_TIMEOUT", 0.1)
+    async with _runner() as w:
+        it = w.iterate(stuck)
+        assert await it.__anext__() == 1
+        with anyio.fail_after(5), pytest.raises(TimeoutError):
+            await it.aclose()
+        assert await w.run(int, "7") == 7
 
 
 async def test_cancel_while_waiting() -> None:

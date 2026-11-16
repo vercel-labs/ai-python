@@ -75,6 +75,7 @@ from contextlib import (
     AbstractAsyncContextManager,
     AsyncExitStack,
     asynccontextmanager,
+    suppress,
 )
 from typing import IO, TYPE_CHECKING, Any, Protocol, Self
 
@@ -96,6 +97,7 @@ _LENGTH = struct.Struct(">Q")
 
 DEFAULT_WINDOW = 256
 DEFAULT_MAX_REPLY_BYTES = 64 * 1024 * 1024
+_CLOSE_TIMEOUT = 20.0
 
 
 class RemoteError(Exception):
@@ -686,7 +688,8 @@ class RemoteIterator:
             else:
                 kind, value = await self._next_stepped()
         except BaseException:
-            await self.aclose()
+            with suppress(TimeoutError):
+                await self.aclose()
             raise
         if kind == "done":
             self._finished = True
@@ -746,7 +749,12 @@ class RemoteIterator:
             if self._free_running:
                 await self._end_stream(cancel=True)
             elif not self._runner._closed:
-                await protected(self._runner._call(("close", self._id)))
+
+                async def close() -> None:
+                    with anyio.fail_after(_CLOSE_TIMEOUT):
+                        await self._runner._call(("close", self._id))
+
+                await protected(close())
         self._finished = True
 
     async def __aenter__(self) -> Self:
