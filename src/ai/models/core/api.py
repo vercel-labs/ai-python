@@ -133,7 +133,7 @@ class Stream(Generic[StreamOutputT]):
         *,
         output_type: type[StreamOutputT] | None = None,
     ) -> Stream[StreamOutputT]:
-        """Synthesize stream events for ``msg``.
+        """Synthesize stream events for ``message``.
 
         Use when you have a complete ``Message`` from a non-streaming source —
         e.g., the result of a Temporal activity, a cached LLM response, or an
