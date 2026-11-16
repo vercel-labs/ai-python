@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import base64
 from collections.abc import AsyncGenerator
 from typing import Any
 
 import pydantic
 import pytest
 
+import ai
 from ai import models
 from ai.types import events, messages
 
@@ -540,6 +542,60 @@ class TestReplayMessageEvents:
             p for p in rebuilt.parts if isinstance(p, messages.ToolCallPart)
         )
         assert tool.provider_metadata == {"p": {"tc": 2}}
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\xff\xfe",
+        b"\xfb\xff",
+        b"hello",
+        b"",
+    ],
+)
+def test_file_event_with_bytes_serializes_like_file_part(data: bytes) -> None:
+    event = events.FileEvent(media_type="image/png", data=data)
+
+    dumped = event.model_dump(mode="json")
+    assert dumped["data"] == base64.b64encode(data).decode("ascii")
+    assert (
+        dumped["data"]
+        == messages.FilePart(media_type="image/png", data=data).model_dump(
+            mode="json"
+        )["data"]
+    )
+    assert event.model_dump()["data"] == data
+
+    restored = events.FileEvent.model_validate_json(event.model_dump_json())
+    assert restored.data == base64.b64encode(data).decode("ascii")
+    assert base64.b64decode(restored.data, validate=True) == data
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        "https://example.com/image.png",
+        "data:image/png;base64,+/8=",
+        "+/8=",
+    ],
+)
+def test_file_event_preserves_string_data(data: str) -> None:
+    event = events.FileEvent(media_type="image/png", data=data)
+
+    assert event.model_dump(mode="json")["data"] == data
+    assert (
+        events.FileEvent.model_validate_json(event.model_dump_json()).data
+        == data
+    )
+
+
+async def test_replayed_message_with_bytes_gives_json_safe_events() -> None:
+    data = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\xff\xfe"
+    message = ai.assistant_message("image:", ai.file_part(data))
+
+    async with ai.Stream.replay_message(message) as stream:
+        async for event in stream:
+            event.model_dump_json()
 
 
 async def test_drop_discarded_drops_leftover_tool_output() -> None:
