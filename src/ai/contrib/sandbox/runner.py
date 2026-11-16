@@ -95,6 +95,7 @@ if TYPE_CHECKING:
 _LENGTH = struct.Struct(">Q")
 
 DEFAULT_WINDOW = 256
+DEFAULT_MAX_REPLY_BYTES = 64 * 1024 * 1024
 
 
 class RemoteError(Exception):
@@ -436,15 +437,19 @@ class Runner:
         self,
         process: AbstractAsyncContextManager[Process],
         main_path: str | None = None,
+        *,
+        max_reply_bytes: int = DEFAULT_MAX_REPLY_BYTES,
     ) -> None:
         self._process_cm = process
         self._main_path = main_path
+        self._max_reply_bytes = max_reply_bytes
         self._iter_ids = itertools.count()
         self._request_ids = itertools.count()
         self._pending: dict[int, _Pending] = {}
         self._streams: dict[int, MemoryObjectSendStream[_Reply]]
         self._streams = {}
         self._closed = False
+        self._read_error: Exception | None = None
         # Commands from RemoteIterator.__del__, sent with the next request.
         self._abandoned: list[tuple[Any, ...]] = []
 
@@ -484,8 +489,8 @@ class Runner:
         self._reader_scope.cancel()
         await self._task_group.__aexit__(None, None, None)
 
-    async def _closed_message(self) -> str:
-        return await self._process.exit_message()
+    async def _closed_error(self) -> Exception:
+        return self._read_error or EOFError(await self._process.exit_message())
 
     async def _read_replies(self) -> None:
         with self._reader_scope:
@@ -497,6 +502,11 @@ class Runner:
                 (size,) = _LENGTH.unpack(
                     await self._stdout.receive_exactly(_LENGTH.size)
                 )
+                if size > self._max_reply_bytes:
+                    raise ValueError(
+                        f"runner sent a {size}-byte reply; the limit is "
+                        f"{self._max_reply_bytes}"
+                    )
                 request_id, status, value = json.loads(
                     await self._stdout.receive_exactly(size)
                 )
@@ -517,13 +527,12 @@ class Runner:
             anyio.IncompleteRead,
             anyio.BrokenResourceError,
         ):
-            error: BaseException | None = None
+            pass
         except Exception as exc:
-            error = exc
+            self._read_error = exc
         self._closed = True
         if self._pending or self._streams:
-            if error is None:
-                error = EOFError(await self._closed_message())
+            error = await self._closed_error()
             for pending in self._pending.values():
                 pending.error = error
                 pending.done.set()
@@ -553,7 +562,7 @@ class Runner:
 
     async def _call(self, command: tuple[Any, ...]) -> Any:
         if self._closed:
-            raise EOFError(await self._closed_message())
+            raise await self._closed_error()
         request_id = next(self._request_ids)
         pending = self._pending[request_id] = _Pending()
         try:
@@ -584,7 +593,7 @@ class Runner:
         limit how many it gets.
         """
         if self._closed:
-            raise EOFError(await self._closed_message())
+            raise await self._closed_error()
         request_id = next(self._request_ids)
         # Room for a window of items, the reply that ends the stream, and
         # an error from here; a runner that fills it has ignored its credit.
@@ -781,7 +790,10 @@ async def local_process(
 
 
 def local_runner(
-    main_path: str | None = None, *, python: str = sys.executable
+    main_path: str | None = None,
+    *,
+    python: str = sys.executable,
+    max_reply_bytes: int = DEFAULT_MAX_REPLY_BYTES,
 ) -> Runner:
     """Make a runner subprocess on this machine.
 
@@ -789,7 +801,9 @@ def local_runner(
     """
     if main_path is None:
         main_path = getattr(sys.modules["__main__"], "__file__", None)
-    return Runner(local_process(python), main_path)
+    return Runner(
+        local_process(python), main_path, max_reply_bytes=max_reply_bytes
+    )
 
 
 # This module's name even when it runs as ``__main__``.

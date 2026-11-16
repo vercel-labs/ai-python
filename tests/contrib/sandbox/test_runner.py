@@ -198,27 +198,27 @@ def test_window_must_be_positive() -> None:
 
 
 @contextlib.asynccontextmanager
-async def _flooding_process(items: int) -> AsyncIterator[runner_.Process]:
-    """A runner that answers its first request with ``items`` items at once."""
-    send, receive = anyio.create_memory_object_stream[bytes](items)
+async def _scripted_process(
+    output: list[bytes],
+) -> AsyncIterator[runner_.Process]:
+    """A runner that answers its first request with ``output``, all at once."""
+    send, receive = anyio.create_memory_object_stream[bytes](len(output))
 
     class Stdin:
         async def send(self, data: bytes) -> None:
-            if not receive.statistics().current_buffer_used:
-                for i in range(items):
-                    send.send_nowait(
-                        runner_.encode_reply(0, "ok", ["yield", i])
-                    )
+            while output:
+                send.send_nowait(output.pop(0))
 
-    class Flood:
+    class Scripted:
         stdin = Stdin()
         stdout = receive
 
         async def exit_message(self) -> str:
-            return "flood over"
+            await anyio.sleep_forever()
+            raise AssertionError
 
     try:
-        yield cast("runner_.Process", Flood())
+        yield cast("runner_.Process", Scripted())
     finally:
         send.close()
         receive.close()
@@ -226,7 +226,8 @@ async def _flooding_process(items: int) -> AsyncIterator[runner_.Process]:
 
 async def test_items_beyond_credit_fail_the_stream() -> None:
     window = 4
-    async with runner_.Runner(_flooding_process(100)) as w:
+    flood = [runner_.encode_reply(0, "ok", ["yield", i]) for i in range(100)]
+    async with runner_.Runner(_scripted_process(flood)) as w:
         seen = []
         async with w.iterate(gen, 0, free_running=True, window=window) as it:
             with pytest.raises(RuntimeError, match="credit"):
@@ -235,3 +236,12 @@ async def test_items_beyond_credit_fail_the_stream() -> None:
                     await anyio.sleep(0.01)
         assert len(seen) <= window + 3
         assert not w._streams
+
+
+async def test_oversized_reply_closes_the_runner() -> None:
+    reply = runner_.encode_reply(0, "ok", "x" * 100)
+    process = _scripted_process([reply])
+    async with runner_.Runner(process, max_reply_bytes=50) as w:
+        for _ in range(2):
+            with pytest.raises(ValueError, match="limit is 50"):
+                await w.run(produced)

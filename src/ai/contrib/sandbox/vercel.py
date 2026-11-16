@@ -305,6 +305,7 @@ def sandbox_runner(
     src_dir: StrPath = ".",
     target_dir: str = "workspace",
     env: dict[str, str] | None = None,
+    max_reply_bytes: int = runner_.DEFAULT_MAX_REPLY_BYTES,
 ) -> Runner:
     """Make a sandbox runner, running a copy of ``src_dir`` with ``uv run``.
 
@@ -316,7 +317,11 @@ def sandbox_runner(
     process = sandbox_process(
         box, src_dir=src_dir, target_dir=target_dir, env=env
     )
-    return Runner(process, _remote_main(main_path, src_dir))
+    return Runner(
+        process,
+        _remote_main(main_path, src_dir),
+        max_reply_bytes=max_reply_bytes,
+    )
 
 
 def _session_gone(exc: SandboxApiError | SandboxStdinError) -> bool:
@@ -379,7 +384,12 @@ def pty_sandbox_runner(
     *,
     src_dir: StrPath = ".",
     target_dir: str = "workspace",
+    max_reply_bytes: int = runner_.DEFAULT_MAX_REPLY_BYTES,
 ) -> Runner:
     """Like ``sandbox_runner``, but with ``pty_sandbox_process``."""
     process = pty_sandbox_process(box, src_dir=src_dir, target_dir=target_dir)
-    return Runner(process, _remote_main(main_path, src_dir))
+    return Runner(
+        process,
+        _remote_main(main_path, src_dir),
+        max_reply_bytes=max_reply_bytes,
+    )
