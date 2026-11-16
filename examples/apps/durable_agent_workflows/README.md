@@ -12,7 +12,6 @@ message stream. The agent has a single `bash` tool.
 - Python 3.12+, uv, Node.js, and pnpm for the backend and frontend.
 - Vercel CLI installed and signed in (`vercel login`).
 - A linked Vercel project (`vercel link` from this app directory).
-- `AI_GATEWAY_API_KEY` set in your environment.
 
 ## Development
 
