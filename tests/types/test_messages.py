@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import dataclasses
+import pickle
 import random
 import subprocess
 import sys
@@ -569,3 +571,17 @@ async def test_use_random_overrides_and_restores_async() -> None:
 
     assert await build() == expected
     assert await build() == expected
+
+
+def test_tool_message_equals_its_pickle_and_deep_copy() -> None:
+    message = messages.Message(
+        role="tool",
+        parts=[
+            messages.ToolResultPart(
+                tool_call_id="tc-1", tool_name="lookup", result={"a": 1}
+            )
+        ],
+    )
+    assert pickle.loads(pickle.dumps(message)) == message
+    assert copy.deepcopy(message) == message
+    assert message.model_copy(deep=True) == message
