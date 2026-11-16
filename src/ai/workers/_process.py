@@ -1,7 +1,7 @@
 """A CLI process: the version probe, and JSON lines on stdio.
 
 Shared by the wires. `probe` serves every wire; `spawn` and `Process` serve
-the wires that drive a CLI over stdio (Codex, Pi).
+the wires that drive a CLI over stdio (Codex, Fx, Pi).
 """
 
 from __future__ import annotations

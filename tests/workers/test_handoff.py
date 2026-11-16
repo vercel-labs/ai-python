@@ -3,7 +3,7 @@
 Text verbatim; tool calls as native items with the ORIGINAL name and
 arguments; tool results as strings bound to their call; reasoning as a
 user-role note after the turn it belonged to (codex), or not at all
-(claude, pi). A worker holds a tool an `ai.Agent` ran as a call and a
+(claude, fx, pi). A worker holds a tool an `ai.Agent` ran as a call and a
 `tool` message, and a tool the CLI ran as built-in parts in one message:
 each renderer takes both, and both seed the same.
 """

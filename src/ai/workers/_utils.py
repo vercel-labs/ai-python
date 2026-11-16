@@ -26,9 +26,10 @@ has the context, and the rule for what becomes what is the same everywhere:
   Claude renderer omits reasoning, and the worker warns with the count,
   because dropping context silently is the one thing this SDK never does.
   Pi omits it too, for both reasons: pi drops thinking another model wrote,
-  and pi often runs Claude.
-- files: images go to every harness, as the image input each takes (pi
-  takes bytes, so an image known only by URL becomes a note naming it);
+  and pi often runs Claude. Fx omits it as well: its session store keeps
+  reasoning only as the provider's own records, with no portable form.
+- files: images go to every harness, as the image input each takes (pi and
+  fx take bytes, so an image known only by URL becomes a note naming it);
   PDFs to Claude as documents. Anything else (a PDF into codex, a text
   file) is left out and counted (`unsupported_files`), and the worker
   warns, like it does for reasoning into Claude.
