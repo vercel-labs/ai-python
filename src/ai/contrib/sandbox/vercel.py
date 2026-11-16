@@ -183,9 +183,10 @@ def _remote_main(main_path: StrPath | None, src_dir: StrPath) -> str | None:
 # Sandbox command output doesn't yet pass arbitrary bytes through intact, so
 # the runner's stdout is piped through this, which base64-encodes each chunk
 # onto its own line.
-_BASE64_ENCODER = """\
+_BASE64_CHUNK = 65536
+_BASE64_ENCODER = f"""\
 import base64, sys
-while data := sys.stdin.buffer.read1():
+while data := sys.stdin.buffer.read1({_BASE64_CHUNK}):
     sys.stdout.buffer.write(base64.b64encode(data) + b"\\n")
     sys.stdout.buffer.flush()
 """
@@ -223,6 +224,8 @@ class Base64ByteReceiveStream(ByteReceiveStream):
     async def receive(self, max_bytes: int = 65536) -> bytes:
         while not self._data:
             line, newline, rest = self._lines.partition(b"\n")
+            if len(line) > 2 * _BASE64_CHUNK:
+                raise ValueError("runner sent an overlong base64 line")
             if newline:
                 self._lines = rest
             elif self._eof:
