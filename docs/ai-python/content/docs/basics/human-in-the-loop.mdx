@@ -49,6 +49,11 @@ Cancel a live hook when the waiting workflow should stop:
 await ai.cancel_hook("approve_tool_call_id_here", reason="client disconnected")
 ```
 
+Cancellation stops the waiting tool without adding a tool result. The history
+can end with an unanswered tool call; in that case, `stream.output` is not
+available. Resolve with `granted=False` instead when you want the model to
+continue after a denial.
+
 Hook operations target the current `HookRegistry`, which is set inside the
 `async with agent.run(...)` block. To resolve from a different task — a UI
 callback, another endpoint — pass a registry explicitly. Create one up front
@@ -102,7 +107,7 @@ class CustomPayload(pydantic.BaseModel):
 approval = await ai.hook(
     "some_hook",
     payload=CustomPayload,
-    metadata={"kek": "pek"},
+    metadata={"request_type": "operator_review"},
 )
 ```
 
@@ -117,41 +122,86 @@ ai.resolve_hook(
 
 ## Resume in serverless flows
 
-Serverless setups can't suspend on `await` in the same way as long-running
-servers. For that reason, the SDK provides an alternative way for handling
-hook resolutions.
+For an initial request that must end while a hook waits, call `ai.defer_hook`
+on each `PendingHookEvent`. The run ends in a blocked state instead of waiting
+for a resolution in the same process.
 
-Using the serverless flow only requires you to update the `agent.run` callsite
-(e.g. your serverless endpoint code).
+On the first request, drain the stream and save the full runtime history,
+including internal messages. `stream.blocked` tells you whether the run needs
+external input. `stream.deferred_hooks` holds the hooks to show to the caller:
 
 ```python
-# start (or replay pre-hook part of) a run
-async with agent.run(model, messages) as stream:
-    # pre-register tool approvals before iterating the stream
-    for approval in approvals:
-        ai.resolve_hook(
-            approval.hook_id,
-            ai.tools.ToolApproval.model_validate(approval.data)
-        )
+from typing import Any
 
-    async for event in stream:
-        if isinstance(event, ai.events.PendingHookEvent):
-            # interrupt the loop
-            ai.defer_hook(event.hook)
 
+async def start_run(
+    agent: ai.Agent,
+    model: ai.Model,
+    messages: list[ai.messages.Message],
+) -> dict[str, Any]:
+    async with agent.run(model, messages) as stream:
+        async for event in stream:
+            if isinstance(event, ai.events.PendingHookEvent):
+                ai.defer_hook(event.hook)
+
+    state = {
+        "messages": [message.model_dump(mode="json") for message in stream.messages],
+        "blocked": stream.blocked,
+        "hooks": [hook.model_dump(mode="json") for hook in stream.deferred_hooks],
+    }
+    if not stream.blocked:
+        print(stream.output)
+    return state
 ```
 
-When handling the hook event, call `defer_hook` to interrupt the loop
-and surface your tool approvals (or custom hook-related work) to the client.
+Persist the returned state in your application's store before ending the
+request. Do not read `stream.output` while the run is blocked: it has no final
+assistant output yet. The run's `stream.hook_registry` is an in-process
+registry, not the history you persist.
 
-The `ToolRunner` will handle multiple concurrent aborts by waiting for all
-scheduled tasks to complete or get aborted. That way you can run approval-gated
-tools on serverless concurrently.
+On the next request, load the saved state and accept authenticated decisions
+from the caller. Pass each stored hook ID and its payload to `ai.resolve_hook`
+inside the new run, before iteration. Supply decisions for all saved hooks
+together: a current SDK defect can leave `stream.blocked` false if a replayed
+turn defers again, so this helper can raise `ValueError` instead of returning
+state.
 
-Once the client has gathered payloads for all hooks, it will re-enter via the
-same endpoint, which will then pre-register hook resolutions inside the
-`agent.run` block, before iterating the stream. The loop will replay results
-of LLM calls and tool results
-from the first run without redoing non-deterministic and duplicating side-effects.
-When it hits the hook for which it has a pre-registered resolution, it will
-continue through without suspending.
+```python
+from typing import Any
+
+
+async def resume_run(
+    agent: ai.Agent,
+    model: ai.Model,
+    saved_state: dict[str, Any],
+    decisions: dict[str, ai.tools.ToolApproval],
+) -> dict[str, Any]:
+    messages = [
+        ai.messages.Message.model_validate(item) for item in saved_state["messages"]
+    ]
+    async with agent.run(model, messages) as stream:
+        for hook_id, payload in decisions.items():
+            ai.resolve_hook(hook_id, payload)
+
+        async for event in stream:
+            if isinstance(event, ai.events.PendingHookEvent):
+                ai.defer_hook(event.hook)
+
+    state = {
+        "messages": [message.model_dump(mode="json") for message in stream.messages],
+        "blocked": stream.blocked,
+        "hooks": [hook.model_dump(mode="json") for hook in stream.deferred_hooks],
+    }
+    if not stream.blocked:
+        print(stream.output)
+    return state
+```
+
+For example, an operator's approval becomes
+`ai.tools.ToolApproval(granted=True, reason="approved")`. Custom hooks use their
+declared payload type instead. Check that each decision belongs to the current
+user and saved run before registering it.
+
+The loop replays saved model responses and completed tool results. It continues
+when it reaches a hook with a pre-registered resolution. Keep tools and custom
+loop behavior consistent between requests so replay can match the saved history.
