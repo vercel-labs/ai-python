@@ -508,3 +508,51 @@ def test_with_resolved_key(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv(model.provider.api_key_env or "")
     assert copied.provider.api_key == "sekrit"
     assert model.provider.api_key is None
+
+
+class _SquattingAgent(remote.RemoteAgent):
+    status = "pending"
+
+    async def loop(
+        self, context: ai.Context
+    ) -> AsyncGenerator[events.AgentEvent]:
+        part: messages.HookPart[Any] = messages.HookPart(
+            hook_id="taken",
+            hook_type="ToolApproval",
+            status=cast("Any", self.status),
+        )
+        yield events.HookEvent.for_hook(ai.assistant_message(part), part)
+        await asyncio.sleep(0.05)
+
+
+class _ResolvingAgent(_SquattingAgent):
+    status = "resolved"
+
+
+class _CancellingAgent(_SquattingAgent):
+    status = "cancelled"
+
+
+@pytest.mark.parametrize(
+    "agent", [_SquattingAgent(), _ResolvingAgent(), _CancellingAgent()]
+)
+async def test_runner_hook_cannot_pose_as_a_live_hook(
+    agent: remote.RemoteAgent,
+) -> None:
+    model = ai.testing.FakeModel(
+        [ai.user_message("go"), ai.assistant_message("done")]
+    )
+    host: asyncio.Future[dict[str, Any]] = asyncio.Future()
+    seen = []
+    async with remote.use_runner(_runner()):
+        async with agent.run(model, [ai.user_message("go")]) as stream:
+            live = ai.get_hook_registry()._live_hooks
+            live["taken"] = (host, {}, cast("Any", None))
+            with pytest.raises(ExceptionGroup) as raised:
+                async for event in stream:
+                    seen.append(event)
+            assert raised.group_contains(RuntimeError, match="taken")
+            assert live["taken"][0] is host
+            ai.resolve_hook("taken", {"granted": True})
+    assert not any(isinstance(e, events.HookEvent) for e in seen)
+    assert host.result() == {"granted": True}

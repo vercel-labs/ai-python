@@ -152,6 +152,7 @@ class _HookBridge:
         self._runtime = runtime_.get_runtime()
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._cancelled: set[str] = set()
+        self._pending: set[str] = set()
 
     def forward(self, event: events.HookEvent) -> bool:
         """Note a hook event from the runner; return whether to yield it.
@@ -159,23 +160,36 @@ class _HookBridge:
         A cancellation made here was already reported here.
         """
         hook = event.hook
-        if hook.status == "cancelled":
-            return hook.hook_id not in self._cancelled
-        if hook.status == "pending":
-            future: asyncio.Future[dict[str, Any]] = asyncio.Future()
-            self._registry._live_hooks[hook.hook_id] = (
-                future,
-                hook.metadata,
-                self._runtime,
+        if hook.status != "pending":
+            if hook.hook_id not in self._pending:
+                raise RuntimeError(
+                    f"runner hook {hook.hook_id!r} is {hook.status} "
+                    "but was never pending"
+                )
+            self._pending.remove(hook.hook_id)
+            return (
+                hook.status != "cancelled"
+                or hook.hook_id not in self._cancelled
             )
-            self._tasks[hook.hook_id] = asyncio.create_task(
-                self._pass_on(hook.hook_id, future)
+        if hook.hook_id in self._registry._live_hooks:
+            raise RuntimeError(
+                f"runner hook {hook.hook_id!r} is already pending here"
             )
-            early = self._registry._pending_resolutions.pop(hook.hook_id, None)
-            if isinstance(early, BaseException):
-                future.set_exception(early)
-            elif early is not None:
-                future.set_result(early)
+        self._pending.add(hook.hook_id)
+        future: asyncio.Future[dict[str, Any]] = asyncio.Future()
+        self._registry._live_hooks[hook.hook_id] = (
+            future,
+            hook.metadata,
+            self._runtime,
+        )
+        self._tasks[hook.hook_id] = asyncio.create_task(
+            self._pass_on(hook.hook_id, future)
+        )
+        early = self._registry._pending_resolutions.pop(hook.hook_id, None)
+        if isinstance(early, BaseException):
+            future.set_exception(early)
+        elif early is not None:
+            future.set_result(early)
         return True
 
     async def _pass_on(
@@ -197,7 +211,9 @@ class _HookBridge:
                 _resolve_remote, self._key, label, resolution
             )
         finally:
-            self._registry._live_hooks.pop(label, None)
+            live = self._registry._live_hooks
+            if label in live and live[label][0] is future:
+                del live[label]
             self._tasks.pop(label, None)
 
     async def aclose(self) -> None:
