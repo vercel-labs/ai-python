@@ -16,18 +16,17 @@ import subprocess
 import sys
 import tomllib
 from collections.abc import AsyncIterator, Iterable
-from contextlib import AsyncExitStack, asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from os import PathLike
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import anyio
 from anyio.abc import ByteReceiveStream, ByteSendStream
-from anyio.streams.buffered import BufferedByteReceiveStream
 from vercel.sandbox import SandboxApiError, SandboxStdinError
 
 if TYPE_CHECKING:
-    from vercel.sandbox import Command, InteractiveSession, Sandbox
+    from vercel.sandbox import Command, Sandbox
 
 from . import runner as runner_
 from .runner import Process, Runner
@@ -251,12 +250,17 @@ class _CommandProcess:
     stdin: ByteSendStream
     stdout: ByteReceiveStream
     cmd: Command
+    stderr: bytearray
+    stderr_done: anyio.Event
 
     async def exit_message(self) -> str:
         returncode = await self.cmd.wait()
-        stderr = await self.cmd.stderr.read() if self.cmd.stderr else b""
-        text = stderr.decode(errors="replace")
+        await self.stderr_done.wait()
+        text = self.stderr.decode(errors="replace")
         return f"runner exited with {returncode}\n{text}"
+
+
+_STDERR_TAIL = 65536
 
 
 @asynccontextmanager
@@ -280,22 +284,44 @@ async def sandbox_process(
         stdin=subprocess.PIPE,
     )
     assert cmd.stdin is not None and cmd.stdout is not None
+    raw_stderr = cmd.stderr
+    assert raw_stderr is not None
     stdout = Base64ByteReceiveStream(cmd.stdout)
+    stderr = bytearray()
+    stderr_done = anyio.Event()
+
+    # The sandbox client buffers stderr until it's read, so it's read as it
+    # comes, and only its end is kept.
+    async def keep_stderr_tail() -> None:
+        try:
+            with suppress(Exception):
+                async for chunk in raw_stderr:
+                    stderr.extend(chunk)
+                    del stderr[:-_STDERR_TAIL]
+        finally:
+            stderr_done.set()
+
+    task_group = anyio.create_task_group()
+    await task_group.__aenter__()
+    task_group.start_soon(keep_stderr_tail)
     try:
-        yield _CommandProcess(cmd.stdin, stdout, cmd)
-    except BaseException:
-        await protected(cmd.kill())
-        raise
-    try:
-        await cmd.stdin.aclose()
-        await cmd.wait()
-    except (SandboxApiError, SandboxStdinError) as exc:
-        # The sandbox may have stopped, as at its execution time limit.
-        if not _session_gone(exc):
+        try:
+            yield _CommandProcess(cmd.stdin, stdout, cmd, stderr, stderr_done)
+        except BaseException:
+            await protected(cmd.kill())
             raise
-    await stdout.aclose()
-    if cmd.stderr is not None:
-        await cmd.stderr.aclose()
+        try:
+            await cmd.stdin.aclose()
+            await cmd.wait()
+        except (SandboxApiError, SandboxStdinError) as exc:
+            # The sandbox may have stopped, as at its execution time limit.
+            if not _session_gone(exc):
+                raise
+        await stdout.aclose()
+    finally:
+        task_group.cancel_scope.cancel()
+        await task_group.__aexit__(None, None, None)
+        await raw_stderr.aclose()
 
 
 def sandbox_runner(
@@ -328,68 +354,3 @@ def _session_gone(exc: SandboxApiError | SandboxStdinError) -> bool:
     """Whether ``exc`` says the sandbox's session is gone (HTTP 410)."""
     cause = exc.cause if isinstance(exc, SandboxStdinError) else exc
     return isinstance(cause, SandboxApiError) and cause.status_code == 410
-
-
-_READY = b"RUN_SYNC_READY\n"
-
-
-@dataclasses.dataclass
-class _PtyProcess:
-    stdin: ByteSendStream
-    stdout: ByteReceiveStream
-    pty: InteractiveSession
-    box: Sandbox
-    stderr_path: str
-
-    async def exit_message(self) -> str:
-        returncode = await self.pty.wait()
-        stderr = await self.box.fs.read_text(self.stderr_path)
-        return f"runner exited with {returncode}\n{stderr}"
-
-
-@asynccontextmanager
-async def pty_sandbox_process(
-    box: Sandbox, *, src_dir: StrPath = ".", target_dir: str = "workspace"
-) -> AsyncIterator[Process]:
-    """Like ``sandbox_process``, but on a PTY in raw mode, so replies are raw.
-
-    The runner's stderr goes to a file in the sandbox instead of the terminal.
-    """
-    sync_env = await sync_workspace(box, src_dir, target_dir)
-    env_args = [f"{k}={v}" for k, v in sync_env.items()]
-    command = shlex.join(["env", *env_args, *_uv_args()])
-    stderr_path = f"/tmp/run_sync-{os.urandom(4).hex()}.err"
-    script = (
-        f"cd {shlex.quote(target_dir)} && stty raw -echo"
-        f" && printf {shlex.quote(_READY.decode())}"
-        f" && exec {command} 2>{stderr_path}"
-    )
-    stack = AsyncExitStack()
-    try:
-        pty = await stack.enter_async_context(
-            box.open_interactive("sh", ["-c", script])
-        )
-        stdout = BufferedByteReceiveStream(pty.stream)
-        await stdout.receive_until(_READY, 65536)
-        yield _PtyProcess(pty.stream, stdout, pty, box, stderr_path)
-    except BaseException:
-        await protected(stack.aclose())
-        raise
-    await stack.aclose()
-
-
-def pty_sandbox_runner(
-    box: Sandbox,
-    main_path: StrPath | None = None,
-    *,
-    src_dir: StrPath = ".",
-    target_dir: str = "workspace",
-    max_reply_bytes: int = runner_.DEFAULT_MAX_REPLY_BYTES,
-) -> Runner:
-    """Like ``sandbox_runner``, but with ``pty_sandbox_process``."""
-    process = pty_sandbox_process(box, src_dir=src_dir, target_dir=target_dir)
-    return Runner(
-        process,
-        _remote_main(main_path, src_dir),
-        max_reply_bytes=max_reply_bytes,
-    )
