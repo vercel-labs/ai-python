@@ -10,10 +10,15 @@ async def main() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         harness = ai.external.ClaudeCode(cwd=tmp)
 
-        await ai.experimental_generate(
-            harness,
-            [ai.user_message("Remember this codeword: PLATYPUS. Reply OK.")],
-        )
+        async with harness.session():
+            await ai.experimental_generate(
+                harness,
+                [
+                    ai.user_message(
+                        "Remember this codeword: PLATYPUS. Reply OK."
+                    )
+                ],
+            )
 
         # The external harness is plain data, and it remembers its CLI session.
         saved = harness.model_dump_json()  # put this in your database

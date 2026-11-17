@@ -31,7 +31,7 @@ async def main(kind: str) -> None:
         )
     ]
     harness = KINDS[kind]()
-    async with agent.run(harness, messages) as run:
+    async with harness.session(), agent.run(harness, messages) as run:
         async for event in run:
             match event:
                 case ai.events.ToolEnd():  # an ai tool: the agent runs it

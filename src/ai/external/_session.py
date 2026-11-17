@@ -102,7 +102,7 @@ class Session:
     - `messages`: the conversation, in `ai` messages. The session keeps it
       current.
 
-    Open the session to keep the CLI alive between turns and to control it::
+    Open the session to use it. The CLI stays alive between the turns::
 
         async with harness.session() as session:
             await session.send(ai.user_message("Fix the tests"))
@@ -111,8 +111,10 @@ class Session:
 
     `start()` and `close()` do the same without a block. While the session is
     open, the external harness's model calls (`ai.stream(harness, messages)`,
-    `ai.Agent(...).run(harness, messages)`) run on it. This applies to the
-    task that opened the session and to the tasks that it makes after that.
+    `ai.Agent(...).run(harness, messages)`) run on it; without an open session
+    they raise. This applies to the task that opened the session and to the
+    tasks that it makes after that. An external harness has one open session
+    in a task.
 
     The CLI starts with the first `send()` or the first model call, not when
     the block opens: by then the tools and the past are known. `start()`
@@ -165,20 +167,15 @@ class Session:
             raise errors.ExternalHarnessError(
                 f"the session {self.id} is open already"
             )
-        # The session that the external harness's model calls made without a
-        # block.
-        last = self.harness._session
-        if last is not None and last.id == self.id:
-            if last._stream_lock.locked():
-                raise errors.ExternalHarnessError(
-                    "a model call runs on this session: wait for its end"
-                )
-            self.harness._session = None
+        # A model call runs on the open session of its external harness, so
+        # an external harness has one open session in a context.
+        if any(s.harness is self.harness for s in opened):
+            raise errors.ExternalHarnessError(
+                "a session of this external harness is open already: "
+                "sessions of one external harness do not nest"
+            )
         self._open = True
         _OPEN.set((*opened, self))
-        if last is not None and last.id == self.id:
-            # Its CLI can wait in a turn that nobody continues.
-            await last._stop_cli()
 
     async def start(self) -> None:
         """Open the session and start the CLI now. `close()` ends both.

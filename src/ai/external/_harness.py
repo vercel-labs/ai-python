@@ -17,7 +17,7 @@ from __future__ import annotations
 import asyncio
 import os
 from collections.abc import AsyncGenerator, Sequence
-from typing import TYPE_CHECKING, Any, ClassVar, Self
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import pydantic
 
@@ -63,12 +63,10 @@ class ExternalHarnessProvider(pydantic.BaseModel):
     ) -> AsyncGenerator[events_.Event]:
         """Answer `messages` with one assistant message, as a model does.
 
-        Use `ai.stream(harness, messages)` or `ai.Agent.run(harness, ...)`. In
-        an open session (`async with harness.session()`), the call runs on the
-        live CLI. Without one, the call starts the CLI, continues
-        `harness.session_id`, and stops the CLI when the turn ends. An external
-        harness with no `session_id` starts a new session, seeded with the past
-        in `messages` (lossy), and remembers its id.
+        Use `ai.stream(harness, messages)` or `ai.Agent.run(harness, ...)` in
+        an open session (`async with harness.session()`): the call runs on its
+        live CLI. Without an open session, the call raises. A new session
+        starts with the past in `messages` (lossy).
 
         The message ends with `finish_reason="tool_call"` when the CLI calls
         `ai` tools from `tools=`; the CLI waits for the results, which come with
@@ -80,23 +78,21 @@ class ExternalHarnessProvider(pydantic.BaseModel):
                 "external harnesses do not support output_type yet"
             )
         pin = harness.session_id
-        # A session of this external harness that is open here: the live CLI.
+        # The session of this external harness that is open here: the live CLI.
         session = next(
             (
                 s
-                for s in reversed(session_._OPEN.get())
+                for s in session_._OPEN.get()
                 if s._open
                 and (s.harness is harness or (pin is not None and s.id == pin))
             ),
             None,
         )
-        stale = None
         if session is None:
-            # No block: the session that the last call made, if it is still
-            # the external harness's session.
-            session = harness._session
-            if session is None or session.id != pin:
-                stale, session = session, session_.Session(harness)
+            raise errors.ExternalHarnessError(
+                "a model call of an external harness needs an open session: "
+                "use `async with harness.session()`"
+            )
         if session._stream_lock.locked():
             raise errors.ExternalHarnessError(
                 "an external harness runs one stream() at a time"
@@ -105,17 +101,12 @@ class ExternalHarnessProvider(pydantic.BaseModel):
         new = session._sync(messages)
         seeds = seeds and bool(session.messages)
         async with session._stream_lock:
-            if not session._open:
-                harness._session = session
-            if stale is not None:
-                # Its CLI can wait in a turn that nobody continues.
-                await stale._stop_cli()
             if tools is not None:
                 harness.tools = [t for t in tools if t.kind == "function"]
             run = await session._start_for_stream(seeds=seeds)
             queue: asyncio.Queue[Any] = asyncio.Queue()
             session._stream_queues.add(queue)
-            ended = waits = False
+            ended = False
             try:
                 for message in new:
                     await session._send(message)
@@ -136,7 +127,6 @@ class ExternalHarnessProvider(pydantic.BaseModel):
                         continue  # the end of a message that began earlier
                     if isinstance(event, events_.StreamEnd):
                         ended = True
-                        waits = event.finish_reason == "tool_call"
                         error = run.failures.pop(event.message.id, None)
                         if error is not None:
                             raise error
@@ -157,10 +147,6 @@ class ExternalHarnessProvider(pydantic.BaseModel):
                 raise
             finally:
                 session._stream_queues.discard(queue)
-                if not session._open and not waits:
-                    # Nobody holds the session open: the CLI runs for one
-                    # turn. After `tool_call` it waits for the results.
-                    await session._stop_cli()
 
     async def generate(
         self,
@@ -178,19 +164,17 @@ class ExternalHarnessProvider(pydantic.BaseModel):
 class ExternalHarness(pydantic.BaseModel):
     """A coding-agent CLI, in the shape of an `ai.Model`.
 
-    Use it where a model goes. As with a model, give the whole history::
-
-        async with ai.stream(harness, messages) as s: ...
-        async with ai.Agent(tools=[...]).run(harness, messages) as run: ...
-
-    Each call starts the CLI, continues the session `session_id`, and stops the
-    CLI when the turn ends. An external harness with no `session_id` starts a
-    new session and remembers its id. In a session block the same calls run on
-    one live CLI, and the session gives direct control::
+    Use it where a model goes, in a session block. As with a model, give the
+    whole history::
 
         async with harness.session() as session:
             async with ai.stream(harness, messages) as s: ...
             await session.send(ai.user_message("And the tests?"))
+
+    The block holds one live CLI: the model calls in it (`ai.stream`,
+    `ai.Agent.run`) run on that CLI, and the session gives direct control. A
+    model call outside a session block raises. An external harness with no
+    `session_id` starts a new session and remembers its id.
 
     The fields are plain data. `model_dump()` saves the external harness with
     its `session_id`, and `ExternalHarness.model_validate(data)` makes the
@@ -219,7 +203,6 @@ class ExternalHarness(pydantic.BaseModel):
     """
 
     _classes: ClassVar[dict[str, type[ExternalHarness]]] = {}
-    _session: session_.Session | None = pydantic.PrivateAttr(default=None)
 
     def __init__(self, **data: Any) -> None:
         if type(self) is ExternalHarness:
@@ -260,16 +243,6 @@ class ExternalHarness(pydantic.BaseModel):
                 )
             return harness_class.model_validate(data)
         return handler(data)
-
-    def __copy__(self) -> Self:
-        copied = super().__copy__()
-        copied._session = None
-        return copied
-
-    def __deepcopy__(self, memo: dict[int, Any] | None = None) -> Self:
-        copied = super().__deepcopy__(memo)
-        copied._session = None
-        return copied
 
     @property
     def id(self) -> str:

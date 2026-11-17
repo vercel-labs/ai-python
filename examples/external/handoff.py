@@ -18,15 +18,16 @@ async def main() -> None:
                 "remember: the deadline is FRIDAY. Reply with exactly: OK"
             )
         ]
-        reply = await ai.experimental_generate(claude, messages)
+        async with claude.session():
+            reply = await ai.experimental_generate(claude, messages)
         print(
             f"Claude Code: {reply.text.strip()} "
             f"({len(reply.builtin_tool_calls)} tool call(s))"
         )
 
         # 2. Codex continues it, in the same directory. As with a model:
-        #    give the history to the new external harness. It starts a new CLI
-        #    session with that past, thus it knows what was said and what was
+        #    give the history to the new external harness. Its new session
+        #    starts with that past, thus it knows what was said and what was
         #    done.
         codex = ai.external.Codex(cwd=tmp)
 
@@ -38,7 +39,8 @@ async def main() -> None:
                 "Then append 'bread' to notes.txt. Reply in one line."
             ),
         ]
-        reply = await ai.experimental_generate(codex, messages)
+        async with codex.session():
+            reply = await ai.experimental_generate(codex, messages)
         print("Codex:", reply.text.strip())
 
         notes = pathlib.Path(tmp, "notes.txt").read_text()

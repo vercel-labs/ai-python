@@ -532,14 +532,15 @@ async def test_a_refused_seed_is_removed(
     with pytest.raises(
         external.ExternalHarnessError, match=r"0\.0\.17"
     ) as error:
-        await run(
-            harness,
-            [
-                ai.user_message("old"),
-                ai.assistant_message("reply"),
-                ai.user_message("new"),
-            ],
-        )
+        async with harness.session():
+            await run(
+                harness,
+                [
+                    ai.user_message("old"),
+                    ai.assistant_message("reply"),
+                    ai.user_message("new"),
+                ],
+            )
     assert str(error.value).startswith(
         "fx 0.0.17: this version of ai cannot seed an fx session: "
     )
@@ -635,6 +636,7 @@ async def test_bridge_calls_are_ai_tool_calls_not_builtin(
     task = asyncio.create_task(call_bridge())
     async with (
         asyncio.timeout(5),
+        harness.session(),
         ai.Agent(tools=[lookup]).run(
             harness, [ai.user_message("go")]
         ) as result,
@@ -824,7 +826,8 @@ async def test_a_failed_initialize_without_sign_in_is_not_authenticated(
         ),
     }
     with pytest.raises(external.NotAuthenticatedError):
-        await run(harness, [ai.user_message("go")])
+        async with harness.session():
+            await run(harness, [ai.user_message("go")])
     assert server.process.terminated
 
 
@@ -864,7 +867,8 @@ async def test_a_refused_turn_raises_with_the_last_error_detail(
     with pytest.raises(
         external.ExternalHarnessError,
     ) as error:
-        await run(harness, [ai.user_message("go")])
+        async with harness.session():
+            await run(harness, [ai.user_message("go")])
     detail = "final recovery" if recovery else "last failure"
     assert str(error.value) == f"fx turn failed: {detail}"
 
@@ -880,7 +884,8 @@ async def test_a_crash_reaches_the_stream(
 
     task = asyncio.create_task(die())
     with pytest.raises(external.ExternalHarnessError, match=r"crashed|stopped"):
-        await run(harness, [ai.user_message("go")])
+        async with harness.session():
+            await run(harness, [ai.user_message("go")])
     await task
 
 
@@ -931,6 +936,7 @@ async def test_text_and_reasoning_blocks_close_without_end_markers(
     events = []
     async with (
         asyncio.timeout(5),
+        harness.session(),
         ai.stream(harness, [ai.user_message("go")]) as stream,
     ):
         async for event in stream:
@@ -973,7 +979,8 @@ async def test_seed_replay_counts_distinct_user_ids_not_image_chunks(
         ai.user_message("now"),
     ]
     server.turns = [([text("fresh")], END)]
-    stream = await run(harness, history)
+    async with harness.session():
+        stream = await run(harness, history)
     assert stream.text == "fresh"
     assert server.loaded is not None and server.loaded.exists()
 
@@ -997,6 +1004,7 @@ async def test_prompt_stop_reasons_have_one_stream_end(
     ends = []
     async with (
         asyncio.timeout(5),
+        harness.session(),
         ai.stream(harness, [ai.user_message("go")]) as stream,
     ):
         async for event in stream:
@@ -1092,7 +1100,8 @@ async def test_a_prompt_rpc_error_reaches_the_stream(
     with pytest.raises(
         external.ExternalHarnessError, match="model request failed"
     ):
-        await run(harness, [ai.user_message("go")])
+        async with harness.session():
+            await run(harness, [ai.user_message("go")])
     await task
 
 
@@ -1107,7 +1116,8 @@ async def test_a_refused_turn_with_bad_credentials_is_not_authenticated(
         )
     ]
     with pytest.raises(external.NotAuthenticatedError):
-        await run(harness, [ai.user_message("go")])
+        async with harness.session():
+            await run(harness, [ai.user_message("go")])
 
 
 async def through_turns(feed: AsyncIterator[Any], count: int) -> list[Any]:
@@ -1320,7 +1330,10 @@ async def test_noncontent_updates_do_not_split_a_text_block(
     fields = fields_by_kind[native]
     server.turns = [([text("HE"), update(native, **fields), text("RON")], END)]
     events = []
-    async with ai.stream(harness, [ai.user_message("go")]) as stream:
+    async with (
+        harness.session(),
+        ai.stream(harness, [ai.user_message("go")]) as stream,
+    ):
         async for event in stream:
             events.append(event)
     assert stream.text == "HERON"
@@ -1335,7 +1348,10 @@ async def test_a_final_tool_update_without_a_call_is_ignored(
 ) -> None:
     server.turns = [([RESULT, text("done")], END)]
     events = []
-    async with ai.stream(harness, [ai.user_message("go")]) as stream:
+    async with (
+        harness.session(),
+        ai.stream(harness, [ai.user_message("go")]) as stream,
+    ):
         async for event in stream:
             events.append(event)
     assert not any(isinstance(e, ai.events.BuiltinToolResult) for e in events)
@@ -1365,7 +1381,8 @@ async def test_credential_refresh_failure_is_not_authenticated(
         ([text("credential refresh failed")], {"stopReason": "refused"})
     ]
     with pytest.raises(external.NotAuthenticatedError):
-        await run(harness, [ai.user_message("go")])
+        async with harness.session():
+            await run(harness, [ai.user_message("go")])
 
 
 async def test_a_crash_while_idle_reaches_session_events(
@@ -1899,7 +1916,8 @@ async def test_seeding_warns_when_reasoning_is_not_carried_into_fx(
     ]
     server.turns = [([text("fresh")], END)]
     with pytest.warns(UserWarning, match=r"1 reasoning part\(s\).*"):
-        stream = await run(harness, history)
+        async with harness.session():
+            stream = await run(harness, history)
     assert stream.text == "fresh"
     assert "private thought" not in json.dumps(server.loaded_records)
 

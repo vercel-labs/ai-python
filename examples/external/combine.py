@@ -10,7 +10,10 @@ import ai
 async def tagged(
     label: str, harness: ai.external.ExternalHarness, prompt: str
 ) -> AsyncGenerator[tuple[str, ai.events.Event]]:
-    async with ai.stream(harness, [ai.user_message(prompt)]) as stream:
+    async with (
+        harness.session(),
+        ai.stream(harness, [ai.user_message(prompt)]) as stream,
+    ):
         async for event in stream:
             yield label, event
 

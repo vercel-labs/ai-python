@@ -27,7 +27,10 @@ class CodeThenReview(ai.Agent):
         # Step 1: the external harness does the task. Each run is a new
         # conversation, thus a copy of the external harness with no session.
         harness = self.harness.model_copy(update={"session_id": None})
-        async with ai.stream(harness, [context.messages[-1]]) as work:
+        async with (
+            harness.session(),
+            ai.stream(harness, [context.messages[-1]]) as work,
+        ):
             async for event in work:
                 if not isinstance(event, REASONING):
                     yield event

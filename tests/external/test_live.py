@@ -68,43 +68,17 @@ async def test_a_turn_with_a_cli_tool_and_a_resume(
         assert s.message.builtin_tool_calls
     assert session.id is not None
     assert harness.session_id == session.id  # the external harness remembers it
-    # The external harness's data is all that a later process needs. No block:
-    # the call starts the CLI and continues the session.
+    # The external harness's data is all that a later process needs: its
+    # session continues the CLI session.
     again = external.ExternalHarness.model_validate_json(
         harness.model_dump_json()
     )
-    async with asyncio.timeout(240):
+    async with asyncio.timeout(240), again.session():
         reply = await ai.experimental_generate(
             again, [ai.user_message("Which word did you read? One word.")]
         )
     assert "HERON" in reply.text.upper()
     assert again.session_id == session.id
-
-
-async def test_model_calls_without_a_session_continue_the_conversation(
-    make: Callable[..., external.ExternalHarness],
-) -> None:
-    harness = make()
-    history = [
-        ai.user_message(
-            "Read secret.txt with a tool. Reply with the word only."
-        )
-    ]
-    async with asyncio.timeout(240):
-        async with ai.stream(harness, history) as s:
-            async for _ in s:
-                pass
-        assert "HERON" in s.text.upper()
-        # The CLI stopped after the turn; this call continues its session.
-        reply = await ai.experimental_generate(
-            harness,
-            [
-                *history,
-                s.message,
-                ai.user_message("Which file did you read? The name only."),
-            ],
-        )
-    assert "SECRET" in reply.text.upper()
 
 
 async def test_an_agent_gives_its_tools_to_the_cli(
@@ -116,7 +90,7 @@ async def test_an_agent_gives_its_tools_to_the_cli(
         return "PELICAN" if topic == "birds" else "UNKNOWN"
 
     harness = make()
-    async with asyncio.timeout(240):  # no session: the CLI runs for the turn
+    async with asyncio.timeout(240), harness.session():
         async with ai.Agent(tools=[secret_word]).run(
             harness,
             [
@@ -200,7 +174,7 @@ async def test_a_new_session_uses_the_given_past(
             "What is the secret word from our conversation? Reply with it only."
         ),
     ]
-    async with asyncio.timeout(240):
+    async with asyncio.timeout(240), harness.session():
         reply = await ai.experimental_generate(harness, history)
     assert "GENTIAN-31" in reply.text.upper()
     assert harness.session_id is not None
