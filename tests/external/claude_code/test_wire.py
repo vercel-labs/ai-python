@@ -54,7 +54,6 @@ class FakeCLI:
             ),
             result(subtype="error_during_execution", is_error=True),
         ]
-        self.sessions = {SESSION}
 
     @property
     def client(self) -> FakeClient:
@@ -224,14 +223,10 @@ def cli(monkeypatch: pytest.MonkeyPatch) -> FakeCLI:
     async def probe(kind: str, executable: str, **kwargs: Any) -> str:
         return "2.1.319 (Claude Code)"
 
-    def session_info(session_id: str, directory: str | None = None) -> Any:
-        return object() if session_id in cli.sessions else None
-
     monkeypatch.setattr(_process, "probe", probe)
     monkeypatch.setattr(
         sdk, "ClaudeSDKClient", lambda options: FakeClient(cli, options)
     )
-    monkeypatch.setattr(sdk, "get_session_info", session_info)
     return cli
 
 
@@ -347,21 +342,55 @@ async def test_start_connects_with_the_bridge_and_no_approvals(
         assert options.session_id == harness.session.id
 
 
-async def test_a_resumed_session_must_exist(cli: FakeCLI, cwd: str) -> None:
-    harness = ClaudeCode(cwd=cwd, resume=SESSION)
+@pytest.mark.parametrize("config_kind", ["inherited", "override", "relative"])
+async def test_a_resumed_session_must_exist_in_the_effective_config(
+    cli: FakeCLI,
+    cwd: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config_kind: str,
+) -> None:
+    ambient = tmp_path / "ambient"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(ambient))
+    config = ambient if config_kind == "inherited" else Path(cwd) / "config"
+    env = {}
+    if config_kind != "inherited":
+        env["CLAUDE_CONFIG_DIR"] = (
+            "config" if config_kind == "relative" else str(config)
+        )
+    provider = external.ClaudeCodeProvider(env=env)
+    key = sdk.project_key_for_directory(cwd)
+    project = config / "projects" / key
+    project.mkdir(parents=True)
+    record = '{"type":"custom-title","customTitle":"Known session"}\n'
+    (project / f"{SESSION}.jsonl").write_text(record)
+
+    harness = ClaudeCode(cwd=cwd, provider=provider, resume=SESSION)
     async with harness:
         await harness.session.start()
         assert cli.client.options.resume == SESSION
         assert cli.client.options.session_id is None
         assert harness.session.id == SESSION
+
+    ghost_id = "22222222-2222-2222-2222-222222222222"
+    if config != ambient:
+        # A transcript in the parent's configuration is not in the CLI's.
+        wrong_project = ambient / "projects" / key
+        wrong_project.mkdir(parents=True)
+        (wrong_project / f"{ghost_id}.jsonl").write_text(record)
+        assert sdk.get_session_info(ghost_id, cwd) is not None
+    ghost = ClaudeCode(cwd=cwd, provider=provider, resume=ghost_id)
     with pytest.raises(external.ExternalHarnessError, match="no session"):
-        async with ClaudeCode(cwd=cwd, resume="ghost") as ghost:
+        async with ghost:
             await ghost.session.start()
+    assert len(cli.clients) == 1
 
 
 async def test_a_new_session_is_seeded_from_the_past(
-    cli: FakeCLI, cwd: str, tmp_path: Path
+    cli: FakeCLI, cwd: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    ambient = tmp_path / "ambient"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(ambient))
     config = tmp_path / "config"
     cli.on_query = lambda record: [
         echo(record),

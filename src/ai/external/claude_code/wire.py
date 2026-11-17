@@ -153,9 +153,20 @@ class ClaudeCodeWire:
             raise _sdk_error(exc) from exc
         return session_id
 
+    def _project_dir(self, *, for_cli: bool = True) -> pathlib.Path:
+        config = os.environ.get("CLAUDE_CONFIG_DIR", "")
+        if for_cli:
+            config = self.harness.provider.env.get("CLAUDE_CONFIG_DIR", config)
+        root = (
+            pathlib.Path(self.cwd if for_cli else os.getcwd(), config)
+            if config
+            else pathlib.Path.home() / ".claude"
+        )
+        key: str = _sdk().project_key_for_directory(self.cwd)
+        return root / "projects" / key
+
     async def _stage(self, seed: list[messages_.Message]) -> str:
         """Write a past into the CLI's store under a new id; run nothing."""
-        claude_agent_sdk = _sdk()
         session_id = str(uuid.uuid4())
         _utils.warn_unsupported_files(
             seed,
@@ -172,15 +183,7 @@ class ClaudeCodeWire:
                 "calls were carried in full.",
                 stacklevel=2,
             )
-        # Where the CLI keeps transcripts:
-        # `$CLAUDE_CONFIG_DIR/projects/<key>/<session>.jsonl`.
-        config = (
-            self.harness.provider.env.get("CLAUDE_CONFIG_DIR")
-            or os.environ.get("CLAUDE_CONFIG_DIR")
-            or str(pathlib.Path.home() / ".claude")
-        )
-        key = claude_agent_sdk.project_key_for_directory(self.cwd)
-        path = pathlib.Path(config) / "projects" / key / f"{session_id}.jsonl"
+        path = self._project_dir() / f"{session_id}.jsonl"
         records = await handoff.to_claude_records(seed, session_id, self.cwd)
         text = "".join(
             json.dumps(r, separators=(",", ":")) + "\n" for r in records
@@ -194,16 +197,30 @@ class ClaudeCodeWire:
         Connecting to a ghost surfaces as claude-agent-sdk's own error
         somewhere downstream.
         """
-        claude_agent_sdk = _sdk()
         try:
-            info = await asyncio.to_thread(
-                claude_agent_sdk.get_session_info, session_id, self.cwd
-            )
+            project = self._project_dir()
+            if project == self._project_dir(for_cli=False):
+                known = (
+                    await asyncio.to_thread(
+                        _sdk().get_session_info, session_id, self.cwd
+                    )
+                    is not None
+                )
+            else:
+                # SDK lookup reads the Python process's environment, not the
+                # CLI's. Check the CLI's own project transcript without
+                # changing process-wide state or treating an ID as a path.
+                try:
+                    valid = str(uuid.UUID(session_id)) == session_id.lower()
+                except ValueError:
+                    valid = False
+                path = project / f"{session_id}.jsonl"
+                known = valid and await asyncio.to_thread(path.is_file)
         except Exception as exc:
             raise errors.ExternalHarnessError(
                 f"{KIND}: cannot read session {session_id}: {exc}"
             ) from exc
-        if info is None:
+        if not known:
             raise errors.ExternalHarnessError(
                 f"{KIND}: no session {session_id} in {self.cwd}"
             )
