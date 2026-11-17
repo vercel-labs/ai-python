@@ -27,6 +27,7 @@ from ai.models.core import model as model_
 from ai.providers.ai_gateway import (
     GatewayParams,
     GatewayV3Protocol,
+    GatewayV4Protocol,
     ProviderTimeoutsParams,
 )
 from ai.types import events, messages
@@ -350,6 +351,68 @@ class TestStreaming:
 
 
 class TestRequest:
+    @pytest.mark.parametrize("protocol", [GatewayV3Protocol, GatewayV4Protocol])
+    @pytest.mark.parametrize(
+        ("choice", "expected"),
+        [
+            (None, {}),
+            (ai.ToolChoiceMode.AUTO, {"toolChoice": {"type": "auto"}}),
+            (ai.ToolChoiceMode.NONE, {"toolChoice": {"type": "none"}}),
+            (ai.ToolChoiceMode.REQUIRED, {"toolChoice": {"type": "required"}}),
+            (
+                ai.ToolRef("a"),
+                {"toolChoice": {"type": "tool", "toolName": "a"}},
+            ),
+            (
+                ai.ToolSelection(["b", "a"], mode=ai.ToolChoiceMode.AUTO),
+                {"activeTools": ["a", "b"], "toolChoice": {"type": "auto"}},
+            ),
+            (
+                ai.ToolSelection(["b", "a"], mode=ai.ToolChoiceMode.NONE),
+                {"activeTools": ["a", "b"], "toolChoice": {"type": "none"}},
+            ),
+            (
+                ai.ToolSelection(["b", "a"], mode=ai.ToolChoiceMode.REQUIRED),
+                {"activeTools": ["a", "b"], "toolChoice": {"type": "required"}},
+            ),
+        ],
+    )
+    async def test_tool_choice(
+        self,
+        protocol: type[GatewayV3Protocol | GatewayV4Protocol],
+        choice: ai.ToolChoiceMode | ai.ToolRef | ai.ToolSelection | None,
+        expected: dict[str, Any],
+    ) -> None:
+        """Tool choice is always an object in the v3 and v4 specs."""
+        captured_body: dict[str, Any] = {}
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            captured_body.update(json.loads(req.content))
+            return httpx.Response(
+                200,
+                text=sse(
+                    {"type": "finish", "finishReason": "stop", "usage": {}}
+                ),
+            )
+
+        model = mock_model(httpx.MockTransport(handler)).with_protocol(
+            protocol()
+        )
+        request_params = ai.InferenceRequestParams(
+            tool_calling=(
+                ai.ToolCallingParams(tool_choice=choice)
+                if choice is not None
+                else None
+            )
+        )
+        await _collect(model, [user_msg("Hi")], params=request_params)
+
+        assert {
+            key: captured_body[key]
+            for key in ("toolChoice", "activeTools")
+            if key in captured_body
+        } == expected
+
     async def test_protocol_headers(self) -> None:
         captured: dict[str, str] = {}
 
