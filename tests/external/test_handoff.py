@@ -11,6 +11,7 @@ both seed the same.
 from __future__ import annotations
 
 import base64
+import datetime
 import hashlib
 import json
 import os
@@ -18,6 +19,7 @@ import stat
 from pathlib import Path
 from typing import Any
 
+import pydantic
 import pytest
 
 from ai.external import _utils
@@ -253,6 +255,117 @@ def read_fx_log(home: Path, session_id: str) -> list[dict[str, Any]]:
         assert checksum == f"{crc ^ 0xFFFFFFFF:08x}".encode() + b'"}\n'
         records.append(record)
     return records
+
+
+class ProjectedResult(pydantic.BaseModel):
+    published_on: datetime.date
+    hidden: str = pydantic.Field(default="do not replay", exclude=True)
+
+
+class WrappedBundle(pydantic.BaseModel):
+    bundles: list[m.MessageBundle]
+
+
+PROJECTED_BUNDLE = m.MessageBundle(
+    messages=(
+        Message(
+            role="tool",
+            parts=[
+                ToolResultPart(
+                    tool_call_id="inner",
+                    tool_name="Read",
+                    result="private nested result",
+                    model_input="nested model input",
+                ),
+            ],
+        ),
+        Message(role="assistant", parts=[TextPart(text="Public reply")]),
+    )
+)
+
+
+@pytest.mark.parametrize(
+    ("model_input", "expected"),
+    [
+        pytest.param("public", "public", id="text"),
+        pytest.param({"public": True}, '{"public": true}', id="json"),
+        pytest.param(None, "null", id="explicit-null"),
+        pytest.param(
+            ProjectedResult(published_on=datetime.date(2026, 11, 17)),
+            '{"published_on": "2026-11-17"}',
+            id="pydantic-model",
+        ),
+        pytest.param(
+            m.ContentOutput(
+                value=[
+                    TextPart(text="Visible description"),
+                    m.FilePart(data=b"not inlined", media_type="image/png"),
+                ]
+            ),
+            "Visible description\n[file: image/png]",
+            id="multipart",
+        ),
+        pytest.param(
+            PROJECTED_BUNDLE,
+            "Public reply",
+            id="message-bundle",
+        ),
+        pytest.param(
+            WrappedBundle(bundles=[PROJECTED_BUNDLE]),
+            '"[unsupported structured output omitted]"',
+            id="wrapped-message-bundle",
+        ),
+    ],
+)
+async def test_handoffs_use_model_input_for_tool_results(
+    tmp_path: Path, model_input: object, expected: str
+) -> None:
+    raw_result = {"private": "not for the model"}
+    part = ToolResultPart(
+        tool_call_id="call_1",
+        tool_name="Write",
+        result=raw_result,
+        model_input=model_input,
+    )
+    messages = [
+        *AGENT_TOOL[:2],
+        Message(role="tool", parts=[part]),
+        AGENT_TOOL[-1],
+    ]
+
+    claude = await claude_handoff.to_claude_records(messages, "sid", "/w")
+    claude_result = claude[2]["message"]["content"][0]
+    assert claude_result["tool_use_id"] == "call_1"
+    assert claude_result["content"] == expected
+
+    codex = codex_handoff.to_codex_items(messages)
+    codex_result = next(i for i in codex if i["type"] == "function_call_output")
+    assert codex_result["call_id"] == "call_1"
+    assert codex_result["output"] == expected
+
+    pi = pi_handoff.to_pi_messages(messages, timestamp=1)
+    pi_result = next(i for i in pi if i["role"] == "toolResult")
+    assert pi_result["toolCallId"] == "call_1"
+    assert pi_result["content"] == [{"type": "text", "text": expected}]
+
+    session_id, _ = fx_handoff.write_session(
+        messages,
+        fx_home=str(tmp_path),
+        cwd="/w",
+        prefs=FX_PREFS,
+        instructions=None,
+    )
+    fx_result = next(
+        r
+        for r in read_fx_log(tmp_path, session_id)
+        if r.get("type") == "tool_result"
+    )
+    assert fx_result["data"]["call_id"] == "call_1"
+    assert fx_result["data"]["preview"] == expected
+    (digest,) = fx_result["blobs"]
+    blobs = tmp_path / "sessions/v2" / session_id / "blobs"
+    assert (blobs / digest).read_bytes() == expected.encode()
+    assert part.result == raw_result
 
 
 def test_fx_crc32c_has_the_standard_check_value() -> None:

@@ -14,6 +14,7 @@ from typing import Any
 
 from ...types import media
 from ...types import messages as messages_
+from .. import _handoff_output
 
 FORMAT_DIR = "v2"
 FORMAT_VERSION = 1
@@ -380,7 +381,6 @@ def to_fx_records(messages: list[messages_.Message]) -> list[dict[str, Any]]:
                 part, messages_.ToolResultPart | messages_.BuiltinToolReturnPart
             ):
                 flush()
-                value = part.result
                 out.append(
                     {
                         "role": "tool",
@@ -388,9 +388,7 @@ def to_fx_records(messages: list[messages_.Message]) -> list[dict[str, Any]]:
                             {
                                 "id": part.tool_call_id,
                                 "name": part.tool_name,
-                                "output": value
-                                if isinstance(value, str)
-                                else json.dumps(value),
+                                "output": _handoff_output.format_result(part),
                                 "is_error": part.result_kind == "error"
                                 if isinstance(part, messages_.ToolResultPart)
                                 else part.is_error,

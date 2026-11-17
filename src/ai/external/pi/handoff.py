@@ -10,6 +10,7 @@ from typing import Any
 
 from ...types import media
 from ...types import messages as messages_
+from .. import _handoff_output
 
 # What names a reply's author in a pi session: its API and model.
 AUTHOR = ("api", "provider", "model")
@@ -45,21 +46,21 @@ def to_pi_messages(
         },
     }
 
-    def result(call_id: str, name: str, value: Any, *, is_error: bool) -> None:
+    def result(
+        part: messages_.ToolResultPart | messages_.BuiltinToolReturnPart,
+    ) -> None:
         out.append(
             {
                 "role": "toolResult",
-                "toolCallId": call_id,
-                "toolName": name,
+                "toolCallId": part.tool_call_id,
+                "toolName": part.tool_name,
                 "content": [
                     {
                         "type": "text",
-                        "text": value
-                        if isinstance(value, str)
-                        else json.dumps(value),
+                        "text": _handoff_output.format_result(part),
                     }
                 ],
-                "isError": is_error,
+                "isError": part.is_error,
                 "timestamp": timestamp,
             }
         )
@@ -113,21 +114,14 @@ def to_pi_messages(
         for p in m.parts:
             if isinstance(p, messages_.ToolResultPart):
                 # A tool an `ai.Agent` ran: its result is in a `tool` message.
-                result(
-                    p.tool_call_id,
-                    p.tool_name,
-                    p.result,
-                    is_error=p.result_kind == "error",
-                )
+                result(p)
             elif isinstance(p, messages_.BuiltinToolReturnPart):
                 # A tool the CLI ran: the external harness holds its result in
                 # the assistant message, pi as a message of its own. So the
                 # assistant message ends here, and the result follows.
                 add(m, blocks)
                 blocks = []
-                result(
-                    p.tool_call_id, p.tool_name, p.result, is_error=p.is_error
-                )
+                result(p)
             elif isinstance(p, messages_.TextPart) and p.text.strip():
                 blocks.append({"type": "text", "text": p.text})
             elif (

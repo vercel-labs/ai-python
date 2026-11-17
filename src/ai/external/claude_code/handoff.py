@@ -12,7 +12,7 @@ import uuid
 from typing import Any
 
 from ...types import messages as messages_
-from .. import _utils
+from .. import _handoff_output, _utils
 
 
 async def to_claude_records(
@@ -67,9 +67,7 @@ async def to_claude_records(
                     {
                         "type": "tool_result",
                         "tool_use_id": p.tool_call_id,
-                        "content": p.result
-                        if isinstance(p.result, str)
-                        else json.dumps(p.result),
+                        "content": _handoff_output.format_result(p),
                         **({"is_error": True} if p.is_error else {}),
                     }
                 )
@@ -121,9 +119,7 @@ async def to_claude_records(
                     {
                         "type": "tool_result",
                         "tool_use_id": p.tool_call_id,
-                        "content": p.result
-                        if isinstance(p.result, str)
-                        else json.dumps(p.result),
+                        "content": _handoff_output.format_result(p),
                         **(
                             {"is_error": True}
                             if p.result_kind == "error"
