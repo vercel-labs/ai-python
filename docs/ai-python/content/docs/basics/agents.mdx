@@ -77,7 +77,9 @@ history = stream.messages
 ```
 
 Use `stream.messages` when you want to persist the complete conversation after
-the run.
+the run. Append a new user message before starting the next turn: a history
+that ends with a completed, non-replay assistant message makes no model call
+and returns the previous output.
 
 ## Pass params and structured output
 

@@ -10,13 +10,13 @@ branching. While the SDK defines the loop as a Python async generator, it still
 uses a few framework components. Reuse those to retain framework-controlled
 behavior.
 
-Note that, by default, `loop` does not run in lock-step with the code
+Note that, by default, `loop` does not run in lockstep with the code
 that iterates the stream. The framework runs it as a separate asyncio
 task that puts events on a queue, and the `agent.run` stream reads
 from that queue. This means the loop can keep making progress (for
 example, launching tools) while the consumer is between reads, and
 events you `yield` may be consumed later than they are produced.  This
-can be changed by overriding by the `LOOP_BUFFER` class variable in an
+can be changed by overriding the `LOOP_BUFFER` class variable in an
 `Agent` subclass: with `None`, the default, an unbounded number of
 events will be buffered. With `0`, the `loop` will run in lockstep.
 
@@ -26,6 +26,10 @@ The default loop keeps running while there is more work to do. On each
 turn, it streams the model response and schedules tool calls:
 
 ```python
+from collections.abc import AsyncGenerator
+import ai
+
+
 class CustomAgent(ai.Agent):
     # ai.Context keeps track of message history, run inputs, and other per-run data
     async def loop(self, context: ai.Context) -> AsyncGenerator[ai.events.AgentEvent]:
