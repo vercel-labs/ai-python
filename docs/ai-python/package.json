@@ -1,6 +1,6 @@
 {
-  "name": "template",
-  "description": "Template for Geistdocs projects.",
+  "name": "ai-python-docs",
+  "description": "Documentation for the AI SDK for Python.",
   "version": "0.0.0",
   "private": true,
   "scripts": {
