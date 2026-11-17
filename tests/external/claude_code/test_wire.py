@@ -7,6 +7,7 @@ SDK message types, in the order a real `claude` 2.1.319 sends them.
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import os
 from collections.abc import AsyncIterable, AsyncIterator, Callable
@@ -266,7 +267,7 @@ async def test_a_turn_streams_in_the_model_view(cli: FakeCLI, cwd: str) -> None:
     ]
     user = ai.user_message("go")
     harness = ClaudeCode(cwd=cwd)
-    async with harness.session() as session:
+    async with harness:
         s, end = await run(harness, [user])
     message = s.message
     assert message.reasoning == "plan"
@@ -283,8 +284,11 @@ async def test_a_turn_streams_in_the_model_view(cli: FakeCLI, cwd: str) -> None:
     assert message.usage.cache_write_tokens == 5
     assert end.finish_reason == "stop"
     # The echo came at once, but acceptance still comes first.
-    assert [msg.role for msg in session.messages] == ["user", "assistant"]
-    assert session.messages[0].id == user.id
+    assert [msg.role for msg in harness.session.messages] == [
+        "user",
+        "assistant",
+    ]
+    assert harness.session.messages[0].id == user.id
     # The uuid the echo matched is the one written.
     (written,) = cli.client.written
     assert written["message"]["content"] == [{"type": "text", "text": "go"}]
@@ -305,12 +309,12 @@ async def test_start_connects_with_the_bridge_and_no_approvals(
         disallowed_tools=["Bash"],
         max_turns=3,
     )
-    async with harness.session() as session:
-        await session.start()
+    async with harness:
+        await harness.session.start()
         options = cli.client.options
-        assert session._run is not None
+        assert harness.session._run is not None
         assert options.mcp_servers == {
-            "ai_sdk": {"type": "http", "url": session._run.bridge.url}
+            "ai_sdk": {"type": "http", "url": harness.session._run.bridge.url}
         }
         assert options.permission_mode == "bypassPermissions"
         assert options.can_use_tool is None
@@ -334,19 +338,19 @@ async def test_start_connects_with_the_bridge_and_no_approvals(
         assert options.max_turns == 3
         # A new session: the id we chose is the CLI's.
         assert options.resume is None
-        assert options.session_id == session.id
+        assert options.session_id == harness.session.id
 
 
 async def test_a_resumed_session_must_exist(cli: FakeCLI, cwd: str) -> None:
-    harness = ClaudeCode(cwd=cwd)
-    async with harness.session(SESSION) as session:
-        await session.start()
+    harness = ClaudeCode(cwd=cwd, resume=SESSION)
+    async with harness:
+        await harness.session.start()
         assert cli.client.options.resume == SESSION
         assert cli.client.options.session_id is None
-        assert session.id == SESSION
+        assert harness.session.id == SESSION
     with pytest.raises(external.ExternalHarnessError, match="no session"):
-        async with ClaudeCode(cwd=cwd).session("ghost") as session:
-            await session.start()
+        async with ClaudeCode(cwd=cwd, resume="ghost") as ghost:
+            await ghost.session.start()
 
 
 async def test_a_new_session_is_seeded_from_the_past(
@@ -382,12 +386,12 @@ async def test_a_new_session_is_seeded_from_the_past(
         ),
     )
     with pytest.warns(UserWarning, match="1 reasoning part"):
-        async with harness.session() as session:
+        async with harness:
             await run(harness, history)
     options = cli.client.options
-    assert options.resume == session.id
+    assert options.resume == harness.session.id
     key = sdk.project_key_for_directory(cwd)
-    path = config / "projects" / key / f"{session.id}.jsonl"
+    path = config / "projects" / key / f"{harness.session.id}.jsonl"
     records = [json.loads(line) for line in path.read_text().splitlines()]
     assert [(r["type"], r["message"]["content"]) for r in records] == [
         ("user", [{"type": "text", "text": "one"}]),
@@ -409,7 +413,7 @@ async def test_a_new_session_is_seeded_from_the_past(
         ),
     ]
     assert records[1]["parentUuid"] == records[0]["uuid"]
-    assert {r["sessionId"] for r in records} == {session.id}
+    assert {r["sessionId"] for r in records} == {harness.session.id}
     # Only the new message went to the CLI.
     (written,) = cli.client.written
     assert written["message"]["content"] == [{"type": "text", "text": "two"}]
@@ -459,7 +463,7 @@ async def test_bridge_calls_are_ai_tool_calls_not_builtin(
 
     cli.on_query = on_query
     harness = ClaudeCode(cwd=cwd)
-    async with harness.session() as session:
+    async with harness:
         async with asyncio.timeout(5):
             async with ai.Agent(tools=[lookup]).run(
                 harness, [ai.user_message("go")]
@@ -467,17 +471,17 @@ async def test_bridge_calls_are_ai_tool_calls_not_builtin(
                 async for _ in agent_run:
                     pass
         await asyncio.gather(*tasks)
-    assert [msg.role for msg in session.messages] == [
+    assert [msg.role for msg in harness.session.messages] == [
         "user",
         "assistant",
         "tool",
         "assistant",
     ]
-    (call,) = session.messages[1].tool_calls
+    (call,) = harness.session.messages[1].tool_calls
     assert call.tool_name == "lookup"
-    assert all(not msg.builtin_tool_calls for msg in session.messages)
-    assert all(not msg.builtin_tool_returns for msg in session.messages)
-    assert session.messages[3].text == "got HERON"
+    assert all(not msg.builtin_tool_calls for msg in harness.session.messages)
+    assert all(not msg.builtin_tool_returns for msg in harness.session.messages)
+    assert harness.session.messages[3].text == "got HERON"
     assert answers[0]["content"][0]["text"] == "HERON"
 
 
@@ -496,10 +500,10 @@ async def test_a_send_during_a_turn_steers_it(cli: FakeCLI, cwd: str) -> None:
 
     cli.on_query = on_query
     harness = ClaudeCode(cwd=cwd)
-    async with harness.session() as session:
-        feed = session.events()
-        await session.send(ai.user_message("fix"))
-        await session.send(ai.user_message("skip slow ones"))
+    async with harness:
+        feed = harness.session.events()
+        await harness.session.send(ai.user_message("fix"))
+        await harness.session.send(ai.user_message("skip slow ones"))
         steer = cli.client.written[1]
         # The step ends, then the CLI echoes the steer where it injects it.
         cli.say(
@@ -509,15 +513,15 @@ async def test_a_send_during_a_turn_steers_it(cli: FakeCLI, cwd: str) -> None:
             result(),
         )
         async with asyncio.timeout(5):
-            while len(session.messages) < 4:
+            while len(harness.session.messages) < 4:
                 await anext(feed)
-    assert [(msg.role, msg.text) for msg in session.messages] == [
+    assert [(msg.role, msg.text) for msg in harness.session.messages] == [
         ("user", "fix"),
         ("assistant", "Look"),
         ("user", "skip slow ones"),
         ("assistant", "OK"),
     ]
-    assert len(session.messages[1].builtin_tool_returns) == 1
+    assert len(harness.session.messages[1].builtin_tool_returns) == 1
 
 
 async def test_interrupt_ends_the_turn_as_interrupted(
@@ -540,19 +544,19 @@ async def test_interrupt_ends_the_turn_as_interrupted(
         ),
     ]
     harness = ClaudeCode(cwd=cwd)
-    async with harness.session() as session:
-        feed = session.events()
-        await session.send(ai.user_message("long job"))
+    async with harness:
+        feed = harness.session.events()
+        await harness.session.send(ai.user_message("long job"))
         async with asyncio.timeout(5):
             async for event in feed:
                 if isinstance(event, ai.events.TextDelta):
                     break
-            await session.interrupt()
+            await harness.session.interrupt()
         assert cli.client.interrupts == 1
-        assert (session.messages[-1].provider_metadata or {}).get(
+        assert (harness.session.messages[-1].provider_metadata or {}).get(
             "external"
         ) == {"stop_reason": "interrupted"}
-        assert session.messages[-1].text == "work"
+        assert harness.session.messages[-1].text == "work"
         # The next turn is a normal one: the interrupt was used up.
         cli.on_query = lambda record: [
             echo(record),
@@ -560,7 +564,7 @@ async def test_interrupt_ends_the_turn_as_interrupted(
             result(),
         ]
         s, end = await run(
-            harness, [*session.messages, ai.user_message("again")]
+            harness, [*harness.session.messages, ai.user_message("again")]
         )
     assert s.text == "OK"
     assert end.finish_reason == "stop"
@@ -581,10 +585,10 @@ async def test_a_failed_turn_without_a_key_is_not_authenticated(
         result(is_error=True, result=detail),
     ]
     harness = ClaudeCode(cwd=cwd)
-    async with harness.session() as session:
+    async with harness:
         with pytest.raises(external.NotAuthenticatedError):
             await run(harness, [ai.user_message("go")])
-    assert session.messages[-1].text == detail
+    assert harness.session.messages[-1].text == detail
 
 
 async def test_max_turns_ends_with_length(cli: FakeCLI, cwd: str) -> None:
@@ -593,7 +597,7 @@ async def test_max_turns_ends_with_length(cli: FakeCLI, cwd: str) -> None:
         result(subtype="error_max_turns", is_error=True),
     ]
     harness = ClaudeCode(cwd=cwd, max_turns=1)
-    async with harness.session():
+    async with harness:
         _, end = await run(harness, [ai.user_message("go")])
     assert end.finish_reason == "length"
 
@@ -604,7 +608,7 @@ async def test_a_crash_reaches_the_stream(cli: FakeCLI, cwd: str) -> None:
         sdk.ProcessError("boom", exit_code=1),
     ]
     harness = ClaudeCode(cwd=cwd)
-    async with harness.session():
+    async with harness:
         with pytest.raises(external.ExternalHarnessError, match="crashed"):
             await run(harness, [ai.user_message("go")])
 
@@ -613,9 +617,9 @@ async def test_unsupported_parts_are_refused_before_writing(
     cli: FakeCLI, cwd: str
 ) -> None:
     harness = ClaudeCode(cwd=cwd)
-    async with harness.session() as session:
+    async with harness:
         with pytest.raises(external.UnsupportedError):
-            await session.send(
+            await harness.session.send(
                 ai.user_message(
                     m.FilePart(data=b"x", media_type="audio/wav"),
                 )
@@ -626,7 +630,7 @@ async def test_unsupported_parts_are_refused_before_writing(
 async def test_images_go_as_base64_blocks(cli: FakeCLI, cwd: str) -> None:
     cli.on_query = lambda record: [echo(record), result()]
     harness = ClaudeCode(cwd=cwd)
-    async with harness.session():
+    async with harness:
         await run(
             harness,
             [
@@ -648,19 +652,17 @@ async def test_images_go_as_base64_blocks(cli: FakeCLI, cwd: str) -> None:
 
 
 async def test_close_is_idempotent(cli: FakeCLI, cwd: str) -> None:
-    session = ClaudeCode(cwd=cwd).session()
-    async with session:
-        await session.start()
-        assert session._run is not None
-        wire = session._run.wire
-    await session.close()
-    await wire.close()  # the wire itself too
+    async with ClaudeCode(cwd=cwd) as harness:
+        await harness.session.start()
+        assert harness.session._run is not None
+        wire = harness.session._run.wire
+    await wire.close()  # the block closed it: a second close is safe
     assert cli.client.disconnects == 1
 
 
-async def test_the_settings_round_trip(cli: FakeCLI, cwd: str) -> None:
+async def test_a_copy_keeps_the_settings(cli: FakeCLI, cwd: str) -> None:
     harness = ClaudeCode(cwd=cwd, max_turns=2)
-    again = external.ExternalHarness.model_validate(harness.model_dump())
+    again = copy.copy(harness)
     assert isinstance(again, ClaudeCode)
     assert again.max_turns == 2
     assert again.harness_class_id == "claude-code"

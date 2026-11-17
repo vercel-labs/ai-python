@@ -8,9 +8,7 @@ import ai
 
 async def main() -> None:
     with tempfile.TemporaryDirectory() as tmp:
-        harness = ai.external.ClaudeCode(cwd=tmp)
-
-        async with harness.session() as session:
+        async with ai.external.ClaudeCode(cwd=tmp) as harness:
             await ai.experimental_generate(
                 harness,
                 [
@@ -20,25 +18,25 @@ async def main() -> None:
                 ],
             )
 
-        # The external harness is plain data: the settings. The session id
-        # names the conversation in the CLI. Put both in your database.
-        saved = harness.model_dump_json()
-        session_id = session.id
+        # The session id names the conversation in the CLI. Put it in your
+        # database.
+        session_id = harness.session.id
 
         # ... later, another process entirely ...
 
-        # The base class loads the class that was saved.
-        again = ai.external.ExternalHarness.model_validate_json(saved)
-        assert isinstance(again, ai.external.ClaudeCode)
-
-        # The CLI has the conversation: send what is new. A session block
+        # A new external harness with the same settings continues the
+        # session. The CLI has the conversation: send what is new. The block
         # keeps the CLI alive between the calls.
-        async with again.session(session_id) as session:
+        again = ai.external.ClaudeCode(cwd=tmp, resume=session_id)
+        async with again:
             for question in (
                 "What codeword did I give you? Reply with the word only.",
                 "Spell it backwards. Reply with the word only.",
             ):
-                messages = [*session.messages, ai.user_message(question)]
+                messages = [
+                    *again.session.messages,
+                    ai.user_message(question),
+                ]
                 answer = await ai.experimental_generate(again, messages)
                 print(answer.text)
 

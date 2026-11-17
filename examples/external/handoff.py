@@ -18,7 +18,7 @@ async def main() -> None:
                 "remember: the deadline is FRIDAY. Reply with exactly: OK"
             )
         ]
-        async with claude.session():
+        async with claude:
             reply = await ai.experimental_generate(claude, messages)
         print(
             f"Claude Code: {reply.text.strip()} "
@@ -39,7 +39,7 @@ async def main() -> None:
                 "Then append 'bread' to notes.txt. Reply in one line."
             ),
         ]
-        async with codex.session():
+        async with codex:
             reply = await ai.experimental_generate(codex, messages)
         print("Codex:", reply.text.strip())
 

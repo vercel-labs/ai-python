@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import dataclasses
 import json
 import os
 from collections.abc import AsyncIterator
@@ -378,11 +379,14 @@ async def test_a_turn_streams_in_the_model_view(
         )
     ]
     user = ai.user_message("go")
-    async with harness.session() as session:
+    async with harness:
         stream = await run(harness, [user])
-        assert session.id == SESSION
-        assert [msg.role for msg in session.messages] == ["user", "assistant"]
-        assert session.messages[0].id == user.id
+        assert harness.session.id == SESSION
+        assert [msg.role for msg in harness.session.messages] == [
+            "user",
+            "assistant",
+        ]
+        assert harness.session.messages[0].id == user.id
     message = stream.message
     assert message.text == "HERON"
     assert message.reasoning == "plan"
@@ -412,8 +416,8 @@ async def test_start_gives_the_bridge_and_settings(
     harness.model_name = "openai/gpt-test"
     harness.effort = "high"
     harness.instructions = "Be brief."
-    async with harness.session() as session:
-        await session.start()
+    async with harness:
+        await harness.session.start()
         argv, kwargs = server.spawned[0]
         assert argv == [
             "/custom/fx",
@@ -455,8 +459,8 @@ async def test_default_start_omits_optional_flags_and_empty_instructions(
     server: AcpServer, harness: external.Fx, instructions: str | None
 ) -> None:
     harness.instructions = instructions
-    async with harness.session() as session:
-        await session.start()
+    async with harness:
+        await harness.session.start()
         assert server.spawned[0][0] == [
             "fx",
             "acp",
@@ -476,10 +480,11 @@ async def test_a_new_session_loads_the_written_past_without_streaming_replay(
         ai.assistant_message("old reply"),
         ai.user_message("two"),
     ]
-    async with harness.session() as session:
+    async with harness:
         stream = await run(harness, history)
         assert (
-            session.id == server.sent("session/load")[0]["params"]["sessionId"]
+            harness.session.id
+            == server.sent("session/load")[0]["params"]["sessionId"]
         )
     assert stream.text == "fresh"
     assert [
@@ -532,7 +537,7 @@ async def test_a_refused_seed_is_removed(
     with pytest.raises(
         external.ExternalHarnessError, match=r"0\.0\.17"
     ) as error:
-        async with harness.session():
+        async with harness:
             await run(
                 harness,
                 [
@@ -557,8 +562,9 @@ async def test_a_resume_reads_all_pages_and_opens_here_only(
     server: AcpServer, harness: external.Fx
 ) -> None:
     server.pages = [["other"], [SESSION]]
-    async with harness.session(SESSION) as session:
-        await session.start()
+    harness = dataclasses.replace(harness, resume=SESSION)
+    async with harness:
+        await harness.session.start()
         (resume,) = server.sent("session/resume")
         assert resume["params"]["sessionId"] == SESSION
         assert resume["params"]["cwd"] == server.cwd
@@ -571,8 +577,8 @@ async def test_a_resume_refuses_an_id_not_in_this_directory(
     server: AcpServer, harness: external.Fx, session_id: str
 ) -> None:
     with pytest.raises(external.ExternalHarnessError):
-        async with harness.session(session_id) as session:
-            await session.start()
+        async with dataclasses.replace(harness, resume=session_id) as harness:
+            await harness.session.start()
     assert not server.sent("session/resume")
 
 
@@ -636,7 +642,7 @@ async def test_bridge_calls_are_ai_tool_calls_not_builtin(
     task = asyncio.create_task(call_bridge())
     async with (
         asyncio.timeout(5),
-        harness.session(),
+        harness,
         ai.Agent(tools=[lookup]).run(
             harness, [ai.user_message("go")]
         ) as result,
@@ -659,16 +665,16 @@ async def test_a_send_during_a_turn_waits_for_its_correlated_echo(
     server: AcpServer, harness: external.Fx
 ) -> None:
     server.turns = [([text("Look")], None)]
-    async with asyncio.timeout(5), harness.session() as session:
-        feed = session.events()
+    async with asyncio.timeout(5), harness:
+        feed = harness.session.events()
         events = []
-        await session.send(ai.user_message("fix"))
+        await harness.session.send(ai.user_message("fix"))
         async for event in feed:
             events.append(event)
             if isinstance(event, ai.events.TextDelta):
                 break
         steer = asyncio.create_task(
-            session.send(ai.user_message("skip slow ones"))
+            harness.session.send(ai.user_message("skip slow ones"))
         )
         await server.wait_for("session/prompt", 2)
         request = server.steers[0]
@@ -692,9 +698,9 @@ async def test_a_send_during_a_turn_waits_for_its_correlated_echo(
                 and event.chunk == " before"
             ):
                 break
-        assert [msg.text for msg in session.messages if msg.role == "user"] == [
-            "fix"
-        ]
+        assert [
+            msg.text for msg in harness.session.messages if msg.role == "user"
+        ] == ["fix"]
         server.says(
             update(
                 "user_message_chunk",
@@ -719,7 +725,7 @@ async def test_a_send_during_a_turn_waits_for_its_correlated_echo(
             for e in events
             if isinstance(e, ai.events.StreamEnd)
         ] == ["other", "stop"]
-        assert [(msg.role, msg.text) for msg in session.messages] == [
+        assert [(msg.role, msg.text) for msg in harness.session.messages] == [
             ("user", "fix"),
             ("assistant", "Look before"),
             ("user", "skip slow ones"),
@@ -735,10 +741,10 @@ async def test_a_dropped_steer_starts_a_new_prompt(
         ([text("first", "a1")], None),
         ([text("second", "a2")], END),
     ]
-    async with asyncio.timeout(5), harness.session() as session:
-        feed = session.events()
-        await session.send(ai.user_message("one"))
-        task = asyncio.create_task(session.send(ai.user_message("two")))
+    async with asyncio.timeout(5), harness:
+        feed = harness.session.events()
+        await harness.session.send(ai.user_message("one"))
+        task = asyncio.create_task(harness.session.send(ai.user_message("two")))
         await server.wait_for("session/prompt", 2)
         server.finish(server.prompts[0], END)
         request = server.steers[0]
@@ -766,7 +772,7 @@ async def test_a_dropped_steer_starts_a_new_prompt(
         await task
         await server.wait_for("session/prompt", 3)
         events = await through_turns(feed, 2)
-        assert [(msg.role, msg.text) for msg in session.messages] == [
+        assert [(msg.role, msg.text) for msg in harness.session.messages] == [
             ("user", "one"),
             ("assistant", "first"),
             ("user", "two"),
@@ -798,20 +804,20 @@ async def test_interrupt_ends_as_interrupted(
 ) -> None:
     server.turns = [([text("work")], None)]
     server.cancel_result = {"stopReason": stop_reason}
-    async with asyncio.timeout(5), harness.session() as session:
-        feed = session.events()
-        await session.send(ai.user_message("long job"))
+    async with asyncio.timeout(5), harness:
+        feed = harness.session.events()
+        await harness.session.send(ai.user_message("long job"))
         async for event in feed:
             if isinstance(event, ai.events.TextDelta):
                 break
-        await session.interrupt()
+        await harness.session.interrupt()
         (cancel,) = server.sent("session/cancel")
         assert "id" not in cancel
         assert cancel["params"] == {"sessionId": SESSION}
-        assert (session.messages[-1].provider_metadata or {})["external"] == {
-            "stop_reason": "interrupted"
-        }
-        assert session.messages[-1].text == "work"
+        assert (harness.session.messages[-1].provider_metadata or {})[
+            "external"
+        ] == {"stop_reason": "interrupted"}
+        assert harness.session.messages[-1].text == "work"
 
 
 async def test_a_failed_initialize_without_sign_in_is_not_authenticated(
@@ -826,7 +832,7 @@ async def test_a_failed_initialize_without_sign_in_is_not_authenticated(
         ),
     }
     with pytest.raises(external.NotAuthenticatedError):
-        async with harness.session():
+        async with harness:
             await run(harness, [ai.user_message("go")])
     assert server.process.terminated
 
@@ -867,7 +873,7 @@ async def test_a_refused_turn_raises_with_the_last_error_detail(
     with pytest.raises(
         external.ExternalHarnessError,
     ) as error:
-        async with harness.session():
+        async with harness:
             await run(harness, [ai.user_message("go")])
     detail = "final recovery" if recovery else "last failure"
     assert str(error.value) == f"fx turn failed: {detail}"
@@ -884,7 +890,7 @@ async def test_a_crash_reaches_the_stream(
 
     task = asyncio.create_task(die())
     with pytest.raises(external.ExternalHarnessError, match=r"crashed|stopped"):
-        async with harness.session():
+        async with harness:
             await run(harness, [ai.user_message("go")])
     await task
 
@@ -892,10 +898,10 @@ async def test_a_crash_reaches_the_stream(
 async def test_close_is_safe_twice(
     server: AcpServer, harness: external.Fx
 ) -> None:
-    async with harness.session() as session:
-        await session.start()
-        await session.close()
-        await session.close()
+    async with harness:
+        await harness.session.start()
+        await harness.session._close()
+        await harness.session._close()
     assert server.process.terminated
     assert len(server.sent("session/close")) == 1
 
@@ -907,8 +913,8 @@ async def test_a_failed_handshake_stops_the_process(
     with pytest.raises(
         external.ExternalHarnessError, match="unsupported effort"
     ):
-        async with harness.session() as session:
-            await session.start()
+        async with harness:
+            await harness.session.start()
     assert server.process.terminated
 
 
@@ -936,7 +942,7 @@ async def test_text_and_reasoning_blocks_close_without_end_markers(
     events = []
     async with (
         asyncio.timeout(5),
-        harness.session(),
+        harness,
         ai.stream(harness, [ai.user_message("go")]) as stream,
     ):
         async for event in stream:
@@ -979,7 +985,7 @@ async def test_seed_replay_counts_distinct_user_ids_not_image_chunks(
         ai.user_message("now"),
     ]
     server.turns = [([text("fresh")], END)]
-    async with harness.session():
+    async with harness:
         stream = await run(harness, history)
     assert stream.text == "fresh"
     assert server.loaded is not None and server.loaded.exists()
@@ -1004,7 +1010,7 @@ async def test_prompt_stop_reasons_have_one_stream_end(
     ends = []
     async with (
         asyncio.timeout(5),
-        harness.session(),
+        harness,
         ai.stream(harness, [ai.user_message("go")]) as stream,
     ):
         async for event in stream:
@@ -1018,8 +1024,8 @@ async def test_an_unexpected_permission_request_gets_an_answer(
     server: AcpServer,
     harness: external.Fx,
 ) -> None:
-    async with asyncio.timeout(5), harness.session() as session:
-        await session.start()
+    async with asyncio.timeout(5), harness:
+        await harness.session.start()
         server.says(
             {
                 "id": 99,
@@ -1058,10 +1064,10 @@ async def test_a_nontext_steer_waits_and_becomes_a_new_prompt(
 ) -> None:
     server.turns = [([], None), ([text("seen")], END)]
     image = m.FilePart(data=b"image bytes", media_type="image/png")
-    async with asyncio.timeout(5), harness.session() as session:
-        await session.send(ai.user_message("first"))
+    async with asyncio.timeout(5), harness:
+        await harness.session.send(ai.user_message("first"))
         task = asyncio.create_task(
-            session.send(
+            harness.session.send(
                 m.Message(role="user", parts=[m.TextPart(text="look"), image])
             )
         )
@@ -1100,7 +1106,7 @@ async def test_a_prompt_rpc_error_reaches_the_stream(
     with pytest.raises(
         external.ExternalHarnessError, match="model request failed"
     ):
-        async with harness.session():
+        async with harness:
             await run(harness, [ai.user_message("go")])
     await task
 
@@ -1116,7 +1122,7 @@ async def test_a_refused_turn_with_bad_credentials_is_not_authenticated(
         )
     ]
     with pytest.raises(external.NotAuthenticatedError):
-        async with harness.session():
+        async with harness:
             await run(harness, [ai.user_message("go")])
 
 
@@ -1146,10 +1152,10 @@ async def test_a_late_steer_runs_as_its_own_turn(
 ) -> None:
     # Native order from fx 0.0.17: first reply, second content, plain reply.
     server.turns = [([text("ONE", "a1")], None)]
-    async with asyncio.timeout(5), harness.session() as session:
-        feed = session.events()
-        await session.send(ai.user_message("ONE"))
-        await session.send(ai.user_message("TWO"))
+    async with asyncio.timeout(5), harness:
+        feed = harness.session.events()
+        await harness.session.send(ai.user_message("ONE"))
+        await harness.session.send(ai.user_message("TWO"))
         request = server.steers[0]
         server.finish(
             server.prompts[0],
@@ -1161,7 +1167,7 @@ async def test_a_late_steer_runs_as_its_own_turn(
             request, {**END, "usage": {"inputTokens": 22, "outputTokens": 2}}
         )
         events = await through_turns(feed, 2)
-        assert [(msg.role, msg.text) for msg in session.messages] == [
+        assert [(msg.role, msg.text) for msg in harness.session.messages] == [
             ("user", "ONE"),
             ("assistant", "ONE"),
             ("user", "TWO"),
@@ -1212,10 +1218,10 @@ async def test_interrupt_cancels_the_turn_of_a_late_steer(
     harness: external.Fx,
 ) -> None:
     server.turns = [([text("ONE", "a1")], None)]
-    async with asyncio.timeout(5), harness.session() as session:
-        feed = session.events()
-        await session.send(ai.user_message("ONE"))
-        await session.send(ai.user_message("TWO"))
+    async with asyncio.timeout(5), harness:
+        feed = harness.session.events()
+        await harness.session.send(ai.user_message("ONE"))
+        await harness.session.send(ai.user_message("TWO"))
         request = server.steers[0]
         server.cancel_request = request
         server.finish(server.prompts[0], END)
@@ -1225,18 +1231,18 @@ async def test_interrupt_cancels_the_turn_of_a_late_steer(
             events.append(event)
             if isinstance(event, ai.events.TextDelta) and event.chunk == "TWO":
                 break
-        await session.interrupt()
+        await harness.session.interrupt()
         (cancel,) = server.sent("session/cancel")
         assert cancel["params"] == {"sessionId": SESSION}
-        assert [(msg.role, msg.text) for msg in session.messages] == [
+        assert [(msg.role, msg.text) for msg in harness.session.messages] == [
             ("user", "ONE"),
             ("assistant", "ONE"),
             ("user", "TWO"),
             ("assistant", "TWO"),
         ]
-        assert (session.messages[-1].provider_metadata or {})["external"] == {
-            "stop_reason": "interrupted"
-        }
+        assert (harness.session.messages[-1].provider_metadata or {})[
+            "external"
+        ] == {"stop_reason": "interrupted"}
 
 
 async def test_a_rejected_steer_waits_for_the_running_turn_then_retries(
@@ -1244,10 +1250,10 @@ async def test_a_rejected_steer_waits_for_the_running_turn_then_retries(
     harness: external.Fx,
 ) -> None:
     server.turns = [([text("ONE", "a1")], None), ([text("TWO", "a2")], END)]
-    async with asyncio.timeout(5), harness.session() as session:
-        feed = session.events()
-        await session.send(ai.user_message("ONE"))
-        await session.send(ai.user_message("TWO"))
+    async with asyncio.timeout(5), harness:
+        feed = harness.session.events()
+        await harness.session.send(ai.user_message("ONE"))
+        await harness.session.send(ai.user_message("TWO"))
         request = server.steers[0]
         server.says(
             {
@@ -1268,13 +1274,13 @@ async def test_a_rejected_steer_waits_for_the_running_turn_then_retries(
             ):
                 break
         assert not any(isinstance(e, ai.events.StreamEnd) for e in events)
-        assert [msg.text for msg in session.messages if msg.role == "user"] == [
-            "ONE"
-        ]
+        assert [
+            msg.text for msg in harness.session.messages if msg.role == "user"
+        ] == ["ONE"]
         assert len(server.sent("session/prompt")) == 2
         server.finish(server.prompts[0], END)
         events += await through_turns(feed, 2)
-        assert [(msg.role, msg.text) for msg in session.messages] == [
+        assert [(msg.role, msg.text) for msg in harness.session.messages] == [
             ("user", "ONE"),
             ("assistant", "ONE CONTINUES"),
             ("user", "TWO"),
@@ -1300,9 +1306,9 @@ async def test_updates_after_a_prompt_response_do_not_join_the_ended_turn(
     harness: external.Fx,
 ) -> None:
     server.turns = [([CALL], None)]
-    async with asyncio.timeout(5), harness.session() as session:
-        feed = session.events()
-        await session.send(ai.user_message("ONE"))
+    async with asyncio.timeout(5), harness:
+        feed = harness.session.events()
+        await harness.session.send(ai.user_message("ONE"))
         server.finish(server.prompts[0], END)
         server.says(RESULT, text("late text", "late"))
         events = await through_turns(feed, 1)
@@ -1310,8 +1316,8 @@ async def test_updates_after_a_prompt_response_do_not_join_the_ended_turn(
             isinstance(e, ai.events.BuiltinToolResult | ai.events.TextDelta)
             for e in events
         ), ", ".join(type(e).__name__ for e in events)
-        assert session.messages[-1].builtin_tool_returns == []
-        assert session.messages[-1].text == ""
+        assert harness.session.messages[-1].builtin_tool_returns == []
+        assert harness.session.messages[-1].text == ""
 
 
 @pytest.mark.parametrize(
@@ -1331,7 +1337,7 @@ async def test_noncontent_updates_do_not_split_a_text_block(
     server.turns = [([text("HE"), update(native, **fields), text("RON")], END)]
     events = []
     async with (
-        harness.session(),
+        harness,
         ai.stream(harness, [ai.user_message("go")]) as stream,
     ):
         async for event in stream:
@@ -1349,7 +1355,7 @@ async def test_a_final_tool_update_without_a_call_is_ignored(
     server.turns = [([RESULT, text("done")], END)]
     events = []
     async with (
-        harness.session(),
+        harness,
         ai.stream(harness, [ai.user_message("go")]) as stream,
     ):
         async for event in stream:
@@ -1362,8 +1368,8 @@ async def test_an_unknown_server_request_gets_an_error_reply(
     server: AcpServer,
     harness: external.Fx,
 ) -> None:
-    async with asyncio.timeout(5), harness.session() as session:
-        await session.start()
+    async with asyncio.timeout(5), harness:
+        await harness.session.start()
         server.says({"id": 98, "method": "unknown/request", "params": {}})
         while not server.replies:
             await asyncio.sleep(0)
@@ -1381,7 +1387,7 @@ async def test_credential_refresh_failure_is_not_authenticated(
         ([text("credential refresh failed")], {"stopReason": "refused"})
     ]
     with pytest.raises(external.NotAuthenticatedError):
-        async with harness.session():
+        async with harness:
             await run(harness, [ai.user_message("go")])
 
 
@@ -1389,13 +1395,13 @@ async def test_a_crash_while_idle_reaches_session_events(
     server: AcpServer,
     harness: external.Fx,
 ) -> None:
-    async with asyncio.timeout(5), harness.session() as session:
-        await session.start()
+    async with asyncio.timeout(5), harness:
+        await harness.session.start()
         await server.process.terminate()
         with pytest.raises(
             external.ExternalHarnessError, match=r"^fx crashed:"
         ):
-            await anext(session.events())
+            await anext(harness.session.events())
 
 
 async def test_early_content_waits_for_acceptance_while_write_yields(
@@ -1404,9 +1410,9 @@ async def test_early_content_waits_for_acceptance_while_write_yields(
 ) -> None:
     server.process.yield_prompt_write = True
     server.turns = [([text("reply")], END)]
-    async with harness.session() as session:
+    async with harness:
         stream = await run(harness, [ai.user_message("question")])
-        assert [(msg.role, msg.text) for msg in session.messages] == [
+        assert [(msg.role, msg.text) for msg in harness.session.messages] == [
             ("user", "question"),
             ("assistant", "reply"),
         ]
@@ -1422,8 +1428,8 @@ async def test_a_resume_refuses_a_listed_session_with_a_different_cwd(
         external.ExternalHarnessError,
         match="unknown or belongs to another directory",
     ):
-        async with harness.session(SESSION) as session:
-            await session.start()
+        async with dataclasses.replace(harness, resume=SESSION) as harness:
+            await harness.session.start()
     assert not server.sent("session/resume")
 
 
@@ -1431,7 +1437,8 @@ async def test_wire_start_omits_empty_instructions_and_close_is_safe_twice(
     server: AcpServer,
     harness: external.Fx,
 ) -> None:
-    # Session.close has its own guard. Check the Wire contract separately.
+    # The close of the session has its own guard. Check the Wire contract
+    # separately.
     wire = wire_.FxWire(harness)
     await wire.start(
         session_id=None,
@@ -1454,10 +1461,10 @@ async def test_a_no_echo_steer_always_ends_and_the_next_send_is_normal(
 ) -> None:
     server.turns = [([text("ONE", "a1")], None), ([text("THREE", "a3")], END)]
     messages = [ai.user_message(value) for value in ("ONE", "TWO", "THREE")]
-    async with asyncio.timeout(5), harness.session() as session:
-        feed = session.events()
-        await session.send(messages[0])
-        await session.send(messages[1])
+    async with asyncio.timeout(5), harness:
+        feed = harness.session.events()
+        await harness.session.send(messages[0])
+        await harness.session.send(messages[1])
         request = server.steers[0]
         server.finish(server.prompts[0], END)
         server.says(text("TWO", "a2"))
@@ -1475,15 +1482,15 @@ async def test_a_no_echo_steer_always_ends_and_the_next_send_is_normal(
             events.append(event)
             if sum(isinstance(e, ai.events.StreamEnd) for e in events) == 2:
                 break
-        assert [(msg.role, msg.text) for msg in session.messages] == [
+        assert [(msg.role, msg.text) for msg in harness.session.messages] == [
             ("user", "ONE"),
             ("assistant", "ONE"),
             ("user", "TWO"),
             ("assistant", "TWO"),
         ]
-        await session.send(messages[2])
+        await harness.session.send(messages[2])
         events += await through_turns(feed, 1)
-        assert [(msg.role, msg.text) for msg in session.messages] == [
+        assert [(msg.role, msg.text) for msg in harness.session.messages] == [
             ("user", "ONE"),
             ("assistant", "ONE"),
             ("user", "TWO"),
@@ -1491,9 +1498,9 @@ async def test_a_no_echo_steer_always_ends_and_the_next_send_is_normal(
             ("user", "THREE"),
             ("assistant", "THREE"),
         ]
-        assert [msg.id for msg in session.messages if msg.role == "user"] == [
-            msg.id for msg in messages
-        ]
+        assert [
+            msg.id for msg in harness.session.messages if msg.role == "user"
+        ] == [msg.id for msg in messages]
         assert len(server.prompts) == 2 and len(server.steers) == 1
         assert not server.rejected_prompts
         assert (
@@ -1513,10 +1520,10 @@ async def test_a_send_in_the_gap_before_late_steer_content_keeps_send_order(
 ) -> None:
     server.turns = [([text("ONE", "a1")], None), ([text("THREE", "a3")], END)]
     messages = [ai.user_message(value) for value in ("ONE", "TWO", "THREE")]
-    async with asyncio.timeout(5), harness.session() as session:
-        feed = session.events()
-        await session.send(messages[0])
-        await session.send(messages[1])
+    async with asyncio.timeout(5), harness:
+        feed = harness.session.events()
+        await harness.session.send(messages[0])
+        await harness.session.send(messages[1])
         second = server.steers[0]
         server.finish(server.prompts[0], END)
         events = []
@@ -1524,7 +1531,7 @@ async def test_a_send_in_the_gap_before_late_steer_content_keeps_send_order(
             events.append(event)
             if isinstance(event, ai.events.StreamEnd):
                 break
-        third_send = asyncio.create_task(session.send(messages[2]))
+        third_send = asyncio.create_task(harness.session.send(messages[2]))
         # Let send() write, without requiring it to bypass a queue.
         await asyncio.sleep(0.01)
         assert not server.rejected_prompts
@@ -1537,7 +1544,7 @@ async def test_a_send_in_the_gap_before_late_steer_content_keeps_send_order(
             server.finish(third, END)
         await third_send
         events += await through_turns(feed, 2)
-        assert [(msg.role, msg.text) for msg in session.messages] == [
+        assert [(msg.role, msg.text) for msg in harness.session.messages] == [
             ("user", "ONE"),
             ("assistant", "ONE"),
             ("user", "TWO"),
@@ -1545,9 +1552,9 @@ async def test_a_send_in_the_gap_before_late_steer_content_keeps_send_order(
             ("user", "THREE"),
             ("assistant", "THREE"),
         ]
-        assert [msg.id for msg in session.messages if msg.role == "user"] == [
-            msg.id for msg in messages
-        ]
+        assert [
+            msg.id for msg in harness.session.messages if msg.role == "user"
+        ] == [msg.id for msg in messages]
         assert not server.rejected_prompts
         assert (
             len([e for e in events if isinstance(e, ai.events.StreamStart)])
@@ -1573,12 +1580,12 @@ async def test_a_late_update_after_interrupt_does_not_accept_a_dropped_steer(
     server.cancel_result = {"stopReason": "cancelled"}
     server.cancel_updates = [text("LATE", "late") if late == "text" else RESULT]
     messages = [ai.user_message(value) for value in ("ONE", "TWO")]
-    async with asyncio.timeout(5), harness.session() as session:
-        feed = session.events()
-        await session.send(messages[0])
-        await session.send(messages[1])
+    async with asyncio.timeout(5), harness:
+        feed = harness.session.events()
+        await harness.session.send(messages[0])
+        await harness.session.send(messages[1])
         request = server.steers[0]
-        await session.interrupt()
+        await harness.session.interrupt()
         server.finish(
             request,
             {
@@ -1587,15 +1594,15 @@ async def test_a_late_update_after_interrupt_does_not_accept_a_dropped_steer(
             },
         )
         events = await through_turns(feed, 2)
-        assert [(msg.role, msg.text) for msg in session.messages] == [
+        assert [(msg.role, msg.text) for msg in harness.session.messages] == [
             ("user", "ONE"),
             ("assistant", "ONE"),
             ("user", "TWO"),
             ("assistant", "TWO"),
         ]
-        assert [msg.id for msg in session.messages if msg.role == "user"] == [
-            msg.id for msg in messages
-        ]
+        assert [
+            msg.id for msg in harness.session.messages if msg.role == "user"
+        ] == [msg.id for msg in messages]
         assert not any(
             isinstance(e, ai.events.TextDelta) and e.chunk == "LATE"
             for e in events
@@ -1627,8 +1634,9 @@ async def test_a_cancelled_seed_load_closes_before_removing_its_folder(
     index = sibling.parent / "index.jsonl"
     index.write_bytes(b"keep index")
     history = [ai.user_message("old"), ai.assistant_message("old answer")]
-    async with asyncio.timeout(5), harness.session(messages=history) as session:
-        task = asyncio.create_task(session.start())
+    harness = dataclasses.replace(harness, history=history)
+    async with asyncio.timeout(5), harness:
+        task = asyncio.create_task(harness.session.start())
         await server.wait_for("session/load")
         assert server.loaded is not None and server.loaded.exists()
         task.cancel()
@@ -1655,9 +1663,9 @@ async def test_an_image_send_waiting_for_a_turn_raises_when_the_process_stops(
             m.FilePart(data=b"image", media_type="image/png"),
         ],
     )
-    async with asyncio.timeout(5), harness.session() as session:
-        await session.send(ai.user_message("first"))
-        pending = asyncio.create_task(session.send(image_message))
+    async with asyncio.timeout(5), harness:
+        await harness.session.send(ai.user_message("first"))
+        pending = asyncio.create_task(harness.session.send(image_message))
         try:
             await asyncio.sleep(0.01)
             assert not pending.done()
@@ -1665,7 +1673,7 @@ async def test_an_image_send_waiting_for_a_turn_raises_when_the_process_stops(
             if ending == "crash":
                 await server.process.terminate()
             else:
-                await session.close()
+                await harness.session._close()
             with pytest.raises(external.ExternalHarnessError):
                 async with asyncio.timeout(1):
                     await pending
@@ -1686,10 +1694,10 @@ async def test_a_newer_steer_echo_does_not_lose_an_older_refused_steer(
     initial, older, newer = [
         ai.user_message(value) for value in ("T", "OLDER", "NEWER")
     ]
-    async with asyncio.timeout(5), harness.session() as session:
-        feed = session.events()
+    async with asyncio.timeout(5), harness:
+        feed = harness.session.events()
         for message in (initial, older, newer):
-            await session.send(message)
+            await harness.session.send(message)
         old_request, new_request = server.steers
         server.finish(server.prompts[0], END)
         server.says(
@@ -1715,7 +1723,7 @@ async def test_a_newer_steer_echo_does_not_lose_an_older_refused_steer(
             }
         )
         events = await through_turns(feed, 3)
-        assert [(msg.role, msg.text) for msg in session.messages] == [
+        assert [(msg.role, msg.text) for msg in harness.session.messages] == [
             ("user", "T"),
             ("assistant", "T reply"),
             ("user", "NEWER"),
@@ -1723,7 +1731,9 @@ async def test_a_newer_steer_echo_does_not_lose_an_older_refused_steer(
             ("user", "OLDER"),
             ("assistant", "OLDER reply"),
         ]
-        assert [msg.id for msg in session.messages if msg.role == "user"] == [
+        assert [
+            msg.id for msg in harness.session.messages if msg.role == "user"
+        ] == [
             initial.id,
             newer.id,
             older.id,
@@ -1762,19 +1772,19 @@ async def test_three_steers_keep_retry_order_and_accept_each_message_once(
     initial, refused, accepted, dropped, queued = [
         ai.user_message(value) for value in ("T", "S1", "S2", "S3", "NEW")
     ]
-    async with asyncio.timeout(5), harness.session() as session:
-        feed = session.events()
+    async with asyncio.timeout(5), harness:
+        feed = harness.session.events()
         server.process.fail_next_prompt = True
         failed = ai.user_message("not written")
         with pytest.raises(
             (OSError, external.ExternalHarnessError),
             match="scripted write failed",
         ):
-            await session.send(failed)
-        await session.send(initial)
+            await harness.session.send(failed)
+        await harness.session.send(initial)
         assert len(server.prompts) == 1 and not server.steers
         for message in (refused, accepted, dropped):
-            await session.send(message)
+            await harness.session.send(message)
         s1, s2, s3 = server.steers
         server.cancel_request = s2
         if not echo_before_end:
@@ -1817,7 +1827,7 @@ async def test_three_steers_keep_retry_order_and_accept_each_message_once(
                 and event.chunk == " READY"
             ):
                 break
-        new_send = asyncio.create_task(session.send(queued))
+        new_send = asyncio.create_task(harness.session.send(queued))
         await asyncio.sleep(0.01)
         assert [
             request["params"]["prompt"][0]["text"]
@@ -1854,7 +1864,7 @@ async def test_three_steers_keep_retry_order_and_accept_each_message_once(
             server.finish(new_request, END)
         await new_send
         events += await through_turns(feed, 4)
-        assert [(msg.role, msg.text) for msg in session.messages] == [
+        assert [(msg.role, msg.text) for msg in harness.session.messages] == [
             ("user", "T"),
             ("assistant", "T reply"),
             ("user", "S2"),
@@ -1866,7 +1876,9 @@ async def test_three_steers_keep_retry_order_and_accept_each_message_once(
             ("user", "NEW"),
             ("assistant", "NEW reply"),
         ]
-        assert [msg.id for msg in session.messages if msg.role == "user"] == [
+        assert [
+            msg.id for msg in harness.session.messages if msg.role == "user"
+        ] == [
             initial.id,
             accepted.id,
             refused.id,
@@ -1916,7 +1928,7 @@ async def test_seeding_warns_when_reasoning_is_not_carried_into_fx(
     ]
     server.turns = [([text("fresh")], END)]
     with pytest.warns(UserWarning, match=r"1 reasoning part\(s\).*"):
-        async with harness.session():
+        async with harness:
             stream = await run(harness, history)
     assert stream.text == "fresh"
     assert "private thought" not in json.dumps(server.loaded_records)
@@ -1930,10 +1942,10 @@ async def test_close_fails_a_send_waiting_behind_the_retry_queue(
         ([text("first", "a1")], None),
         ([text("retry", "a2")], None),
     ]
-    async with asyncio.timeout(5), harness.session() as session:
-        await session.send(ai.user_message("T"))
-        await session.send(ai.user_message("S1"))
-        await session.send(ai.user_message("S2"))
+    async with asyncio.timeout(5), harness:
+        await harness.session.send(ai.user_message("T"))
+        await harness.session.send(ai.user_message("S1"))
+        await harness.session.send(ai.user_message("S2"))
         server.finish(server.prompts[0], END)
         for request in server.steers:
             server.finish(
@@ -1944,12 +1956,14 @@ async def test_close_fails_a_send_waiting_behind_the_retry_queue(
                 },
             )
         await server.wait_for("session/prompt", 4)
-        pending = asyncio.create_task(session.send(ai.user_message("NEW")))
+        pending = asyncio.create_task(
+            harness.session.send(ai.user_message("NEW"))
+        )
         try:
             await asyncio.sleep(0.01)
             assert not pending.done()
             assert len(server.sent("session/prompt")) == 4
-            await session.close()
+            await harness.session._close()
             with pytest.raises(external.ExternalHarnessError):
                 async with asyncio.timeout(1):
                     await pending

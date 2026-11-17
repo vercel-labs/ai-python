@@ -154,7 +154,7 @@ async def test_a_turn_streams_in_the_model_view(
     server.turns = [TURN]
     user = ai.user_message("go")
     harness = external.Codex(cwd=cwd)
-    async with harness.session() as session:
+    async with harness:
         s = await run(harness, [user])
     message = s.message
     assert message.reasoning == "plan"
@@ -166,9 +166,12 @@ async def test_a_turn_streams_in_the_model_view(
     assert result.result == "the word is HERON\n"
     assert message.usage is not None and message.usage.input_tokens == 10
     # Acceptance came first, although the notes came before the response.
-    assert [msg.role for msg in session.messages] == ["user", "assistant"]
-    assert session.messages[0].id == user.id
-    assert session.id == THREAD
+    assert [msg.role for msg in harness.session.messages] == [
+        "user",
+        "assistant",
+    ]
+    assert harness.session.messages[0].id == user.id
+    assert harness.session.id == THREAD
 
 
 async def test_start_runs_app_server_with_the_bridge(
@@ -184,12 +187,12 @@ async def test_start_runs_app_server_with_the_bridge(
         sandbox="workspace-write",
         config={"model_reasoning_effort": "high"},
     )
-    async with harness.session() as session:
-        await session.start()
+    async with harness:
+        await harness.session.start()
         (argv, kwargs) = server.spawned[0]
         assert argv[:2] == ["/custom/codex", "app-server"]
-        assert session._run is not None
-        bridge = session._run.bridge.url
+        assert harness.session._run is not None
+        bridge = harness.session._run.bridge.url
         assert f'mcp_servers.ai_sdk.url="{bridge}"' in argv
         assert "mcp_servers.ai_sdk.tool_timeout_sec=86400" in argv
         assert 'model_reasoning_effort="high"' in argv
@@ -217,7 +220,7 @@ async def test_a_new_thread_is_seeded_with_the_past(
         ai.user_message("two"),
     ]
     harness = external.Codex(cwd=cwd)
-    async with harness.session():  # the first call starts the CLI, seeded
+    async with harness:  # the first call starts the CLI, seeded
         await run(harness, history)
     (inject,) = server.sent("thread/inject_items")
     texts = [item["content"][0]["text"] for item in inject["params"]["items"]]
@@ -227,15 +230,15 @@ async def test_a_new_thread_is_seeded_with_the_past(
 
 
 async def test_a_session_resumes_here_only(server: AppServer, cwd: str) -> None:
-    async with external.Codex(cwd=cwd).session(THREAD) as session:
-        await session.start()
+    async with external.Codex(cwd=cwd, resume=THREAD) as harness:
+        await harness.session.start()
         assert server.sent("thread/resume")[0]["params"]["threadId"] == THREAD
-    elsewhere = external.Codex(cwd=cwd)
+    elsewhere = external.Codex(cwd=cwd, resume="elsewhere")
     with pytest.raises(
         external.ExternalHarnessError, match="belongs to /other"
     ):
-        async with elsewhere.session("elsewhere") as session:
-            await session.start()
+        async with elsewhere:
+            await elsewhere.session.start()
 
 
 async def test_another_turns_notifications_are_not_this_turns(
@@ -256,7 +259,7 @@ async def test_another_turns_notifications_are_not_this_turns(
         ]
     ]
     harness = external.Codex(cwd=cwd)
-    async with harness.session():
+    async with harness:
         s = await run(harness, [ai.user_message("go")])
     assert s.text == "mine"
 
@@ -276,7 +279,7 @@ async def test_a_message_that_was_never_streamed_still_arrives(
         ]
     ]
     harness = external.Codex(cwd=cwd)
-    async with harness.session():
+    async with harness:
         s = await run(harness, [ai.user_message("go")])
     assert s.text == "whole"
 
@@ -297,7 +300,7 @@ async def test_a_failed_turn_without_a_key_is_not_authenticated(
         ]
     ]
     harness = external.Codex(cwd=cwd)
-    async with harness.session():
+    async with harness:
         with pytest.raises(external.NotAuthenticatedError):
             await run(harness, [ai.user_message("go")])
 
@@ -309,20 +312,20 @@ async def test_interrupt_ends_the_turn_as_interrupted(
         [note("item/agentMessage/delta", itemId="a1", delta="work")]
     ]
     harness = external.Codex(cwd=cwd)
-    async with harness.session() as session:
-        feed = session.events()
-        await session.send(ai.user_message("long job"))
+    async with harness:
+        feed = harness.session.events()
+        await harness.session.send(ai.user_message("long job"))
         async with asyncio.timeout(5):
             async for event in feed:
                 if isinstance(event, ai.events.TextDelta):
                     break
-            await session.interrupt()
+            await harness.session.interrupt()
         (interrupt,) = server.sent("turn/interrupt")
         assert interrupt["params"] == {"threadId": THREAD, "turnId": "turn-1"}
-        assert (session.messages[-1].provider_metadata or {}).get(
+        assert (harness.session.messages[-1].provider_metadata or {}).get(
             "external"
         ) == {"stop_reason": "interrupted"}
-        assert session.messages[-1].text == "work"
+        assert harness.session.messages[-1].text == "work"
 
 
 async def test_a_send_during_a_turn_steers_it(
@@ -332,10 +335,10 @@ async def test_a_send_during_a_turn_steers_it(
         [note("item/agentMessage/delta", itemId="a1", delta="Look")]
     ]
     harness = external.Codex(cwd=cwd)
-    async with harness.session() as session:
-        feed = session.events()
-        await session.send(ai.user_message("fix"))
-        await session.send(ai.user_message("skip slow ones"))
+    async with harness:
+        feed = harness.session.events()
+        await harness.session.send(ai.user_message("fix"))
+        await harness.session.send(ai.user_message("skip slow ones"))
         (steer,) = server.sent("turn/steer")
         assert steer["params"]["expectedTurnId"] == "turn-1"
         assert steer["params"]["input"] == [
@@ -354,9 +357,9 @@ async def test_a_send_during_a_turn_steers_it(
             note("turn/completed", turn={"id": "turn-1", "status": "completed"})
         )
         async with asyncio.timeout(5):
-            while len(session.messages) < 4:
+            while len(harness.session.messages) < 4:
                 await anext(feed)
-        assert [(msg.role, msg.text) for msg in session.messages] == [
+        assert [(msg.role, msg.text) for msg in harness.session.messages] == [
             ("user", "fix"),
             ("assistant", "Look"),
             ("user", "skip slow ones"),
@@ -379,9 +382,9 @@ async def test_a_steer_that_lost_the_race_starts_a_turn(
     ]
     server.steer_error = {"code": -32600, "message": "no active turn to steer"}
     harness = external.Codex(cwd=cwd)
-    async with harness.session() as session:
-        await session.send(ai.user_message("one"))
-        await session.send(ai.user_message("two"))
+    async with harness:
+        await harness.session.send(ai.user_message("one"))
+        await harness.session.send(ai.user_message("two"))
         assert len(server.sent("turn/start")) == 2
 
 
@@ -391,12 +394,12 @@ async def test_other_steer_rejections_are_errors(
     server.turns = [[]]
     server.steer_error = {"code": -32600, "message": "expected turn mismatch"}
     harness = external.Codex(cwd=cwd)
-    async with harness.session() as session:
-        await session.send(ai.user_message("one"))
+    async with harness:
+        await harness.session.send(ai.user_message("one"))
         with pytest.raises(
             external.ExternalHarnessError, match="steer rejected"
         ):
-            await session.send(ai.user_message("two"))
+            await harness.session.send(ai.user_message("two"))
         assert len(server.sent("turn/start")) == 1
 
 
@@ -421,7 +424,7 @@ async def test_bridge_calls_are_ai_tool_calls_not_builtin(
         ]
     ]
     harness = external.Codex(cwd=cwd)
-    async with harness.session():
+    async with harness:
         s = await run(harness, [ai.user_message("go")])
     assert s.message.builtin_tool_calls == []
     assert s.text == "done"
@@ -430,8 +433,8 @@ async def test_bridge_calls_are_ai_tool_calls_not_builtin(
 async def test_an_approval_request_is_answered(
     server: AppServer, cwd: str
 ) -> None:
-    async with external.Codex(cwd=cwd).session() as session:
-        await session.start()
+    async with external.Codex(cwd=cwd) as harness:
+        await harness.session.start()
         server.process.server_says(
             {
                 "id": 99,
@@ -462,8 +465,8 @@ async def test_a_failed_handshake_closes_the_process(
 
     server.process.answer = refuse
     with pytest.raises(jsonrpc.JsonRpcError):
-        async with external.Codex(cwd=cwd).session() as session:
-            await session.start()
+        async with external.Codex(cwd=cwd) as harness:
+            await harness.session.start()
     assert server.process.terminated
 
 
@@ -478,7 +481,7 @@ async def test_a_crash_reaches_the_stream(server: AppServer, cwd: str) -> None:
 
     harness = external.Codex(cwd=cwd)
 
-    async with harness.session():
+    async with harness:
         task = asyncio.create_task(die())
         with pytest.raises(
             external.ExternalHarnessError, match=r"crashed|stopped"

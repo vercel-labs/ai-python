@@ -25,10 +25,13 @@ class Checked:
 async def until_passes(
     harness: ai.external.ExternalHarness, task: str, *, attempts: int = 3
 ) -> AsyncGenerator[ai.events.Event | Checked]:
-    async with harness.session() as session:
+    async with harness:
         prompt = task
         for attempt in range(1, attempts + 1):
-            messages = [*session.messages, ai.user_message(prompt)]
+            messages = [
+                *harness.session.messages,
+                ai.user_message(prompt),
+            ]
             async with ai.stream(harness, messages) as stream:
                 async for event in stream:
                     if not isinstance(event, ai.events.ReasoningDelta):

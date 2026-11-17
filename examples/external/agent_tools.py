@@ -5,10 +5,11 @@ uv run python examples/external/agent_tools.py [claude-code|codex|fx|pi]
 
 import asyncio
 import sys
+from collections.abc import Callable
 
 import ai
 
-KINDS: dict[str, type[ai.external.ExternalHarness]] = {
+KINDS: dict[str, Callable[[], ai.external.ExternalHarness]] = {
     "claude-code": ai.external.ClaudeCode,
     "codex": ai.external.Codex,
     "fx": ai.external.Fx,
@@ -31,7 +32,7 @@ async def main(kind: str) -> None:
         )
     ]
     harness = KINDS[kind]()
-    async with harness.session(), agent.run(harness, messages) as run:
+    async with harness, agent.run(harness, messages) as run:
         async for event in run:
             match event:
                 case ai.events.ToolEnd():  # an ai tool: the agent runs it

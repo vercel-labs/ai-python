@@ -1,6 +1,7 @@
 """Custom loop: an external harness turn as one step of your own agent loop."""
 
 import asyncio
+import dataclasses
 import pathlib
 import tempfile
 from collections.abc import AsyncGenerator
@@ -24,10 +25,10 @@ class CodeThenReview(ai.Agent):
     ) -> AsyncGenerator[ai.events.AgentEvent]:
         """The external harness does the task, then the model reviews it."""
         # Step 1: the external harness does the task. Each run is a new
-        # conversation, thus a new session.
-        harness = self.harness
+        # conversation: the same settings, with a new session.
+        harness = dataclasses.replace(self.harness)
         async with (
-            harness.session(),
+            harness,
             ai.stream(harness, [context.messages[-1]]) as work,
         ):
             async for event in work:

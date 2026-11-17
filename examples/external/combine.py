@@ -11,7 +11,7 @@ async def tagged(
     label: str, harness: ai.external.ExternalHarness, prompt: str
 ) -> AsyncGenerator[tuple[str, ai.events.Event]]:
     async with (
-        harness.session(),
+        harness,
         ai.stream(harness, [ai.user_message(prompt)]) as stream,
     ):
         async for event in stream:
@@ -20,19 +20,17 @@ async def tagged(
 
 async def main() -> None:
     with tempfile.TemporaryDirectory() as tmp:
-        # A session is one conversation: two at a time are two sessions of
-        # the external harness, one in each stream.
-        harness = ai.external.ClaudeCode(cwd=tmp)
-
+        # One external harness is one conversation: two at a time are two
+        # external harnesses, one in each stream.
         async with ai.util.merge(
             tagged(
                 "poem",
-                harness,
+                ai.external.ClaudeCode(cwd=tmp),
                 "Write a two-line poem about rivers into poem.txt.",
             ),
             tagged(
                 "limerick",
-                harness,
+                ai.external.ClaudeCode(cwd=tmp),
                 "Write a limerick about mountains into limerick.txt.",
             ),
         ) as events:

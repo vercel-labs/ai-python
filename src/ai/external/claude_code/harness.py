@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Literal
-
-import pydantic
+import dataclasses
+from typing import ClassVar
 
 from .. import _harness
 from . import wire
@@ -19,6 +18,7 @@ class ClaudeCodeProvider(_harness.ExternalHarnessProvider):
         return wire.ClaudeCodeWire(harness)
 
 
+@dataclasses.dataclass(kw_only=True, eq=False)
 class ClaudeCode(_harness.ExternalHarness):
     """Claude Code, through `claude-agent-sdk`. Needs the `claude-code` extra.
 
@@ -29,10 +29,11 @@ class ClaudeCode(_harness.ExternalHarness):
     with `bypassPermissions`.
     """
 
-    harness_class_id: Literal["claude-code"] = "claude-code"
-    provider: ClaudeCodeProvider = pydantic.Field(
+    harness_class_id: ClassVar[str] = "claude-code"
+
+    provider: ClaudeCodeProvider = dataclasses.field(
         default_factory=ClaudeCodeProvider
     )
     allowed_tools: list[str] | None = None
-    disallowed_tools: list[str] = pydantic.Field(default_factory=list)
+    disallowed_tools: list[str] = dataclasses.field(default_factory=list)
     max_turns: int | None = None

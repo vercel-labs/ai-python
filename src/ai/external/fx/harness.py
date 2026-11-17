@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Literal
-
-import pydantic
+import dataclasses
+from typing import ClassVar
 
 from .. import _harness
 from . import wire
@@ -19,6 +18,7 @@ class FxProvider(_harness.ExternalHarnessProvider):
         return wire.FxWire(harness)
 
 
+@dataclasses.dataclass(kw_only=True, eq=False)
 class Fx(_harness.ExternalHarness):
     """Fx over `fx acp`, with full access to its built-in tools.
 
@@ -32,7 +32,8 @@ class Fx(_harness.ExternalHarness):
     wrong past.
     """
 
-    harness_class_id: Literal["fx"] = "fx"
-    provider: FxProvider = pydantic.Field(default_factory=FxProvider)
+    harness_class_id: ClassVar[str] = "fx"
+
+    provider: FxProvider = dataclasses.field(default_factory=FxProvider)
     model_provider: str | None = None
     effort: str | None = None

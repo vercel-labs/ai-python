@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Literal
-
-import pydantic
+import dataclasses
+from typing import ClassVar, Literal
 
 from .. import _harness
 from . import wire
@@ -19,6 +18,7 @@ class PiProvider(_harness.ExternalHarnessProvider):
         return wire.PiWire(harness)
 
 
+@dataclasses.dataclass(kw_only=True, eq=False)
 class Pi(_harness.ExternalHarness):
     """Pi, over `pi --mode rpc`.
 
@@ -29,8 +29,9 @@ class Pi(_harness.ExternalHarness):
     asks for approval.
     """
 
-    harness_class_id: Literal["pi"] = "pi"
-    provider: PiProvider = pydantic.Field(default_factory=PiProvider)
+    harness_class_id: ClassVar[str] = "pi"
+
+    provider: PiProvider = dataclasses.field(default_factory=PiProvider)
     model_provider: str | None = None
     thinking: (
         Literal["off", "minimal", "low", "medium", "high", "xhigh", "max"]
@@ -38,4 +39,4 @@ class Pi(_harness.ExternalHarness):
     ) = None
     allowed_tools: list[str] | None = None
     disallowed_tools: list[str] | None = None
-    args: list[str] = pydantic.Field(default_factory=list)
+    args: list[str] = dataclasses.field(default_factory=list)

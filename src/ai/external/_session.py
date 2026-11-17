@@ -1,7 +1,7 @@
-"""`Session`: one session of an external harness's CLI.
+"""`Session`: the session of an external harness.
 
 The state is here: `id` and `messages`. So is the low level: `start`,
-`send`, `events`, `interrupt` and `close`. The model protocol
+`send`, `events` and `interrupt`. The model protocol
 (`ExternalHarnessProvider.stream`) is built on it.
 """
 
@@ -10,13 +10,12 @@ from __future__ import annotations
 import asyncio
 import collections
 import contextlib
-import contextvars
 import dataclasses
 import functools
 import json
 import warnings
 from collections.abc import AsyncGenerator, Awaitable, Callable
-from typing import TYPE_CHECKING, Any, Literal, Self
+from typing import TYPE_CHECKING, Any, Literal
 
 import pydantic
 
@@ -43,15 +42,12 @@ METADATA_KEY = "external"
 NEW_MESSAGE = "No result: a new user message came before the result."
 INTERRUPTED = "No result: the turn was interrupted."
 CLOSED = "No result: the external harness closed."
-NOT_OPEN = "the session is not open: use `async with harness.session()`"
+NOT_OPEN = "the external harness is not open: use `async with harness`"
 
 
-# The sessions that are open in this context, the newest last. A model call of
-# an external harness runs on the external harness's open session, if the
-# context has one.
-_OPEN: contextvars.ContextVar[tuple[Session, ...]] = contextvars.ContextVar(
-    "ai_external_open_sessions", default=()
-)
+# The sessions that are open in this process. Two external harnesses on one
+# CLI session are two writers: the second one does not open.
+_OPEN: set[Session] = set()
 
 
 class MessageEvent(events_.BaseEvent):
@@ -65,7 +61,7 @@ ExternalHarnessEvent = events_.Event | MessageEvent
 
 
 class ExternalHarnessSessionSpanData(pydantic.BaseModel):
-    """One external harness session, from `start()` to `close()`."""
+    """One external harness session, from the start of the CLI to its stop."""
 
     kind: Literal["external_session"] = "external_session"
     harness: str
@@ -87,31 +83,31 @@ class ExternalHarnessMessageSpanData(pydantic.BaseModel):
 
 
 class Session:
-    """One session of an external harness's CLI: its state and direct control.
+    """The session of an external harness: its state and direct control.
 
-    `harness.session()` makes a new session. `harness.session(session_id)`
-    continues a session that the CLI has, and
-    `harness.session(messages=history)` makes a new one that starts with a
-    past. The state is plain data:
+    An external harness comes with its session: `harness.session`. Do not
+    make a session, and do not open or close one: `async with harness` does
+    that. `Codex(resume=session_id)` gives an external harness whose session
+    continues one that the CLI has, and `Codex(history=messages)` gives one
+    whose new session starts with a past. The state is plain data:
 
     - `id`: the CLI's id for the session. None until a new session starts.
       Save it to continue the session later.
     - `messages`: the conversation, in `ai` messages. The session keeps it
       current.
 
-    Open the session to use it. The CLI stays alive between the turns::
+    Use the session in the block of its external harness. The CLI stays
+    alive between the turns::
 
-        async with harness.session() as session:
-            await session.send(ai.user_message("Fix the tests"))
-            async for event in session.events():
+        async with ai.external.Codex(cwd=".") as harness:
+            await harness.session.send(ai.user_message("Fix the tests"))
+            async for event in harness.session.events():
                 ...
 
-    The block is the only way to open the session. While the session is
-    open, the external harness's model calls (`ai.stream(harness, messages)`,
-    `ai.Agent(...).run(harness, messages)`) run on it; without an open session
-    they raise. This applies to the task that opened the session and to the
-    tasks that it makes after that. An external harness has one open session
-    in a task.
+    In the block, the external harness's model calls
+    (`ai.stream(harness, messages)`, `ai.Agent(...).run(harness, messages)`)
+    run on this session; outside the block they raise. After the block, `id`
+    and `messages` stay.
 
     The CLI starts with the first `send()` or the first model call, not when
     the block opens: by then the tools and the past are known. `start()`
@@ -148,31 +144,21 @@ class Session:
         # Held by the provider's `stream()`: one model call at a time.
         self._stream_lock = asyncio.Lock()
 
-    async def __aenter__(self) -> Self:
-        """Open the session: the external harness's model calls run on it."""
+    def _enter(self) -> None:
+        """Open the session. For `ExternalHarness.__aenter__`."""
         if self._open:
-            raise errors.ExternalHarnessError("the session is open already")
-        opened = [s for s in _OPEN.get() if s._open]
-        if self.id is not None and any(s.id == self.id for s in opened):
+            raise errors.ExternalHarnessError(
+                "the external harness is open already"
+            )
+        if self.id is not None and any(s.id == self.id for s in _OPEN):
             raise errors.ExternalHarnessError(
                 f"the session {self.id} is open already"
             )
-        # A model call runs on the open session of its external harness, so
-        # an external harness has one open session in a context.
-        if any(s.harness is self.harness for s in opened):
-            raise errors.ExternalHarnessError(
-                "a session of this external harness is open already: "
-                "sessions of one external harness do not nest"
-            )
         self._open = True
-        _OPEN.set((*opened, self))
-        return self
-
-    async def __aexit__(self, *exc_info: object) -> None:
-        await self.close()
+        _OPEN.add(self)
 
     async def start(self) -> None:
-        """Start the CLI now, in an open session.
+        """Start the CLI now, in the block of the external harness.
 
         Without this call, the CLI starts with the first `send()` or the first
         model call. With `id`, continue that CLI session. Without it, start a
@@ -249,8 +235,8 @@ class Session:
         The session keeps the events that nobody read. Thus `send()` and then
         `events()` loses nothing, and a reader that stops needs no cleanup:
         the next `events()` continues. One reader: with two, each event goes
-        to one of them. It ends when the session closes, and raises if the
-        CLI fails.
+        to one of them. It ends when the external harness closes, and raises
+        if the CLI fails.
 
         If nobody reads during a whole turn, the events before the latest
         turn are dropped. The messages stay in `messages`.
@@ -290,15 +276,14 @@ class Session:
         except TimeoutError:
             await self._stop_cli()
 
-    async def close(self) -> None:
+    async def _close(self) -> None:
         """Stop the CLI and close the session. `id` and `messages` stay.
 
-        A second close does nothing. `async with session` opens the session
-        again.
+        For `ExternalHarness.__aexit__`. A second close does nothing.
         """
         await self._stop_cli()
         self._open = False
-        _OPEN.set(tuple(s for s in _OPEN.get() if s is not self))
+        _OPEN.discard(self)
         self._pending_events_wake.set()
 
     async def _stop_cli(self) -> None:
@@ -391,7 +376,8 @@ class Session:
         if [m.id for m in given[: len(known)]] != known:
             raise errors.TranscriptMismatchError(
                 "the messages do not continue this session's conversation; "
-                "use session.messages as the history, or a new session"
+                "use harness.session.messages as the history, or a new "
+                "external harness"
             )
         new = given[len(known) :]
         if not new:

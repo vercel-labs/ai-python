@@ -5,10 +5,11 @@ uv run python examples/external/direct_control.py [claude-code|codex|fx|pi]
 
 import asyncio
 import sys
+from collections.abc import Callable
 
 import ai
 
-KINDS: dict[str, type[ai.external.ExternalHarness]] = {
+KINDS: dict[str, Callable[[], ai.external.ExternalHarness]] = {
     "claude-code": ai.external.ClaudeCode,
     "codex": ai.external.Codex,
     "fx": ai.external.Fx,
@@ -17,8 +18,8 @@ KINDS: dict[str, type[ai.external.ExternalHarness]] = {
 
 
 async def main(kind: str) -> None:
-    harness = KINDS[kind]()
-    async with harness.session() as session:
+    async with KINDS[kind]() as harness:
+        session = harness.session
         await session.send(
             ai.user_message("Count from 1 to 20 slowly, one number per line.")
         )

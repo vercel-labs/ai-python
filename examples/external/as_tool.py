@@ -12,16 +12,19 @@ async def main() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         harness = ai.external.ClaudeCode(cwd=tmp)
 
-        # One session for the whole run: each call of the tool continues the
+        # One block for the whole run: each call of the tool continues the
         # same conversation, on one live CLI.
-        async with harness.session() as session:
+        async with harness:
             # The external harness's events stream up as partial tool results,
             # and its last text becomes the tool result. To close the parent run
             # stops the external harness's turn too.
             @ai.tool
             async def code(task: str) -> ai.SubAgentTool:
                 """Do a coding task in the project; returns what was done."""
-                messages = [*session.messages, ai.user_message(task)]
+                messages = [
+                    *harness.session.messages,
+                    ai.user_message(task),
+                ]
                 async with ai.stream(harness, messages) as stream:
                     async for event in stream:
                         yield event
@@ -52,7 +55,8 @@ async def main() -> None:
             print()
 
             # The session has the external harness's own conversation.
-            print(f"external harness messages: {len(session.messages)}")
+            count = len(harness.session.messages)
+            print(f"external harness messages: {count}")
 
 
 if __name__ == "__main__":

@@ -4,9 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import copy
+import dataclasses
+import pickle
+from collections.abc import Callable
 from typing import Any
 
 import pydantic
+import pydantic_core
 import pytest
 
 import ai
@@ -34,21 +39,24 @@ async def drain(feed: Any, until: type = events.StreamEnd) -> list[Any]:
 async def test_a_harness_streams_like_a_model() -> None:
     harness = fakes.fake(fakes.echo)
     user = ai.user_message("hello")
-    async with harness.session() as session:
+    async with harness:
         async with ai.stream(harness, [user]) as s:
             kinds = [type(e).__name__ async for e in s]
         assert s.text == "hello"
         assert kinds[0] == "StreamStart" and kinds[-1] == "StreamEnd"
         # The session's state and the stream agree, ids too.
-        assert [msg.id for msg in session.messages] == [user.id, s.message.id]
-        assert session.messages[1].text == "hello"
-        assert session.id == "s1"
+        assert [msg.id for msg in harness.session.messages] == [
+            user.id,
+            s.message.id,
+        ]
+        assert harness.session.messages[1].text == "hello"
+        assert harness.session.id == "s1"
 
 
 async def test_the_next_call_sends_only_the_new_messages() -> None:
     harness = fakes.fake(fakes.echo)
     first = ai.user_message("one")
-    async with harness.session() as session:
+    async with harness:
         async with ai.stream(harness, [first]) as s:
             async for _ in s:
                 pass
@@ -58,12 +66,12 @@ async def test_the_next_call_sends_only_the_new_messages() -> None:
                 pass
         assert [msg.text for msg in harness.wire.sent] == ["one", "two"]
         assert s2.text == "two"
-        assert len(session.messages) == 4
+        assert len(harness.session.messages) == 4
 
 
 async def test_a_rewritten_history_is_refused() -> None:
     harness = fakes.fake(fakes.echo)
-    async with harness.session():
+    async with harness:
         async with ai.stream(harness, [ai.user_message("one")]) as s:
             async for _ in s:
                 pass
@@ -83,7 +91,7 @@ async def test_a_fresh_harness_seeds_the_session_with_the_past() -> None:
         ai.assistant_message("done"),
         ai.user_message("two"),
     ]
-    async with harness.session() as session:
+    async with harness:
         assert harness._wires == []  # the CLI starts with the first use
         async with ai.stream(harness, history, tools=[_tool("a")]) as s:
             async for _ in s:
@@ -94,17 +102,19 @@ async def test_a_fresh_harness_seeds_the_session_with_the_past() -> None:
     assert started["instructions"] == "Be brief.\n\nYou fix tests."
     assert [msg.text for msg in started["seed"]] == ["one", "done"]
     assert [msg.text for msg in harness.wire.sent] == ["two"]
-    assert [msg.id for msg in session.messages[:4]] == [x.id for x in history]
+    assert [msg.id for msg in harness.session.messages[:4]] == [
+        x.id for x in history
+    ]
 
 
 async def test_a_resumed_session_does_not_resend_the_past() -> None:
-    harness = fakes.fake(fakes.echo)
+    harness = fakes.fake(fakes.echo, resume="old")
     history = [
         ai.user_message("one"),
         ai.assistant_message("done"),
         ai.user_message("two"),
     ]
-    async with harness.session("old"):
+    async with harness:
         async with ai.stream(harness, history) as s:
             async for _ in s:
                 pass
@@ -117,8 +127,8 @@ async def test_a_resumed_session_does_not_resend_the_past() -> None:
 async def test_a_started_empty_session_is_replaced_by_a_seeded_one() -> None:
     harness = fakes.fake(fakes.echo)
     history = [ai.system_message("s"), ai.user_message("x")]
-    async with harness.session() as session:
-        await session.start()
+    async with harness:
+        await harness.session.start()
         async with ai.stream(harness, history) as st:
             async for _ in st:
                 pass
@@ -132,8 +142,8 @@ async def test_a_started_empty_session_is_replaced_by_a_seeded_one() -> None:
 
 async def test_new_tools_restart_an_idle_cli_on_the_same_session() -> None:
     harness = fakes.fake(fakes.echo)
-    async with harness.session() as session:
-        await session.start()
+    async with harness:
+        await harness.session.start()
         first = ai.user_message("one")
         async with ai.stream(harness, [first], tools=[_tool("a")]) as st:
             async for _ in st:
@@ -146,7 +156,7 @@ async def test_new_tools_restart_an_idle_cli_on_the_same_session() -> None:
             async for _ in st:
                 pass
         assert len(harness._wires) == 2  # same tools: no restart
-        more = [*session.messages, ai.user_message("three")]
+        more = [*harness.session.messages, ai.user_message("three")]
         async with ai.stream(harness, more, tools=[_tool("b")]) as st:
             async for _ in st:
                 pass
@@ -156,14 +166,14 @@ async def test_new_tools_restart_an_idle_cli_on_the_same_session() -> None:
 
 
 async def test_a_started_resumed_session_takes_its_known_past() -> None:
-    harness = fakes.fake(fakes.echo)
+    harness = fakes.fake(fakes.echo, resume="old")
     history = [
         ai.user_message("one"),
         ai.assistant_message("done"),
         ai.user_message("two"),
     ]
-    async with harness.session("old") as session:
-        await session.start()
+    async with harness:
+        await harness.session.start()
         async with ai.stream(harness, history) as s:
             async for _ in s:
                 pass
@@ -178,7 +188,7 @@ async def test_a_harness_cannot_continue_tool_calls_it_did_not_make() -> None:
         m.Message(role="assistant", parts=[call]),
         ai.tool_message(tool_call_id="c", result="r"),
     ]
-    async with harness.session():
+    async with harness:
         with pytest.raises(external.TranscriptMismatchError):
             async with ai.stream(harness, history) as s:
                 async for _ in s:
@@ -186,22 +196,26 @@ async def test_a_harness_cannot_continue_tool_calls_it_did_not_make() -> None:
         assert harness._wires == []  # refused before the CLI starts
 
 
-async def test_a_model_call_needs_an_open_session() -> None:
+async def test_a_model_call_needs_an_open_harness() -> None:
     harness = fakes.fake(fakes.echo)
     first = ai.user_message("one")
-    with pytest.raises(external.ExternalHarnessError, match="open session"):
+    with pytest.raises(
+        external.ExternalHarnessError, match="open external harness"
+    ):
         async with ai.stream(harness, [first]) as s:
             async for _ in s:
                 pass
     assert harness._wires == []  # refused before the CLI starts
-    async with harness.session() as session:
+    async with harness:
         async with ai.stream(harness, [first]) as s:
             async for _ in s:
                 pass
     assert harness.wire.closed
-    # A closed session is not an open one.
-    more = [*session.messages, ai.user_message("two")]
-    with pytest.raises(external.ExternalHarnessError, match="open session"):
+    # A closed external harness is not an open one.
+    more = [*harness.session.messages, ai.user_message("two")]
+    with pytest.raises(
+        external.ExternalHarnessError, match="open external harness"
+    ):
         async with ai.stream(harness, more) as s:
             async for _ in s:
                 pass
@@ -211,19 +225,14 @@ async def test_a_model_call_needs_an_open_session() -> None:
 async def test_a_saved_session_id_continues_the_session() -> None:
     harness = fakes.fake(fakes.echo)
     first = ai.user_message("one")
-    async with harness.session() as session:
+    async with harness:
         async with ai.stream(harness, [first]) as s:
             async for _ in s:
                 pass
-    assert session.id == "s1"
-    # The external harness and the id are plain data: another process
-    # continues with them.
-    again = external.ExternalHarness.model_validate(
-        harness.model_dump(mode="json")
-    )
-    assert isinstance(again, fakes.FakeHarness)
-    again._reply = fakes.echo
-    async with again.session(session.id):
+    assert harness.session.id == "s1"
+    # The id is plain data: a new external harness continues with it.
+    again = fakes.fake(fakes.echo, resume=harness.session.id)
+    async with again:
         async with ai.stream(
             again, [first, s.message, ai.user_message("two")]
         ) as s:
@@ -235,23 +244,27 @@ async def test_a_saved_session_id_continues_the_session() -> None:
     assert again.wire.started["seed"] == []
     assert [msg.text for msg in again.wire.sent] == ["two"]
     assert again.wire.closed
-    # The external harness remembers no session: the next one is new.
-    async with harness.session() as other:
-        assert other.id is None
-        async with ai.stream(harness, [ai.user_message("other")]) as s:
+    # An external harness that opens again continues its session.
+    async with harness:
+        assert harness.session.id == "s1"
+        more = [*harness.session.messages, ai.user_message("other")]
+        async with ai.stream(harness, more) as s:
             async for _ in s:
                 pass
     assert s.text == "other"
     assert harness.wire.started is not None
-    assert harness.wire.started["session_id"] is None
-    assert [msg.text for msg in other.messages] == ["other", "other"]
+    assert harness.wire.started["session_id"] == "s1"
+    # The same settings with a new session: a new conversation.
+    fresh = dataclasses.replace(harness)
+    assert fresh.session.id is None
+    assert fresh.session.messages == []
 
 
 async def test_in_a_block_the_model_calls_use_the_live_cli() -> None:
-    harness = fakes.fake(fakes.echo)
+    harness = fakes.fake(fakes.echo, resume="abc")
     first = ai.user_message("one")
-    async with harness.session("abc") as session:
-        assert session.id == "abc"
+    async with harness:
+        assert harness.session.id == "abc"
         async with ai.stream(harness, [first]) as s:
             async for _ in s:
                 pass
@@ -263,30 +276,30 @@ async def test_in_a_block_the_model_calls_use_the_live_cli() -> None:
         assert harness.wire.started is not None
         assert harness.wire.started["session_id"] == "abc"
         assert [msg.text for msg in harness.wire.sent] == ["one", "two"]
-        # A copy is another external harness: it has no open session.
-        twin = harness.model_copy()
-        with pytest.raises(external.ExternalHarnessError, match="open session"):
+        # A copy is another external harness, and it is closed.
+        twin = copy.copy(harness)
+        with pytest.raises(
+            external.ExternalHarnessError, match="open external harness"
+        ):
             async with ai.stream(twin, [ai.user_message("x")]) as s:
                 async for _ in s:
                     pass
     assert harness.wire.closed
 
 
-async def test_two_tasks_open_sessions_of_one_harness() -> None:
-    harness = fakes.fake(fakes.echo)
-
-    async def chat(text: str) -> tuple[str, external.Session]:
-        async with harness.session() as session:
+async def test_two_conversations_are_two_harnesses() -> None:
+    async def chat(text: str) -> tuple[str, fakes.FakeHarness]:
+        async with fakes.fake(fakes.echo) as harness:
             async with ai.stream(harness, [ai.user_message(text)]) as s:
                 async for _ in s:
                     pass
-            return s.text, session
+            return s.text, harness
 
     (one, a), (two, b) = await asyncio.gather(chat("one"), chat("two"))
     assert (one, two) == ("one", "two")
-    assert len(harness._wires) == 2  # each task had its own live CLI
-    assert [msg.text for msg in a.messages] == ["one", "one"]
-    assert [msg.text for msg in b.messages] == ["two", "two"]
+    assert len(a._wires) == len(b._wires) == 1  # each had its own live CLI
+    assert [msg.text for msg in a.session.messages] == ["one", "one"]
+    assert [msg.text for msg in b.session.messages] == ["two", "two"]
 
 
 async def test_the_cli_stays_for_a_tool_loop() -> None:
@@ -302,7 +315,7 @@ async def test_the_cli_stays_for_a_tool_loop() -> None:
         ]
 
     harness = fakes.fake(reply)
-    async with harness.session():
+    async with harness:
         async with ai.Agent(tools=[lookup]).run(
             harness, [ai.user_message("go")]
         ) as run:
@@ -345,7 +358,7 @@ async def test_cli_tools_are_builtin_parts() -> None:
         ]
 
     harness = fakes.fake(reply)
-    async with harness.session():
+    async with harness:
         async with ai.stream(harness, [ai.user_message("ls")]) as s:
             async for _ in s:
                 pass
@@ -366,12 +379,14 @@ async def test_turn_metadata_goes_on_the_last_reply() -> None:
         ]
 
     harness = fakes.fake(reply)
-    async with harness.session() as session:
+    async with harness:
         async with ai.stream(harness, [ai.user_message("x")]) as s:
             async for _ in s:
                 pass
     assert s.message.provider_metadata == {"fake": {"model": "m1"}}
-    assert session.messages[-1].provider_metadata == {"fake": {"model": "m1"}}
+    assert harness.session.messages[-1].provider_metadata == {
+        "fake": {"model": "m1"}
+    }
 
 
 async def test_a_failed_turn_raises_from_stream() -> None:
@@ -382,13 +397,13 @@ async def test_a_failed_turn_raises_from_stream() -> None:
 
     harness = fakes.fake(reply)
     history = [ai.user_message("x")]
-    async with harness.session() as session:
+    async with harness:
         with pytest.raises(external.NotAuthenticatedError):
             async with ai.stream(harness, history) as s:
                 async for _ in s:
                     pass
         # The state keeps the failed message, marked.
-        assert session.messages[-1].provider_metadata == {
+        assert harness.session.messages[-1].provider_metadata == {
             "external": {"error": str(error)}
         }
         # The caller does not have it; the next call still works.
@@ -399,18 +414,18 @@ async def test_a_failed_turn_raises_from_stream() -> None:
             async for _ in s:
                 pass
         assert s.text == "again"
-        # Nothing new is refused in an open session.
+        # Nothing new is refused in an open external harness.
         with pytest.raises(
             external.TranscriptMismatchError, match="nothing new"
         ):
-            async with ai.stream(harness, list(session.messages)) as s:
+            async with ai.stream(harness, list(harness.session.messages)) as s:
                 async for _ in s:
                     pass
 
 
 async def test_one_stream_at_a_time() -> None:
     harness = fakes.fake()  # accepts, never answers
-    async with harness.session():
+    async with harness:
         first = harness.provider.stream(harness, [ai.user_message("one")])
         task = asyncio.create_task(anext(first))
         await asyncio.sleep(0.01)
@@ -440,22 +455,22 @@ async def test_an_agent_runs_ai_tools_for_the_cli() -> None:
         ]
 
     harness = fakes.fake(reply)
-    async with harness.session() as session:
+    async with harness:
         async with ai.Agent(tools=[lookup]).run(
             harness, [ai.user_message("go")]
         ) as run:
             async for _ in run:
                 pass
-        roles = [msg.role for msg in session.messages]
+        roles = [msg.role for msg in harness.session.messages]
         assert roles == ["user", "assistant", "tool", "assistant"]
-        (call,) = session.messages[1].tool_calls
+        (call,) = harness.session.messages[1].tool_calls
         assert call.tool_name == "lookup"
-        assert session.messages[1].provider_metadata is None
-        assert session.messages[3].text == "got HERON"
+        assert harness.session.messages[1].provider_metadata is None
+        assert harness.session.messages[3].text == "got HERON"
         # The CLI got the result through MCP.
         assert await harness.wire.calls[0] == ("HERON", False)
         assert [msg.id for msg in run.messages] == [
-            msg.id for msg in session.messages
+            msg.id for msg in harness.session.messages
         ]
         assert harness.tools[0].name == "lookup"
 
@@ -471,7 +486,7 @@ async def test_parallel_calls_are_one_message() -> None:
         ]
 
     harness = fakes.fake(reply, tools=[_tool("a"), _tool("b")])
-    async with harness.session() as session:
+    async with harness:
         async with ai.stream(harness, [ai.user_message("go")]) as s:
             async for _ in s:
                 pass
@@ -487,7 +502,9 @@ async def test_parallel_calls_are_one_message() -> None:
                 for c in s.message.tool_calls
             ]
         )
-        async with ai.stream(harness, [*session.messages, results]) as s2:
+        async with ai.stream(
+            harness, [*harness.session.messages, results]
+        ) as s2:
             async for _ in s2:
                 pass
         assert s2.text == "both"
@@ -501,24 +518,30 @@ async def test_cli_work_during_a_tool_call_comes_after_the_result() -> None:
         ],
         tools=[_tool("a")],
     )
-    async with harness.session() as session:
+    async with harness:
         async with ai.stream(harness, [ai.user_message("go")]) as s:
             async for _ in s:
                 pass
         # The CLI keeps working on its own tools while it waits.
         harness.wire.push(*fakes.builtin("b1", "read"))
         await asyncio.sleep(0.05)
-        assert [msg.role for msg in session.messages] == ["user", "assistant"]
+        assert [msg.role for msg in harness.session.messages] == [
+            "user",
+            "assistant",
+        ]
         (call,) = s.message.tool_calls
-        await session.send(
+        await harness.session.send(
             ai.tool_message(
                 tool_call_id=call.tool_call_id, tool_name="a", result="r"
             )
         )
         await asyncio.sleep(0.05)
-        roles = [msg.role for msg in session.messages]
+        roles = [msg.role for msg in harness.session.messages]
         assert roles == ["user", "assistant", "tool", "assistant"]
-        assert session.messages[3].builtin_tool_calls[0].tool_name == "read"
+        assert (
+            harness.session.messages[3].builtin_tool_calls[0].tool_name
+            == "read"
+        )
 
 
 async def test_a_new_message_fails_waiting_calls_with_a_tool_message() -> None:
@@ -531,19 +554,19 @@ async def test_a_new_message_fails_waiting_calls_with_a_tool_message() -> None:
         else fakes.echo(msg),
         tools=[_tool("a")],
     )
-    async with harness.session() as session:
+    async with harness:
         async with ai.stream(harness, [ai.user_message("go")]) as s:
             async for _ in s:
                 pass
         # An agent was cancelled while its tool ran; the next run comes.
         async with ai.stream(
-            harness, [*session.messages, ai.user_message("next")]
+            harness, [*harness.session.messages, ai.user_message("next")]
         ) as s2:
             async for _ in s2:
                 pass
-        roles = [msg.role for msg in session.messages]
+        roles = [msg.role for msg in harness.session.messages]
         assert roles == ["user", "assistant", "tool", "user", "assistant"]
-        synthetic = session.messages[2]
+        synthetic = harness.session.messages[2]
         assert synthetic.provider_metadata == {"external": {"synthetic": True}}
         assert synthetic.tool_results[0].result_kind == "error"
         assert await harness.wire.calls[0] == (_session.NEW_MESSAGE, True)
@@ -551,9 +574,11 @@ async def test_a_new_message_fails_waiting_calls_with_a_tool_message() -> None:
 
 async def test_a_result_for_no_call_is_refused() -> None:
     harness = fakes.fake()
-    async with harness.session() as session:
+    async with harness:
         with pytest.raises(ValueError, match="no tool call waits"):
-            await session.send(ai.tool_message(tool_call_id="x", result="r"))
+            await harness.session.send(
+                ai.tool_message(tool_call_id="x", result="r")
+            )
 
 
 # -- the session: direct control ----------------------------------------------
@@ -561,50 +586,54 @@ async def test_a_result_for_no_call_is_refused() -> None:
 
 async def test_events_after_send_lose_nothing() -> None:
     harness = fakes.fake(fakes.echo)
-    async with harness.session() as session:
-        await session.send(ai.user_message("hi"))
+    async with harness:
+        await harness.session.send(ai.user_message("hi"))
         await asyncio.sleep(0.01)  # the turn ends before anyone reads
-        seen = await drain(session.events())
+        seen = await drain(harness.session.events())
         assert isinstance(seen[0], external.MessageEvent)
         assert seen[0].message.text == "hi"
         assert isinstance(seen[1], events.StreamStart)
         # A reader that stopped needs no cleanup: the next one continues.
-        rest = await drain(session.events(), until=external.MessageEvent)
+        rest = await drain(
+            harness.session.events(), until=external.MessageEvent
+        )
         assert [type(e) for e in rest] == [external.MessageEvent]
         assert rest[0].message.role == "assistant"
 
 
 async def test_events_that_nobody_reads_do_not_pile_up() -> None:
     harness = fakes.fake(fakes.echo)
-    async with harness.session() as session:
+    async with harness:
         history: list[m.Message] = []
         sizes = []
         for text in ("one", "two", "three"):
-            history = [*session.messages, ai.user_message(text)]
+            history = [*harness.session.messages, ai.user_message(text)]
             async with ai.stream(harness, history) as s:
                 async for _ in s:
                     pass
-            sizes.append(len(session._pending_events))
+            sizes.append(len(harness.session._pending_events))
         assert sizes[0] == sizes[1] == sizes[2]  # the latest turn only
         # A reader that reads keeps everything.
-        seen = await drain(session.events())
-        await session.send(ai.user_message("four"))
-        rest = await drain(session.events(), until=external.MessageEvent)
+        seen = await drain(harness.session.events())
+        await harness.session.send(ai.user_message("four"))
+        rest = await drain(
+            harness.session.events(), until=external.MessageEvent
+        )
         assert isinstance(seen[0], external.MessageEvent)
         assert rest[0].message.text == "three"  # the reply before "four"
 
 
 async def test_a_steer_splits_the_reply_at_a_clean_point() -> None:
     harness = fakes.fake()
-    async with harness.session() as session:
-        feed = session.events()
-        await session.send(ai.user_message("fix the tests"))
+    async with harness:
+        feed = harness.session.events()
+        await harness.session.send(ai.user_message("fix the tests"))
         harness.wire.push(
             events.TextStart(block_id="t1"),
             events.TextDelta(chunk="Look", block_id="t1"),
         )
         steer = ai.user_message("skip the slow ones")
-        await session.send(steer)
+        await harness.session.send(steer)
         # The text block is open: the split waits for its end.
         harness.wire.push(
             events.TextDelta(chunk="ing.", block_id="t1"),
@@ -613,7 +642,7 @@ async def test_a_steer_splits_the_reply_at_a_clean_point() -> None:
         harness.wire.push(*fakes.text("Skipped.", block="t2"), _wire.TurnEnd())
         await drain(feed)  # the first part ends
         await drain(feed)  # the second part ends
-        texts = [(msg.role, msg.text) for msg in session.messages]
+        texts = [(msg.role, msg.text) for msg in harness.session.messages]
         assert texts == [
             ("user", "fix the tests"),
             ("assistant", "Looking."),
@@ -624,19 +653,19 @@ async def test_a_steer_splits_the_reply_at_a_clean_point() -> None:
 
 async def test_interrupt_stops_the_turn_and_marks_the_reply() -> None:
     harness = fakes.fake()
-    async with harness.session() as session:
-        await session.send(ai.user_message("long job"))
+    async with harness:
+        await harness.session.send(ai.user_message("long job"))
         harness.wire.push(*fakes.text("Starting"))
         await asyncio.sleep(0.01)
-        await session.interrupt()
+        await harness.session.interrupt()
         assert harness.wire.interrupts == 1
-        reply = session.messages[-1]
+        reply = harness.session.messages[-1]
         assert reply.text == "Starting"
         # Not a finish reason of the vocabulary: the raw value is here.
         assert reply.provider_metadata == {
             "external": {"stop_reason": "interrupted"}
         }
-        await session.interrupt()  # no turn: nothing happens
+        await harness.session.interrupt()  # no turn: nothing happens
         assert harness.wire.interrupts == 1
 
 
@@ -645,23 +674,23 @@ async def test_an_ignored_interrupt_stops_the_cli(
 ) -> None:
     monkeypatch.setattr(_session, "INTERRUPT_TIMEOUT", 0.05)
     harness = fakes.fake()
-    async with harness.session() as session:
-        await session.start()
+    async with harness:
+        await harness.session.start()
         harness.wire.on_interrupt = None
-        feed = session.events()
-        await session.send(ai.user_message("long job"))
+        feed = harness.session.events()
+        await harness.session.send(ai.user_message("long job"))
         harness.wire.push(*fakes.text("Starting"))
         await asyncio.sleep(0.01)
-        await session.interrupt()
-        assert session._run is None
+        await harness.session.interrupt()
+        assert harness.session._run is None
         assert harness.wire.closed
-        assert session.messages[-1].provider_metadata == {
+        assert harness.session.messages[-1].provider_metadata == {
             "external": {"stop_reason": "interrupted"}
         }
         assert (await drain(feed))[-1].finish_reason == "other"
         # The session stays open: the next use continues the CLI session.
         harness._reply = fakes.echo
-        await session.send(ai.user_message("again"))
+        await harness.session.send(ai.user_message("again"))
         assert len(harness._wires) == 2
         assert harness.wire.started is not None
         assert harness.wire.started["session_id"] == "s1"
@@ -670,13 +699,13 @@ async def test_an_ignored_interrupt_stops_the_cli(
 async def test_a_cancelled_stream_interrupts_the_turn() -> None:
     harness = fakes.fake(lambda msg: [_wire.Accepted(msg), *fakes.text("work")])
     history = [ai.user_message("long job")]
-    async with harness.session() as session:
+    async with harness:
         async with ai.stream(harness, history) as s:
             async for event in s:
                 if isinstance(event, events.TextEnd):
                     break  # stop reading: the turn must stop too
         assert harness.wire.interrupts == 1
-        assert session.messages[-1].provider_metadata == {
+        assert harness.session.messages[-1].provider_metadata == {
             "external": {"stop_reason": "interrupted"}
         }
         # ai.Agent keeps no cancelled message; the next call still works.
@@ -697,37 +726,37 @@ async def test_a_cancelled_task_interrupts_the_turn() -> None:
             async for _ in s:
                 pass
 
-    async with harness.session() as session:
+    async with harness:
         task = asyncio.create_task(consume())
         await asyncio.sleep(0.02)
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await task
         assert harness.wire.interrupts == 1
-        assert session.messages[-1].provider_metadata == {
+        assert harness.session.messages[-1].provider_metadata == {
             "external": {"stop_reason": "interrupted"}
         }
 
 
 async def test_a_crash_reaches_the_reader_and_start_recovers() -> None:
     harness = fakes.fake()
-    async with harness.session() as session:
-        feed = session.events()
-        await session.send(ai.user_message("go"))
+    async with harness:
+        feed = harness.session.events()
+        await harness.session.send(ai.user_message("go"))
         harness.wire.push(*fakes.text("half"), RuntimeError("boom"))
         with pytest.raises(external.ExternalHarnessError, match="boom"):
             await drain(feed, until=type(None))
         with pytest.raises(external.ExternalHarnessError, match="stopped"):
-            await session.send(ai.user_message("again"))
-        assert session.messages[-1].provider_metadata is not None
-        await session.start()
+            await harness.session.send(ai.user_message("again"))
+        assert harness.session.messages[-1].provider_metadata is not None
+        await harness.session.start()
         assert len(harness._wires) == 2
 
 
 async def test_close_ends_readers_and_keeps_the_state() -> None:
     harness = fakes.fake(fakes.echo)
-    session = harness.session()
-    async with session:
+    session = harness.session
+    async with harness:
         feed = session.events()
         await session.send(ai.user_message("hi"))
         await drain(feed)
@@ -737,69 +766,63 @@ async def test_close_ends_readers_and_keeps_the_state() -> None:
     assert harness.wire.closed
     assert session.id == "s1"
     assert [msg.text for msg in session.messages] == ["hi", "hi"]
-    await session.close()  # a second close does nothing
     with pytest.raises(external.ExternalHarnessError, match="not open"):
         await session.send(ai.user_message("x"))
     with pytest.raises(external.ExternalHarnessError, match="not open"):
         await anext(session.events())
 
 
-async def test_start_needs_an_open_session() -> None:
+async def test_start_needs_an_open_harness() -> None:
     harness = fakes.fake(fakes.echo)
-    session = harness.session()
+    session = harness.session
     with pytest.raises(external.ExternalHarnessError, match="not open"):
         await session.start()  # the block is the only way to open
     assert harness._wires == []
-    async with session:
+    async with harness:
         assert harness._wires == []
         await session.start()  # the CLI starts now, not with the first use
         assert len(harness._wires) == 1
         await session.send(ai.user_message("hi"))
         await drain(session.events())
     assert harness.wire.closed
-    async with session:  # open again: the same CLI session
+    async with harness:  # open again: the same CLI session
         await session.start()
         assert harness.wire.started is not None
         assert harness.wire.started["session_id"] == "s1"
 
 
-async def test_a_session_is_open_once_in_a_context() -> None:
-    one, two = fakes.fake(fakes.echo), fakes.fake(fakes.echo)
-    async with one.session("abc"):
+async def test_a_session_is_open_once() -> None:
+    one = fakes.fake(fakes.echo, resume="abc")
+    two = fakes.fake(fakes.echo, resume="abc")
+    async with one:
         # Two external harnesses, one CLI session: two writers.
         with pytest.raises(external.ExternalHarnessError, match="open already"):
-            async with two.session("abc"):
+            async with two:
                 pass
-    async with two.session("abc") as session:  # the first one closed
-        await session.send(ai.user_message("hi"))
+    async with two:  # the first one closed
+        await two.session.send(ai.user_message("hi"))
 
 
-async def test_sessions_of_one_harness_do_not_nest() -> None:
+async def test_a_harness_does_not_open_twice() -> None:
     harness = fakes.fake(fakes.echo)
-    async with harness.session() as session:
+    async with harness:
         with pytest.raises(external.ExternalHarnessError, match="open already"):
-            async with session:
+            async with harness:
                 pass
-        with pytest.raises(external.ExternalHarnessError, match="do not nest"):
-            async with harness.session():
-                pass
-        with pytest.raises(external.ExternalHarnessError, match="do not nest"):
-            async with harness.session("other"):
-                pass
-        # The first one is still the open session.
+        # It is still open.
         async with ai.stream(harness, [ai.user_message("hi")]) as s:
             async for _ in s:
                 pass
-        assert [msg.text for msg in session.messages] == ["hi", "hi"]
-    async with harness.session():  # the first one closed
+        assert [msg.text for msg in harness.session.messages] == ["hi", "hi"]
+    async with harness:  # it closed: it opens again
         pass
 
 
 async def test_the_feed_stays_when_new_tools_restart_the_cli() -> None:
     harness = fakes.fake(fakes.echo)
-    async with harness.session() as session:
-        await session.start()
-        feed = session.events()
+    async with harness:
+        await harness.session.start()
+        feed = harness.session.events()
         async with ai.stream(
             harness, [ai.user_message("one")], tools=[_tool("a")]
         ) as st:
@@ -814,7 +837,7 @@ async def test_the_feed_stays_when_new_tools_restart_the_cli() -> None:
 # -- state ---------------------------------------------------------------------
 
 
-async def test_a_harness_is_plain_data() -> None:
+async def test_a_harness_is_settings_and_a_session() -> None:
     harness = external.Codex(
         cwd="/w",
         model_name="gpt-5.5",
@@ -823,44 +846,67 @@ async def test_a_harness_is_plain_data() -> None:
             executable="/bin/codex", env={"K": "v"}
         ),
     )
-    data = harness.model_dump(mode="json")
-    # Settings only: the session has the id and the conversation.
-    assert "session_id" not in data and "messages" not in data
-    again = external.ExternalHarness.model_validate(data)
-    assert type(again) is external.Codex
-    assert again.model_dump(mode="json") == data
-    assert again.provider == harness.provider
-    assert again.session().id is None
-    assert again.session("abc").id == "abc"
-    with pytest.raises(ValueError, match="unknown harness_class_id"):
-        external.ExternalHarness.model_validate(
-            {**data, "harness_class_id": "nope"}
-        )
+    # The fields are the settings: the session has the id and the
+    # conversation, and no field keeps `resume` or `history`.
+    fields = {field.name for field in dataclasses.fields(harness)}
+    assert not {"resume", "history", "session_id", "messages"} & fields
+    assert harness.id == "gpt-5.5"
+    assert harness.session.harness is harness
+    assert harness.session.id is None
+    assert harness.session.messages == []
+    history = [ai.user_message("one")]
+    resumed = external.Codex(cwd="/w", resume="abc", history=history)
+    assert resumed.session.id == "abc"
+    assert [msg.id for msg in resumed.session.messages] == [history[0].id]
+    # The same settings, a new session.
+    fresh = dataclasses.replace(resumed, model_name="m")
+    assert (fresh.cwd, fresh.model_name) == ("/w", "m")
+    assert fresh.session.id is None
+    assert fresh.session.messages == []
     with pytest.raises(TypeError):
-        external.ExternalHarness(harness_class_id="codex")
+        external.ExternalHarness(provider=external.CodexProvider())
+    with pytest.raises(TypeError):
+        external.Codex(cwdd="/w")  # type: ignore[call-arg]  # ty: ignore[unknown-argument]
 
 
 @pytest.mark.parametrize(
     "harness_class",
     [external.ClaudeCode, external.Codex, external.Fx, external.Pi],
 )
-def test_saved_json_loads_as_the_saved_class(
-    harness_class: type[external.ExternalHarness],
+def test_a_copy_or_a_pickle_has_the_settings_and_the_conversation(
+    harness_class: Callable[..., external.ExternalHarness],
 ) -> None:
-    harness = harness_class(cwd="/w", model_name="m")
-    again = external.ExternalHarness.model_validate_json(
-        harness.model_dump_json()
+    history = [ai.user_message("one")]
+    harness = harness_class(
+        cwd="/w", model_name="m", resume="abc", history=history
     )
-    assert type(again) is harness_class
-    assert again == harness
+    for again in (
+        copy.copy(harness),
+        copy.deepcopy(harness),
+        pickle.loads(pickle.dumps(harness)),
+    ):
+        assert type(again) is harness_class
+        assert (again.cwd, again.model_name) == ("/w", "m")
+        assert again.provider == harness.provider
+        assert again.session is not harness.session
+        assert again.session.harness is again
+        assert again.session.id == "abc"
+        assert [msg.id for msg in again.session.messages] == [history[0].id]
+
+
+async def test_an_open_harness_copies_and_pickles_as_a_closed_one() -> None:
+    async with external.Codex(cwd="/w") as harness:  # no CLI starts
+        for again in (copy.copy(harness), pickle.loads(pickle.dumps(harness))):
+            with pytest.raises(external.ExternalHarnessError, match="not open"):
+                await again.session.start()
 
 
 async def test_a_seeded_session_starts_with_its_past() -> None:
-    harness = fakes.fake(fakes.echo)
     history = [ai.user_message("one"), ai.assistant_message("done")]
-    async with harness.session(messages=history) as session:
-        await session.send(ai.user_message("two"))
-        await drain(session.events())
+    harness = fakes.fake(fakes.echo, history=history)
+    async with harness:
+        await harness.session.send(ai.user_message("two"))
+        await drain(harness.session.events())
         assert harness.wire.started is not None
         assert harness.wire.started["session_id"] is None
         assert [msg.text for msg in harness.wire.started["seed"]] == [
@@ -868,8 +914,8 @@ async def test_a_seeded_session_starts_with_its_past() -> None:
             "done",
         ]
         assert len(history) == 2  # the caller's list stays as it was
-        assert session.id == "s1"
-        assert [msg.id for msg in session.messages[:2]] == [
+        assert harness.session.id == "s1"
+        assert [msg.id for msg in harness.session.messages[:2]] == [
             msg.id for msg in history
         ]
 
@@ -878,10 +924,10 @@ async def test_an_agent_context_keeps_the_harness() -> None:
     harness = external.Codex(cwd="/w")
     context = ai.Context(model=harness, messages=[], tools=[])
     assert context.model is harness
-    # The data of a context loads its model as an ai.Model: save an external
-    # harness with `harness.model_dump()`, not in a context.
-    with pytest.raises(pydantic.ValidationError):
-        ai.Context.model_validate(context.model_dump(mode="json"))
+    # An external harness is not plain data: a context with one does not
+    # dump.
+    with pytest.raises(pydantic_core.PydanticSerializationError):
+        context.model_dump(mode="json")
 
 
 # -- telemetry ----------------------------------------------------------------
@@ -898,7 +944,7 @@ async def test_sessions_messages_and_cli_tools_have_spans() -> None:
     sink = ai.experimental_telemetry.DictSink()
     async with ai.experimental_telemetry.use_sink(sink):
         harness = fakes.fake(reply)
-        async with harness.session():
+        async with harness:
             async with ai.stream(harness, [ai.user_message("go")]) as s:
                 async for _ in s:
                     pass

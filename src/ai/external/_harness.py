@@ -4,19 +4,21 @@ An `ai.Model` is an id and a provider, and `ai.stream` calls
 `model.provider.stream(model, messages)`. An external harness has the same
 shape:
 
-- `ExternalHarness` is plain data: the settings of the CLI.
+- `ExternalHarness` is the settings of the CLI. It comes with one `Session`,
+  `harness.session`, and `async with harness` opens it.
 - `ExternalHarnessProvider` is the CLI behind it: where it is and how it runs.
   Its `stream` makes one model call.
 
-The state and direct control are `Session`: `harness.session()` makes one.
+The state and direct control are in the session.
 """
 
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import os
 from collections.abc import AsyncGenerator, Sequence
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, Self
 
 import pydantic
 
@@ -63,9 +65,9 @@ class ExternalHarnessProvider(pydantic.BaseModel):
         """Answer `messages` with one assistant message, as a model does.
 
         Use `ai.stream(harness, messages)` or `ai.Agent.run(harness, ...)` in
-        an open session (`async with harness.session()`): the call runs on its
-        live CLI. Without an open session, the call raises. A new session
-        starts with the past in `messages` (lossy).
+        the block of the external harness (`async with harness`): the call
+        runs on its live CLI. Outside the block, the call raises. A new
+        session starts with the past in `messages` (lossy).
 
         The message ends with `finish_reason="tool_call"` when the CLI calls
         `ai` tools from `tools=`; the CLI waits for the results, which come with
@@ -76,19 +78,11 @@ class ExternalHarnessProvider(pydantic.BaseModel):
             raise errors.UnsupportedError(
                 "external harnesses do not support output_type yet"
             )
-        # The session of this external harness that is open here: the live CLI.
-        session = next(
-            (
-                s
-                for s in session_._OPEN.get()
-                if s._open and s.harness is harness
-            ),
-            None,
-        )
-        if session is None:
+        session = harness.session
+        if not session._open:
             raise errors.ExternalHarnessError(
-                "a model call of an external harness needs an open session: "
-                "use `async with harness.session()`"
+                "a model call of an external harness needs an open external "
+                "harness: use `async with harness`"
             )
         if session._stream_lock.locked():
             raise errors.ExternalHarnessError(
@@ -158,98 +152,101 @@ class ExternalHarnessProvider(pydantic.BaseModel):
         raise NotImplementedError
 
 
-class ExternalHarness(pydantic.BaseModel):
+@dataclasses.dataclass(kw_only=True, eq=False)
+class ExternalHarness:
     """A coding-agent CLI, in the shape of an `ai.Model`.
 
-    Use it where a model goes, in a session block. As with a model, give the
-    whole history::
+    One external harness is one conversation. It comes with one session,
+    `harness.session`, and it has one live CLI at a time. For two
+    conversations, make two external harnesses.
 
-        async with harness.session() as session:
+    Open it, and use it where a model goes. As with a model, give the whole
+    history::
+
+        async with ai.external.Codex(cwd=".") as harness:
             async with ai.stream(harness, messages) as s: ...
-            await session.send(ai.user_message("And the tests?"))
+            await harness.session.send(ai.user_message("And the tests?"))
 
-    The block holds one live CLI: the model calls in it (`ai.stream`,
+    The block holds the live CLI: the model calls in it (`ai.stream`,
     `ai.Agent.run`) run on that CLI, and the session gives direct control. A
-    model call outside a session block raises.
+    model call outside the block raises. An external harness that closed
+    opens again, and continues its session.
 
-    The fields are plain data: the settings of the CLI. `model_dump()` saves
-    the external harness, and `ExternalHarness.model_validate(data)` makes the
-    correct subclass again. The conversation is in the session, not here:
-    `harness.session()` starts a new one, and `harness.session(session.id)`
-    continues one later.
+    The fields are the settings of the CLI. The conversation is in the
+    session: `harness.session.id` and `harness.session.messages`. To continue
+    a conversation later, save `harness.session.id` and give it to a new
+    external harness as `resume`.
+
+    A copy or a pickle is a closed external harness with the same settings
+    and the same conversation, not the live CLI. `dataclasses.replace(harness)`
+    gives the same settings with a new session.
     """
 
-    model_config = pydantic.ConfigDict(extra="forbid")
+    harness_class_id: ClassVar[str]
+    """The name of the kind of CLI, for telemetry and errors."""
 
-    harness_class_id: str
     provider: ExternalHarnessProvider
-    """The CLI that runs the sessions."""
+    """The CLI that runs the session."""
     model_name: str | None = None
     """The CLI's model. None: the CLI default."""
-    cwd: str = pydantic.Field(default_factory=os.getcwd)
+    cwd: str = dataclasses.field(default_factory=os.getcwd)
     """Where the CLI runs."""
     instructions: str | None = None
-    """Added to the CLI's system prompt when a session starts."""
-    tools: list[tools_.Tool] = pydantic.Field(default_factory=list)
+    """Added to the CLI's system prompt when the session starts."""
+    tools: list[tools_.Tool] = dataclasses.field(default_factory=list)
     """`ai` function tools that the CLI can call through the MCP bridge."""
 
-    _classes: ClassVar[dict[str, type[ExternalHarness]]] = {}
+    resume: dataclasses.InitVar[str | None] = None
+    """The id of a session that the CLI has: the session continues it.
 
-    def __init__(self, **data: Any) -> None:
+    None: a new session. Only the constructor takes it; read the id of the
+    session from `harness.session.id`.
+    """
+    history: dataclasses.InitVar[list[messages_.Message] | None] = None
+    """The conversation so far. A new session starts with it (lossy).
+
+    With `resume`, the CLI has it already and nothing goes to the CLI. Only
+    the constructor takes it; read the conversation from
+    `harness.session.messages`.
+    """
+
+    session: session_.Session = dataclasses.field(init=False, repr=False)
+    """The session of this external harness: its state and direct control."""
+
+    def __post_init__(
+        self, resume: str | None, history: list[messages_.Message] | None
+    ) -> None:
         if type(self) is ExternalHarness:
             raise TypeError(
                 "ExternalHarness must be subclassed, "
                 "for example ai.external.Codex"
             )
-        super().__init__(**data)
+        self.session = session_.Session(self, resume, history)
 
-    @classmethod
-    def __pydantic_init_subclass__(cls, **kwargs: Any) -> None:  # noqa: PLW3201
-        super().__pydantic_init_subclass__(**kwargs)
-        class_id = cls.model_fields["harness_class_id"].default
-        if isinstance(class_id, str):
-            existing = ExternalHarness._classes.get(class_id)
-            if (
-                existing is not None
-                and existing.__qualname__ != cls.__qualname__
-            ):
-                raise RuntimeError(
-                    f"duplicate external harness class id: {class_id!r}"
-                )
-            ExternalHarness._classes[class_id] = cls
+    def __getstate__(self) -> dict[str, Any]:
+        # For `copy` and `pickle`: the settings and the conversation, not the
+        # live CLI.
+        session = self.session
+        return {**self.__dict__, "session": (session.id, session.messages)}
 
-    @pydantic.model_validator(mode="wrap")
-    @classmethod
-    def _load_registered_harness(
-        cls, data: Any, handler: pydantic.ValidatorFunctionWrapHandler
-    ) -> Any:
-        if cls is ExternalHarness and isinstance(data, dict):
-            harness_class = ExternalHarness._classes.get(
-                str(data.get("harness_class_id"))
-            )
-            if harness_class is None:
-                raise ValueError(
-                    "unknown harness_class_id: "
-                    f"{data.get('harness_class_id')!r}"
-                )
-            return harness_class.model_validate(data)
-        return handler(data)
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        session_id, messages = state["session"]
+        self.__dict__.update(state)
+        self.session = session_.Session(self, session_id, messages)
+
+    async def __aenter__(self) -> Self:
+        """Open the external harness: its model calls and its session work.
+
+        The CLI starts with the first `session.send()` or the first model
+        call, not here.
+        """
+        self.session._enter()
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> None:
+        """Stop the CLI and close. The state of the session stays."""
+        await self.session._close()
 
     @property
     def id(self) -> str:
         return self.model_name or "default"
-
-    def session(
-        self,
-        session_id: str | None = None,
-        *,
-        messages: list[messages_.Message] | None = None,
-    ) -> session_.Session:
-        """Return a session of the CLI.
-
-        No argument: a new session. `session_id`: the session that the CLI
-        has with this id (`session.id` of an earlier session). `messages`: the
-        conversation so far. A new session starts with it (lossy); a session
-        with an id has it already.
-        """
-        return session_.Session(self, session_id, messages)

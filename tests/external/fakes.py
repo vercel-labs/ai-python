@@ -7,9 +7,7 @@ import dataclasses
 import json
 import urllib.parse
 from collections.abc import AsyncIterator, Callable, Iterable
-from typing import Any, Literal
-
-import pydantic
+from typing import Any, ClassVar
 
 from ai import external
 from ai.external import _utils, _wire
@@ -156,13 +154,19 @@ class FakeProvider(external.ExternalHarnessProvider):
         return FakeWire(harness)
 
 
+@dataclasses.dataclass(kw_only=True, eq=False)
 class FakeHarness(external.ExternalHarness):
-    harness_class_id: Literal["fake"] = "fake"
-    provider: FakeProvider = pydantic.Field(default_factory=FakeProvider)
+    harness_class_id: ClassVar[str] = "fake"
+
+    provider: FakeProvider = dataclasses.field(default_factory=FakeProvider)
 
     # Test controls, not settings.
-    _reply: Reply | None = pydantic.PrivateAttr(default=None)
-    _wires: list[FakeWire] = pydantic.PrivateAttr(default_factory=list)
+    _reply: Reply | None = dataclasses.field(
+        default=None, init=False, repr=False
+    )
+    _wires: list[FakeWire] = dataclasses.field(
+        default_factory=list, init=False, repr=False
+    )
 
     @property
     def wire(self) -> FakeWire:

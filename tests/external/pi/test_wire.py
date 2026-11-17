@@ -287,7 +287,7 @@ async def test_a_turn_streams_in_the_model_view(
     server.turns = [TOOL_TURN]
     prompt = ai.user_message("say done")
     harness = make(cwd, agent_dir)
-    async with harness.session() as session:
+    async with harness:
         s = await run(harness, [prompt])
     message = s.message
     assert message.reasoning == "plan"
@@ -306,9 +306,12 @@ async def test_a_turn_streams_in_the_model_view(
     assert usage.cache_read_tokens == 200
     assert usage.raw == {"cost_usd": 0.02}
     # Acceptance came first, although the run came before the response.
-    assert [msg.role for msg in session.messages] == ["user", "assistant"]
-    assert session.messages[0].id == prompt.id
-    assert session.id == server.session_id
+    assert [msg.role for msg in harness.session.messages] == [
+        "user",
+        "assistant",
+    ]
+    assert harness.session.messages[0].id == prompt.id
+    assert harness.session.id == server.session_id
     (sent,) = server.sent("prompt")
     assert sent["message"] == "say done"
     assert sent["streamingBehavior"] == "steer"
@@ -338,13 +341,13 @@ async def test_start_runs_pi_with_the_extension_and_the_bridge(
         disallowed_tools=["write"],
         args=["--no-skills"],
     )
-    async with harness.session() as session:
-        await session.start()
+    async with harness:
+        await harness.session.start()
         (argv, kwargs) = server.spawned[0]
         assert argv[:3] == ["/custom/pi", "--mode", "rpc"]
         assert argv[argv.index("-e") + 1] == wire_.EXTENSION
         assert Path(wire_.EXTENSION).is_file()
-        assert argv[argv.index("--session-id") + 1] == session.id
+        assert argv[argv.index("--session-id") + 1] == harness.session.id
         for flag, value in [
             ("--model", "claude-test"),
             ("--provider", "anthropic"),
@@ -360,11 +363,11 @@ async def test_start_runs_pi_with_the_extension_and_the_bridge(
         assert kwargs["cwd"] == cwd
         env = kwargs["env"]
         assert env["ANTHROPIC_API_KEY"] == "k"
-        assert session._run is not None
+        assert harness.session._run is not None
         assert json.loads(env[wire_.CONFIG_VAR]) == {
             "mcp": {
                 "ai_sdk": {
-                    "url": session._run.bridge.url,
+                    "url": harness.session._run.bridge.url,
                     "exposure": "direct",
                     "timeout": 86400,
                 }
@@ -379,8 +382,8 @@ async def test_a_pi_without_the_extension_is_refused(
     server.loaded = False
     harness = make(cwd, agent_dir)
     with pytest.raises(external.ExternalHarnessError, match="did not load"):
-        async with harness.session() as session:
-            await session.start()
+        async with harness:
+            await harness.session.start()
     assert server.process.terminated
 
 
@@ -388,10 +391,9 @@ async def test_close_is_idempotent(
     server: PiServer, cwd: str, agent_dir: Path
 ) -> None:
     harness = make(cwd, agent_dir)
-    session = harness.session()
-    async with session:
-        await session.start()
-    await session.close()
+    async with harness:
+        await harness.session.start()
+    await harness.session._close()  # a second close does nothing
     assert server.process.terminated
     wire = harness.provider._make_wire(harness)
     await wire.close()
@@ -467,21 +469,21 @@ async def test_bridge_calls_are_ai_tool_calls_not_builtin(
     server.on_prompt = turn
     harness = make(cwd, agent_dir)
     try:
-        async with harness.session() as session:
+        async with harness:
             async with asyncio.timeout(5):
                 async with ai.Agent(tools=[lookup]).run(
                     harness, [ai.user_message("go")]
                 ) as agent_run:
                     async for _ in agent_run:
                         pass
-            roles = [msg.role for msg in session.messages]
+            roles = [msg.role for msg in harness.session.messages]
             assert roles == ["user", "assistant", "tool", "assistant"]
-            (call,) = session.messages[1].tool_calls
+            (call,) = harness.session.messages[1].tool_calls
             assert call.tool_name == "lookup"
-            for message in session.messages:
+            for message in harness.session.messages:
                 assert message.builtin_tool_calls == []
                 assert message.builtin_tool_returns == []
-            assert session.messages[3].text == "got HERON"
+            assert harness.session.messages[3].text == "got HERON"
             assert answers[0]["result"]["isError"] is False
     finally:
         for task in tasks:
@@ -500,16 +502,18 @@ async def test_a_send_during_a_run_steers_it(
         ]
     ]
     harness = make(cwd, agent_dir)
-    async with harness.session() as session:
-        feed = session.events()
-        await session.send(ai.user_message("fix"))
-        await session.send(ai.user_message("skip slow ones"))
+    async with harness:
+        feed = harness.session.events()
+        await harness.session.send(ai.user_message("fix"))
+        await harness.session.send(ai.user_message("skip slow ones"))
         assert len(server.sent("prompt")) == 2
         steer = server.sent("prompt")[-1]
         assert steer["message"] == "skip slow ones"
         assert steer["streamingBehavior"] == "steer"
         # Queued, not delivered: pi did not put it in the conversation yet.
-        assert "skip slow ones" not in [msg.text for msg in session.messages]
+        assert "skip slow ones" not in [
+            msg.text for msg in harness.session.messages
+        ]
         server.says(
             update("text_end", content="Look"),
             {
@@ -524,9 +528,9 @@ async def test_a_send_during_a_run_steers_it(
             *SETTLED,
         )
         async with asyncio.timeout(5):
-            while len(session.messages) < 4:
+            while len(harness.session.messages) < 4:
                 await anext(feed)
-        assert [(msg.role, msg.text) for msg in session.messages] == [
+        assert [(msg.role, msg.text) for msg in harness.session.messages] == [
             ("user", "fix"),
             ("assistant", "Look"),
             ("user", "skip slow ones"),
@@ -546,19 +550,19 @@ async def test_interrupt_ends_the_run_as_interrupted(
         ]
     ]
     harness = make(cwd, agent_dir)
-    async with harness.session() as session:
-        feed = session.events()
-        await session.send(ai.user_message("long job"))
+    async with harness:
+        feed = harness.session.events()
+        await harness.session.send(ai.user_message("long job"))
         async with asyncio.timeout(5):
             async for event in feed:
                 if isinstance(event, ai.events.TextDelta):
                     break
-            await session.interrupt()
+            await harness.session.interrupt()
         assert len(server.sent("abort")) == 1
-        assert (session.messages[-1].provider_metadata or {}).get(
+        assert (harness.session.messages[-1].provider_metadata or {}).get(
             "external"
         ) == {"stop_reason": "interrupted"}
-        assert session.messages[-1].text == "work"
+        assert harness.session.messages[-1].text == "work"
 
 
 async def test_a_rejected_prompt_without_a_key_is_not_authenticated(
@@ -567,7 +571,7 @@ async def test_a_rejected_prompt_without_a_key_is_not_authenticated(
     """Measured: pi refuses the prompt itself when it has no credentials."""
     server.prompt_error = "No API key found for anthropic.\n\nUse /login"
     harness = make(cwd, agent_dir)
-    async with harness.session():
+    async with harness:
         with pytest.raises(external.NotAuthenticatedError):
             await run(harness, [ai.user_message("go")])
 
@@ -590,12 +594,12 @@ async def test_a_failed_run_without_a_key_is_not_authenticated(
         ]
     ]
     harness = make(cwd, agent_dir)
-    async with harness.session() as session:
+    async with harness:
         with pytest.raises(external.NotAuthenticatedError):
             await run(harness, [ai.user_message("go")])
-        assert "error" in (session.messages[-1].provider_metadata or {}).get(
-            "external", {}
-        )
+        assert "error" in (
+            harness.session.messages[-1].provider_metadata or {}
+        ).get("external", {})
 
 
 async def test_a_new_session_is_seeded_with_the_past(
@@ -623,12 +627,10 @@ async def test_a_new_session_is_seeded_with_the_past(
     ]
     harness = make(cwd, agent_dir)
     with pytest.warns(UserWarning, match="reasoning"):
-        async with (
-            harness.session() as session
-        ):  # the first call starts pi, seeded
+        async with harness:  # the first call starts pi, seeded
             s = await run(harness, history)
     assert s.text == "fine"
-    session_id = session.id
+    session_id = harness.session.id
     assert session_id is not None
     assert session_id == server.session_id
     path = session_file(agent_dir, session_id)
@@ -665,31 +667,29 @@ async def test_an_existing_session_opens_here_only(
     server.turns = [[*begin("one"), *said("ok"), *SETTLED]]
     first = make(cwd, agent_dir)
     past = [ai.user_message("zero"), ai.assistant_message("fine")]
-    async with first.session() as opened:
+    async with first:
         await run(first, [*past, ai.user_message("one")])
-    session_id = opened.id
+    session_id = first.session.id
     assert session_id is not None
     assert server.process.terminated
     # The seed made the session file (a real pi also writes it itself).
     path = session_file(agent_dir, session_id)
 
-    again = make(cwd, agent_dir)
+    again = make(cwd, agent_dir, resume=session_id)
 
-    async with again.session(session_id) as session:
-        await session.start()
+    async with again:
+        await again.session.start()
         assert server.session_id == session_id
-        assert session.id == session_id
+        assert again.session.id == session_id
 
     with pytest.raises(external.ExternalHarnessError, match="no session"):
-        unknown = make(cwd, agent_dir)
-        async with unknown.session("0000-unknown") as session:
-            await session.start()
+        async with make(cwd, agent_dir, resume="0000-unknown") as unknown:
+            await unknown.session.start()
     with pytest.raises(
         external.ExternalHarnessError, match="not a pi session id"
     ):
-        escape = make(cwd, agent_dir)
-        async with escape.session("../escape") as session:
-            await session.start()
+        async with make(cwd, agent_dir, resume="../escape") as escape:
+            await escape.session.start()
     # A session that names another directory is not this one's.
     entries = path.read_text().splitlines()
     header = json.loads(entries[0])
@@ -701,17 +701,17 @@ async def test_an_existing_session_opens_here_only(
         + "\n"
     )
     with pytest.raises(external.ExternalHarnessError, match="belongs to"):
-        moved = make(cwd, agent_dir)
-        async with moved.session(f"{session_id}-moved") as session:
-            await session.start()
+        moved = make(cwd, agent_dir, resume=f"{session_id}-moved")
+        async with moved:
+            await moved.session.start()
     assert len(server.spawned) == 2
 
 
 async def test_a_dialog_is_answered_without_a_person(
     server: PiServer, cwd: str, agent_dir: Path
 ) -> None:
-    async with make(cwd, agent_dir).session() as session:
-        await session.start()
+    async with make(cwd, agent_dir) as harness:
+        await harness.session.start()
         server.says(
             {
                 "type": "extension_ui_request",
@@ -742,11 +742,11 @@ async def test_images_travel_as_base64(
     png = m.FilePart(data=b"\x89PNG", media_type="image/png")
     message = m.Message(role="user", parts=[m.TextPart(text="look"), png])
     harness = make(cwd, agent_dir)
-    async with harness.session() as session:
+    async with harness:
         await run(harness, [message])
         with pytest.raises(external.UnsupportedError):
             pdf = m.FilePart(data=b"%PDF", media_type="application/pdf")
-            await session.send(m.Message(role="user", parts=[pdf]))
+            await harness.session.send(m.Message(role="user", parts=[pdf]))
     (prompt,) = server.sent("prompt")
     assert prompt["images"] == [
         {"type": "image", "data": "iVBORw==", "mimeType": "image/png"}
@@ -761,10 +761,13 @@ async def test_a_command_that_starts_nothing_ends_the_turn_empty(
 
     server.on_prompt = turn
     harness = make(cwd, agent_dir)
-    async with harness.session() as session:
+    async with harness:
         s = await run(harness, [ai.user_message("/noop")])
     assert s.message.parts == []
-    assert [msg.role for msg in session.messages] == ["user", "assistant"]
+    assert [msg.role for msg in harness.session.messages] == [
+        "user",
+        "assistant",
+    ]
 
 
 async def test_a_crash_reaches_the_stream(
@@ -785,7 +788,7 @@ async def test_a_crash_reaches_the_stream(
 
     harness = make(cwd, agent_dir)
 
-    async with harness.session():
+    async with harness:
         task = asyncio.create_task(die())
         with pytest.raises(
             external.ExternalHarnessError, match=r"crashed|stopped"

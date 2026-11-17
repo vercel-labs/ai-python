@@ -10,7 +10,7 @@ async def main() -> None:
 
     messages = [ai.user_message("Reply with exactly: READY")]
 
-    async with harness.session(), ai.stream(harness, messages) as stream:
+    async with harness, ai.stream(harness, messages) as stream:
         async for event in stream:
             match event:
                 case ai.events.TextDelta():

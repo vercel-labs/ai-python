@@ -17,7 +17,7 @@ async def main() -> None:
             )
         ]
 
-        async with harness.session():
+        async with harness:
             async with ai.stream(harness, messages) as stream:
                 async for event in stream:
                     match event:

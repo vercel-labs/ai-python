@@ -2,39 +2,38 @@
 
 Experimental: not part of the stable API, may change or be removed.
 
-An external harness is a CLI in the shape of a model: plain data and a provider.
-Use it where a model goes, in a session block, with the whole history::
+An external harness is a CLI in the shape of a model: settings and a provider.
+Open it, and use it where a model goes, with the whole history::
 
     import ai
 
-    harness = ai.external.Codex(cwd=".")
     messages = [ai.user_message("Fix the tests")]
-    async with harness.session():
+    async with ai.external.Codex(cwd=".") as harness:
         async with ai.stream(harness, messages) as s:
             async for event in s:
                 ...
 
     # ai tools reach the CLI through a local MCP bridge
-    async with harness.session():
+    async with ai.external.Codex(cwd=".") as harness:
         async with ai.Agent(tools=[search_docs]).run(harness, messages) as run:
             ...
 
 The block holds one live CLI, and the model calls in it run on that CLI. A model
-call outside a session block raises. The session also gives direct control::
+call outside the block raises. One external harness is one conversation: it
+comes with one session, `harness.session`, which has the state and gives direct
+control::
 
-    async with harness.session() as session:
-        await session.send(ai.user_message("Fix the tests"))
-        async for event in session.events():
-            ...  # session.send() again to steer, session.interrupt() to stop
+    async with ai.external.Codex(cwd=".") as harness:
+        await harness.session.send(ai.user_message("Fix the tests"))
+        async for event in harness.session.events():
+            ...  # send() again to steer, harness.session.interrupt() to stop
 
-`harness.session()` starts a new session; `harness.session(session_id)`
-continues one that the CLI has, and `harness.session(messages=history)` makes
-one that starts with a past. The CLI's own tools come as
-`ai.events.BuiltinTool*` events. The state is in the session, as plain data:
-`session.id` is the CLI's id for the session, and `session.messages` holds the
-conversation in `ai` messages. The external harness holds only settings. The
-provider says where the CLI is:
-`ai.external.CodexProvider(executable=..., env=...)`.
+`Codex()` has a new session; `Codex(resume=session_id)` continues one that the
+CLI has, and `Codex(history=messages)` has a new one that starts with a past.
+The CLI's own tools come as `ai.events.BuiltinTool*` events. The state is plain
+data: `harness.session.id` is the CLI's id for the session, and
+`harness.session.messages` holds the conversation in `ai` messages. The provider
+says where the CLI is: `ai.external.CodexProvider(executable=..., env=...)`.
 """
 
 from ._errors import (

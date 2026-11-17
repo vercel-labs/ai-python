@@ -16,7 +16,8 @@ async def main() -> None:
             "steered.txt instead, then finish."
         )
 
-        async with harness.session() as session:
+        async with harness:
+            session = harness.session
             await session.send(
                 ai.user_message(
                     "Create files step1.txt through step40.txt, one at a "
