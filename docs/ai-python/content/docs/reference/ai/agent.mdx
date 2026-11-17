@@ -21,16 +21,30 @@ agent.tools
 objects. Use it when implementing a custom `Agent.loop`:
 
 ```python
+from collections.abc import AsyncGenerator
+
+import ai
+
+
 class CustomAgent(ai.Agent):
-    async def loop(self, context: ai.Context):
+    async def loop(self, context: ai.Context) -> AsyncGenerator[ai.events.AgentEvent]:
         while context.keep_running():
-            async with ai.stream(context=context) as stream:
-                async for event in stream:
+            async with (
+                ai.stream(context=context) as stream,
+                ai.ToolRunner() as runner,
+                ai.util.merge(stream, runner.events()) as events,
+            ):
+                async for event in events:
                     yield event
                     if isinstance(event, ai.events.ToolEnd):
-                        tool_call = self.resolve(event.tool_call)
-                        await tool_call()
+                        runner.schedule(self.resolve(event.tool_call))
+                context.add(stream.message)
+                context.add(runner.get_tool_message())
 ```
+
+Add the assistant message and the tool results to the context after each
+turn. `keep_running()` uses that history to decide whether to call the model
+again.
 
 Resolution performs tool-name lookup and argument validation, and applies
 approval gates and cached replay results. Pass a sequence of tool-call parts
@@ -66,18 +80,13 @@ optional `type=MyAgent` argument to validate the agent at runtime and return
 context. It is available to the tool and code called by the tool. Calling it
 outside tool execution raises `LookupError`.
 
-Both methods use task-local context, so concurrent agent runs and tool calls do
+Both functions use task-local context, so concurrent agent runs and tool calls do
 not share their current values.
 
 ## run
 
 ```python
-async with agent.run(
-    model,
-    messages,
-    output_type=None,
-    params=None,
-) as stream:
+async with agent.run(model, messages) as stream:
     async for event in stream:
         ...
 ```
@@ -86,8 +95,11 @@ Arguments:
 
 - `model`: `ai.Model`.
 - `messages`: initial list of `ai.messages.Message`.
-- `output_type`: optional Pydantic model for final JSON output.
-- `params`: optional `ai.InferenceRequestParams`.
+- `output_type`: optional Pydantic model for final JSON output. Omit it for text.
+- `params`: optional `ai.InferenceRequestParams`. Defaults to `None`.
+- `hook_registry`: optional `ai.agents.hooks.HookRegistry`. Defaults to the
+  current registry in a nested run, or a new registry at the top level. Pass
+  your own registry to resolve hooks from another task.
 
 ## AgentStream
 
@@ -99,13 +111,29 @@ stream.messages
 stream.output
 ```
 
-- `stream.context`: the run's `ai.Context`, i.e. the live per-run state (model,
-  messages, tools, params). 
+- `stream.context`: the run's `ai.Context`, the live per-run state (model,
+  messages, tools, params).
 - `stream.messages`: the message history, including messages added during the
   run. Shorthand for `stream.context.messages`.
 - `stream.output`: the run's result. By default, the final assistant message's
   text. When `output_type` is set, the text is validated as JSON against that
-  Pydantic model and the parsed instance is returned.
+  Pydantic model and the parsed instance is returned. Read it only after a
+  completed run, not when the run is blocked on a hook.
+- `stream.hook_registry`: the registry used by this run. Inside the `run`
+  context, hook functions use it implicitly. Pass it as `registry=` when
+  resolving a hook from another task.
+- `stream.blocked`: whether the delivered events show that the run cannot
+  proceed until a deferred hook is resolved. It keeps its final value after
+  iteration ends.
+- `stream.deferred_hooks`: a copy of the unresolved hooks tracked from the
+  delivered events. Resolved and cancelled hooks leave this list.
+
+For a request/response flow, call `ai.defer_hook(event.hook)` when you receive
+an `ai.events.PendingHookEvent`. This lets iteration end. If `stream.blocked`
+is true, persist `stream.messages` and return the pending hook information
+instead of reading `stream.output`. On the next request, restore the messages
+and register the resolutions before iteration. See
+[AI SDK UI approvals](/docs/reference/ai.ui/ai-sdk/approvals) for an example.
 
 ## loop
 
@@ -126,7 +154,7 @@ with the consumer, which loops that sequence side effects against consumer
 code depend on.
 
 ```python
-class DurableAgent(ai.Agent):
+class LockstepAgent(ai.Agent):
     LOOP_BUFFER = 0
 ```
 
