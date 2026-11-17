@@ -425,6 +425,8 @@ class Process(Protocol):
         """Describe how the process ended, once its output has closed."""
         ...
 
+    async def kill(self) -> None: ...
+
 
 class Runner:
     """A connection to a runner, used as an async context manager.
@@ -532,6 +534,7 @@ class Runner:
             pass
         except Exception as exc:
             self._read_error = exc
+            await protected(self._process.kill())
         self._closed = True
         if self._pending or self._streams:
             error = await self._closed_error()
@@ -783,6 +786,14 @@ class _LocalProcess:
 
     async def exit_message(self) -> str:
         return f"runner exited with {await self.proc.wait()}"
+
+    async def kill(self) -> None:
+        self.proc.kill()
+        # asyncio doesn't count the process as exited until its pipes
+        # have closed, and one with unread output never does.
+        with suppress(anyio.BrokenResourceError, anyio.ClosedResourceError):
+            async for _ in self.stdout:
+                pass
 
 
 @asynccontextmanager

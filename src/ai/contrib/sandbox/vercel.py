@@ -259,6 +259,9 @@ class _CommandProcess:
         text = self.stderr.decode(errors="replace")
         return f"runner exited with {returncode}\n{text}"
 
+    async def kill(self) -> None:
+        await self.cmd.kill()
+
 
 _STDERR_TAIL = 65536
 

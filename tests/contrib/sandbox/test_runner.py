@@ -74,6 +74,10 @@ def unbuiltin() -> None:
     raise UnbuiltinError("nope")
 
 
+def big(n: int) -> str:
+    return "x" * n
+
+
 def produced() -> int:
     return _produced[0]
 
@@ -234,6 +238,9 @@ async def _scripted_process(
             await anyio.sleep_forever()
             raise AssertionError
 
+        async def kill(self) -> None:
+            pass
+
     try:
         yield cast("runner_.Process", Scripted())
     finally:
@@ -262,3 +269,12 @@ async def test_oversized_reply_closes_the_runner() -> None:
         for _ in range(2):
             with pytest.raises(ValueError, match="limit is 50"):
                 await w.run(produced)
+
+
+async def test_oversized_reply_kills_the_runner() -> None:
+    with anyio.fail_after(10):
+        async with runner_.local_runner(
+            main_path=__file__, max_reply_bytes=50
+        ) as w:
+            with pytest.raises(ValueError, match="limit is 50"):
+                await w.run(big, 10_000_000)
