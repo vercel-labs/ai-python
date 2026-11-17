@@ -37,7 +37,7 @@ Part = (
 
 ```
 
-Use built-in factory functions to quickly construct frequently used shapes of
+Use built-in factory functions to construct frequently used shapes of
 messages:
 
 ```python
@@ -151,13 +151,15 @@ Agents can also emit tool results, hook events, and partial tool output. You can
 ignore events you do not need, or route them into your application UI,
 observability pipeline, or durable workflow.
 
-Every event also carries a reference to a `ai.Message` that has partial content
-accumulated from the stream *so far*.
+Every model event carries an `ai.messages.Message` with the content accumulated
+so far. Among agent-only events, `ToolCallResult` and `HookEvent` also carry a
+message. `PartialToolCallResult`, `RunBlocked`, and `Retry` do not.
 
 ## Track usage
 
-Providers attach usage to events when they report it. The latest value is also
-available on the final message and stream:
+Providers attach usage to model events when they report it. The latest value
+is also available on the final message and on an `ai.stream` stream. Agent-only
+events do not have `usage` or `provider_metadata` fields:
 
 ```python
 async with ai.stream(model, messages) as stream:
@@ -181,6 +183,11 @@ validate the history yourself:
 from ai.providers import history_utils
 
 
-history_utils.validate(messages)  # raises IntegrityError on any issue
+history_utils.validate(messages)  # raises IntegrityError on a reported issue
 issues = history_utils.inspect(messages)  # or just report them
 ```
+
+These functions check internal messages and parts, invalid JSON tool arguments,
+duplicate tool-call and tool-result IDs, and orphaned calls or results. They do
+not check general message ordering, such as a late system message or consecutive
+user messages. Orphaned-call checks are skipped when tool IDs have issues.

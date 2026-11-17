@@ -35,7 +35,7 @@ if __name__ == "__main__":
     asyncio.run(main())
 ```
 
-One call to `ai.stream` produces one `ai.Message`.
+One call to `ai.stream` produces one `ai.messages.Message`.
 
 
 ## Read the final message
@@ -117,7 +117,7 @@ an instance of that Pydantic model after the stream finishes.
 tools locally. Use an agent when you want the SDK to execute requested tools
 and continue the loop.
 
-Provider-executed tools run on provider's side. They appear in the
+Provider-executed tools run on the provider's side. They appear in the
 stream as built-in tool events and do not need a Python function:
 
 ```python
@@ -126,11 +126,11 @@ tools = [ai.providers.ai_gateway.tools.perplexity_search(max_results=5)]
 async with ai.stream(model, messages, tools=tools) as stream:
     async for event in stream:
         match event:
-            case ai.events.BuiltinToolEnd(tool_call):
+            case ai.events.BuiltinToolEnd(tool_call=tool_call):
                 print(tool_call.tool_name)
-            case ai.events.BuiltinToolResult(result):
+            case ai.events.BuiltinToolResult(result=result):
                 print(result.result)
-            case ai.events.TextDelta(chunk):
+            case ai.events.TextDelta(chunk=chunk):
                 print(chunk, end="", flush=True)
 ```
 
