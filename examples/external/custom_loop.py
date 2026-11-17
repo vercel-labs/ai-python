@@ -1,7 +1,6 @@
 """Custom loop: an external harness turn as one step of your own agent loop."""
 
 import asyncio
-import dataclasses
 import pathlib
 import tempfile
 from collections.abc import AsyncGenerator
@@ -16,19 +15,18 @@ REASONING = (
 
 
 class CodeThenReview(ai.Agent):
-    def __init__(self, harness: ai.external.ExternalHarness) -> None:
+    def __init__(self, cwd: str) -> None:
         super().__init__()
-        self.harness = harness
+        self.cwd = cwd
 
     async def loop(
         self, context: ai.Context
     ) -> AsyncGenerator[ai.events.AgentEvent]:
         """The external harness does the task, then the model reviews it."""
         # Step 1: the external harness does the task. Each run is a new
-        # conversation: the same settings, with a new session.
-        harness = dataclasses.replace(self.harness)
+        # conversation: a new external harness.
         async with (
-            harness,
+            ai.external.ClaudeCode(cwd=self.cwd) as harness,
             ai.stream(harness, [context.messages[-1]]) as work,
         ):
             async for event in work:
@@ -38,11 +36,11 @@ class CodeThenReview(ai.Agent):
         # Step 2: evidence from the directory, not the external harness's word
         # for it. Only the external harness's answer joins the agent's context,
         # not its tool calls: they name tools that this model does not have.
-        source = pathlib.Path(harness.cwd, "hello.py").read_text()
+        source = pathlib.Path(self.cwd, "hello.py").read_text()
         process = await asyncio.create_subprocess_exec(
             "python3",
             "hello.py",
-            cwd=harness.cwd,
+            cwd=self.cwd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
         )
@@ -75,7 +73,7 @@ async def main() -> None:
     model = ai.get_model("anthropic/claude-sonnet-4.6")
 
     with tempfile.TemporaryDirectory() as tmp:
-        my_agent = CodeThenReview(ai.external.ClaudeCode(cwd=tmp))
+        my_agent = CodeThenReview(tmp)
 
         async with my_agent.run(
             model,

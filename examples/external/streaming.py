@@ -8,8 +8,6 @@ import ai
 
 async def main() -> None:
     with tempfile.TemporaryDirectory() as tmp:
-        harness = ai.external.ClaudeCode(cwd=tmp)
-
         messages = [
             ai.user_message(
                 "Write the word HELLO into greeting.txt, then read it back "
@@ -17,7 +15,7 @@ async def main() -> None:
             )
         ]
 
-        async with harness:
+        async with ai.external.ClaudeCode(cwd=tmp) as harness:
             async with ai.stream(harness, messages) as stream:
                 async for event in stream:
                     match event:

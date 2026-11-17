@@ -10,15 +10,13 @@ import ai
 async def main() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         # 1. A conversation with Claude Code. It does real work.
-        claude = ai.external.ClaudeCode(cwd=tmp)
-
         messages = [
             ai.user_message(
                 "Create notes.txt containing exactly: milk, eggs. Also "
                 "remember: the deadline is FRIDAY. Reply with exactly: OK"
             )
         ]
-        async with claude:
+        async with ai.external.ClaudeCode(cwd=tmp) as claude:
             reply = await ai.experimental_generate(claude, messages)
         print(
             f"Claude Code: {reply.text.strip()} "
@@ -29,8 +27,6 @@ async def main() -> None:
         #    give the history to the new external harness. Its new session
         #    starts with that past, thus it knows what was said and what was
         #    done.
-        codex = ai.external.Codex(cwd=tmp)
-
         messages = [
             *messages,
             reply,
@@ -39,7 +35,7 @@ async def main() -> None:
                 "Then append 'bread' to notes.txt. Reply in one line."
             ),
         ]
-        async with codex:
+        async with ai.external.Codex(cwd=tmp) as codex:
             reply = await ai.experimental_generate(codex, messages)
         print("Codex:", reply.text.strip())
 

@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import dataclasses
 import json
 import os
 from collections.abc import AsyncIterator
@@ -562,7 +561,9 @@ async def test_a_resume_reads_all_pages_and_opens_here_only(
     server: AcpServer, harness: external.Fx
 ) -> None:
     server.pages = [["other"], [SESSION]]
-    harness = dataclasses.replace(harness, resume=SESSION)
+    harness = external.Fx(
+        cwd=harness.cwd, provider=harness.provider, resume=SESSION
+    )
     async with harness:
         await harness.session.start()
         (resume,) = server.sent("session/resume")
@@ -577,7 +578,9 @@ async def test_a_resume_refuses_an_id_not_in_this_directory(
     server: AcpServer, harness: external.Fx, session_id: str
 ) -> None:
     with pytest.raises(external.ExternalHarnessError):
-        async with dataclasses.replace(harness, resume=session_id) as harness:
+        async with external.Fx(
+            cwd=harness.cwd, provider=harness.provider, resume=session_id
+        ) as harness:
             await harness.session.start()
     assert not server.sent("session/resume")
 
@@ -1428,7 +1431,9 @@ async def test_a_resume_refuses_a_listed_session_with_a_different_cwd(
         external.ExternalHarnessError,
         match="unknown or belongs to another directory",
     ):
-        async with dataclasses.replace(harness, resume=SESSION) as harness:
+        async with external.Fx(
+            cwd=harness.cwd, provider=harness.provider, resume=SESSION
+        ) as harness:
             await harness.session.start()
     assert not server.sent("session/resume")
 
@@ -1634,7 +1639,9 @@ async def test_a_cancelled_seed_load_closes_before_removing_its_folder(
     index = sibling.parent / "index.jsonl"
     index.write_bytes(b"keep index")
     history = [ai.user_message("old"), ai.assistant_message("old answer")]
-    harness = dataclasses.replace(harness, history=history)
+    harness = external.Fx(
+        cwd=harness.cwd, provider=harness.provider, history=history
+    )
     async with asyncio.timeout(5), harness:
         task = asyncio.create_task(harness.session.start())
         await server.wait_for("session/load")

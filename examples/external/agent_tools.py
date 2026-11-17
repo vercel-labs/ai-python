@@ -1,20 +1,8 @@
-"""An ai.Agent gives its Python tools to a CLI, through the MCP bridge.
-
-uv run python examples/external/agent_tools.py [claude-code|codex|fx|pi]
-"""
+"""An ai.Agent gives its Python tools to a CLI, through the MCP bridge."""
 
 import asyncio
-import sys
-from collections.abc import Callable
 
 import ai
-
-KINDS: dict[str, Callable[[], ai.external.ExternalHarness]] = {
-    "claude-code": ai.external.ClaudeCode,
-    "codex": ai.external.Codex,
-    "fx": ai.external.Fx,
-    "pi": ai.external.Pi,
-}
 
 
 @ai.tool
@@ -23,7 +11,7 @@ async def secret_word(topic: str) -> str:
     return {"birds": "HERON"}.get(topic, "UNKNOWN")
 
 
-async def main(kind: str) -> None:
+async def main() -> None:
     agent = ai.Agent(tools=[secret_word])
     messages = [
         ai.user_message(
@@ -31,8 +19,7 @@ async def main(kind: str) -> None:
             "Reply with the word only."
         )
     ]
-    harness = KINDS[kind]()
-    async with harness, agent.run(harness, messages) as run:
+    async with ai.external.Fx() as harness, agent.run(harness, messages) as run:
         async for event in run:
             match event:
                 case ai.events.ToolEnd():  # an ai tool: the agent runs it
@@ -43,4 +30,4 @@ async def main(kind: str) -> None:
     print([message.role for message in run.messages])
 
 
-asyncio.run(main(sys.argv[1] if len(sys.argv) > 1 else "codex"))
+asyncio.run(main())

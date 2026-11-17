@@ -27,8 +27,7 @@ async def main() -> None:
         # A new external harness with the same settings continues the
         # session. The CLI has the conversation: send what is new. The block
         # keeps the CLI alive between the calls.
-        again = ai.external.ClaudeCode(cwd=tmp, resume=session_id)
-        async with again:
+        async with ai.external.ClaudeCode(cwd=tmp, resume=session_id) as again:
             for question in (
                 "What codeword did I give you? Reply with the word only.",
                 "Spell it backwards. Reply with the word only.",

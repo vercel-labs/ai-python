@@ -254,10 +254,6 @@ async def test_a_saved_session_id_continues_the_session() -> None:
     assert s.text == "other"
     assert harness.wire.started is not None
     assert harness.wire.started["session_id"] == "s1"
-    # The same settings with a new session: a new conversation.
-    fresh = dataclasses.replace(harness)
-    assert fresh.session.id is None
-    assert fresh.session.messages == []
 
 
 async def test_in_a_block_the_model_calls_use_the_live_cli() -> None:
@@ -858,11 +854,6 @@ async def test_a_harness_is_settings_and_a_session() -> None:
     resumed = external.Codex(cwd="/w", resume="abc", history=history)
     assert resumed.session.id == "abc"
     assert [msg.id for msg in resumed.session.messages] == [history[0].id]
-    # The same settings, a new session.
-    fresh = dataclasses.replace(resumed, model_name="m")
-    assert (fresh.cwd, fresh.model_name) == ("/w", "m")
-    assert fresh.session.id is None
-    assert fresh.session.messages == []
     with pytest.raises(TypeError):
         external.ExternalHarness(provider=external.CodexProvider())
     with pytest.raises(TypeError):

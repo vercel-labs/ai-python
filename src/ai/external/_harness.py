@@ -178,8 +178,8 @@ class ExternalHarness:
     external harness as `resume`.
 
     A copy or a pickle is a closed external harness with the same settings
-    and the same conversation, not the live CLI. `dataclasses.replace(harness)`
-    gives the same settings with a new session.
+    and the same conversation, not the live CLI. For a new conversation,
+    make a new external harness.
     """
 
     harness_class_id: ClassVar[str]

@@ -6,11 +6,12 @@ import ai
 
 
 async def main() -> None:
-    harness = ai.external.ClaudeCode()
-
     messages = [ai.user_message("Reply with exactly: READY")]
 
-    async with harness, ai.stream(harness, messages) as stream:
+    async with (
+        ai.external.ClaudeCode() as harness,
+        ai.stream(harness, messages) as stream,
+    ):
         async for event in stream:
             match event:
                 case ai.events.TextDelta():

@@ -7,7 +7,7 @@ Usage (from repo root):
     uv run examples/.test_scripts/run-examples.py --video  # also video samples
     uv run examples/.test_scripts/run-examples.py --e2e  # also e2e test scripts
     uv run examples/.test_scripts/run-examples.py --external
-        # also external samples: need logged-in `claude` and `codex` CLIs
+        # also external samples: need logged-in `claude`, `codex` and `fx` CLIs
     uv run examples/.test_scripts/run-examples.py --all  # everything
     uv run examples/.test_scripts/run-examples.py --parallel  # in parallel
     uv run examples/.test_scripts/run-examples.py models/stream.py

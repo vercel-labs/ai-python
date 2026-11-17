@@ -8,10 +8,10 @@ import ai
 
 
 async def tagged(
-    label: str, harness: ai.external.ExternalHarness, prompt: str
+    label: str, cwd: str, prompt: str
 ) -> AsyncGenerator[tuple[str, ai.events.Event]]:
     async with (
-        harness,
+        ai.external.ClaudeCode(cwd=cwd) as harness,
         ai.stream(harness, [ai.user_message(prompt)]) as stream,
     ):
         async for event in stream:
@@ -25,12 +25,12 @@ async def main() -> None:
         async with ai.util.merge(
             tagged(
                 "poem",
-                ai.external.ClaudeCode(cwd=tmp),
+                tmp,
                 "Write a two-line poem about rivers into poem.txt.",
             ),
             tagged(
                 "limerick",
-                ai.external.ClaudeCode(cwd=tmp),
+                tmp,
                 "Write a limerick about mountains into limerick.txt.",
             ),
         ) as events:

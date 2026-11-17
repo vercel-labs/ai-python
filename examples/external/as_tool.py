@@ -10,11 +10,9 @@ model = ai.get_model("anthropic/claude-sonnet-4.6")
 
 async def main() -> None:
     with tempfile.TemporaryDirectory() as tmp:
-        harness = ai.external.ClaudeCode(cwd=tmp)
-
         # One block for the whole run: each call of the tool continues the
         # same conversation, on one live CLI.
-        async with harness:
+        async with ai.external.ClaudeCode(cwd=tmp) as harness:
             # The external harness's events stream up as partial tool results,
             # and its last text becomes the tool result. To close the parent run
             # stops the external harness's turn too.

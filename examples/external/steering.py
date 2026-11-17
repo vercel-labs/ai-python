@@ -9,16 +9,13 @@ import ai
 
 async def main() -> None:
     with tempfile.TemporaryDirectory() as tmp:
-        harness = ai.external.ClaudeCode(cwd=tmp)
-
         steer = ai.user_message(
             "Stop creating numbered files. Write the word STEERED into "
             "steered.txt instead, then finish."
         )
 
-        async with harness:
-            session = harness.session
-            await session.send(
+        async with ai.external.ClaudeCode(cwd=tmp) as harness:
+            await harness.session.send(
                 ai.user_message(
                     "Create files step1.txt through step40.txt, one at a "
                     "time, each containing its own number."
@@ -26,7 +23,7 @@ async def main() -> None:
             )
 
             sent = accepted = False
-            async for event in session.events():
+            async for event in harness.session.events():
                 match event:
                     case ai.events.BuiltinToolStart() if not sent:
                         sent = True
@@ -35,7 +32,7 @@ async def main() -> None:
                         )
                         # A message during a turn steers it. The CLI takes it
                         # at its next step, between tool calls.
-                        await session.send(steer)
+                        await harness.session.send(steer)
                     case ai.external.MessageEvent():
                         # The steer is in the conversation: the reply before
                         # it ended, and a new reply starts.
@@ -43,7 +40,7 @@ async def main() -> None:
                     case ai.events.StreamEnd() if accepted:
                         break
 
-            print([message.role for message in session.messages])
+            print([message.role for message in harness.session.messages])
 
         # How much of the first plan it finished depends on where its next
         # step was.

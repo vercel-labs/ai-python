@@ -111,8 +111,6 @@ class DurableAgent(ai.Agent):
 
         # A durable step serializes the model: it must be an ai.Model.
         assert isinstance(context.model, ai.Model)
-        # TODO: the assertion can go if ai.Context and ai.Agent become generic
-        # on the model type. Then worker users must specify the parameter.
         while context.keep_running():
             result = await temporalio.workflow.execute_activity(
                 llm_activity,
