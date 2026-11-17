@@ -425,8 +425,6 @@ class Process(Protocol):
         """Describe how the process ended, once its output has closed."""
         ...
 
-    async def kill(self) -> None: ...
-
 
 class Runner:
     """A connection to a runner, used as an async context manager.
@@ -534,7 +532,6 @@ class Runner:
             pass
         except Exception as exc:
             self._read_error = exc
-            await protected(self._process.kill())
         self._closed = True
         if self._pending or self._streams:
             error = await self._closed_error()
@@ -787,14 +784,6 @@ class _LocalProcess:
     async def exit_message(self) -> str:
         return f"runner exited with {await self.proc.wait()}"
 
-    async def kill(self) -> None:
-        self.proc.kill()
-        # asyncio doesn't count the process as exited until its pipes
-        # have closed, and one with unread output never does.
-        with suppress(anyio.BrokenResourceError, anyio.ClosedResourceError):
-            async for _ in self.stdout:
-                pass
-
 
 @asynccontextmanager
 async def local_process(
@@ -805,7 +794,27 @@ async def local_process(
         [python, "-m", _MODULE], stderr=None
     ) as proc:
         assert proc.stdin is not None and proc.stdout is not None
-        yield _LocalProcess(proc.stdin, proc.stdout, proc)
+        stdin, stdout = proc.stdin, proc.stdout
+
+        async def stop() -> None:
+            await stdin.aclose()
+            with anyio.move_on_after(_CLOSE_TIMEOUT):
+                await proc.wait()
+
+        async def kill() -> None:
+            proc.kill()
+            # asyncio doesn't count the process as exited until its pipes
+            # have closed, and one with unread output never does.
+            with suppress(anyio.BrokenResourceError, anyio.ClosedResourceError):
+                async for _ in stdout:
+                    pass
+
+        try:
+            yield _LocalProcess(stdin, stdout, proc)
+            await protected(stop())
+        finally:
+            if proc.returncode is None:
+                await protected(kill())
 
 
 def local_runner(

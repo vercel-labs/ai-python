@@ -259,9 +259,6 @@ class _CommandProcess:
         text = self.stderr.decode(errors="replace")
         return f"runner exited with {returncode}\n{text}"
 
-    async def kill(self) -> None:
-        await self.cmd.kill()
-
 
 _STDERR_TAIL = 65536
 
@@ -313,9 +310,17 @@ async def sandbox_process(
         except BaseException:
             await protected(cmd.kill())
             raise
+        stdin = cmd.stdin
+
+        async def stop() -> None:
+            await stdin.aclose()
+            with anyio.move_on_after(runner_._CLOSE_TIMEOUT) as scope:
+                await cmd.wait()
+            if scope.cancelled_caught:
+                await cmd.kill()
+
         try:
-            await cmd.stdin.aclose()
-            await cmd.wait()
+            await protected(stop())
         except (SandboxApiError, SandboxStdinError) as exc:
             # The sandbox may have stopped, as at its execution time limit.
             if not _session_gone(exc):

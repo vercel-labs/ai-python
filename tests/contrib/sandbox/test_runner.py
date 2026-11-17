@@ -238,9 +238,6 @@ async def _scripted_process(
             await anyio.sleep_forever()
             raise AssertionError
 
-        async def kill(self) -> None:
-            pass
-
     try:
         yield cast("runner_.Process", Scripted())
     finally:
@@ -271,7 +268,8 @@ async def test_oversized_reply_closes_the_runner() -> None:
                 await w.run(produced)
 
 
-async def test_oversized_reply_kills_the_runner() -> None:
+async def test_stuck_runner_is_killed(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(runner_, "_CLOSE_TIMEOUT", 0.5)
     with anyio.fail_after(10):
         async with runner_.local_runner(
             main_path=__file__, max_reply_bytes=50
