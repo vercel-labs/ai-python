@@ -27,13 +27,13 @@ call outside a session block raises. The session also gives direct control::
         async for event in session.events():
             ...  # session.send() again to steer, session.interrupt() to stop
 
-An external harness with no `session_id` starts a new session and remembers its
-id. `harness.session()` gives the external harness's session;
-`harness.session(session_id)` continues another one, and
-`harness.session(messages=history)` makes one that starts with a past. The CLI's
-own tools come as `ai.events.BuiltinTool*` events. The state is plain data:
+`harness.session()` starts a new session; `harness.session(session_id)`
+continues one that the CLI has, and `harness.session(messages=history)` makes
+one that starts with a past. The CLI's own tools come as
+`ai.events.BuiltinTool*` events. The state is in the session, as plain data:
 `session.id` is the CLI's id for the session, and `session.messages` holds the
-conversation in `ai` messages. The provider says where the CLI is:
+conversation in `ai` messages. The external harness holds only settings. The
+provider says where the CLI is:
 `ai.external.CodexProvider(executable=..., env=...)`.
 """
 

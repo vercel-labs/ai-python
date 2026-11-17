@@ -49,8 +49,8 @@ class TranscriptMismatchError(ExternalHarnessError):
 
     A session holds a conversation in its CLI. It can continue it, but it cannot
     rewrite it: use `session.messages` as the history. For another conversation,
-    use an external harness with no `session_id`. A history must always end with
-    a user message, or with the results of tool calls that the session made.
+    use a new session. A history must always end with a user message, or with
+    the results of tool calls that the session made.
     """
 
 

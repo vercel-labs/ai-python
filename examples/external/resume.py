@@ -1,4 +1,4 @@
-"""Save an external harness, and continue its conversation in a new process."""
+"""Save a session id, and continue the conversation in a new process."""
 
 import asyncio
 import tempfile
@@ -10,7 +10,7 @@ async def main() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         harness = ai.external.ClaudeCode(cwd=tmp)
 
-        async with harness.session():
+        async with harness.session() as session:
             await ai.experimental_generate(
                 harness,
                 [
@@ -20,8 +20,10 @@ async def main() -> None:
                 ],
             )
 
-        # The external harness is plain data, and it remembers its CLI session.
-        saved = harness.model_dump_json()  # put this in your database
+        # The external harness is plain data: the settings. The session id
+        # names the conversation in the CLI. Put both in your database.
+        saved = harness.model_dump_json()
+        session_id = session.id
 
         # ... later, another process entirely ...
 
@@ -29,7 +31,7 @@ async def main() -> None:
 
         # The CLI has the conversation: send what is new. A session block
         # keeps the CLI alive between the calls.
-        async with again.session() as session:
+        async with again.session(session_id) as session:
             for question in (
                 "What codeword did I give you? Reply with the word only.",
                 "Spell it backwards. Reply with the word only.",

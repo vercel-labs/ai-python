@@ -20,20 +20,19 @@ async def tagged(
 
 async def main() -> None:
     with tempfile.TemporaryDirectory() as tmp:
-        # An external harness is one conversation: two at a time are two
-        # external harnesses.
-        poem = ai.external.ClaudeCode(cwd=tmp)
-        limerick = ai.external.ClaudeCode(cwd=tmp)
+        # A session is one conversation: two at a time are two sessions of
+        # the external harness, one in each stream.
+        harness = ai.external.ClaudeCode(cwd=tmp)
 
         async with ai.util.merge(
             tagged(
                 "poem",
-                poem,
+                harness,
                 "Write a two-line poem about rivers into poem.txt.",
             ),
             tagged(
                 "limerick",
-                limerick,
+                harness,
                 "Write a limerick about mountains into limerick.txt.",
             ),
         ) as events:

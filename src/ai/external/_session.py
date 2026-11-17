@@ -92,13 +92,13 @@ class ExternalHarnessMessageSpanData(pydantic.BaseModel):
 class Session:
     """One session of an external harness's CLI: its state and direct control.
 
-    `harness.session()` gives the external harness's session
-    (`harness.session_id`), or a new one if the external harness has none.
-    `harness.session(session_id)` continues another session that the CLI has,
-    and `harness.session(messages=history)` makes a new one that starts with a
+    `harness.session()` makes a new session. `harness.session(session_id)`
+    continues a session that the CLI has, and
+    `harness.session(messages=history)` makes a new one that starts with a
     past. The state is plain data:
 
     - `id`: the CLI's id for the session. None until a new session starts.
+      Save it to continue the session later.
     - `messages`: the conversation, in `ai` messages. The session keeps it
       current.
 
@@ -134,7 +134,7 @@ class Session:
         messages: list[messages_.Message] | None = None,
     ) -> None:
         self.harness = harness
-        self.id = session_id if session_id is not None else harness.session_id
+        self.id = session_id
         self.messages = list(messages or [])
         # Open: the CLI stays alive between turns, and `send()` works.
         self._open = False
@@ -342,10 +342,7 @@ class Session:
                     await run.close()
                 if run.fresh and not run.used:
                     # The session is new and empty: start a new one, which also
-                    # takes the past. The external harness forgets the empty
-                    # one.
-                    if harness.session_id == self.id:
-                        harness.session_id = None
+                    # takes the past.
                     self.id = None
             elif restart:
                 warnings.warn(
@@ -540,10 +537,6 @@ class _CliRun:
                 await self.bridge.close()
             await self.span.stamp_end(error=exc).push()
             raise
-        if self.fresh and harness.session_id is None:
-            # The external harness's first new session: the external harness
-            # remembers it.
-            harness.session_id = session.id
         self.span.data.session_id = session.id
         self.tasks = [
             asyncio.create_task(self._read_wire()),

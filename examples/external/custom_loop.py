@@ -25,8 +25,8 @@ class CodeThenReview(ai.Agent):
     ) -> AsyncGenerator[ai.events.AgentEvent]:
         """The external harness does the task, then the model reviews it."""
         # Step 1: the external harness does the task. Each run is a new
-        # conversation, thus a copy of the external harness with no session.
-        harness = self.harness.model_copy(update={"session_id": None})
+        # conversation, thus a new session.
+        harness = self.harness
         async with (
             harness.session(),
             ai.stream(harness, [context.messages[-1]]) as work,
