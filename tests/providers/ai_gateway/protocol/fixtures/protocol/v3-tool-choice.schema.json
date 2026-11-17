@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "anyOf": [
+    {
+      "type": "object",
+      "required": [
+        "type"
+      ],
+      "properties": {
+        "type": {
+          "enum": [
+            "auto",
+            "none",
+            "required"
+          ]
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "type",
+        "toolName"
+      ],
+      "properties": {
+        "type": {
+          "const": "tool"
+        },
+        "toolName": {
+          "type": "string"
+        }
+      }
+    }
+  ],
+  "$comment": "Independently transcribed from LanguageModelV3ToolChoice; see sources.json. Additional properties and name lengths are intentionally unconstrained."
+}

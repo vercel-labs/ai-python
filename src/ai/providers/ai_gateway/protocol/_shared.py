@@ -388,7 +388,7 @@ def request_options(
             body["parallelToolCalls"] = tool_calling.parallel_tool_calls
         tool_choice = tool_calling.tool_choice
         if isinstance(tool_choice, models.ToolChoiceMode):
-            body["toolChoice"] = tool_choice.value
+            body["toolChoice"] = {"type": tool_choice.value}
         elif isinstance(tool_choice, models.ToolRef):
             body["toolChoice"] = {
                 "type": "tool",
@@ -398,7 +398,7 @@ def request_options(
             body["activeTools"] = sorted(
                 str(tool) for tool in tool_choice.tools
             )
-            body["toolChoice"] = tool_choice.mode.value
+            body["toolChoice"] = {"type": tool_choice.mode.value}
 
     # provider service
     if value.provider_service is not None:
