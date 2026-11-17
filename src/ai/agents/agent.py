@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import contextvars
 import dataclasses
+import functools
 import inspect
 import json
 import typing
@@ -25,6 +26,7 @@ from typing import (
     Any,
     ClassVar,
     Generic,
+    Literal,
     Protocol,
     Self,
     cast,
@@ -44,6 +46,7 @@ from ..types import builders
 from ..types import events as events_
 from ..types.messages import MessageBundle
 from . import hooks as hooks_
+from . import runner as runner_
 from . import runtime
 
 
@@ -381,6 +384,11 @@ def _return_type_from_callable(fn: Callable[..., Any]) -> Any:
         return None
 
 
+def _item_type(fn: Callable[..., Any]) -> Any:
+    """Return the type of the items a streaming tool's function yields."""
+    return _stream_item_type(_return_type_from_callable(fn)) or Any
+
+
 def _stream_item_type(return_type: Any) -> Any:
     resolved = type_utils.resolve_type_alias(return_type)
     if typing.get_origin(resolved) is typing.Annotated:
@@ -472,6 +480,8 @@ def _aggregate_from_return_type(fn: Callable[..., Any]) -> Aggregate | None:
 
 Tool = types.tools.Tool
 
+type ExecutionStrategy = Literal["local", "remote-enabled", "remote"]
+
 
 class _ToolArgs(pydantic.BaseModel):
     """Base of the argument validators ``tool()`` generates."""
@@ -487,6 +497,7 @@ class AgentTool:
     aggregator: Callable[[], events_.Aggregator[Any, Any, Any]] | None = None
     to_model_input: Callable[[Any], Any] | None = None
     return_type: Any = None
+    execution_strategy: ExecutionStrategy = "local"
 
     @property
     def name(self) -> str:
@@ -589,6 +600,7 @@ def tool[**P](
     require_approval: bool,
     to_model_input: Callable[[Any], Any] | None = None,
     return_type: Any = None,
+    execution_strategy: ExecutionStrategy = "local",
 ) -> Callable[
     [Callable[P, Awaitable[Any] | AsyncIterable[Any]]], AgentTool
 ]: ...
@@ -600,6 +612,7 @@ def tool[**P](
     return_type: Any,
     require_approval: bool = False,
     to_model_input: Callable[[Any], Any] | None = None,
+    execution_strategy: ExecutionStrategy = "local",
 ) -> Callable[
     [Callable[P, Awaitable[Any] | AsyncIterable[Any]]], AgentTool
 ]: ...
@@ -611,6 +624,7 @@ def tool[**P](
     aggregator: Callable[[], events_.Aggregator[Any, Any, Any]],
     require_approval: bool = False,
     return_type: Any = None,
+    execution_strategy: ExecutionStrategy = "local",
 ) -> Callable[[Callable[P, AsyncIterable[Any]]], AgentTool]: ...
 
 
@@ -619,6 +633,19 @@ def tool[**P](
     *,
     to_model_input: Callable[[Any], Any],
     require_approval: bool = False,
+    return_type: Any = None,
+    execution_strategy: ExecutionStrategy = "local",
+) -> Callable[
+    [Callable[P, Awaitable[Any] | AsyncIterable[Any]]], AgentTool
+]: ...
+
+
+@overload
+def tool[**P](
+    *,
+    execution_strategy: ExecutionStrategy,
+    require_approval: bool = False,
+    to_model_input: Callable[[Any], Any] | None = None,
     return_type: Any = None,
 ) -> Callable[
     [Callable[P, Awaitable[Any] | AsyncIterable[Any]]], AgentTool
@@ -633,6 +660,7 @@ def tool[**P, T, R](
     require_approval: bool = False,
     to_model_input: Callable[[Any], Any] | None = None,
     return_type: Any = None,
+    execution_strategy: ExecutionStrategy = "local",
 ) -> (
     Callable[[Callable[P, AsyncIterable[Any]]], AgentTool]
     | Callable[[Callable[P, Awaitable[R]]], AgentTool]
@@ -658,6 +686,11 @@ def tool[**P, T, R](
     It receives the tool's return value, and is mutually exclusive with
     an aggregator -- a streaming tool derives the model-facing value
     from the aggregator instead.
+
+    ``execution_strategy=`` says where the tool runs: ``"local"`` (the
+    default) where the agent's loop does, ``"remote-enabled"`` in the
+    ambient runner if there is one (see :mod:`ai.remote`), and
+    ``"remote"`` only in the ambient runner, failing without one.
     """
 
     def wrap(fn: Any) -> AgentTool:
@@ -728,6 +761,7 @@ def tool[**P, T, R](
             or _tool_result_type_from_return_annotation(
                 annotated_return_type, effective_aggregator
             ),
+            execution_strategy=execution_strategy,
         )
 
     if fn is None:
@@ -827,9 +861,24 @@ class BoundToolCall:
             try:
                 if parse_error is not None:
                     raise parse_error
+                runner = None
+                strategy = tool.execution_strategy
+                if strategy != "local" and not runner_._in_runner.get():
+                    runner = runner_._runner.get()
+                    if runner is None and strategy == "remote":
+                        raise RuntimeError(
+                            f"tool {tool.name!r} runs only in a runner, and "
+                            f"there is none; see ai.remote.use_runner()"
+                        )
                 # The returned value decides how the tool runs, so a
                 # plain `def` returning a coroutine works too.
-                returned = tool.fn(**kwargs)
+                returned: Any
+                if runner is None:
+                    returned = tool.fn(**kwargs)
+                elif tool.aggregator is None:
+                    returned = _run_remotely(runner, tool, kwargs)
+                else:
+                    returned = _iterate_remotely(runner, tool, kwargs)
                 if isinstance(returned, AsyncIterable):
                     # Streaming tool (e.g. agent-as-a-tool): drain the async
                     # iterable, forward each yielded value to the runtime for
@@ -884,6 +933,41 @@ class BoundToolCall:
             if res.exception is not None:
                 sp.error = telemetry.SpanError.from_exception(res.exception)
             return res
+
+
+async def _run_remotely(
+    runner: runner_.Runner, tool: AgentTool, kwargs: dict[str, Any]
+) -> Any:
+    call = functools.partial(tool.fn, **kwargs)
+    result = await runner.run(_run_in_runner, call)
+    return pydantic.TypeAdapter(tool.return_type or Any).validate_python(result)
+
+
+async def _iterate_remotely(
+    runner: runner_.Runner, tool: AgentTool, kwargs: dict[str, Any]
+) -> AsyncGenerator[Any]:
+    adapter = pydantic.TypeAdapter(_item_type(tool.fn))
+    call = functools.partial(tool.fn, **kwargs)
+    async with runner.iterate(
+        _iterate_in_runner, call, free_running=True
+    ) as items:
+        async for item in items:
+            yield adapter.validate_python(item)
+
+
+async def _run_in_runner(call: Callable[[], Awaitable[Any]]) -> Any:
+    runner_._in_runner.set(True)
+    return await call()
+
+
+async def _iterate_in_runner(
+    call: Callable[[], AsyncIterable[Any]],
+) -> AsyncGenerator[Any]:
+    runner_._in_runner.set(True)
+    source = call()
+    async with util.maybe_aclosing(source):
+        async for item in source:
+            yield item
 
 
 class GatedToolCall:
@@ -1504,6 +1588,15 @@ class Agent:
         """Resolve ToolCallPart(s) into callable ToolCall object(s)."""
         return self._tool_resolver.resolve(tool_part)
 
+    def _loop(self, context: Context) -> AsyncGenerator[events_.AgentEvent]:
+        """Run ``loop``.
+
+        ``run`` calls this rather than ``loop``, so that an agent class
+        can change how its loop is run while leaving ``loop`` for its
+        subclasses to override.
+        """
+        return self.loop(context)
+
     async def loop(
         self, context: Context
     ) -> AsyncGenerator[events_.AgentEvent]:
@@ -1630,7 +1723,7 @@ class Agent:
         async def _events() -> AsyncGenerator[events_.AgentEvent]:
             tracker = events_.RunStateTracker()
             retry_filter = events_._RetryFilter()
-            source = self.loop(context)
+            source = self._loop(context)
             async with contextlib.aclosing(runtime.run(source)) as events:
                 async for event in events:
                     if not retry_filter.feed(event):
