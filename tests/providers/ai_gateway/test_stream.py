@@ -364,16 +364,16 @@ class TestRequest:
                 {"toolChoice": {"type": "tool", "toolName": "a"}},
             ),
             (
-                ai.ToolSelection(["b", "a"], mode=ai.ToolChoiceMode.AUTO),
-                {"activeTools": ["a", "b"], "toolChoice": {"type": "auto"}},
+                ai.ToolSelection(["a"], mode=ai.ToolChoiceMode.AUTO),
+                {"toolChoice": {"type": "auto"}},
             ),
             (
-                ai.ToolSelection(["b", "a"], mode=ai.ToolChoiceMode.NONE),
-                {"activeTools": ["a", "b"], "toolChoice": {"type": "none"}},
+                ai.ToolSelection(["a"], mode=ai.ToolChoiceMode.NONE),
+                {"toolChoice": {"type": "none"}},
             ),
             (
-                ai.ToolSelection(["b", "a"], mode=ai.ToolChoiceMode.REQUIRED),
-                {"activeTools": ["a", "b"], "toolChoice": {"type": "required"}},
+                ai.ToolSelection(["a"], mode=ai.ToolChoiceMode.REQUIRED),
+                {"toolChoice": {"type": "required"}},
             ),
         ],
     )
@@ -412,6 +412,53 @@ class TestRequest:
             for key in ("toolChoice", "activeTools")
             if key in captured_body
         } == expected
+
+    @pytest.mark.parametrize("protocol", [GatewayV3Protocol, GatewayV4Protocol])
+    async def test_tool_selection_sends_only_selected_tools(
+        self, protocol: type[GatewayV3Protocol | GatewayV4Protocol]
+    ) -> None:
+        """The gateway has no tool-subset field, so the SDK filters tools."""
+
+        @ai.tool
+        async def lookup(query: str) -> str:
+            """Search the database."""
+            return "result"
+
+        @ai.tool
+        async def summarize(text: str) -> str:
+            """Summarize the text."""
+            return "summary"
+
+        captured_body: dict[str, Any] = {}
+
+        def handler(req: httpx.Request) -> httpx.Response:
+            captured_body.update(json.loads(req.content))
+            return httpx.Response(
+                200,
+                text=sse(
+                    {"type": "finish", "finishReason": "stop", "usage": {}}
+                ),
+            )
+
+        model = mock_model(httpx.MockTransport(handler)).with_protocol(
+            protocol()
+        )
+        request_params = ai.InferenceRequestParams(
+            tool_calling=ai.ToolCallingParams(
+                tool_choice=ai.ToolSelection(
+                    ["lookup"], mode=ai.ToolChoiceMode.REQUIRED
+                )
+            )
+        )
+        await _collect(
+            model,
+            [user_msg("Hi")],
+            tools=[lookup.tool, summarize.tool],
+            params=request_params,
+        )
+
+        assert [tool["name"] for tool in captured_body["tools"]] == ["lookup"]
+        assert captured_body["toolChoice"] == {"type": "required"}
 
     async def test_protocol_headers(self) -> None:
         captured: dict[str, str] = {}

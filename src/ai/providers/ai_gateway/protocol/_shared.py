@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 import httpx2 as httpx
@@ -136,6 +136,24 @@ def tool_to_wire(tool: types.tools.Tool) -> dict[str, Any]:
         "description": spec.description or "",
         "inputSchema": spec.params,
     }
+
+
+def tools_to_wire(
+    tools: Sequence[types.tools.Tool],
+    params: models.InferenceRequestParams | None,
+) -> list[dict[str, Any]]:
+    """Convert tools to the wire format, keeping only a selected subset.
+
+    The gateway has no tool-subset field, so a ``ToolSelection`` drops the
+    other tools from the request.
+    """
+    tool_calling = params.tool_calling if params is not None else None
+    if tool_calling is not None and isinstance(
+        tool_calling.tool_choice, models.ToolSelection
+    ):
+        selected = tool_calling.tool_choice.tools
+        tools = [tool for tool in tools if tool.name in selected]
+    return [tool_to_wire(tool) for tool in tools]
 
 
 def response_format(output_type: type[Any] | None) -> dict[str, Any] | None:
@@ -395,9 +413,7 @@ def request_options(
                 "toolName": str(tool_choice),
             }
         else:
-            body["activeTools"] = sorted(
-                str(tool) for tool in tool_choice.tools
-            )
+            # The subset itself is applied in `tools_to_wire`.
             body["toolChoice"] = {"type": tool_choice.mode.value}
 
     # provider service
