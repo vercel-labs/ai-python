@@ -139,7 +139,7 @@ class ToolCallingParams:
     """Tool choice policy.
 
     * `ToolChoiceMode.AUTO`: the model can choose whether and what tools to call
-    * `ToolChoiceMode.REQUIED`: the model must call (some) tool
+    * `ToolChoiceMode.REQUIRED`: the model must call (some) tool
     * `ToolChoiceMode.NONE`: the model must not call tools
     * `ToolRef("tool-name")`: the model must call the specified tool
     * `ToolSelection(tools, mode)`: the model should treat the specified set of
