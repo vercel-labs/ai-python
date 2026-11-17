@@ -110,6 +110,7 @@ async def _remote_loop(
     registry = _registries[key] = hooks_.HookRegistry()
     # Left set: this generator's context is the runner's, not the run's.
     hooks_._hook_registry.set(registry)
+    agent_._current_agent.set(agent)
     try:
         loop = agent.loop(context)
         async with contextlib.aclosing(runtime_.run(loop)) as stream:
@@ -170,6 +171,11 @@ class _HookBridge:
             self._tasks[hook.hook_id] = asyncio.create_task(
                 self._pass_on(hook.hook_id, future)
             )
+            early = self._registry._pending_resolutions.pop(hook.hook_id, None)
+            if isinstance(early, BaseException):
+                future.set_exception(early)
+            elif early is not None:
+                future.set_result(early)
         return True
 
     async def _pass_on(

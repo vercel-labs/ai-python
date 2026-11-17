@@ -14,6 +14,7 @@ from collections.abc import (
 )
 from typing import Any, Self, cast
 
+import anyio
 import pydantic
 import pydantic_core
 import pytest
@@ -467,6 +468,37 @@ async def test_overridden_loop(runner: Any, expected: str) -> None:
                 pass
     assert stream.messages[-1].text == f"loop ran {expected}"
     assert _results(stream) == {"locate": f"{expected}:1"}
+
+
+class _SelfNotingAgent(remote.RemoteAgent):
+    async def loop(
+        self, context: ai.Context
+    ) -> AsyncGenerator[events.AgentEvent]:
+        async for event in super().loop(context):
+            yield event
+        context.add(ai.assistant_message(type(ai.current_agent()).__name__))
+
+
+async def test_current_agent_in_the_runner() -> None:
+    model = _script(ai.testing.tool_call(locate, x=1))
+    agent = _SelfNotingAgent(tools=[locate])
+    async with remote.use_runner(_runner()):
+        async with agent.run(model, [ai.user_message("go")]) as stream:
+            async for _ in stream:
+                pass
+    assert stream.messages[-1].text == "_SelfNotingAgent"
+
+
+async def test_hook_resolved_before_it_is_pending() -> None:
+    call = ai.testing.tool_call(gated, x=1)
+    agent = remote.RemoteAgent(tools=[gated])
+    async with remote.use_runner(_runner()):
+        async with agent.run(_script(call), [ai.user_message("go")]) as stream:
+            ai.resolve_hook(f"approve_{call.tool_call_id}", {"granted": True})
+            with anyio.fail_after(5):
+                async for _ in stream:
+                    pass
+    assert _results(stream) == {"gated": "runner:1"}
 
 
 def test_with_resolved_key(monkeypatch: pytest.MonkeyPatch) -> None:
