@@ -2,7 +2,6 @@
 
 import asyncio
 import dataclasses
-import subprocess
 import tempfile
 from collections.abc import AsyncGenerator
 
@@ -35,26 +34,31 @@ async def until_passes(
                     if not isinstance(event, ai.events.ReasoningDelta):
                         yield event
 
-            run = await asyncio.to_thread(
-                lambda: subprocess.run(
-                    ["python3", "fizzbuzz.py"],
-                    cwd=harness.cwd,
-                    capture_output=True,
-                    text=True,
-                    timeout=30,
-                )
+            process = await asyncio.create_subprocess_exec(
+                "python3",
+                "fizzbuzz.py",
+                cwd=harness.cwd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
             )
-            output = run.stdout.strip()
-            passed = run.returncode == 0 and output == EXPECTED
-            yield Checked(attempt, passed, output or run.stderr.strip())
+            try:
+                async with asyncio.timeout(30):
+                    stdout, stderr = await process.communicate()
+            except TimeoutError:
+                process.kill()
+                raise
+            output = stdout.decode().strip()
+            failure = stderr.decode().strip()
+            passed = process.returncode == 0 and output == EXPECTED
+            yield Checked(attempt, passed, output or failure)
             if passed:
                 return
 
             prompt = (
                 "`python3 fizzbuzz.py` should print exactly:\n"
                 + EXPECTED
-                + f"\n\nIt printed (exit code {run.returncode}):\n"
-                + (output or run.stderr.strip())
+                + f"\n\nIt printed (exit code {process.returncode}):\n"
+                + (output or failure)
                 + "\n\nFix fizzbuzz.py."
             )
 

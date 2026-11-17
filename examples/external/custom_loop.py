@@ -2,7 +2,6 @@
 
 import asyncio
 import pathlib
-import subprocess
 import tempfile
 from collections.abc import AsyncGenerator
 
@@ -39,22 +38,26 @@ class CodeThenReview(ai.Agent):
         # for it. Only the external harness's answer joins the agent's context,
         # not its tool calls: they name tools that this model does not have.
         source = pathlib.Path(harness.cwd, "hello.py").read_text()
-        run = await asyncio.to_thread(
-            lambda: subprocess.run(
-                ["python3", "hello.py"],
-                cwd=harness.cwd,
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
+        process = await asyncio.create_subprocess_exec(
+            "python3",
+            "hello.py",
+            cwd=harness.cwd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
         )
+        try:
+            async with asyncio.timeout(30):
+                stdout, _ = await process.communicate()
+        except TimeoutError:
+            process.kill()
+            raise
         context.add(ai.assistant_message(work.text))
         context.add(
             ai.user_message(
                 "You are the reviewer. hello.py contains:\n"
                 + source
-                + f"\nRunning it printed: {run.stdout.strip()!r} "
-                + f"(exit code {run.returncode}).\n"
+                + f"\nRunning it printed: {stdout.decode().strip()!r} "
+                + f"(exit code {process.returncode}).\n"
                 + "In one sentence: does it meet the task? Start with YES "
                 + "or NO."
             )
