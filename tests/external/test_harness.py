@@ -744,19 +744,23 @@ async def test_close_ends_readers_and_keeps_the_state() -> None:
         await anext(session.events())
 
 
-async def test_start_and_close_are_a_pair() -> None:
+async def test_start_needs_an_open_session() -> None:
     harness = fakes.fake(fakes.echo)
     session = harness.session()
-    await session.start()  # no block
-    assert len(harness._wires) == 1
-    await session.send(ai.user_message("hi"))
-    await drain(session.events())
-    await session.close()
+    with pytest.raises(external.ExternalHarnessError, match="not open"):
+        await session.start()  # the block is the only way to open
+    assert harness._wires == []
+    async with session:
+        assert harness._wires == []
+        await session.start()  # the CLI starts now, not with the first use
+        assert len(harness._wires) == 1
+        await session.send(ai.user_message("hi"))
+        await drain(session.events())
     assert harness.wire.closed
-    await session.start()  # open again: the same CLI session
-    assert harness.wire.started is not None
-    assert harness.wire.started["session_id"] == "s1"
-    await session.close()
+    async with session:  # open again: the same CLI session
+        await session.start()
+        assert harness.wire.started is not None
+        assert harness.wire.started["session_id"] == "s1"
 
 
 async def test_a_session_is_open_once_in_a_context() -> None:
@@ -773,6 +777,9 @@ async def test_a_session_is_open_once_in_a_context() -> None:
 async def test_sessions_of_one_harness_do_not_nest() -> None:
     harness = fakes.fake(fakes.echo)
     async with harness.session() as session:
+        with pytest.raises(external.ExternalHarnessError, match="open already"):
+            async with session:
+                pass
         with pytest.raises(external.ExternalHarnessError, match="do not nest"):
             async with harness.session():
                 pass

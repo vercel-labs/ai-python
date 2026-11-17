@@ -43,10 +43,7 @@ METADATA_KEY = "external"
 NEW_MESSAGE = "No result: a new user message came before the result."
 INTERRUPTED = "No result: the turn was interrupted."
 CLOSED = "No result: the external harness closed."
-NOT_OPEN = (
-    "the session is not open: use `async with harness.session()` "
-    "or `await session.start()`"
-)
+NOT_OPEN = "the session is not open: use `async with harness.session()`"
 
 
 # The sessions that are open in this context, the newest last. A model call of
@@ -109,7 +106,7 @@ class Session:
             async for event in session.events():
                 ...
 
-    `start()` and `close()` do the same without a block. While the session is
+    The block is the only way to open the session. While the session is
     open, the external harness's model calls (`ai.stream(harness, messages)`,
     `ai.Agent(...).run(harness, messages)`) run on it; without an open session
     they raise. This applies to the task that opened the session and to the
@@ -152,16 +149,9 @@ class Session:
         self._stream_lock = asyncio.Lock()
 
     async def __aenter__(self) -> Self:
-        await self._mark_open()
-        return self
-
-    async def __aexit__(self, *exc_info: object) -> None:
-        await self.close()
-
-    async def _mark_open(self) -> None:
         """Open the session: the external harness's model calls run on it."""
         if self._open:
-            return
+            raise errors.ExternalHarnessError("the session is open already")
         opened = [s for s in _OPEN.get() if s._open]
         if self.id is not None and any(s.id == self.id for s in opened):
             raise errors.ExternalHarnessError(
@@ -176,15 +166,21 @@ class Session:
             )
         self._open = True
         _OPEN.set((*opened, self))
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> None:
+        await self.close()
 
     async def start(self) -> None:
-        """Open the session and start the CLI now. `close()` ends both.
+        """Start the CLI now, in an open session.
 
-        With `id`, continue that CLI session. Without it, start a new one,
-        seeded with `messages` (lossy). Started already: nothing happens.
-        After the CLI stopped, start it again.
+        Without this call, the CLI starts with the first `send()` or the first
+        model call. With `id`, continue that CLI session. Without it, start a
+        new one, seeded with `messages` (lossy). Started already: nothing
+        happens. After the CLI stopped, start it again.
         """
-        await self._mark_open()
+        if not self._open:
+            raise errors.ExternalHarnessError(NOT_OPEN)
         await self._start()
 
     async def _start(self) -> None:
@@ -297,7 +293,8 @@ class Session:
     async def close(self) -> None:
         """Stop the CLI and close the session. `id` and `messages` stay.
 
-        A second close does nothing. `start()` opens the session again.
+        A second close does nothing. `async with session` opens the session
+        again.
         """
         await self._stop_cli()
         self._open = False
