@@ -27,7 +27,9 @@ async def main() -> None:
 
         # ... later, another process entirely ...
 
+        # The base class loads the class that was saved.
         again = ai.external.ExternalHarness.model_validate_json(saved)
+        assert isinstance(again, ai.external.ClaudeCode)
 
         # The CLI has the conversation: send what is new. A session block
         # keeps the CLI alive between the calls.

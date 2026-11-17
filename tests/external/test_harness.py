@@ -840,6 +840,21 @@ async def test_a_harness_is_plain_data() -> None:
         external.ExternalHarness(harness_class_id="codex")
 
 
+@pytest.mark.parametrize(
+    "harness_class",
+    [external.ClaudeCode, external.Codex, external.Fx, external.Pi],
+)
+def test_saved_json_loads_as_the_saved_class(
+    harness_class: type[external.ExternalHarness],
+) -> None:
+    harness = harness_class(cwd="/w", model_name="m")
+    again = external.ExternalHarness.model_validate_json(
+        harness.model_dump_json()
+    )
+    assert type(again) is harness_class
+    assert again == harness
+
+
 async def test_a_seeded_session_starts_with_its_past() -> None:
     harness = fakes.fake(fakes.echo)
     history = [ai.user_message("one"), ai.assistant_message("done")]
