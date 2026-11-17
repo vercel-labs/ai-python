@@ -924,6 +924,46 @@ async def test_an_agent_context_keeps_the_harness() -> None:
 # -- telemetry ----------------------------------------------------------------
 
 
+async def test_stream_reply_is_in_history_while_telemetry_is_pending() -> None:
+    telemetry_started = asyncio.Event()
+    release_telemetry = asyncio.Event()
+
+    class BlockingSink:
+        async def on_push(self, span: ai.experimental_telemetry.Span) -> None:
+            if (
+                isinstance(span.data, external.ExternalHarnessMessageSpanData)
+                and span.ended_at is not None
+            ):
+                telemetry_started.set()
+                await release_telemetry.wait()
+
+    harness = fakes.fake(fakes.echo)
+    user = ai.user_message("one")
+
+    async def reply() -> m.Message:
+        async with ai.stream(harness, [user]) as stream:
+            async for _ in stream:
+                pass
+        return stream.message
+
+    async with ai.experimental_telemetry.use_sink(BlockingSink()), harness:
+        task = asyncio.create_task(reply())
+        try:
+            async with asyncio.timeout(5):
+                message = await asyncio.shield(task)
+            assert telemetry_started.is_set()
+            assert [msg.id for msg in harness.session.messages] == [
+                user.id,
+                message.id,
+            ]
+        finally:
+            release_telemetry.set()
+            if not task.done():
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+
+
 async def test_sessions_messages_and_cli_tools_have_spans() -> None:
     def reply(msg: m.Message) -> list[Any]:
         return [

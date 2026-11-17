@@ -874,6 +874,16 @@ class _CliRun:
         message = self.hydrator.message
         self.hydrator = None
         self.open.clear()
+        # Keep history current when readers receive StreamEnd. A telemetry
+        # push can yield to them, so publish the messages first.
+        await self._append_message(message)
+        inputs, self.inputs = self.inputs, []
+        if reason == "tool_call":
+            # The tool results must follow the calls: steers wait for them.
+            self.held_items[:0] = [_wire.Accepted(m) for m in inputs]
+        else:
+            for m in inputs:
+                await self._append_message(m)
         for span in self.tool_spans.values():
             await span.stamp_end().push()
         self.tool_spans.clear()
@@ -883,14 +893,6 @@ class _CliRun:
             self.message_span.data.finish_reason = reason
             await self.message_span.stamp_end(error=error).push()
             self.message_span = None
-        await self._append_message(message)
-        inputs, self.inputs = self.inputs, []
-        if reason == "tool_call":
-            # The tool results must follow the calls: steers wait for them.
-            self.held_items[:0] = [_wire.Accepted(m) for m in inputs]
-        else:
-            for m in inputs:
-                await self._append_message(m)
 
     def _emit(self, event: events_.Event) -> None:
         assert self.hydrator is not None
