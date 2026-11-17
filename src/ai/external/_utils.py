@@ -38,6 +38,8 @@ has the context, and the rule for what becomes what is the same everywhere:
 from __future__ import annotations
 
 import base64
+import os
+import pathlib
 import warnings
 from collections.abc import Sequence
 from typing import Any
@@ -153,6 +155,14 @@ def get_builtin_result_event(
 
 
 # -- seeding a CLI with a past -------------------------------------------------
+
+
+def write_seed_transcript(path: pathlib.Path, text: str) -> None:
+    """Create a private transcript without overwriting an existing path."""
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(text)
 
 
 def warn_unsupported_files(

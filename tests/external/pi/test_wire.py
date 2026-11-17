@@ -637,6 +637,8 @@ async def test_a_new_session_is_seeded_with_the_past(
     assert session_id is not None
     assert session_id == server.session_id
     path = session_file(agent_dir, session_id)
+    assert path.stat().st_mode & 0o777 == 0o600
+    assert path.parent.stat().st_mode & 0o777 == 0o700
     assert path.parent.name.startswith("--")
     entries = [json.loads(line) for line in path.read_text().splitlines()]
     header = entries[0]

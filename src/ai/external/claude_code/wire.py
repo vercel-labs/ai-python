@@ -185,12 +185,7 @@ class ClaudeCodeWire:
         text = "".join(
             json.dumps(r, separators=(",", ":")) + "\n" for r in records
         )
-
-        def write() -> None:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(text)
-
-        await asyncio.to_thread(write)
+        await asyncio.to_thread(_utils.write_seed_transcript, path, text)
         return session_id
 
     async def _require_known(self, session_id: str) -> None:

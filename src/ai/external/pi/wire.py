@@ -584,8 +584,9 @@ class PiWire:
             parent = entry_id
         name = stamp.replace(":", "-").replace(".", "-")
         path = self._session_dir() / f"{name}_{session_id}.jsonl"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("".join(json.dumps(line) + "\n" for line in lines))
+        _utils.write_seed_transcript(
+            path, "".join(json.dumps(line) + "\n" for line in lines)
+        )
 
 
 class _Run:

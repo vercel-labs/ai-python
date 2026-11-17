@@ -398,6 +398,8 @@ async def test_a_new_session_is_seeded_from_the_past(
     assert options.resume == harness.session.id
     key = sdk.project_key_for_directory(cwd)
     path = config / "projects" / key / f"{harness.session.id}.jsonl"
+    assert path.stat().st_mode & 0o777 == 0o600
+    assert path.parent.stat().st_mode & 0o777 == 0o700
     records = [json.loads(line) for line in path.read_text().splitlines()]
     assert [(r["type"], r["message"]["content"]) for r in records] == [
         ("user", [{"type": "text", "text": "one"}]),
