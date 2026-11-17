@@ -313,8 +313,13 @@ async def test_start_connects_with_the_bridge_and_no_approvals(
         await harness.session.start()
         options = cli.client.options
         assert harness.session._run is not None
+        bridge = harness.session._run.bridge
         assert options.mcp_servers == {
-            "ai_sdk": {"type": "http", "url": harness.session._run.bridge.url}
+            "ai_sdk": {
+                "type": "http",
+                "url": bridge.url,
+                "headers": {"Authorization": "Bearer ${AI_PYTHON_MCP_TOKEN}"},
+            }
         }
         assert options.permission_mode == "bypassPermissions"
         assert options.can_use_tool is None
@@ -331,6 +336,7 @@ async def test_start_connects_with_the_bridge_and_no_approvals(
         assert options.env == {
             "MCP_TOOL_TIMEOUT": "86400000",
             "ANTHROPIC_API_KEY": "k",
+            "AI_PYTHON_MCP_TOKEN": bridge.token,
         }
         assert options.model == "haiku"
         assert options.tools == ["Read"]
@@ -431,14 +437,20 @@ async def test_bridge_calls_are_ai_tool_calls_not_builtin(
 
     async def call_bridge() -> None:
         # The CLI calls the bridge over MCP, as Claude Code does.
-        url = cli.client.options.mcp_servers["ai_sdk"]["url"]
+        options = cli.client.options
+        config = options.mcp_servers["ai_sdk"]
         reply = await fakes.mcp_call(
-            url,
+            config["url"],
             {
                 "jsonrpc": "2.0",
                 "id": 1,
                 "method": "tools/call",
                 "params": {"name": "lookup", "arguments": {"word": "heron"}},
+            },
+            {
+                "Authorization": config["headers"]["Authorization"].replace(
+                    "${AI_PYTHON_MCP_TOKEN}", options.env["AI_PYTHON_MCP_TOKEN"]
+                )
             },
         )
         answers.append(reply["result"])

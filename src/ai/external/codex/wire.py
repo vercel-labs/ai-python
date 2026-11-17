@@ -92,6 +92,7 @@ class CodexWire:
         *,
         session_id: str | None,
         bridge_url: str,
+        bridge_token: str,
         instructions: str | None,
         seed: list[messages_.Message],
     ) -> str:
@@ -107,15 +108,18 @@ class CodexWire:
             env=harness.provider.env,
         )
         config = {
-            f"mcp_servers.{_bridge.SERVER_NAME}.url": bridge_url,
             # An `ai` tool can take longer than Codex's default (60 seconds).
             f"mcp_servers.{_bridge.SERVER_NAME}.tool_timeout_sec": 24 * 3600,
             **harness.config,
+            f"mcp_servers.{_bridge.SERVER_NAME}.url": bridge_url,
+            f"mcp_servers.{_bridge.SERVER_NAME}.bearer_token_env_var": (
+                _bridge.TOKEN_ENV
+            ),
         }
         self.process = await _process.spawn(
             [executable, "app-server", *config_args(config)],
             cwd=self.cwd,
-            env=harness.provider.env,
+            env={**harness.provider.env, _bridge.TOKEN_ENV: bridge_token},
         )
         self.peer = jsonrpc.JsonRpcPeer(self.process, kind=KIND)
         self.peer.start(

@@ -96,11 +96,13 @@ class FakeWire:
         *,
         session_id: str | None,
         bridge_url: str,
+        bridge_token: str,
         instructions: str | None,
         seed: list[m.Message],
     ) -> str:
         self.started = {
             "bridge_url": bridge_url,
+            "bridge_token": bridge_token,
             "instructions": instructions,
             "seed": seed,
             "session_id": session_id,
@@ -132,6 +134,7 @@ class FakeWire:
                 "method": "tools/call",
                 "params": {"name": call.name, "arguments": call.arguments},
             },
+            {"Authorization": f"Bearer {self.started['bridge_token']}"},
         )
         result = reply["result"]
         answer = (result["content"][0]["text"], bool(result["isError"]))
@@ -222,15 +225,20 @@ class FakeProcess:
         return "exit code 0; no stderr"
 
 
-async def mcp_call(url: str, payload: dict[str, Any]) -> dict[str, Any]:
+async def mcp_call(
+    url: str, payload: dict[str, Any], headers: dict[str, str]
+) -> dict[str, Any]:
     """POST one JSON-RPC message to the bridge; return the JSON reply."""
     parts = urllib.parse.urlsplit(url)
     reader, writer = await asyncio.open_connection(parts.hostname, parts.port)
     body = json.dumps(payload).encode()
+    extra = "".join(f"{key}: {value}\r\n" for key, value in headers.items())
     writer.write(
-        f"POST {parts.path} HTTP/1.1\r\nHost: x\r\n"
-        f"Content-Type: application/json\r\nContent-Length: {len(body)}\r\n"
-        "\r\n".encode()
+        (
+            f"POST {parts.path} HTTP/1.1\r\nHost: {parts.netloc}\r\n"
+            f"Content-Type: application/json\r\nContent-Length: {len(body)}\r\n"
+            f"{extra}\r\n"
+        ).encode()
         + body
     )
     await writer.drain()

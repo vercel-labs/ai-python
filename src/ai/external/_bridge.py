@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import secrets
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
@@ -31,6 +32,7 @@ if TYPE_CHECKING:
 SERVER_NAME = "ai_sdk"
 
 PROTOCOL_VERSION = "2025-06-18"
+TOKEN_ENV = "AI_PYTHON_MCP_TOKEN"
 
 # `on_call(name, arguments)` returns `(result, is_error)`. A result that is
 # not a `str` goes to the CLI as JSON text.
@@ -40,6 +42,7 @@ OnCall = Callable[[str, dict[str, Any]], Awaitable[tuple[Any, bool]]]
 class Bridge:
     def __init__(self, on_call: OnCall) -> None:
         self._on_call = on_call
+        self.token = secrets.token_urlsafe(32)
         self._tools: dict[str, tools_.Tool] = {}
         self._server: asyncio.Server | None = None
         self._connections: set[asyncio.Task[None]] = set()
@@ -92,12 +95,27 @@ class Bridge:
         task = asyncio.current_task()
         assert task is not None
         self._connections.add(task)
+        host, port = writer.get_extra_info("sockname")[:2]
+        authority = f"{host}:{port}"
+        authorization = f"Bearer {self.token}".encode("ascii")
         try:
             while True:
-                request = await _read_request(reader)
+                request = await _read_head(reader)
                 if request is None:
                     return
-                method, body = request
+                method, headers = request
+                # The native clients use the literal loopback authority and
+                # send no Origin. Neither check replaces client authentication.
+                if headers.get("host") != authority or "origin" in headers:
+                    await _respond(writer, 403, None)
+                    return
+                if not secrets.compare_digest(
+                    headers.get("authorization", "").encode("latin-1"),
+                    authorization,
+                ):
+                    await _respond(writer, 401, None)
+                    return
+                body = await _read_body(reader, headers)
                 if method != "POST":
                     # No SSE stream to offer, and a session needs no teardown.
                     status = 200 if method == "DELETE" else 405
@@ -191,10 +209,10 @@ def _error(rid: Any, code: int, message: str) -> dict[str, Any]:
     }
 
 
-async def _read_request(
+async def _read_head(
     reader: asyncio.StreamReader,
-) -> tuple[str, bytes] | None:
-    """Read one HTTP/1.1 request. None when the client hung up."""
+) -> tuple[str, dict[str, str]] | None:
+    """Read the HTTP head before accepting a body."""
     try:
         head = await reader.readuntil(b"\r\n\r\n")
     except asyncio.IncompleteReadError:
@@ -205,7 +223,16 @@ async def _read_request(
     for line in lines[1:]:
         if ":" in line:
             key, value = line.split(":", 1)
-            headers[key.strip().lower()] = value.strip()
+            key = key.strip().lower()
+            if key in headers and key in ("host", "authorization", "origin"):
+                return None
+            headers[key] = value.strip()
+    return method, headers
+
+
+async def _read_body(
+    reader: asyncio.StreamReader, headers: dict[str, str]
+) -> bytes:
     if headers.get("transfer-encoding", "").lower() == "chunked":
         body = b""
         while True:
@@ -215,15 +242,21 @@ async def _read_request(
                 break
             body += await reader.readexactly(size)
             await reader.readexactly(2)
-        return method, body
+        return body
     length = int(headers.get("content-length", "0") or 0)
-    return method, await reader.readexactly(length) if length else b""
+    return await reader.readexactly(length) if length else b""
 
 
 async def _respond(
     writer: asyncio.StreamWriter, status: int, payload: Any
 ) -> None:
-    reason = {200: "OK", 202: "Accepted", 405: "Method Not Allowed"}[status]
+    reason = {
+        200: "OK",
+        202: "Accepted",
+        401: "Unauthorized",
+        403: "Forbidden",
+        405: "Method Not Allowed",
+    }[status]
     body = b"" if payload is None else json.dumps(payload).encode()
     head = [f"HTTP/1.1 {status} {reason}", f"Content-Length: {len(body)}"]
     if payload is not None:

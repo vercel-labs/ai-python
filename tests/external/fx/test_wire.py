@@ -443,11 +443,17 @@ async def test_start_gives_the_bridge_and_settings(
             {"type": "text", "text": "Be brief."}
         ]
         (bridge,) = new["params"]["mcpServers"]
+        assert harness.session._run is not None
         assert bridge == {
             "type": "http",
             "name": "ai_sdk",
             "url": bridge["url"],
-            "headers": [],
+            "headers": [
+                {
+                    "name": "Authorization",
+                    "value": f"Bearer {harness.session._run.bridge.token}",
+                }
+            ],
         }
         assert bridge["url"].startswith("http://127.0.0.1:")
     assert server.process.terminated
@@ -595,7 +601,7 @@ async def test_bridge_calls_are_ai_tool_calls_not_builtin(
 
     async def call_bridge() -> None:
         await server.wait_for("session/prompt")
-        bridge = server.sent("session/new")[0]["params"]["mcpServers"][0]["url"]
+        bridge = server.sent("session/new")[0]["params"]["mcpServers"][0]
         server.says(
             update(
                 "tool_call",
@@ -616,13 +622,14 @@ async def test_bridge_calls_are_ai_tool_calls_not_builtin(
             )
         )
         reply = await fakes.mcp_call(
-            bridge,
+            bridge["url"],
             {
                 "jsonrpc": "2.0",
                 "id": 1,
                 "method": "tools/call",
                 "params": {"name": "lookup", "arguments": {}},
             },
+            {h["name"]: h["value"] for h in bridge["headers"]},
         )
         assert "PELICAN" in reply["result"]["content"][0]["text"]
         server.says(
@@ -1448,6 +1455,7 @@ async def test_wire_start_omits_empty_instructions_and_close_is_safe_twice(
     await wire.start(
         session_id=None,
         bridge_url="http://127.0.0.1:1/mcp",
+        bridge_token="test",
         instructions="",
         seed=[],
     )

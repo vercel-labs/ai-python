@@ -364,10 +364,12 @@ async def test_start_runs_pi_with_the_extension_and_the_bridge(
         env = kwargs["env"]
         assert env["ANTHROPIC_API_KEY"] == "k"
         assert harness.session._run is not None
+        bridge = harness.session._run.bridge
         assert json.loads(env[wire_.CONFIG_VAR]) == {
             "mcp": {
                 "ai_sdk": {
-                    "url": harness.session._run.bridge.url,
+                    "url": bridge.url,
+                    "headers": {"Authorization": f"Bearer {bridge.token}"},
                     "exposure": "direct",
                     "timeout": 86400,
                 }
@@ -420,15 +422,16 @@ async def test_bridge_calls_are_ai_tool_calls_not_builtin(
     async def call_bridge(command: dict[str, Any]) -> None:
         # pi calls the MCP server the extension registered.
         env = server.spawned[-1][1]["env"]
-        url = json.loads(env[wire_.CONFIG_VAR])["mcp"]["ai_sdk"]["url"]
+        bridge = json.loads(env[wire_.CONFIG_VAR])["mcp"]["ai_sdk"]
         reply = await fakes.mcp_call(
-            url,
+            bridge["url"],
             {
                 "jsonrpc": "2.0",
                 "id": 1,
                 "method": "tools/call",
                 "params": {"name": "lookup", "arguments": {"word": "heron"}},
             },
+            bridge["headers"],
         )
         answers.append(reply)
         text = reply["result"]["content"][0]["text"]

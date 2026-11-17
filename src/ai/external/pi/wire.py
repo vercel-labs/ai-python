@@ -95,6 +95,7 @@ class PiWire:
         *,
         session_id: str | None,
         bridge_url: str,
+        bridge_token: str,
         instructions: str | None,
         seed: list[messages_.Message],
     ) -> str:
@@ -146,6 +147,7 @@ class PiWire:
         argv += harness.args
         bridge = {
             "url": bridge_url,
+            "headers": {"Authorization": f"Bearer {bridge_token}"},
             # pi's default exposure is "codemode": the model reaches MCP
             # tools through a script, as nested calls. "direct" declares
             # each tool to the model, and the first prompt waits until the

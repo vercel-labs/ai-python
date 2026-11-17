@@ -76,6 +76,7 @@ class FxWire:
         *,
         session_id: str | None,
         bridge_url: str,
+        bridge_token: str,
         instructions: str | None,
         seed: list[messages_.Message],
     ) -> str:
@@ -125,7 +126,12 @@ class FxWire:
                         "type": "http",
                         "name": _bridge.SERVER_NAME,
                         "url": bridge_url,
-                        "headers": [],
+                        "headers": [
+                            {
+                                "name": "Authorization",
+                                "value": f"Bearer {bridge_token}",
+                            }
+                        ],
                     }
                 ],
             }

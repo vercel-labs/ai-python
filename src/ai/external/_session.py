@@ -510,6 +510,7 @@ class _CliRun:
             session.id = await self.wire.start(
                 session_id=session.id,
                 bridge_url=self.bridge.url,
+                bridge_token=self.bridge.token,
                 instructions=instructions or None,
                 seed=seed,
             )

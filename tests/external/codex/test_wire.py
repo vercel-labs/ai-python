@@ -192,11 +192,19 @@ async def test_start_runs_app_server_with_the_bridge(
         (argv, kwargs) = server.spawned[0]
         assert argv[:2] == ["/custom/codex", "app-server"]
         assert harness.session._run is not None
-        bridge = harness.session._run.bridge.url
-        assert f'mcp_servers.ai_sdk.url="{bridge}"' in argv
+        bridge = harness.session._run.bridge
+        assert f'mcp_servers.ai_sdk.url="{bridge.url}"' in argv
+        assert (
+            'mcp_servers.ai_sdk.bearer_token_env_var="AI_PYTHON_MCP_TOKEN"'
+            in argv
+        )
+        assert all(bridge.token not in arg for arg in argv)
         assert "mcp_servers.ai_sdk.tool_timeout_sec=86400" in argv
         assert 'model_reasoning_effort="high"' in argv
-        assert kwargs == {"cwd": cwd, "env": {"CODEX_HOME": "/h"}}
+        assert kwargs == {
+            "cwd": cwd,
+            "env": {"CODEX_HOME": "/h", "AI_PYTHON_MCP_TOKEN": bridge.token},
+        }
         (start,) = server.sent("thread/start")
         assert start["params"] == {
             "cwd": cwd,

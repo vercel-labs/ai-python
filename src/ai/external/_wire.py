@@ -74,6 +74,7 @@ class Wire(Protocol):
         *,
         session_id: str | None,
         bridge_url: str,
+        bridge_token: str,
         instructions: str | None,
         seed: list[messages_.Message],
     ) -> str:

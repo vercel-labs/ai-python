@@ -70,6 +70,7 @@ class ClaudeCodeWire:
         *,
         session_id: str | None,
         bridge_url: str,
+        bridge_token: str,
         instructions: str | None,
         seed: list[messages_.Message],
     ) -> str:
@@ -102,7 +103,15 @@ class ClaudeCodeWire:
             # into the conversation; `send()` uses that as the acceptance.
             "extra_args": {"replay-user-messages": None},
             "mcp_servers": {
-                _bridge.SERVER_NAME: {"type": "http", "url": bridge_url}
+                _bridge.SERVER_NAME: {
+                    "type": "http",
+                    "url": bridge_url,
+                    # The SDK passes these settings on the command line.
+                    # Let Claude expand the token from its environment.
+                    "headers": {
+                        "Authorization": f"Bearer ${{{_bridge.TOKEN_ENV}}}"
+                    },
+                }
             },
             # External harnesses do not ask for approval. No gate at all: an
             # always-allow callback froze the agent at its next tool call once
@@ -117,6 +126,7 @@ class ClaudeCodeWire:
         options["env"] = {
             "MCP_TOOL_TIMEOUT": str(24 * 3600 * 1000),
             **harness.provider.env,
+            _bridge.TOKEN_ENV: bridge_token,
         }
         if harness.model_name:
             options["model"] = harness.model_name
