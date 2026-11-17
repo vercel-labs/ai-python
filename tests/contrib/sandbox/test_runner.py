@@ -51,6 +51,15 @@ async def stuck() -> AsyncGenerator[int]:
         await asyncio.sleep(3600)
 
 
+async def slow_to_close() -> AsyncGenerator[int]:
+    try:
+        yield 1
+        await asyncio.sleep(3600)
+    finally:
+        await asyncio.sleep(0.2)
+        _closed.append("closed")
+
+
 def fast(n: int) -> Generator[int]:
     for i in range(n):
         _produced[0] += 1
@@ -178,6 +187,16 @@ async def test_close_times_out(monkeypatch: pytest.MonkeyPatch) -> None:
         with anyio.fail_after(5), pytest.raises(TimeoutError):
             await it.aclose()
         assert await w.run(int, "7") == 7
+
+
+async def test_cancel_while_stepping_into_slow_cleanup() -> None:
+    async with _runner() as w:
+        with anyio.move_on_after(0.3) as scope:
+            async with w.iterate(slow_to_close) as it:
+                async for _ in it:
+                    pass
+        assert scope.cancelled_caught
+        assert await w.run(closed) == ["closed"]
 
 
 async def test_cancel_while_waiting() -> None:

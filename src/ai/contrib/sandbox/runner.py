@@ -156,6 +156,7 @@ class _Server:
         self._tasks: dict[int, asyncio.Task[None]] = {}
         self._iterators: dict[int, Iterator[Any] | AsyncIterator[Any]] = {}
         self._credits: dict[int, _Credits] = {}
+        self._advancing: dict[int, asyncio.Task[Any]] = {}
         self._shutting_down = False
         task = asyncio.current_task()
         assert task is not None
@@ -305,7 +306,7 @@ class _Server:
             case ("close", iter_id):
                 closing: Any = self._iterators.pop(iter_id, None)
                 if hasattr(closing, "aclose"):
-                    return "await", closing.aclose()
+                    return "await", self._aclose(iter_id, closing)
                 if hasattr(closing, "close"):
                     closing.close()
                 return "value", None
@@ -329,6 +330,9 @@ class _Server:
     async def _anext(
         self, iter_id: int, it: AsyncIterator[Any]
     ) -> tuple[str, Any]:
+        task = asyncio.current_task()
+        assert task is not None
+        self._advancing[iter_id] = task
         try:
             return "yield", await it.__anext__()
         except StopAsyncIteration:
@@ -337,6 +341,15 @@ class _Server:
         except BaseException:
             self._iterators.pop(iter_id, None)
             raise
+        finally:
+            del self._advancing[iter_id]
+
+    async def _aclose(self, iter_id: int, it: Any) -> None:
+        # A cancelled __anext__ may still be cleaning up, and aclose()
+        # raises while it runs.
+        if advancing := self._advancing.get(iter_id):
+            await asyncio.wait([advancing])
+        await it.aclose()
 
 
 class _Credits:
