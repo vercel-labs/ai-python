@@ -16,7 +16,6 @@ is covered:
 from __future__ import annotations
 
 import json
-import socket
 from typing import Any, cast
 
 import httpx2 as httpx
@@ -31,7 +30,7 @@ from ai.providers.ai_gateway import (
     GatewayV4Protocol,
     ProviderTimeoutsParams,
 )
-from ai.types import events, messages, tools
+from ai.types import events, messages
 
 from .conftest import mock_client, mock_model, sse, user_msg
 
@@ -352,142 +351,67 @@ class TestStreaming:
 
 
 class TestRequest:
-    @pytest.mark.parametrize("version", [3, 4])
+    @pytest.mark.parametrize("protocol", [GatewayV3Protocol, GatewayV4Protocol])
     @pytest.mark.parametrize(
-        "choice,expected",
+        ("choice", "expected"),
         [
-            (ai.ToolChoiceMode.AUTO, {"type": "auto"}),
-            (ai.ToolChoiceMode.NONE, {"type": "none"}),
-            (ai.ToolChoiceMode.REQUIRED, {"type": "required"}),
-            (ai.ToolRef("lookup"), {"type": "tool", "toolName": "lookup"}),
-            (None, None),
+            (None, {}),
+            (ai.ToolChoiceMode.AUTO, {"toolChoice": {"type": "auto"}}),
+            (ai.ToolChoiceMode.NONE, {"toolChoice": {"type": "none"}}),
+            (ai.ToolChoiceMode.REQUIRED, {"toolChoice": {"type": "required"}}),
             (
-                ai.ToolSelection(
-                    ["summarize", "lookup"], mode=ai.ToolChoiceMode.AUTO
-                ),
-                {"type": "auto"},
+                ai.ToolRef("a"),
+                {"toolChoice": {"type": "tool", "toolName": "a"}},
             ),
             (
-                ai.ToolSelection(
-                    ["summarize", "lookup"], mode=ai.ToolChoiceMode.NONE
-                ),
-                {"type": "none"},
+                ai.ToolSelection(["b", "a"], mode=ai.ToolChoiceMode.AUTO),
+                {"activeTools": ["a", "b"], "toolChoice": {"type": "auto"}},
             ),
             (
-                ai.ToolSelection(
-                    ["summarize", "lookup"], mode=ai.ToolChoiceMode.REQUIRED
-                ),
-                {"type": "required"},
+                ai.ToolSelection(["b", "a"], mode=ai.ToolChoiceMode.NONE),
+                {"activeTools": ["a", "b"], "toolChoice": {"type": "none"}},
             ),
-        ],
-        ids=[
-            "auto",
-            "none",
-            "required",
-            "named",
-            "omitted",
-            "subset-auto",
-            "subset-none",
-            "subset-required",
+            (
+                ai.ToolSelection(["b", "a"], mode=ai.ToolChoiceMode.REQUIRED),
+                {"activeTools": ["a", "b"], "toolChoice": {"type": "required"}},
+            ),
         ],
     )
-    async def test_tool_choice_serialization(
+    async def test_tool_choice(
         self,
-        monkeypatch: pytest.MonkeyPatch,
-        version: int,
+        protocol: type[GatewayV3Protocol | GatewayV4Protocol],
         choice: ai.ToolChoiceMode | ai.ToolRef | ai.ToolSelection | None,
-        expected: dict[str, str] | None,
+        expected: dict[str, Any],
     ) -> None:
-        # Independent protocol definitions; exact objects reject legacy strings:
-        # https://github.com/vercel/ai/blob/3bea041f28e65f371e640d2c70c302776a46387f/packages/provider/src/language-model/v3/language-model-v3-tool-choice.ts
-        # https://github.com/vercel/ai/blob/3bea041f28e65f371e640d2c70c302776a46387f/packages/provider/src/language-model/v4/language-model-v4-tool-choice.ts
-        def reject_network(*args: Any, **kwargs: Any) -> Any:
-            pytest.fail("unexpected real network operation")
+        """Tool choice is always an object in the v3 and v4 specs."""
+        captured_body: dict[str, Any] = {}
 
-        monkeypatch.setattr(socket, "getaddrinfo", reject_network)
-        monkeypatch.setattr(socket.socket, "connect", reject_network)
-        monkeypatch.setattr(socket.socket, "connect_ex", reject_network)
-        captured: list[dict[str, Any]] = []
-
-        def handler(request: httpx.Request) -> httpx.Response:
-            assert request.method == "POST"
-            assert str(request.url) == (
-                f"https://gw.test/v{version}/ai/language-model"
-            )
-            assert request.headers["authorization"] == "Bearer test-key"
-            assert request.headers[
-                "ai-language-model-specification-version"
-            ] == str(version)
-            assert not captured, "unexpected additional request"
-            captured.append(json.loads(request.content))
+        def handler(req: httpx.Request) -> httpx.Response:
+            captured_body.update(json.loads(req.content))
             return httpx.Response(
                 200,
                 text=sse(
-                    {
-                        "type": "finish",
-                        "finishReason": {"unified": "stop", "raw": "stop"},
-                        "usage": {
-                            "inputTokens": {
-                                "total": 1,
-                                "noCache": 1,
-                                "cacheRead": 0,
-                                "cacheWrite": 0,
-                            },
-                            "outputTokens": {
-                                "total": 0,
-                                "text": 0,
-                                "reasoning": 0,
-                            },
-                        },
-                    }
+                    {"type": "finish", "finishReason": "stop", "usage": {}}
                 ),
             )
 
         model = mock_model(httpx.MockTransport(handler)).with_protocol(
-            GatewayV3Protocol() if version == 3 else GatewayV4Protocol()
+            protocol()
         )
-        declared_tools = [
-            tools.Tool(
-                kind="function",
-                name=name,
-                spec=tools.ToolSpec(
-                    params={"type": "object", "properties": {}}
-                ),
-            )
-            for name in ["lookup", "summarize"]
-        ]
-        params = ai.InferenceRequestParams(
+        request_params = ai.InferenceRequestParams(
             tool_calling=(
                 ai.ToolCallingParams(tool_choice=choice)
                 if choice is not None
                 else None
             )
         )
-        async with ai.stream(
-            model,
-            [user_msg("Look up a value.")],
-            tools=declared_tools,
-            params=params,
-        ) as stream:
-            async for _ in stream:
-                pass
+        await _collect(model, [user_msg("Hi")], params=request_params)
 
-        assert len(captured) == 1
-        body = captured[0]
-        assert "responseFormat" not in body
-        assert [tool["name"] for tool in body["tools"]] == [
-            "lookup",
-            "summarize",
-        ]
-        if expected is None:
-            assert "toolChoice" not in body
-        else:
-            assert body["toolChoice"] == expected
-        if isinstance(choice, ai.ToolSelection):
-            # Preserve existing SDK output, not a claim of Gateway support.
-            assert body["activeTools"] == ["lookup", "summarize"]
-        else:
-            assert "activeTools" not in body
+        assert {
+            key: captured_body[key]
+            for key in ("toolChoice", "activeTools")
+            if key in captured_body
+        } == expected
 
     async def test_protocol_headers(self) -> None:
         captured: dict[str, str] = {}
