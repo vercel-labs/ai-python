@@ -15,6 +15,7 @@ import contextlib
 import json
 import os
 import pathlib
+import types
 import uuid
 import warnings
 from collections.abc import AsyncGenerator, AsyncIterator, Iterator
@@ -425,7 +426,7 @@ class _Turn:
             yield events_.ReasoningEnd(block_id=block_id)
 
 
-def _sdk() -> Any:
+def _sdk() -> types.ModuleType:
     return _optional.import_optional_sdk(
         "claude_agent_sdk", provider="claude-code", extra="claude-code"
     )
