@@ -354,7 +354,7 @@ class SandboxProcess(_base.Process):
     async def readline(self) -> str:
         assert self._proc.stdout is not None, "spawned with stdout piped"
         try:
-            return await self._proc.stdout.readline()
+            return await _text(await self._proc.stdout.readline())
         except Exception as exc:
             raise errors_.WorkspaceError(
                 "the sandbox is gone; its process output is unreadable"
@@ -365,7 +365,7 @@ class SandboxProcess(_base.Process):
     async def read_stderr(self) -> str:
         assert self._proc.stderr is not None, "spawned with stderr piped"
         try:
-            return await self._proc.stderr.read()
+            return await _text(await self._proc.stderr.read())
         except Exception as exc:
             if _gone(exc):
                 return ""
@@ -1500,15 +1500,19 @@ class VercelSandbox(_base.Workspace):
 
 
 async def _text(stream: Any) -> str:
+    """Return a process's output as text.
+
+    vercel-sandbox 1.0 hands output over as bytes, as `subprocess` does;
+    the builds before it decoded it themselves.
+    """
+    if callable(stream):
+        stream = stream()
+        if inspect.isawaitable(stream):
+            stream = await stream
     if stream is None:
         return ""
-    if isinstance(stream, str):
-        return stream
-    if callable(stream):
-        result = stream()
-        if inspect.isawaitable(result):
-            result = await result
-        return str(result)
+    if isinstance(stream, bytes | bytearray | memoryview):
+        return bytes(stream).decode(errors="replace")
     return str(stream)
 
 

@@ -249,6 +249,7 @@ async def bridge(
     previous = signal.signal(signal.SIGWINCH, on_winch)
     loop.add_reader(fd_in, on_keys)
     reason = ""
+    running = True  # the program, when the bridge lets go
     try:
         await size()
         screen_task = asyncio.create_task(screen())
@@ -274,6 +275,7 @@ async def bridge(
             with contextlib.suppress(Exception):
                 await pty.detach()
             return None
+        running = False
         return await pty.wait()
     finally:
         loop.remove_reader(fd_in)
@@ -282,7 +284,10 @@ async def bridge(
         # (detached, displaced) never will, and the shell would inherit them.
         _write_all(fd_out, modes.restore())
         termios.tcsetattr(fd_in, termios.TCSADRAIN, saved)
-        _write_all(fd_out, b"\r\n")
+        # A program left running never clears what it drew under the cursor
+        # (its input box, its status line): erase it, or the shell's next
+        # lines land in the middle of it.
+        _write_all(fd_out, b"\r\n\x1b[J" if running else b"\r\n")
         if reason:
             _write_all(fd_out, f"[tty.bridge] {reason}\r\n".encode())
         os.set_blocking(fd_in, blocking[0])
