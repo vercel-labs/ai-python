@@ -71,6 +71,24 @@ class WorkspaceSessionStore(claude_agent_sdk.SessionStore):
         return cls(workspace, directory or await config_dir(workspace))
 
     def _path(self, key: sdk_types.SessionKey) -> str:
+        # Every part becomes a path in the workspace: a part that is itself
+        # a path (absolute, `..`) would read or write outside the store. A
+        # project key or session id is one name; a subagent's subpath nests.
+        for part, nests in (
+            (key["project_key"], False),
+            (key["session_id"], False),
+            (key.get("subpath"), True),
+        ):
+            if part is None:
+                continue
+            names = part.split("/") if nests else [part]
+            if (
+                not part
+                or part.startswith("/")
+                or (not nests and "/" in part)
+                or any(n in ("", ".", "..") for n in names)
+            ):
+                raise ValueError(f"not a store key: {part!r}")
         project_dir = posixpath.join(self._projects, key["project_key"])
         subpath = key.get("subpath")
         if subpath:

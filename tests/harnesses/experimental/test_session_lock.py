@@ -215,3 +215,45 @@ async def test_listing_holders_is_one_command(
     workspace.execs.clear()
     assert len(await locks[0].holders()) == 5
     assert len(workspace.execs) == 1
+
+
+@pytest.mark.parametrize(
+    "bad", ["/victim", "../victim", "a/../../victim", "", ".", "..", "-rf"]
+)
+async def test_a_session_id_is_a_name_never_a_path(
+    lock: SessionLock, workspace: fakes.LockWorkspace, tmp_path: Path, bad: str
+) -> None:
+    """Security review: an id joined onto the lock root escaped it, and a
+    stale "lock" there was deleted with rmtree. Refused before anything
+    runs in the workspace."""
+    from ai.harnesses.experimental.errors import HarnessError
+
+    ran = len(workspace.execs)
+    with pytest.raises(HarnessError, match="not a session id"):
+        await lock.acquire(bad.replace("victim", str(tmp_path / "victim")))
+    assert len(workspace.execs) == ran
+
+
+async def test_the_helper_refuses_an_escaping_id_itself(
+    lock: SessionLock, workspace: fakes.LockWorkspace, tmp_path: Path
+) -> None:
+    """The helper does not trust its caller: an absolute id, or a symlink
+    planted in the root, never reaches rmtree. Called directly, past the
+    check `SessionLock` makes first."""
+    from ai.harnesses.experimental._session_lock import HELPER
+
+    victim = tmp_path / "victim"
+    victim.mkdir()
+    (victim / "keep.txt").write_text("precious")
+    root = await lock.root()
+    Path(root).mkdir(parents=True, exist_ok=True)
+    (Path(root) / "planted").symlink_to(victim)
+    for sid in (str(victim), "../victim", "planted"):
+        args = json.dumps({"sid": sid, "token": "t", "stale_after": 0})
+        result = await workspace.exec(
+            ["python3", "-c", HELPER, "acquire", root, args], timeout=30
+        )
+        assert result.exit_code != 0
+        assert "not a session id" in result.stderr
+    assert (victim / "keep.txt").read_text() == "precious"
+    assert await lock.holders() == {}

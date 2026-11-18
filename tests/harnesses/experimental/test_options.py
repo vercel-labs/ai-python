@@ -129,8 +129,9 @@ def test_a_dict_of_both_factories_keeps_a_callable_type() -> None:
     `{"claude-code": claude_code, "codex": codex}` a dict of bare
     `function` to mypy, and every call through it an error (afk's
     HARNESSES, examples/harnesses/tui.py)."""
-    from ai.harnesses.experimental import claude_code, codex
+    from ai.harnesses.experimental import claude_code, codex, pi
 
-    assert set(inspect.signature(claude_code).parameters) <= set(
-        inspect.signature(codex).parameters
-    )
+    for other in (codex, pi):
+        assert set(inspect.signature(claude_code).parameters) <= set(
+            inspect.signature(other).parameters
+        )

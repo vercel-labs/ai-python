@@ -6,7 +6,7 @@ import asyncio
 
 import pytest
 from afk.rows import Row
-from afk.tui import Picker
+from afk.tui import Picker, verbs
 from rich.text import Text
 from textual.widgets import Static
 
@@ -235,3 +235,19 @@ async def test_stop_is_offered_only_with_a_process(
 async def test_stop_does_nothing_without_a_process() -> None:
     app, _ = await _press_in_use("down", "s", "y")
     assert app.return_value is None
+
+
+def test_a_pi_conversation_resumes_in_pi() -> None:
+    """Enter on a pi conversation here opens pi's own TUI on it: the
+    command pi itself takes to reopen a session (measured: `pi --session
+    <id>`, the project's session first)."""
+    row = Row(
+        where="here",
+        kind="pi",
+        session_id="01a1bbbb",
+        title="remember the codeword",
+        status="idle 1h",
+    )
+    assert verbs(row)["enter"] == ("resume", [["pi", "--session", "01a1bbbb"]])
+    # pi shows no process per conversation: afk cannot name one to stop.
+    assert "s" not in verbs(row)

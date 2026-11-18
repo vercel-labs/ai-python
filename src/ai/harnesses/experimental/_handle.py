@@ -18,7 +18,7 @@ class Handle(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     kind: str
-    """Which harness owns this conversation ("claude-code", "codex")."""
+    """Which harness owns this conversation ("claude-code", "codex", "pi")."""
     session_id: str
     """The harness's OWN conversation id — not one we minted on the side."""
     workspace: _base.WorkspaceCoords

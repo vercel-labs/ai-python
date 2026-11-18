@@ -16,6 +16,7 @@ from ...workspaces.experimental import errors as workspace_errors
 from . import _handle, _harness, _session, errors
 from ._adapters import base
 from ._adapters import codex as codex_
+from ._adapters import pi as pi_
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable, Mapping, Sequence
@@ -173,9 +174,82 @@ def codex(
     )
 
 
+def pi(
+    *,
+    workspace: _base.Workspace,
+    approve: base.ApprovalHook | None = None,
+    approval_timeout: float = _harness.DEFAULT_APPROVAL_TIMEOUT,
+    model: str | None = None,
+    gateway: _gateway.Gateway | None = None,
+    effort: Effort | None = None,
+    executable: str = "pi",
+    instructions: str | None = None,
+    mcp_servers: Mapping[str, Mapping[str, Any]] | None = None,
+    tools: Sequence[str] | None = None,
+    disallowed_tools: Sequence[str] | None = None,
+    max_turns: int | None = None,
+) -> _harness.Harness:
+    """Pi over `pi --mode rpc`, driving your own installation and login.
+
+    `model` is any model pi knows (`--model`): `"sonnet"`,
+    `"anthropic/claude-sonnet-4-5"`, with an optional `:<thinking>` suffix.
+    Unset, pi chooses exactly as it does on its own — gateway or not.
+
+    `gateway` sends pi to the Vercel AI Gateway (its `vercel-ai-gateway`
+    provider) with that key — see `ai.workspaces.experimental.
+    vercel_ai_gateway`. A `model` is then the gateway's:
+    `"anthropic/claude-sonnet-4.5"`.
+
+    `effort` is pi's thinking level, on the same "low" to "max" scale the
+    other harnesses take; pi clamps it to what the model supports.
+
+    `instructions` are appended to pi's system prompt. `mcp_servers` takes
+    the same shape as on `claude_code()`. `tools` limits the tools the
+    agent has (`["read", "grep"]`; `[]` for none); `disallowed_tools` takes
+    tools away.
+
+    pi has no permission prompt, so the approval hook is an extension this
+    SDK loads into pi: it sees EVERY tool call, can rewrite its input, and
+    a `Deny(reason)` reaches the agent. Your own pi extensions, skills and
+    settings load as they always do.
+
+    `max_turns` is accepted so that every `claude_code()` argument is a
+    `pi()` argument, but pi has no such limit: passing one raises
+    UnsupportedError.
+    """
+    if max_turns is not None:
+        raise errors.UnsupportedError(
+            pi_.KIND, "max_turns", "pi has no limit on an agent's steps"
+        )
+    return _harness.Harness(
+        pi_.PiAdapter(
+            executable=executable,
+            model=model,
+            gateway=gateway,
+            effort=effort,
+            instructions=instructions,
+            mcp_servers={k: dict(v) for k, v in (mcp_servers or {}).items()},
+            tools=list(tools) if tools is not None else None,
+            disallowed_tools=list(disallowed_tools or []),
+        ),
+        workspace=workspace,
+        approve=approve,
+        approval_timeout=approval_timeout,
+        options={
+            "model": model,
+            "executable": executable,
+            "effort": effort,
+            "instructions": instructions,
+            "tools": list(tools) if tools is not None else None,
+            "disallowed_tools": list(disallowed_tools or []) or None,
+        },
+    )
+
+
 BUILDERS: dict[str, Callable[..., _harness.Harness]] = {
     "claude-code": claude_code,
     "codex": codex,
+    "pi": pi,
 }
 RUNTIME_ONLY = frozenset(
     {"workspace", "approve", "approval_timeout", "gateway", "mcp_servers"}

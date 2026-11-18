@@ -355,6 +355,8 @@ async def test_the_tui_starts_from_a_history(
         tui.session_id != source.session_id
     ), "a NEW conversation, not the source"
     try:
+        if any_workspace.owner == "provider" and agent.kind not in READY:
+            pytest.skip(f"{agent.kind}'s prompt marker is not measured")
         if any_workspace.owner == "provider":
             screen = await _read_until(tui.pty, READY[agent.kind], timeout=150)
             assert (

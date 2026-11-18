@@ -1,13 +1,14 @@
 ---
 title: Harnesses
-description: Drive Claude Code and Codex from Python.
+description: Drive Claude Code, Codex, and Pi from Python.
 type: guide
 summary: Run turns on coding-agent CLIs, stream events, steer, stop, approve tool calls, resume conversations, and open the CLI's own TUI.
 ---
 
-A harness drives a coding-agent CLI you already have, `claude` or `codex`.
+A harness drives a coding-agent CLI you already have: `claude`, `codex`, or
+`pi`.
 Your program sends prompts. The CLI does the agent work with its own tools,
-login, and session store. The same code runs on either CLI, on this machine or
+login, and session store. The same code runs on any of them, on this machine or
 in a [workspace](/docs/basics/workspaces) such as a Vercel Sandbox.
 
 This API is experimental and may change or be removed.
@@ -35,8 +36,8 @@ if __name__ == "__main__":
     asyncio.run(main())
 ```
 
-`claude_code()` and `codex()` return a `Harness` and share these arguments,
-so swapping one for the other is a one-word edit:
+`claude_code()`, `codex()`, and `pi()` return a `Harness` and share these
+arguments, so swapping one for another is a one-word edit:
 
 ```python
 harness = harnesses.codex(workspace=workspaces.Local("."), effort="high")
@@ -50,7 +51,7 @@ harness = harnesses.codex(workspace=workspaces.Local("."), effort="high")
 | `model` | Model name passed to the CLI. | `None`: the CLI's default |
 | `effort` | `"low"`, `"medium"`, `"high"`, or `"max"`. | `None`: the CLI's default |
 | `gateway` | Upstream model provider LLM Gateway. See [Workspaces](/docs/basics/workspaces#reach-a-model-through-ai-gateway). | `None`: the workspace's gateway |
-| `executable` | CLI name or path. | `"claude"` or `"codex"` |
+| `executable` | CLI name or path. | `"claude"`, `"codex"`, or `"pi"` |
 | `instructions` | Text added to the CLI's own system prompt, for every turn. | `None` |
 | `mcp_servers` | MCP servers to connect: `{"name": {"command": ..., "args": [...], "env": {...}}}`, or `{"name": {"url": ...}}` for a remote one. | `None` |
 
@@ -81,8 +82,8 @@ A missing extra raises `ai.errors.InstallationError` when you call the
 factory. A missing CLI raises `ExecutableMissingError` when the harness
 opens.
 
-Each harness was verified against one CLI version: `claude` 2.1.289 and
-`codex` 0.160.1. An older CLI warns when the harness opens. A harness error
+Each harness was verified against one CLI version: `claude` 2.1.289,
+`codex` 0.160.1, and `pi` 1.3.0. An older CLI warns when the harness opens. A harness error
 carries the CLI version in its notes, so a failure on a newer CLI says so.
 
 On your own machine the SDK uses whatever CLI you installed and never
@@ -137,6 +138,38 @@ It takes the [shared arguments](#run-a-prompt), plus:
   `fileChange`. The shell command is in the call's arguments, never the name.
 - `effort="max"` is sent to Codex as `"xhigh"`.
 
+### Pi
+
+`harnesses.pi()` drives the `pi` CLI over `pi --mode rpc`. It needs no
+extra, only the `pi` CLI (`npm install -g @earendil-works/pi-coding-agent`).
+
+It takes the [shared arguments](#run-a-prompt), plus Claude Code's `tools`
+and `disallowed_tools`:
+
+| Argument | Description | Default |
+|---|---|---|
+| `tools` | The tools the agent has, such as `["read", "grep"]`. `[]` for none. | `None`: pi's defaults |
+| `disallowed_tools` | Tools taken away, such as `["bash"]`. | `None` |
+
+- `model` is any model pi knows, such as `"sonnet"` or
+  `"anthropic/claude-sonnet-4-5"`. With a `gateway`, it is the gateway's
+  model, such as `"anthropic/claude-sonnet-4.5"`. Without a `model`, pi
+  chooses exactly as it does on its own: your settings' default, or a
+  default of a provider it has credentials for, which may not be the
+  gateway. With no credentials at all, the turn raises
+  `NotAuthenticatedError`.
+- `effort` is pi's thinking level. pi clamps it to what the model supports.
+- `instructions` are appended to pi's system prompt.
+- Your own pi extensions, skills, and settings load as they always do.
+- pi has no permission prompt. The SDK loads a small extension into pi that
+  sends every tool call to your hook. See [Approve tool calls](#approve-tool-calls).
+- `pi()` also accepts `max_turns`, but raises `UnsupportedError` when it is
+  set: pi has no such limit.
+- Tool names are pi's own, such as `bash`, `read`, `edit`, and `write`.
+- Context a pi extension injects into a turn (`sendMessage`) is in
+  `history()`, but not in the live `session.messages` of that turn.
+- `result.usage.raw["cost_usd"]` reports the turn's cost.
+
 ## Keep a conversation
 
 `harness.run()` uses a throwaway conversation. Use a session for several turns
@@ -175,11 +208,11 @@ result = await session.run(
 )
 ```
 
-| File | Claude Code | Codex |
-|---|---|---|
-| Images (`image/*`) | yes | yes |
-| PDFs (`application/pdf`) | yes | no |
-| Text files (`text/*`) | yes, as text | yes, as text |
+| File | Claude Code | Codex | Pi |
+|---|---|---|---|
+| Images (`image/*`) | yes | yes | yes |
+| PDFs (`application/pdf`) | yes | no | no |
+| Text files (`text/*`) | yes, as text | yes, as text | yes, as text |
 
 - A file the harness cannot take raises `UnsupportedError` when you call
   `run()` or `stream()`, before anything runs. Check
@@ -260,7 +293,7 @@ task waits for the first.
 Pass `approve=` to decide which tool calls run:
 
 ```python
-SHELL = {"Bash", "commandExecution"}  # Claude Code's and Codex's shell tools
+SHELL = {"Bash", "commandExecution", "bash"}  # Claude Code, Codex, Pi
 
 
 async def approve(ctx: harnesses.ApprovalContext) -> harnesses.Decision:
@@ -269,7 +302,7 @@ async def approve(ctx: harnesses.ApprovalContext) -> harnesses.Decision:
         if "git push" in command or "rm -rf" in command:
             return harnesses.Deny("not that command")
         return harnesses.Allow()
-    target = ctx.call.input.get("file_path")
+    target = ctx.call.input.get("file_path") or ctx.call.input.get("path")
     if target:
         real = await ctx.workspace.resolve(target)  # follows symlinks
         if not ctx.workspace.contains(real):
@@ -293,17 +326,17 @@ The hook receives an `ApprovalContext`:
 | `call` | The `ToolCall`: the CLI's own tool name (`call.name`) and arguments (`call.input`), untranslated. See [Harnesses](#harnesses) for each CLI's names. |
 | `history` | The conversation so far. |
 | `workspace` | The workspace the CLI runs in. |
-| `harness` | `"claude-code"` or `"codex"`. |
+| `harness` | `"claude-code"`, `"codex"`, or `"pi"`. |
 | `session_id` | The conversation's id. |
-| `prompt` | The turn's prompt on Claude Code; `None` on Codex. |
+| `prompt` | The turn's prompt on Claude Code; `None` on Codex and Pi. |
 
 It returns a decision:
 
 | Decision | Effect |
 |---|---|
 | `Allow()` | The call runs. |
-| `Allow(input={...})` | The call runs with rewritten arguments. Claude Code only. |
-| `Deny(reason)` | The call is blocked. On Claude Code the agent reads the reason; on Codex it only learns the call was refused. |
+| `Allow(input={...})` | The call runs with rewritten arguments. Claude Code and Pi. |
+| `Deny(reason)` | The call is blocked. On Claude Code and Pi the agent reads the reason; on Codex it only learns the call was refused. |
 | `Deny(reason, stop=True)` | The call is blocked and the turn ends. |
 
 - A decision the harness cannot honor, such as `Allow(input=...)` on Codex
@@ -311,7 +344,7 @@ It returns a decision:
   `UnsupportedError` from the turn.
 - A hook that raises or runs past `approval_timeout` denies the call. The
   failure is listed in `result.approval_errors`.
-- On Claude Code every tool call reaches the hook, reads included. On
+- On Claude Code and Pi every tool call reaches the hook, reads included. On
   Codex the CLI's policy decides which calls to ask about; shell commands
   and file changes do. See `approval` in [Capabilities](#capabilities).
 - A shell command is a string the agent wrote. Matching on it, as above, is
@@ -335,21 +368,21 @@ Each harness declares what it can do in `harness.capabilities`, before
 anything runs. Using a capability a harness lacks raises `UnsupportedError`;
 the one exception is `deny_reason`, whose absence only drops the reason.
 
-| Capability | Description | Claude Code | Codex |
-|---|---|---|---|
-| `run` | Run a prompt and wait for the result: `run()`. | yes | yes |
-| `stream` | Iterate a turn's events as they arrive: `stream()`. | yes | yes |
-| `steer` | Send guidance to the turn that is running: `session.steer()`. | yes | yes |
-| `stop` | Interrupt the running turn; it settles as cancelled: `session.stop()`. | yes | yes |
-| `resume` | Continue a conversation this process did not create: `resume()`, `harness_from()`. | yes | yes |
-| `fork` | Branch a conversation into a new one with the same past: `fork()`. | yes | yes |
-| `history` | Read stored transcripts in full, tool calls included: `history()`, `sessions()`. | yes | yes |
-| `images` | Images in a prompt. See [Send files](#send-files). | yes | yes |
-| `documents` | PDFs in a prompt. | yes | no |
-| `rewrite_tool_input` | Rewrite a call's arguments before it runs: `Allow(input={...})`. | yes | no |
-| `deny_reason` | The reason in `Deny(reason)` reaches the agent. Without it the call is still denied, but the reason is dropped. | yes | no |
-| `remember_decisions` | Keep an approval for the rest of the session: `Allow(remember=True)`. | no | no |
-| `approval` | Which tool calls reach the hook. `"all"`: every call, reads included. `"policy"`: the CLI's own policy decides, so not every call may. | `"all"` | `"policy"` |
+| Capability | Description | Claude Code | Codex | Pi |
+|---|---|---|---|---|
+| `run` | Run a prompt and wait for the result: `run()`. | yes | yes | yes |
+| `stream` | Iterate a turn's events as they arrive: `stream()`. | yes | yes | yes |
+| `steer` | Send guidance to the turn that is running: `session.steer()`. | yes | yes | yes |
+| `stop` | Interrupt the running turn; it settles as cancelled: `session.stop()`. | yes | yes | yes |
+| `resume` | Continue a conversation this process did not create: `resume()`, `harness_from()`. | yes | yes | yes |
+| `fork` | Branch a conversation into a new one with the same past: `fork()`. | yes | yes | yes |
+| `history` | Read stored transcripts in full, tool calls included: `history()`, `sessions()`. | yes | yes | yes |
+| `images` | Images in a prompt. See [Send files](#send-files). | yes | yes | yes |
+| `documents` | PDFs in a prompt. | yes | no | no |
+| `rewrite_tool_input` | Rewrite a call's arguments before it runs: `Allow(input={...})`. | yes | no | yes |
+| `deny_reason` | The reason in `Deny(reason)` reaches the agent. Without it the call is still denied, but the reason is dropped. | yes | no | yes |
+| `remember_decisions` | Keep an approval for the rest of the session: `Allow(remember=True)`. | no | no | no |
+| `approval` | Which tool calls reach the hook. `"all"`: every call, reads included. `"policy"`: the CLI's own policy decides, so not every call may. | `"all"` | `"policy"` | `"all"` |
 
 ## Resume and fork
 
@@ -389,11 +422,12 @@ same = await harness.resume(infos[0].session_id)
 - `resume()` continues the original. Only one client may write a
   conversation. If another SDK client or a `harness.tui()` holds it,
   `resume()` raises `SessionBusyError`, and `SessionInfo.running` is `True`.
-- A `claude` or `codex` that a person started in a terminal holds no claim,
-  so `resume()` does not refuse it. `sessions()` still shows it as
+- A `claude`, `codex`, or `pi` that a person started in a terminal holds no
+  claim, so `resume()` does not refuse it. `sessions()` still shows it as
   `running`, with its `pid`: any `claude`, and a `codex` started as
-  `codex resume <id>`. A fresh `codex` names no conversation, so it is not
-  seen. Fork conversations you did not start.
+  `codex resume <id>`. A fresh `codex` names no conversation, and `pi` hides
+  its arguments from `ps`, so neither is seen. Fork conversations you did
+  not start.
 
 `harness_from(handle, fork=True)` forks instead of resuming.
 
@@ -411,7 +445,7 @@ session = sandbox_agent.session(history=history)
 The receiving CLI stores the history natively before the first turn. Tool
 calls keep their original names. Two limits:
 
-- Reasoning cannot go into Claude Code. It is dropped with a warning.
+- Reasoning cannot go into Claude Code or Pi. It is dropped with a warning.
 - Paths point to the source machine. Copy the files and tell the agent where
   they are now.
 
@@ -501,13 +535,13 @@ that `ai.Agent` does not have.
 
 What the event stream holds:
 
-| Event detail | `ai.Agent` | Claude Code | Codex |
-|---|---|---|---|
-| Text deltas | yes | yes | yes |
-| Tool calls and their results | yes | yes | yes |
-| Tool arguments while they stream | yes | no: sent whole | no: sent whole |
-| One `StreamStart`/`StreamEnd` per model call | yes | no: one per turn | no: one per turn |
-| Usage per model call | yes | no: per turn, with cost | no: per turn |
+| Event detail | `ai.Agent` | Claude Code | Codex | Pi |
+|---|---|---|---|---|
+| Text deltas | yes | yes | yes | yes |
+| Tool calls and their results | yes | yes | yes | yes |
+| Tool arguments while they stream | yes | no: sent whole | no: sent whole | no: sent whole |
+| One `StreamStart`/`StreamEnd` per model call | yes | no: one per turn | no: one per turn | no: one per turn |
+| Usage per model call | yes | no: per turn, with cost | no: per turn | no: per turn, with cost |
 
 Code that reads events should not need more than this: text, tool calls and
 results, the final `StreamEnd`, and `messages`. The SDK does not invent
@@ -668,6 +702,8 @@ One runnable file per feature:
   redirect a running turn.
 - [`examples/harnesses/tool_approval.py`](https://github.com/vercel-labs/ai-python/blob/main/examples/harnesses/tool_approval.py):
   an approval hook.
+- [`examples/harnesses/pi.py`](https://github.com/vercel-labs/ai-python/blob/main/examples/harnesses/pi.py):
+  your own pi, with a hook that denies, explains and rewrites.
 - [`examples/harnesses/take_over.py`](https://github.com/vercel-labs/ai-python/blob/main/examples/harnesses/take_over.py):
   fork a conversation you did not start.
 - [`examples/harnesses/resume.py`](https://github.com/vercel-labs/ai-python/blob/main/examples/harnesses/resume.py):

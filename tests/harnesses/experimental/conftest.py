@@ -26,7 +26,7 @@ from typing import Any
 
 import pytest
 
-from ai.harnesses.experimental import Harness, claude_code, codex
+from ai.harnesses.experimental import Harness, claude_code, codex, pi
 from ai.workspaces.experimental import Local, VercelSandbox, Workspace, copy
 from tests.workspaces.experimental import conftest as workspaces
 
@@ -37,11 +37,21 @@ project = workspaces.project
 workspace = workspaces.workspace
 sandbox_credentials = workspaces.sandbox_credentials
 
-HARNESS_CLI = {"claude": "claude", "codex": "codex"}
+HARNESS_CLI = {"claude": "claude", "codex": "codex", "pi": "pi"}
+
+
+def _pi(**options: Any) -> Harness:
+    """Pi on PI_TEST_MODEL when set: pi has no model variable of its own,
+    and the default is whatever this machine's pi settings say."""
+    if os.environ.get("PI_TEST_MODEL") and "model" not in options:
+        options["model"] = os.environ["PI_TEST_MODEL"]
+    return pi(**options)
+
 
 SPECS: dict[str, Callable[..., Harness]] = {
     "claude": claude_code,
     "codex": codex,
+    "pi": _pi,
 }
 
 
@@ -49,7 +59,7 @@ def _cli_missing(kind: str) -> bool:
     return shutil.which(HARNESS_CLI[kind]) is None
 
 
-@pytest.fixture(params=["claude", "codex"])
+@pytest.fixture(params=["claude", "codex", "pi"])
 def harness_kind(request: pytest.FixtureRequest) -> str:
     kind: str = request.param
     if _cli_missing(kind):
