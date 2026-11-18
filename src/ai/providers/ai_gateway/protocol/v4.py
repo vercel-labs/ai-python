@@ -488,7 +488,7 @@ async def stream(
             _shared.merge_extra_body(body, params.extra_body)
     body["prompt"] = await _messages_to_prompt(messages)
     if tools:
-        body["tools"] = [_shared.tool_to_wire(tool) for tool in tools]
+        body["tools"] = _shared.tools_to_wire(tools, params)
     response_format = _shared.response_format(output_type)
     if response_format is not None:
         body["responseFormat"] = response_format
