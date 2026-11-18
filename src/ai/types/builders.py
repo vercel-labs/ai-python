@@ -13,6 +13,8 @@ if TYPE_CHECKING:
     from . import events as events_
 
 from .messages import (
+    BuiltinToolCallPart,
+    BuiltinToolReturnPart,
     ContentOutput,
     ContentPart,
     FilePart,
@@ -31,6 +33,8 @@ _PART_TYPES = (
     TextPart,
     ToolCallPart,
     ToolResultPart,
+    BuiltinToolCallPart,
+    BuiltinToolReturnPart,
     ReasoningPart,
     HookPart,
     FilePart,
