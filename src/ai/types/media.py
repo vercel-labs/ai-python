@@ -196,7 +196,23 @@ AUDIO_SIGNATURES: list[_Signature] = [
     ("audio/ogg", (0x4F, 0x67, 0x67, 0x53)),
     ("audio/flac", (0x66, 0x4C, 0x61, 0x43)),
     ("audio/aac", (0x40, 0x15, 0x00, 0x00)),
-    ("audio/mp4", (0x66, 0x74, 0x79, 0x70)),
+    (
+        "audio/mp4",
+        (
+            None,
+            None,
+            None,
+            None,
+            0x66,
+            0x74,
+            0x79,
+            0x70,
+            0x4D,
+            0x34,
+            0x41,
+            0x20,
+        ),
+    ),
     ("audio/webm", (0x1A, 0x45, 0xDF, 0xA3)),
 ]
 

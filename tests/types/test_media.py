@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 
+import ai
 from ai.types import media
 
 _RIFF_WEBP = bytes(
@@ -107,3 +108,13 @@ def test_detect_video_media_type_base64() -> None:
 
 def test_detect_video_media_type_rejects_image() -> None:
     assert media.detect_video_media_type(_JPEG) is None
+
+
+def test_m4a_bytes_are_detected_as_audio() -> None:
+    data = b"\x00\x00\x00\x20ftypM4A \x00\x00\x00\x00M4A mp42isom"
+    assert ai.file_part(data).media_type == "audio/mp4"
+    assert media.detect_audio_media_type(data) == "audio/mp4"
+    assert (
+        media.detect_audio_media_type(base64.b64encode(data).decode())
+        == "audio/mp4"
+    )
