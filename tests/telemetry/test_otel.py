@@ -14,8 +14,8 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
 from opentelemetry.trace import SpanKind
 
 import ai
-from ai.experimental_telemetry import otel
 from ai.models.core import params as core_params
+from ai.telemetry import otel
 from ai.types import messages as messages_
 from ai.types import usage as usage_
 
@@ -31,18 +31,18 @@ def otel_env() -> Iterator[tuple[InMemorySpanExporter, TracerProvider]]:
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
     adapter = otel.OtelAdapter(tracer_provider=provider, capture_content=True)
-    ai.experimental_telemetry.register(adapter)
+    ai.telemetry.register(adapter)
     yield exporter, provider
-    ai.experimental_telemetry.unregister(adapter)
+    ai.telemetry.unregister(adapter)
 
 
 async def test_nesting_names_and_attributes(
     otel_env: tuple[InMemorySpanExporter, TracerProvider],
 ) -> None:
     exporter, _ = otel_env
-    async with ai.experimental_telemetry.span("outer") as sp:
+    async with ai.telemetry.span("outer") as sp:
         sp.set_attrs(foo="bar")
-        async with ai.experimental_telemetry.span("inner"):
+        async with ai.telemetry.span("inner"):
             pass
 
     spans = {s.name: s for s in exporter.get_finished_spans()}
@@ -57,10 +57,10 @@ async def test_trace_attrs_exported_on_every_span(
     otel_env: tuple[InMemorySpanExporter, TracerProvider],
 ) -> None:
     exporter, _ = otel_env
-    async with ai.experimental_telemetry.span("outer") as sp:
+    async with ai.telemetry.span("outer") as sp:
         sp.trace_attrs["session.id"] = "s-1"
         sp.trace_attrs["obj"] = {"a": 1}  # non-scalar: exported as repr
-        async with ai.experimental_telemetry.span("inner"):
+        async with ai.telemetry.span("inner"):
             pass
 
     spans = {s.name: s for s in exporter.get_finished_spans()}
@@ -109,7 +109,7 @@ async def test_error_status(
 ) -> None:
     exporter, _ = otel_env
     with pytest.raises(ValueError, match="boom"):
-        async with ai.experimental_telemetry.span("failing"):
+        async with ai.telemetry.span("failing"):
             raise ValueError("boom")
 
     (span,) = exporter.get_finished_spans()
@@ -163,17 +163,17 @@ async def test_span_events_exported_with_original_timestamps(
             return "<marker>"
 
     marker = Marker()
-    async with ai.experimental_telemetry.span("s") as sp:
-        first = ai.experimental_telemetry.SpanEvent(
+    async with ai.telemetry.span("s") as sp:
+        first = ai.telemetry.SpanEvent(
             name="first_token",
-            time_ns=ai.experimental_telemetry.now_ns(),
+            time_ns=ai.telemetry.now_ns(),
             attrs={"event_type": "TextStart"},
         )
         sp.events.append(first)
         await sp.push()
-        second = ai.experimental_telemetry.SpanEvent(
+        second = ai.telemetry.SpanEvent(
             name="custom",
-            time_ns=ai.experimental_telemetry.now_ns(),
+            time_ns=ai.telemetry.now_ns(),
             attrs={"obj": marker},
         )
         sp.events.append(second)
@@ -211,7 +211,7 @@ async def test_raw_otel_span_nests_under_ours(
 ) -> None:
     exporter, provider = otel_env
     tracer = provider.get_tracer("test")
-    async with ai.experimental_telemetry.span("outer"):
+    async with ai.telemetry.span("outer"):
         with tracer.start_as_current_span("raw"):
             pass
 
@@ -226,10 +226,8 @@ async def test_non_current_span_not_attached_to_otel_context(
 ) -> None:
     exporter, provider = otel_env
     tracer = provider.get_tracer("test")
-    async with ai.experimental_telemetry.span("outer"):
-        async with ai.experimental_telemetry.span(
-            "overlapping", set_as_current=False
-        ):
+    async with ai.telemetry.span("outer"):
+        async with ai.telemetry.span("overlapping", set_as_current=False):
             # A raw otel span opened while the non-current span is
             # open parents like our own spans do: under the outer
             # span, not under the overlapping one.
@@ -255,7 +253,7 @@ async def test_our_root_nests_under_raw_otel_span(
     exporter, provider = otel_env
     tracer = provider.get_tracer("test")
     with tracer.start_as_current_span("raw"):
-        async with ai.experimental_telemetry.span("inner"):
+        async with ai.telemetry.span("inner"):
             pass
 
     spans = {s.name: s for s in exporter.get_finished_spans()}
@@ -270,22 +268,20 @@ async def test_span_finished_elsewhere_exports_and_parents(
     exporter, _ = otel_env
     # "Process one": mint the span and carry it as data.  No push —
     # the record is delivered whole once the work completes.
-    turn = ai.experimental_telemetry.create_span("turn")
-    turn.started_at = ai.experimental_telemetry.now_ns()
+    turn = ai.telemetry.create_span("turn")
+    turn.started_at = ai.telemetry.now_ns()
     payload = turn.model_dump(mode="json")
 
     # "Process two": live children under the restored span.
-    restored = ai.experimental_telemetry.Span.model_validate(payload)
-    async with ai.experimental_telemetry.use_span(restored):
-        async with ai.experimental_telemetry.span("child"):
+    restored = ai.telemetry.Span.model_validate(payload)
+    async with ai.telemetry.use_span(restored):
+        async with ai.telemetry.span("child"):
             pass
 
     # "Process three": finish the span and push the complete record.
-    done = ai.experimental_telemetry.Span.model_validate(payload)
-    done.ended_at = ai.experimental_telemetry.now_ns()
-    done.error = ai.experimental_telemetry.SpanError(
-        type="TurnError", message="nope"
-    )
+    done = ai.telemetry.Span.model_validate(payload)
+    done.ended_at = ai.telemetry.now_ns()
+    done.error = ai.telemetry.SpanError(type="TurnError", message="nope")
     await done.push()
 
     spans = {s.name: s for s in exporter.get_finished_spans()}
@@ -307,7 +303,7 @@ async def test_otel_ids_derived_from_framework_ids(
     otel_env: tuple[InMemorySpanExporter, TracerProvider],
 ) -> None:
     exporter, _ = otel_env
-    async with ai.experimental_telemetry.span("s") as sp:
+    async with ai.telemetry.span("s") as sp:
         pass
 
     (span,) = exporter.get_finished_spans()
@@ -323,21 +319,19 @@ async def test_subclass_can_enrich_names_and_attributes() -> None:
     provider.add_span_processor(SimpleSpanProcessor(exporter))
 
     class Enriched(otel.OtelAdapter):
-        def span_name(self, span: ai.experimental_telemetry.Span, /) -> str:
+        def span_name(self, span: ai.telemetry.Span, /) -> str:
             return f"seal:{super().span_name(span)}"
 
-        def span_attrs(
-            self, span: ai.experimental_telemetry.Span, /
-        ) -> dict[str, Any]:
+        def span_attrs(self, span: ai.telemetry.Span, /) -> dict[str, Any]:
             return super().span_attrs(span) | {"extra": True}
 
     adapter = Enriched(tracer_provider=provider)
-    ai.experimental_telemetry.register(adapter)
+    ai.telemetry.register(adapter)
     try:
-        async with ai.experimental_telemetry.span("s") as sp:
+        async with ai.telemetry.span("s") as sp:
             sp.set_attrs(foo="bar")
     finally:
-        ai.experimental_telemetry.unregister(adapter)
+        ai.telemetry.unregister(adapter)
 
     (span,) = exporter.get_finished_spans()
     assert span.name == "seal:s"
@@ -354,14 +348,14 @@ async def test_content_capture_off_by_default(
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
     adapter = otel.OtelAdapter(tracer_provider=provider)
-    ai.experimental_telemetry.register(adapter)
+    ai.telemetry.register(adapter)
     try:
         mock_llm([[text_msg("hello")]])
         async with ai.stream(MOCK_MODEL, [ai.user_message("hi")]) as stream:
             async for _ in stream:
                 pass
     finally:
-        ai.experimental_telemetry.unregister(adapter)
+        ai.telemetry.unregister(adapter)
 
     (span,) = exporter.get_finished_spans()
     attrs = span.attributes
@@ -382,14 +376,14 @@ async def test_content_capture_env_opt_in(
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
     adapter = otel.OtelAdapter(tracer_provider=provider)
-    ai.experimental_telemetry.register(adapter)
+    ai.telemetry.register(adapter)
     try:
         mock_llm([[text_msg("hello")]])
         async with ai.stream(MOCK_MODEL, [ai.user_message("hi")]) as stream:
             async for _ in stream:
                 pass
     finally:
-        ai.experimental_telemetry.unregister(adapter)
+        ai.telemetry.unregister(adapter)
 
     (span,) = exporter.get_finished_spans()
     assert span.attributes is not None
@@ -398,12 +392,10 @@ async def test_content_capture_env_opt_in(
 
 def _stream_span(
     **data_kwargs: Any,
-) -> ai.experimental_telemetry.Span[Any]:
+) -> ai.telemetry.Span[Any]:
     data_kwargs.setdefault("messages", [ai.user_message("hi")])
-    data = ai.experimental_telemetry.AiStreamSpanData(
-        model="mock-model", **data_kwargs
-    )
-    return ai.experimental_telemetry.Span(
+    data = ai.telemetry.AiStreamSpanData(model="mock-model", **data_kwargs)
+    return ai.telemetry.Span(
         name="ai_stream", data=data, id="span-1", trace_id="trace-1"
     )
 
@@ -483,12 +475,12 @@ def test_response_identity_attributes() -> None:
 
 
 def test_tool_span_description() -> None:
-    data = ai.experimental_telemetry.ToolExecutionSpanData(
+    data = ai.telemetry.ToolExecutionSpanData(
         tool_name="lookup",
         tool_call_id="tc-1",
         tool_description="Look things up.",
     )
-    sp = ai.experimental_telemetry.Span(
+    sp = ai.telemetry.Span(
         name="tool_execution", data=data, id="span-1", trace_id="trace-1"
     )
     attrs = otel._attributes(sp, capture_content=False)
@@ -590,7 +582,7 @@ def test_semconv_message_content_shapes() -> None:
 
 
 def test_generate_span_attributes() -> None:
-    data = ai.experimental_telemetry.AiGenerateSpanData(
+    data = ai.telemetry.AiGenerateSpanData(
         model="mock-model",
         messages=[ai.user_message("hi")],
         params=core_params.InferenceRequestParams(
@@ -601,7 +593,7 @@ def test_generate_span_attributes() -> None:
         response_id="resp-1",
         response_model="mock-model-2",
     )
-    sp = ai.experimental_telemetry.Span(
+    sp = ai.telemetry.Span(
         name="ai_generate", data=data, id="span-1", trace_id="trace-1"
     )
     assert otel._semconv_name(sp) == "chat mock-model"
@@ -618,7 +610,7 @@ def test_generate_span_attributes() -> None:
 
 
 def test_embed_span_attributes() -> None:
-    data = ai.experimental_telemetry.EmbedSpanData(
+    data = ai.telemetry.EmbedSpanData(
         model="text-embedding-3-small",
         provider="openai",
         input_count=2,
@@ -626,7 +618,7 @@ def test_embed_span_attributes() -> None:
         dimensions=1536,
         usage=usage_.Usage(input_tokens=9),
     )
-    sp = ai.experimental_telemetry.Span(
+    sp = ai.telemetry.Span(
         name="ops", data=data, id="span-1", trace_id="trace-1"
     )
     assert otel._semconv_name(sp) == "embeddings text-embedding-3-small"
@@ -640,11 +632,11 @@ def test_embed_span_attributes() -> None:
 
 
 def test_generate_image_span_operation_name() -> None:
-    data = ai.experimental_telemetry.GenerateImageSpanData(
+    data = ai.telemetry.GenerateImageSpanData(
         model="imagen-4",
         provider="google",
     )
-    sp = ai.experimental_telemetry.Span(
+    sp = ai.telemetry.Span(
         name="ops", data=data, id="span-1", trace_id="trace-1"
     )
     assert otel._semconv_name(sp) == "generate_content imagen-4"
@@ -654,13 +646,13 @@ def test_generate_image_span_operation_name() -> None:
 
 
 def test_decide_span_operation_name() -> None:
-    data = ai.experimental_telemetry.DecideSpanData(
+    data = ai.telemetry.DecideSpanData(
         question_count=3,
         model="typesafe-ai/jev",
         provider="ai-gateway",
         usage=usage_.Usage(input_tokens=9),
     )
-    sp = ai.experimental_telemetry.Span(
+    sp = ai.telemetry.Span(
         name="ops", data=data, id="span-1", trace_id="trace-1"
     )
     assert otel._semconv_name(sp) == "decide typesafe-ai/jev"
@@ -673,12 +665,12 @@ def test_decide_span_operation_name() -> None:
 
 
 def test_rerank_span_operation_name() -> None:
-    data = ai.experimental_telemetry.RerankSpanData(
+    data = ai.telemetry.RerankSpanData(
         input_count=1,
         model="rerank-v3.5",
         provider="cohere",
     )
-    sp = ai.experimental_telemetry.Span(
+    sp = ai.telemetry.Span(
         name="ops", data=data, id="span-1", trace_id="trace-1"
     )
     assert otel._semconv_name(sp) == "rerank rerank-v3.5"
@@ -687,7 +679,7 @@ def test_rerank_span_operation_name() -> None:
 
 
 def test_run_span_attributes() -> None:
-    data = ai.experimental_telemetry.RunSpanData(
+    data = ai.telemetry.RunSpanData(
         agent="MyAgent",
         model="anthropic/claude-x",
         messages=[ai.user_message("hi")],
@@ -696,7 +688,7 @@ def test_run_span_attributes() -> None:
         output_type="MyModel",
         usage=usage_.Usage(input_tokens=30, output_tokens=5),
     )
-    sp = ai.experimental_telemetry.Span(
+    sp = ai.telemetry.Span(
         name="run", data=data, id="span-1", trace_id="trace-1"
     )
     attrs = otel._attributes(sp, capture_content=True)

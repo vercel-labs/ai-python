@@ -54,5 +54,5 @@ async def test_transcribe_span(recorder: conftest.Recorder) -> None:
 
     (span,) = recorder.ended
     data = span.data
-    assert isinstance(data, ai.experimental_telemetry.TranscribeSpanData)
+    assert isinstance(data, ai.telemetry.TranscribeSpanData)
     assert data.duration_seconds == 1.5

@@ -15,7 +15,7 @@ from __future__ import annotations
 import dataclasses
 from typing import TYPE_CHECKING, Any, Literal
 
-from .. import experimental_telemetry as telemetry
+from .. import telemetry
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence

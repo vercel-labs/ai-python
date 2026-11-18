@@ -70,7 +70,7 @@ async def test_a_turn_with_a_cli_tool_and_a_resume(
     # The session id is all that a later process needs, with the settings.
     again = make(resume=harness.session.id)
     async with asyncio.timeout(240), again:
-        reply = await ai.experimental_generate(
+        reply = await ai.generate(
             again, [ai.user_message("Which word did you read? One word.")]
         )
     assert "HERON" in reply.text.upper()
@@ -115,7 +115,7 @@ async def test_cancel_interrupts_and_the_session_continues(
                     break  # stop reading: the turn stops
         cut = harness.session.messages[-1].provider_metadata or {}
         assert cut.get("external") == {"stop_reason": "interrupted"}
-        reply = await ai.experimental_generate(
+        reply = await ai.generate(
             harness, [*history, ai.user_message("Reply with the word OK only.")]
         )
     assert "OK" in reply.text.upper()
@@ -170,6 +170,6 @@ async def test_a_new_session_uses_the_given_past(
         ),
     ]
     async with asyncio.timeout(240), harness:
-        reply = await ai.experimental_generate(harness, history)
+        reply = await ai.generate(harness, history)
     assert "GENTIAN-31" in reply.text.upper()
     assert harness.session.id is not None

@@ -68,7 +68,7 @@ async def test_stream_takes_a_model_like() -> None:
 
 
 async def test_generate_takes_a_model_like() -> None:
-    message = await ai.experimental_generate(Echo(), [ai.user_message("hi")])
+    message = await ai.generate(Echo(), [ai.user_message("hi")])
     assert message.text == "hi"
 
 

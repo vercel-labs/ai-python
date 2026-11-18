@@ -49,7 +49,7 @@ async def test_generate_audio_span(recorder: conftest.Recorder) -> None:
 
     (span,) = recorder.ended
     data = span.data
-    assert isinstance(data, ai.experimental_telemetry.GenerateAudioSpanData)
+    assert isinstance(data, ai.telemetry.GenerateAudioSpanData)
     assert data.model == "mock-audio-model"
     assert data.provider == "mock-audio"
     assert data.output_count == 1

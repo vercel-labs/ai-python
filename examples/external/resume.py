@@ -9,7 +9,7 @@ import ai
 async def main() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         async with ai.external.ClaudeCode(cwd=tmp) as harness:
-            await ai.experimental_generate(
+            await ai.generate(
                 harness,
                 [
                     ai.user_message(
@@ -36,7 +36,7 @@ async def main() -> None:
                     *again.session.messages,
                     ai.user_message(question),
                 ]
-                answer = await ai.experimental_generate(again, messages)
+                answer = await ai.generate(again, messages)
                 print(answer.text)
 
 

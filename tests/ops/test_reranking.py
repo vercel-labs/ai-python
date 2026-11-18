@@ -66,7 +66,7 @@ async def test_rerank_span(recorder: conftest.Recorder) -> None:
 
     (span,) = recorder.ended
     data = span.data
-    assert isinstance(data, ai.experimental_telemetry.RerankSpanData)
+    assert isinstance(data, ai.telemetry.RerankSpanData)
     assert data.input_count == 2
     assert data.top_n == 1
     assert data.output_count == 1

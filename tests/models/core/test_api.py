@@ -350,32 +350,42 @@ async def test_generate_dispatches_to_provider(recorder: Recorder) -> None:
 
     provider._generate_impl = _generate
 
-    result = await models.experimental_generate(model, [ai.user_message("Hi")])
+    result = await models.generate(model, [ai.user_message("Hi")])
 
     assert called
     assert result is sentinel
 
     (span,) = [s for s in recorder.ended if s.name == "ai_generate"]
-    assert isinstance(span.data, ai.experimental_telemetry.AiGenerateSpanData)
+    assert isinstance(span.data, ai.telemetry.AiGenerateSpanData)
     assert span.data.provider == "mock"
     # Adapters see pushed snapshots, so compare by value, not identity.
     assert span.data.message == sentinel
     assert span.data.usage == sentinel.usage
 
 
+@pytest.mark.parametrize("module", [ai, models, models.core, models.core.api])
+async def test_experimental_generate_alias(module: Any) -> None:
+    mock_llm([[text_msg("legacy reply")]])
+
+    with pytest.warns(DeprecationWarning, match="use ai.generate"):
+        generate = module.experimental_generate
+
+    assert generate is ai.generate
+    result = await generate(MOCK_MODEL, [ai.user_message("Hi")])
+    assert result.text == "legacy reply"
+
+
 async def test_generate_falls_back_to_stream(recorder: Recorder) -> None:
-    # MOCK_PROVIDER has no native generate(): experimental_generate drains the
+    # MOCK_PROVIDER has no native generate(): generate drains the
     # stream and returns the aggregated message.
     mock_llm([[text_msg("streamed reply")]])
 
-    result = await models.experimental_generate(
-        MOCK_MODEL, [ai.user_message("Hi")]
-    )
+    result = await models.generate(MOCK_MODEL, [ai.user_message("Hi")])
 
     assert result.text == "streamed reply"
 
     (span,) = [s for s in recorder.ended if s.name == "ai_generate"]
-    assert isinstance(span.data, ai.experimental_telemetry.AiGenerateSpanData)
+    assert isinstance(span.data, ai.telemetry.AiGenerateSpanData)
     assert span.data.message is not None
     assert span.data.message.text == "streamed reply"
 
@@ -396,7 +406,7 @@ async def test_generate_fallback_dying_stream_raises() -> None:
     model = models.Model(id="dying-model", provider=provider)
 
     with pytest.raises(ai.errors.ProviderIncompleteResponseError):
-        await models.experimental_generate(model, [ai.user_message("Hi")])
+        await models.generate(model, [ai.user_message("Hi")])
 
 
 async def test_generate_uses_model_protocol() -> None:
@@ -424,7 +434,7 @@ async def test_generate_uses_model_protocol() -> None:
             _ = client, model, messages, tools, output_type, params, provider
             return sentinel
 
-    result = await models.experimental_generate(
+    result = await models.generate(
         MOCK_MODEL.with_protocol(OverrideProtocol()),
         [ai.user_message("Hi")],
     )
@@ -641,20 +651,24 @@ async def test_stream_span_milestones(recorder: Recorder) -> None:
     mock_llm([[text_msg("Hello world")]])
 
     async with models.stream(MOCK_MODEL, [ai.user_message("Hi")]) as stream:
-        assert stream.experimental_span is not None
-        assert stream.experimental_span.events == []
+        assert stream.telemetry_span is not None
+        assert stream.telemetry_span.events == []
+        with pytest.warns(
+            DeprecationWarning, match="use Stream.telemetry_span"
+        ):
+            assert stream.experimental_span is stream.telemetry_span
         async for _ in stream:
             pass
 
     (call,) = [s for s in recorder.ended if s.name == "ai_stream"]
-    assert stream.experimental_span is not None
-    assert stream.experimental_span.id == call.id
-    assert isinstance(call.data, ai.experimental_telemetry.AiStreamSpanData)
+    assert stream.telemetry_span is not None
+    assert stream.telemetry_span.id == call.id
+    assert isinstance(call.data, ai.telemetry.AiStreamSpanData)
     assert call.data.provider == "mock"
     assert call.data.tool_names is None  # no tools were sent
     assert [e.name for e in call.events] == [
-        ai.experimental_telemetry.FIRST_TOKEN,
-        ai.experimental_telemetry.RESPONSE_COMPLETE,
+        ai.telemetry.FIRST_TOKEN,
+        ai.telemetry.RESPONSE_COMPLETE,
     ]
     first, complete = call.events
     # The milestone says what kind of output arrived first.
@@ -685,9 +699,9 @@ async def test_stream_first_token_fires_on_delta_without_start(
         async for _ in stream:
             pass
 
-    assert stream.experimental_span is not None
-    first = stream.experimental_span.events[0]
-    assert first.name == ai.experimental_telemetry.FIRST_TOKEN
+    assert stream.telemetry_span is not None
+    first = stream.telemetry_span.events[0]
+    assert first.name == ai.telemetry.FIRST_TOKEN
     assert first.attrs == {"event_type": "TextDelta"}
 
 
@@ -711,8 +725,8 @@ async def test_replay_stream_has_no_milestones(recorder: Recorder) -> None:
 
     assert events, "replay should still emit ToolEnd events"
     (call,) = [s for s in recorder.ended if s.name == "ai_stream"]
-    assert stream.experimental_span is not None
-    assert stream.experimental_span.id == call.id
+    assert stream.telemetry_span is not None
+    assert stream.telemetry_span.id == call.id
     assert call.events == []
 
 
@@ -726,9 +740,7 @@ async def test_early_close_no_response_complete(recorder: Recorder) -> None:
                 break
 
     (call,) = [s for s in recorder.ended if s.name == "ai_stream"]
-    assert [e.name for e in call.events] == [
-        ai.experimental_telemetry.FIRST_TOKEN
-    ]
+    assert [e.name for e in call.events] == [ai.telemetry.FIRST_TOKEN]
 
 
 async def test_stream_span_captures_response_identity(
@@ -761,7 +773,7 @@ async def test_stream_span_captures_response_identity(
             pass
 
     (call,) = [s for s in recorder.ended if s.name == "ai_stream"]
-    assert isinstance(call.data, ai.experimental_telemetry.AiStreamSpanData)
+    assert isinstance(call.data, ai.telemetry.AiStreamSpanData)
     assert call.data.output_type == "Out"
     assert call.data.finish_reason == "length"
     assert call.data.response_id == "resp-1"
@@ -772,7 +784,7 @@ async def test_directly_constructed_stream_has_no_span() -> None:
     async with ai.Stream.replay_message(text_msg("hi")) as stream:
         async for _ in stream:
             pass
-    assert stream.experimental_span is None
+    assert stream.telemetry_span is None
 
 
 async def test_replayed_turn_gets_replay_span(recorder: Recorder) -> None:
@@ -785,6 +797,6 @@ async def test_replayed_turn_gets_replay_span(recorder: Recorder) -> None:
 
     (call,) = [s for s in recorder.ended if s.name == "ai_stream"]
     assert call.replay
-    assert isinstance(call.data, ai.experimental_telemetry.AiStreamSpanData)
+    assert isinstance(call.data, ai.telemetry.AiStreamSpanData)
     assert call.data.message is not None
     assert call.data.message.text == "prior turn"

@@ -1,15 +1,15 @@
 ---
-title: "ai.experimental_telemetry"
+title: "ai.telemetry"
 description: Reference for spans, adapters, sinks, and the OpenTelemetry exporter.
 type: reference
-summary: Reference for ai.experimental_telemetry.
+summary: Reference for ai.telemetry.
 ---
 
-The module is experimental: it is not part of the stable API
-and may change or be removed.
-
-`ai.experimental_telemetry` contains instrumentation for tracing agent runs, model calls,
+`ai.telemetry` contains instrumentation for tracing agent runs, model calls,
 tool executions, and other work in a provider-agnostic way.
+
+`ai.experimental_telemetry` is a deprecated alias for `ai.telemetry`.
+Use `Stream.telemetry_span` instead of the deprecated `Stream.experimental_span`.
 
 The high-level API consists of the `span()` context manager for creating custom spans,
 and an `@adapter` decorator for making adapters. It can be used to augment the built-in
@@ -72,7 +72,7 @@ class RetrievalSpanData(pydantic.BaseModel):
     query: str
     count: int | None = None
 
-async with ai.experimental_telemetry.span(RetrievalSpanData(query=q)) as sp:
+async with ai.telemetry.span(RetrievalSpanData(query=q)) as sp:
     docs = await search(q)
     sp.data.count = len(docs)  # typed
 ```
@@ -109,7 +109,7 @@ one call; the response `message`, `usage`, `finish_reason`, `response_id`,
 and `response_model` are set at span end.
 
 `AiGenerateSpanData` carries the same request and response fields for
-`ai.experimental_generate` calls.
+`ai.generate` calls.
 
 Each `ai.ops` function has its own span data. All carry `model` and
 `provider`, as well as modality-specific fields.
@@ -158,7 +158,7 @@ raised) and pushes on exit:
 ```python
 import ai
 
-async with ai.experimental_telemetry.span("retrieval") as sp:
+async with ai.telemetry.span("retrieval") as sp:
     sp.set_attrs(query=query)
     docs = await search(query)
     sp.set_attrs(count=len(docs))
@@ -222,7 +222,7 @@ The following utilities connect manual spans to the built-in instrumentation.
 
 
 ```python
-sp = ai.experimental_telemetry.create_span("turn")
+sp = ai.telemetry.create_span("turn")
 sp.set_attrs(session=session_id)
 sp.stamp_start()
 await sp.push()                    # visible to adapters
@@ -258,15 +258,15 @@ class Sink(Protocol):
 `push_all(spans)` can be used to send a list of spans to the current sink.
 
 ```python
-sink = ai.experimental_telemetry.DictSink()
+sink = ai.telemetry.DictSink()
 
-async with ai.experimental_telemetry.use_sink(sink):
+async with ai.telemetry.use_sink(sink):
     ...  # spans go to the sink
 
 payload = [s.model_dump(mode="json") for s in sink.finished_spans]
 
 # elsewhere, with the default sink on:
-await ai.experimental_telemetry.push_all(payload)
+await ai.telemetry.push_all(payload)
 ```
 
 - `DictSink.spans` exposes the dict of span id to span.
@@ -296,7 +296,7 @@ If an adapter raises an error, the SDK logs it and skips the adapter. Telemetry 
 `@adapter` builds an adapter from one async generator function.
 
 ```python
-@ai.experimental_telemetry.adapter
+@ai.telemetry.adapter
 async def vendor(span):
     with sdk.start_span(span.name) as v:          # span start
         while (ev := (yield)) is not None:        # each event, live
@@ -305,7 +305,7 @@ async def vendor(span):
             v.set_error(span.error.message)
         v.update(output=span.data.model_dump(mode="json"))
 
-ai.experimental_telemetry.register(vendor)
+ai.telemetry.register(vendor)
 ```
 
 - Code before the loop runs at span start. Each span event resumes the
@@ -324,7 +324,7 @@ When the adapter needs configuration or state, decorate a class instead.
 `__call__` must be an async generator method with the same yield loop:
 
 ```python
-@ai.experimental_telemetry.adapter
+@ai.telemetry.adapter
 class Vendor:
     def __init__(self, *, api_key):
         self._client = sdk.Client(api_key)
@@ -334,7 +334,7 @@ class Vendor:
             while (ev := (yield)) is not None:
                 v.log_event(ev.name)
 
-ai.experimental_telemetry.register(Vendor(api_key="..."))
+ai.telemetry.register(Vendor(api_key="..."))
 ```
 
 Decorating a class mixes the adapter machinery (`AdapterMixin`) into it.
@@ -365,7 +365,7 @@ Implement the protocol directly when the callback shape fits your target better 
 
 ## The OpenTelemetry adapter
 
-`ai.experimental_telemetry.otel` maps framework spans onto OpenTelemetry
+`ai.telemetry.otel` maps framework spans onto OpenTelemetry
 spans, following the `gen_ai` semantic conventions. It requires the `otel`
 extra:
 
@@ -377,7 +377,7 @@ Configure a tracer provider and exporter before registering the adapter:
 
 ```python
 import ai
-from ai.experimental_telemetry import otel
+from ai.telemetry import otel
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
@@ -385,7 +385,7 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor
 tracer_provider = TracerProvider()
 tracer_provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
 adapter = otel.OtelAdapter(tracer_provider=tracer_provider)
-ai.experimental_telemetry.register(adapter)
+ai.telemetry.register(adapter)
 ```
 
 `OtelAdapter` uses the global tracer provider unless you pass one. It does
@@ -472,7 +472,7 @@ workflow = vercel.workflow.Workflows()
 
 
 @workflow.workflow
-@ai.experimental_telemetry.use_time(vercel.workflow.time_ns)
+@ai.telemetry.use_time(vercel.workflow.time_ns)
 async def run_turn(turn_input):
     ...
 ```
@@ -510,7 +510,7 @@ import ai
 
 
 async def handle(request):
-    async with ai.experimental_telemetry.span("handle_request") as sp:
+    async with ai.telemetry.span("handle_request") as sp:
         sp.set_attrs(request_id=request.id)
         async with agent.run(model, request.messages) as run:
             async for event in run:
@@ -535,7 +535,7 @@ class RetrievalSpanData(pydantic.BaseModel):
     count: int | None = None
 
 
-@ai.experimental_telemetry.adapter
+@ai.telemetry.adapter
 async def retrieval_metrics(span):
     if not isinstance(span.data, RetrievalSpanData):
         return  # skip everything else
@@ -569,7 +569,7 @@ workflow = vercel.workflow.Workflows()
 
 @workflow.workflow
 @ai.messages.use_random(vercel.workflow.random)  # span and message ids
-@ai.experimental_telemetry.use_time(vercel.workflow.time_ns)  # timestamps
+@ai.telemetry.use_time(vercel.workflow.time_ns)  # timestamps
 async def my_workflow(payload):
     ...
 ```
@@ -582,8 +582,8 @@ and the `use_sink` context manager.
 ```python
 @workflow.workflow
 async def my_workflow(payload):
-    sink = ai.experimental_telemetry.DictSink()
-    async with ai.experimental_telemetry.use_sink(sink):
+    sink = ai.telemetry.DictSink()
+    async with ai.telemetry.use_sink(sink):
         ...  # any instrumented work: agent runs, custom spans
 
     await report_spans(
@@ -593,7 +593,7 @@ async def my_workflow(payload):
 
 @workflow.step
 async def report_spans(spans_data):
-    await ai.experimental_telemetry.push_all(spans_data)
+    await ai.telemetry.push_all(spans_data)
 ```
 
 Finally, we need to be able to serialize and restore spans in order to pass them into
@@ -602,26 +602,26 @@ framework reports them to the vendor.
 
 ```python
 # where the run begins: mint the span; nothing is reported yet
-if ai.experimental_telemetry.is_enabled():
+if ai.telemetry.is_enabled():
     payload["run_span"] = (
-        ai.experimental_telemetry.create_span("run")
+        ai.telemetry.create_span("run")
         .stamp_start()
         .model_dump(mode="json")
     )
 
 # in any step or process that continues the work:
-run_span = ai.experimental_telemetry.Span.model_validate(payload["run_span"])
-async with ai.experimental_telemetry.use_span(run_span):
+run_span = ai.telemetry.Span.model_validate(payload["run_span"])
+async with ai.telemetry.use_span(run_span):
     ...  # spans opened here parent under run_span
 
 # where the run ends: complete the span and report it
-run_span = ai.experimental_telemetry.Span.model_validate(payload["run_span"])
+run_span = ai.telemetry.Span.model_validate(payload["run_span"])
 await run_span.stamp_end().push()
 ```
 
 ## Module exports
 
-`ai.experimental_telemetry` exports:
+`ai.telemetry` exports:
 
 - Spans: `Span`, `SpanData`, `SpanEvent`, `SpanError`.
 - Span data types: `RunSpanData`, `LoopTurnSpanData`, `AiStreamSpanData`,
@@ -637,4 +637,4 @@ await run_span.stamp_end().push()
 - Sinks and clocks: `Sink`, `use_sink`, `DictSink`, `push_all`, `use_time`,
   `now_ns`.
 
-`ai.experimental_telemetry.otel` exports `OtelAdapter`.
+`ai.telemetry.otel` exports `OtelAdapter`.

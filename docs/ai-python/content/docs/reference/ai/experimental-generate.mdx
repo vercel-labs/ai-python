@@ -1,24 +1,24 @@
 ---
-title: "experimental_generate"
+title: "generate"
 description: Generate a buffered language-model response.
 type: reference
-summary: Reference for ai.experimental_generate.
+summary: Reference for ai.generate.
 ---
 
-`ai.experimental_generate` makes one language-model call and returns the
+`ai.generate` makes one language-model call and returns the
 complete assistant `Message` without exposing streamed events.
 
-This API is experimental and may change or be removed.
+`ai.experimental_generate` is a deprecated alias for `ai.generate`.
 
 ```python
-message = await ai.experimental_generate(model, messages)
+message = await ai.generate(model, messages)
 print(message.text)
 ```
 
 ## Function
 
 ```python
-await ai.experimental_generate(
+await ai.generate(
     model,
     messages,
     *,
@@ -31,7 +31,7 @@ await ai.experimental_generate(
 You can also pass an agent-loop context:
 
 ```python
-message = await ai.experimental_generate(context=context)
+message = await ai.generate(context=context)
 ```
 
 Pass either `model` and `messages`, or `context=`, not both.
@@ -63,7 +63,7 @@ class Summary(pydantic.BaseModel):
     points: list[str]
 
 
-message = await ai.experimental_generate(
+message = await ai.generate(
     model,
     [ai.user_message("Summarize the mission as JSON.")],
     output_type=Summary,

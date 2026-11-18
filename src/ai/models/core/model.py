@@ -64,7 +64,7 @@ class ProviderLike[M](Protocol):
         """Answer without streaming.
 
         Optional: raise `NotImplementedError`, and
-        `ai.experimental_generate` drains `stream` instead.
+        `ai.generate` drains `stream` instead.
         """
         ...
 

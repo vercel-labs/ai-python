@@ -63,15 +63,15 @@ message.
 
 ## Generate without streamed events
 
-Use `ai.experimental_generate` when you only need the complete message:
+Use `ai.generate` when you only need the complete message:
 
 ```python
-message = await ai.experimental_generate(model, messages)
+message = await ai.generate(model, messages)
 print(message.text)
 ```
 
 The function accepts the same tools, output type, and request parameters as
-`ai.stream`. It is experimental and may change or be removed.
+`ai.stream`.
 
 ## Use structured output
 

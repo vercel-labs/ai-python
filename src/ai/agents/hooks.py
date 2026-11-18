@@ -27,8 +27,7 @@ from typing import TYPE_CHECKING, Any
 
 import pydantic
 
-from .. import experimental_telemetry as telemetry
-from .. import types
+from .. import telemetry, types
 from ..types import messages as messages_
 from . import runtime as runtime_
 

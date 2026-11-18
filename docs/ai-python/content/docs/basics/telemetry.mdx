@@ -10,8 +10,7 @@ and agent loop turn — as a tree of *spans*. You decide where the spans go:
 export them to OpenTelemetry, send them to an observability vendor, or print
 them to the terminal.
 
-Telemetry lives in the `ai.experimental_telemetry` module. It is experimental
-and is not part of the stable API. It may change or be removed.
+Telemetry lives in the `ai.telemetry` module.
 
 ## Turn on tracing
 
@@ -34,7 +33,7 @@ exporter before running your agent:
 
 ```python
 import ai
-from ai.experimental_telemetry import otel
+from ai.telemetry import otel
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
@@ -45,7 +44,7 @@ provider.add_span_processor(
         OTLPSpanExporter(endpoint="http://127.0.0.1:4318/v1/traces")
     )
 )
-ai.experimental_telemetry.register(otel.OtelAdapter(tracer_provider=provider))
+ai.telemetry.register(otel.OtelAdapter(tracer_provider=provider))
 ```
 
 Point the exporter at your collector. At application shutdown, call
@@ -62,7 +61,7 @@ with adapters.
 ```python
 import ai
 
-async with ai.experimental_telemetry.span("retrieval") as sp:
+async with ai.telemetry.span("retrieval") as sp:
     sp.set_attrs(query=query)
     docs = await search(query)
     sp.set_attrs(count=len(docs))
@@ -93,7 +92,7 @@ to pytest fixtures or FastAPI lifecycles.
 ```python
 import ai
 
-@ai.experimental_telemetry.adapter
+@ai.telemetry.adapter
 async def vendor(span):
     with sdk.start_span(span.name) as v:    # create a span before the loop
         while (ev := (yield)) is not None:  # process events coming from span.add_event()
@@ -102,7 +101,7 @@ async def vendor(span):
             v.set_error(span.error.message)
         v.update(output=span.data.model_dump(mode="json"))
 
-ai.experimental_telemetry.register(vendor)  # register custom adapter
+ai.telemetry.register(vendor)  # register custom adapter
 ```
 
 The function runs once per span:
@@ -127,5 +126,5 @@ independently.
 The module also has a low-level API, that can be useful for instrumenting complicated
 cases such as durable execution. It provides more control over adapter functionality and
 spans' lifecycles. See the
-[`ai.experimental_telemetry` reference](/docs/reference/telemetry) for the
+[`ai.telemetry` reference](/docs/reference/telemetry) for the
 full API, the span data types, and the durable execution patterns.

@@ -1,6 +1,6 @@
 """Non-streaming LLM call.
 
-``ai.experimental_generate()`` is the counterpart of ``ai.stream()``:
+``ai.generate()`` is the counterpart of ``ai.stream()``:
 same arguments, but it returns the final message instead of yielding
 events.
 """
@@ -18,7 +18,7 @@ messages = [
 
 
 async def main() -> None:
-    message = await ai.experimental_generate(model, messages)
+    message = await ai.generate(model, messages)
     print(message.text)
 
 

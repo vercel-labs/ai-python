@@ -1,111 +1,28 @@
-"""Telemetry: spans, sinks, adapters, and the ambient current span.
+"""Deprecated import path for :mod:`ai.telemetry`."""
 
-Experimental: not part of the stable API, may change or be removed.
-
-See :mod:`.span` for the full story.
-"""
-
+import importlib
+import sys
 import warnings
-from typing import TYPE_CHECKING, Any
+from pathlib import Path
+from typing import TYPE_CHECKING
 
-from .span import (
-    FIRST_TOKEN,
-    HOOK_CANCELLED,
-    HOOK_DEFERRED,
-    HOOK_RESOLVED,
-    RESPONSE_COMPLETE,
-    AdapterCallable,
-    AdapterMixin,
-    AdapterProtocol,
-    AiGenerateSpanData,
-    AiStreamSpanData,
-    CustomSpanData,
-    DecideSpanData,
-    DictSink,
-    EmbedSpanData,
-    GenerateAudioSpanData,
-    GenerateImageSpanData,
-    GenerateVideoSpanData,
-    HookSpanData,
-    LoopTurnSpanData,
-    RerankSpanData,
-    RunSpanData,
-    Sink,
-    Span,
-    SpanData,
-    SpanError,
-    SpanEvent,
-    ToolExecutionSpanData,
-    TranscribeSpanData,
-    adapter,
-    create_span,
-    current_span,
-    is_enabled,
-    now_ns,
-    push_all,
-    register,
-    span,
-    unregister,
-    use_sink,
-    use_span,
-    use_time,
-)
-
-__all__ = [
-    "FIRST_TOKEN",
-    "HOOK_CANCELLED",
-    "HOOK_DEFERRED",
-    "HOOK_RESOLVED",
-    "RESPONSE_COMPLETE",
-    "AdapterCallable",
-    "AdapterMixin",
-    "AdapterProtocol",
-    "AiGenerateSpanData",
-    "AiStreamSpanData",
-    "CustomSpanData",
-    "DecideSpanData",
-    "DictSink",
-    "EmbedSpanData",
-    "GenerateAudioSpanData",
-    "GenerateImageSpanData",
-    "GenerateVideoSpanData",
-    "HookSpanData",
-    "LoopTurnSpanData",
-    "RerankSpanData",
-    "RunSpanData",
-    "Sink",
-    "Span",
-    "SpanData",
-    "SpanError",
-    "SpanEvent",
-    "ToolExecutionSpanData",
-    "TranscribeSpanData",
-    "adapter",
-    "create_span",
-    "current_span",
-    "is_enabled",
-    "now_ns",
-    "push_all",
-    "register",
-    "span",
-    "unregister",
-    "use_sink",
-    "use_span",
-    "use_time",
-]
+from ..telemetry import *  # noqa: F403
+from ..telemetry import __all__ as __all__
 
 if TYPE_CHECKING:
-    EvaluateSpanData = DecideSpanData
+    from ..telemetry import EvaluateSpanData as EvaluateSpanData
 else:
+    from ..telemetry import __getattr__ as __getattr__
 
-    def __getattr__(name: str) -> Any:
-        # Deprecated names, kept as aliases of their replacements.
-        if name == "EvaluateSpanData":
-            warnings.warn(
-                "ai.experimental_telemetry.EvaluateSpanData is deprecated, "
-                "use ai.experimental_telemetry.DecideSpanData",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            return DecideSpanData
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+warnings.warn(
+    "ai.experimental_telemetry is deprecated; use ai.telemetry",
+    DeprecationWarning,
+    stacklevel=2,
+    skip_file_prefixes=(str(Path(__file__).parent.parent) + "/",),
+)
+
+# Loading the legacy submodule later would overwrite the span() re-export.
+sys.modules[f"{__name__}.span"] = importlib.import_module(
+    "..telemetry.span", __name__
+)

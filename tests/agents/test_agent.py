@@ -30,8 +30,8 @@ if TYPE_CHECKING:
 
 def _by_name(
     recorder: Recorder,
-) -> dict[str, list[ai.experimental_telemetry.Span]]:
-    spans: dict[str, list[ai.experimental_telemetry.Span]] = {}
+) -> dict[str, list[ai.telemetry.Span]]:
+    spans: dict[str, list[ai.telemetry.Span]] = {}
     for s in recorder.ended:
         spans.setdefault(s.name, []).append(s)
     return spans
@@ -77,7 +77,7 @@ async def test_agent_run_span_tree(recorder: Recorder) -> None:
     @ai.tool
     async def lookup(x: int) -> str:
         """Tool that opens a user span."""
-        async with ai.experimental_telemetry.span("user_work") as sp:
+        async with ai.telemetry.span("user_work") as sp:
             sp.set_attrs(x=x)
             return "ok"
 
@@ -110,7 +110,7 @@ async def test_agent_run_span_tree(recorder: Recorder) -> None:
     assert {s.trace_id for s in recorder.ended} == {run.trace_id}
     assert not any(s.replay for s in recorder.ended)
 
-    assert isinstance(run.data, ai.experimental_telemetry.RunSpanData)
+    assert isinstance(run.data, ai.telemetry.RunSpanData)
     assert run.data.agent == "Agent"
     assert run.data.model == "mock-model"
     assert run.data.provider == "mock"
@@ -120,19 +120,17 @@ async def test_agent_run_span_tree(recorder: Recorder) -> None:
     assert run.data.final_message is not None
     assert run.data.final_message.text == "done"
 
-    assert isinstance(
-        tool_span.data, ai.experimental_telemetry.ToolExecutionSpanData
-    )
+    assert isinstance(tool_span.data, ai.telemetry.ToolExecutionSpanData)
     assert tool_span.data.tool_name == "lookup"
     assert tool_span.data.tool_description == "Tool that opens a user span."
     assert tool_span.data.args == {"x": 1}
     assert tool_span.data.result == "ok"
     assert not tool_span.data.is_error
 
-    assert isinstance(calls[0].data, ai.experimental_telemetry.AiStreamSpanData)
+    assert isinstance(calls[0].data, ai.telemetry.AiStreamSpanData)
     assert calls[0].data.provider == "mock"
     assert calls[0].data.tool_names == ["lookup"]
-    assert isinstance(calls[1].data, ai.experimental_telemetry.AiStreamSpanData)
+    assert isinstance(calls[1].data, ai.telemetry.AiStreamSpanData)
     assert calls[1].data.message is not None
     assert calls[1].data.message.text == "done"
 
@@ -172,7 +170,7 @@ async def test_run_span_aggregates_usage(recorder: Recorder) -> None:
             pass
 
     (run,) = _by_name(recorder)["run"]
-    assert isinstance(run.data, ai.experimental_telemetry.RunSpanData)
+    assert isinstance(run.data, ai.telemetry.RunSpanData)
     assert run.data.usage is not None
     assert run.data.usage.input_tokens == 30
     assert run.data.usage.output_tokens == 5
@@ -258,7 +256,7 @@ async def test_early_break_closes_span_tree(recorder: Recorder) -> None:
         async for _ in stream:
             break
 
-    assert ai.experimental_telemetry.current_span() is None
+    assert ai.telemetry.current_span() is None
     assert {s.id for s in recorder.ended} == {s.id for s in recorder.started}
     names = [s.name for s in recorder.ended]
     assert names[-1] == "run"
@@ -274,7 +272,7 @@ async def test_consumer_error_closes_span_tree(recorder: Recorder) -> None:
             async for _ in stream:
                 raise ValueError("stop")
 
-    assert ai.experimental_telemetry.current_span() is None
+    assert ai.telemetry.current_span() is None
     assert {s.id for s in recorder.ended} == {s.id for s in recorder.started}
     assert [s.name for s in recorder.ended][-1] == "run"
 
@@ -292,9 +290,7 @@ async def test_tool_error_marked_on_span(recorder: Recorder) -> None:
             pass
 
     (tool_span,) = _by_name(recorder)["tool_execution"]
-    assert isinstance(
-        tool_span.data, ai.experimental_telemetry.ToolExecutionSpanData
-    )
+    assert isinstance(tool_span.data, ai.telemetry.ToolExecutionSpanData)
     # The framework converts the exception into an error result (the
     # run keeps going), but the failure is threaded onto the span as
     # serializable data.

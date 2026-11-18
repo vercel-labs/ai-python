@@ -68,6 +68,10 @@ tools use built-in tool events. Generated files arrive as `FileEvent`.
 
 Each yielded event has the current aggregated `event.message`.
 
+`stream.telemetry_span` is the [telemetry span](/docs/reference/telemetry)
+for this model call, including replay. It is `None` on streams not created
+by `ai.stream`.
+
 ## Replay
 
 If the last input message has `replay=True`, `ai.stream` does not call the
@@ -89,5 +93,5 @@ If the provider stream ends before a finish event, iteration raises
 `stream.message`.
 
 Use
-[`ai.experimental_generate`](/docs/reference/ai/experimental-generate) when
+[`ai.generate`](/docs/reference/ai/experimental-generate) when
 you need the complete message without consuming streamed events.

@@ -89,7 +89,7 @@ class MockProvider(models.Provider):
             )
         if self._generate_impl is None:
             # Mirrors the base class: providers without a native
-            # generate() make ai.experimental_generate() fall back to streaming.
+            # generate() make ai.generate() fall back to streaming.
             raise NotImplementedError(
                 "MockProvider: no generate implementation configured"
             )
@@ -279,29 +279,29 @@ class Recorder:
     """Telemetry adapter that records every span start/end it sees."""
 
     def __init__(self) -> None:
-        self.started: list[ai.experimental_telemetry.Span] = []
-        self.ended: list[ai.experimental_telemetry.Span] = []
+        self.started: list[ai.telemetry.Span] = []
+        self.ended: list[ai.telemetry.Span] = []
 
-    async def on_span_start(self, span: ai.experimental_telemetry.Span) -> None:
+    async def on_span_start(self, span: ai.telemetry.Span) -> None:
         self.started.append(span)
 
     async def on_span_event(
         self,
-        span: ai.experimental_telemetry.Span,
-        event: ai.experimental_telemetry.SpanEvent,
+        span: ai.telemetry.Span,
+        event: ai.telemetry.SpanEvent,
     ) -> None:
         pass
 
-    async def on_span_end(self, span: ai.experimental_telemetry.Span) -> None:
+    async def on_span_end(self, span: ai.telemetry.Span) -> None:
         self.ended.append(span)
 
 
 @pytest.fixture
 def recorder() -> Iterator[Recorder]:
     r = Recorder()
-    ai.experimental_telemetry.register(r)
+    ai.telemetry.register(r)
     yield r
-    ai.experimental_telemetry.unregister(r)
+    ai.telemetry.unregister(r)
 
 
 BLOCKING_TASKS: dict[

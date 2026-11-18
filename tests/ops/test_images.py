@@ -54,7 +54,7 @@ async def test_generate_image_span_with_warnings(
 
     (span,) = recorder.ended
     data = span.data
-    assert isinstance(data, ai.experimental_telemetry.GenerateImageSpanData)
+    assert isinstance(data, ai.telemetry.GenerateImageSpanData)
     assert data.output_count == 1
     assert data.warnings is not None
     assert data.warnings[0]["kind"] == "unsupported"

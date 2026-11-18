@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import dataclasses
+import warnings
 from contextlib import AbstractAsyncContextManager
 from typing import (
     TYPE_CHECKING,
@@ -18,10 +19,9 @@ import pydantic
 
 # ``typing.TypeVar`` lacks the ``default=`` kwarg on Python <3.13.
 # Use the typing_extensions backport so this works on 3.12 too.
-from typing_extensions import TypeVar
+from typing_extensions import TypeVar, deprecated
 
-from ... import errors, types
-from ... import experimental_telemetry as telemetry
+from ... import errors, telemetry, types
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, AsyncIterator, Sequence
@@ -240,13 +240,10 @@ class Stream(Generic[StreamOutputT]):
         return event
 
     @property
-    def experimental_span(
+    def telemetry_span(
         self,
     ) -> telemetry.Span[telemetry.AiStreamSpanData] | None:
         """The telemetry span bracketing this stream.
-
-        Experimental: not part of the stable API, may change or be
-        removed.
 
         Set when the stream came from :func:`stream` (live and replay
         both); ``None`` for directly constructed streams.  Lets
@@ -254,6 +251,16 @@ class Stream(Generic[StreamOutputT]):
         with the span — per-event data itself never lands on the span.
         """
         return self._span
+
+    @property
+    @deprecated(
+        "Stream.experimental_span is deprecated; use Stream.telemetry_span"
+    )
+    def experimental_span(
+        self,
+    ) -> telemetry.Span[telemetry.AiStreamSpanData] | None:
+        """Deprecated alias for :attr:`telemetry_span`."""
+        return self.telemetry_span
 
     @property
     def message(self) -> types.messages.Message:
@@ -464,14 +471,14 @@ async def _stream(
 
 
 @overload
-async def experimental_generate(
+async def generate(
     *,
     context: StreamContext,
     output_type: type[pydantic.BaseModel] | None = None,
     params: params_.InferenceRequestParams | None = None,
 ) -> types.messages.Message: ...
 @overload
-async def experimental_generate(
+async def generate(
     model: model_.ModelLike,
     messages: list[types.messages.Message],
     *,
@@ -479,7 +486,7 @@ async def experimental_generate(
     output_type: type[pydantic.BaseModel] | None = None,
     params: params_.InferenceRequestParams | None = None,
 ) -> types.messages.Message: ...
-async def experimental_generate(
+async def generate(
     model: model_.ModelLike | None = None,
     messages: list[types.messages.Message] | None = None,
     *,
@@ -491,19 +498,17 @@ async def experimental_generate(
     """Generate an LLM response and return the complete message.
 
     ::
-        message = await ai.experimental_generate(model, messages)
-        message = await ai.experimental_generate(context=context)
+        message = await ai.generate(model, messages)
+        message = await ai.generate(context=context)
 
     When the provider implements a native non-streaming ``generate()``,
     it is used; otherwise the response is streamed internally, drained,
     and the resulting message returned.
-
-    Experimental: not part of the stable API, may change or be removed.
     """
     if context is not None:
         if model is not None or messages is not None or tools is not None:
             raise TypeError(
-                "experimental_generate() takes either model/messages/tools "
+                "generate() takes either model/messages/tools "
                 "or context=, not both"
             )
         model = context.model
@@ -515,8 +520,7 @@ async def experimental_generate(
             params = context.params
     elif model is None or messages is None:
         raise TypeError(
-            "experimental_generate() requires either model and messages "
-            "or context="
+            "generate() requires either model and messages " "or context="
         )
 
     request = _StreamRequest(
@@ -566,3 +570,19 @@ async def experimental_generate(
 async def probe(model: model_.Model) -> None:
     """Raise unless the model's provider is reachable and the model exists."""
     await model.provider.probe(model)
+
+
+if TYPE_CHECKING:
+    experimental_generate = generate
+else:
+
+    def __getattr__(name: str) -> object:
+        if name == "experimental_generate":
+            warnings.warn(
+                f"{__name__}.experimental_generate is deprecated; "
+                "use ai.generate",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            return generate
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

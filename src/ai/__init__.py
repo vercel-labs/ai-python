@@ -1,11 +1,14 @@
+import warnings
+from typing import TYPE_CHECKING
+
 from . import (
     durable,
     errors,
-    experimental_telemetry,
     external,
     models,
     ops,
     providers,
+    telemetry,
     testing,
     ui,
     util,
@@ -98,7 +101,7 @@ from .models import (
     TopKSamplerParams,
     TopPSamplerParams,
     Unset,
-    experimental_generate,
+    generate,
     get_model,
     probe,
     stream,
@@ -204,6 +207,7 @@ __all__ = [
     "experimental_telemetry",
     "external",
     "file_part",
+    "generate",
     "get_hook_registry",
     "get_model",
     "get_provider",
@@ -218,6 +222,7 @@ __all__ = [
     "resolve_hook",
     "stream",
     "system_message",
+    "telemetry",
     "testing",
     "text_part",
     "thinking",
@@ -231,3 +236,26 @@ __all__ = [
     "util",
     "yield_from",
 ]
+
+if TYPE_CHECKING:
+    experimental_generate = generate
+    from . import (
+        experimental_telemetry as experimental_telemetry,  # noqa: TC004
+    )
+else:
+
+    def __getattr__(name: str) -> object:
+        if name == "experimental_generate":
+            warnings.warn(
+                f"{__name__}.experimental_generate is deprecated; "
+                "use ai.generate",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            return generate
+        if name == "experimental_telemetry":
+            # Avoid adding an importlib frame to the shim's warning stack.
+            return __import__(
+                f"{__name__}.experimental_telemetry", fromlist=("__name__",)
+            )
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
