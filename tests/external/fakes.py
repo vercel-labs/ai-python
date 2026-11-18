@@ -1,0 +1,252 @@
+"""Test doubles for external harnesses: a scripted wire and a fake process."""
+
+from __future__ import annotations
+
+import asyncio
+import dataclasses
+import json
+import urllib.parse
+from collections.abc import AsyncIterator, Callable, Iterable
+from typing import Any, ClassVar
+
+from ai import external
+from ai.external import _utils, _wire
+from ai.types import events
+from ai.types import messages as m
+
+
+@dataclasses.dataclass
+class CallTool:
+    """The CLI calls an `ai` tool through the MCP bridge, over HTTP.
+
+    `then(text, is_error)` gives what the CLI says after the result.
+    """
+
+    name: str
+    arguments: dict[str, Any] = dataclasses.field(default_factory=dict)
+    then: Callable[[str, bool], Iterable[_wire.Item]] = lambda text_, err: [
+        *text(f"got {text_}", block=f"after-{text_}"),
+        _wire.TurnEnd(),
+    ]
+
+
+Step = _wire.Item | CallTool
+Reply = Callable[[m.Message], Iterable[Step]]
+
+
+def text(chunk: str, block: str = "t") -> list[_wire.Item]:
+    return [
+        events.TextStart(block_id=block),
+        events.TextDelta(chunk=chunk, block_id=block),
+        events.TextEnd(block_id=block),
+    ]
+
+
+def builtin(
+    call_id: str, name: str, args: str = "{}", result: Any = "ok"
+) -> list[_wire.Item]:
+    """One of the CLI's own tool calls, from start to result."""
+    return [
+        *_utils.get_builtin_call_events(
+            call_id, name, args, started_call_ids=set()
+        ),
+        _utils.get_builtin_result_event(call_id, name, result, is_error=False),
+    ]
+
+
+def echo(message: m.Message) -> list[_wire.Item]:
+    """Accept the message, answer with its text, end the turn."""
+    return [
+        _wire.Accepted(message),
+        *text(message.text, block=f"t-{message.id}"),
+        _wire.TurnEnd(),
+    ]
+
+
+class FakeWire:
+    """A CLI that says what the test tells it to.
+
+    `reply(message)` gives the items that a sent message causes (default:
+    accept it, nothing more). `push()` adds items at any time.
+    """
+
+    def __init__(self, harness: FakeHarness) -> None:
+        self.harness = harness
+        self.reply: Reply = harness._reply or (
+            lambda msg: [_wire.Accepted(msg)]
+        )
+        self.queue: asyncio.Queue[Any] = asyncio.Queue()
+        self.started: dict[str, Any] | None = None
+        self.sent: list[m.Message] = []
+        self.interrupts = 0
+        self.calls: list[asyncio.Task[tuple[str, bool]]] = []
+        self.closed = False
+        # What `interrupt()` does. None: the CLI ignores interrupts.
+        self.on_interrupt: list[_wire.Item] | None = [
+            _wire.TurnEnd(reason="interrupted")
+        ]
+        harness._wires.append(self)
+
+    def push(self, *items: Step | BaseException) -> None:
+        for item in items:
+            self.queue.put_nowait(item)
+
+    async def start(
+        self,
+        *,
+        session_id: str | None,
+        bridge_url: str,
+        bridge_token: str,
+        instructions: str | None,
+        seed: list[m.Message],
+    ) -> str:
+        self.started = {
+            "bridge_url": bridge_url,
+            "bridge_token": bridge_token,
+            "instructions": instructions,
+            "seed": seed,
+            "session_id": session_id,
+        }
+        return session_id or "s1"
+
+    async def send(self, message: m.Message) -> None:
+        self.sent.append(message)
+        self.push(*self.reply(message))
+
+    async def events(self) -> AsyncIterator[_wire.Item]:
+        while True:
+            item = await self.queue.get()
+            if isinstance(item, BaseException):
+                raise item
+            if isinstance(item, CallTool):
+                task = asyncio.create_task(self._call(item))
+                self.calls.append(task)
+                continue
+            yield item
+
+    async def _call(self, call: CallTool) -> tuple[str, bool]:
+        assert self.started is not None
+        reply = await mcp_call(
+            self.started["bridge_url"],
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": call.name, "arguments": call.arguments},
+            },
+            {"Authorization": f"Bearer {self.started['bridge_token']}"},
+        )
+        result = reply["result"]
+        answer = (result["content"][0]["text"], bool(result["isError"]))
+        self.push(*call.then(*answer))
+        return answer
+
+    async def interrupt(self) -> None:
+        self.interrupts += 1
+        if self.on_interrupt is not None:
+            self.push(*self.on_interrupt)
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+class FakeProvider(external.ExternalHarnessProvider):
+    name: str = "fake"
+
+    def _make_wire(self, harness: FakeHarness) -> FakeWire:
+        return FakeWire(harness)
+
+
+@dataclasses.dataclass(kw_only=True, eq=False)
+class FakeHarness(external.ExternalHarness):
+    harness_class_id: ClassVar[str] = "fake"
+
+    provider: FakeProvider = dataclasses.field(default_factory=FakeProvider)
+
+    # Test controls, not settings.
+    _reply: Reply | None = dataclasses.field(
+        default=None, init=False, repr=False
+    )
+    _wires: list[FakeWire] = dataclasses.field(
+        default_factory=list, init=False, repr=False
+    )
+
+    @property
+    def wire(self) -> FakeWire:
+        return self._wires[-1]
+
+
+def fake(reply: Reply | None = None, **fields: Any) -> FakeHarness:
+    harness = FakeHarness(**fields)
+    harness._reply = reply
+    return harness
+
+
+class FakeProcess:
+    """In-memory duplex stdio, for the JSON-RPC peer and the wires.
+
+    `answer(message)` is called for every message the client writes. For a
+    request, a non-None return is sent back as its result. `server_says()`
+    pushes a line from the "server": a notification or a request.
+    """
+
+    def __init__(
+        self, answer: Callable[[dict[str, Any]], Any] | None = None
+    ) -> None:
+        self._lines: asyncio.Queue[str] = asyncio.Queue()
+        self.answer = answer or (lambda message: {})
+        self.written: list[dict[str, Any]] = []
+        self.terminated = False
+
+    def server_says(self, message: dict[str, Any]) -> None:
+        self._lines.put_nowait(json.dumps(message) + "\n")
+
+    async def write(self, data: str) -> None:
+        message = json.loads(data)
+        self.written.append(message)
+        result = self.answer(message)
+        if "method" in message and "id" in message and result is not None:
+            self.server_says({"id": message["id"], "result": result})
+
+    async def readline(self) -> str:
+        return await self._lines.get()
+
+    async def read_stderr(self) -> str:
+        return ""
+
+    async def wait(self) -> int:
+        return 0
+
+    async def terminate(self) -> None:
+        self.terminated = True
+        self._lines.put_nowait("")
+
+    async def death_note(self) -> str:
+        return "exit code 0; no stderr"
+
+
+async def mcp_call(
+    url: str, payload: dict[str, Any], headers: dict[str, str]
+) -> dict[str, Any]:
+    """POST one JSON-RPC message to the bridge; return the JSON reply."""
+    parts = urllib.parse.urlsplit(url)
+    reader, writer = await asyncio.open_connection(parts.hostname, parts.port)
+    body = json.dumps(payload).encode()
+    extra = "".join(f"{key}: {value}\r\n" for key, value in headers.items())
+    writer.write(
+        (
+            f"POST {parts.path} HTTP/1.1\r\nHost: {parts.netloc}\r\n"
+            f"Content-Type: application/json\r\nContent-Length: {len(body)}\r\n"
+            f"{extra}\r\n"
+        ).encode()
+        + body
+    )
+    await writer.drain()
+    head = await reader.readuntil(b"\r\n\r\n")
+    length = 0
+    for line in head.decode().split("\r\n"):
+        if line.lower().startswith("content-length:"):
+            length = int(line.split(":", 1)[1])
+    data = await reader.readexactly(length)
+    writer.close()
+    return json.loads(data) if data else {}

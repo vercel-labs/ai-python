@@ -7,6 +7,9 @@ Examples are grouped by the main API surface they demonstrate.
 - `media/` contains image, video, speech, transcription, multimodal, embedding,
   and reranking examples.
 - `models/` contains model streaming, structured output, and provider examples.
+- `external/` contains examples that use coding-agent CLIs (Claude Code, Codex,
+  fx, pi) where a model goes (experimental; run with
+  `run-examples.py --external`).
 
 Provider-specific model examples live under `models/<provider>/`, such as
 `models/gateway/`, `models/openai/`, and `models/anthropic/`.

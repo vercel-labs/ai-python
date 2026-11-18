@@ -1,17 +1,22 @@
 """Model metadata types."""
 
+from __future__ import annotations
+
 import os
 import weakref
-from typing import TYPE_CHECKING, Any, Self, cast
+from typing import TYPE_CHECKING, Any, Protocol, Self, cast, runtime_checkable
 
 import pydantic
-
-if TYPE_CHECKING:
-    from collections.abc import Callable
 
 from ... import _modelsdev
 from ...errors import ConfigurationError
 from ...providers import base
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator, Callable, Sequence
+
+    from ... import types
+    from . import params as params_
 
 _DEFAULT_MODEL_ENV = "AI_SDK_DEFAULT_MODEL"
 
@@ -22,6 +27,62 @@ def _exclude_if_none(v: Any) -> bool:
     # cycle back through this module; wrap it in weakref.proxy at the call
     # site to keep the serializer's reference weak.
     return v is None
+
+
+class ProviderLike[M](Protocol):
+    """What answers for a model."""
+
+    @property
+    def name(self) -> str: ...
+
+    def stream(
+        self,
+        model: M,
+        messages: list[types.messages.Message],
+        /,
+        *,
+        tools: Sequence[types.tools.Tool] | None = None,
+        output_type: type[pydantic.BaseModel] | None = None,
+        params: params_.InferenceRequestParams | None = None,
+    ) -> AsyncGenerator[types.events.Event]:
+        """Answer the WHOLE conversation with ONE assistant message.
+
+        Yield its events, ending with `StreamEnd`.
+        """
+        ...
+
+    async def generate(
+        self,
+        model: M,
+        messages: list[types.messages.Message],
+        /,
+        *,
+        tools: Sequence[types.tools.Tool] | None = None,
+        output_type: type[pydantic.BaseModel] | None = None,
+        params: params_.InferenceRequestParams | None = None,
+    ) -> types.messages.Message:
+        """Answer without streaming.
+
+        Optional: raise `NotImplementedError`, and
+        `ai.experimental_generate` drains `stream` instead.
+        """
+        ...
+
+
+@runtime_checkable
+class ModelLike(Protocol):
+    """What `ai.stream` and `ai.Agent.run` need from a model.
+
+    An id and the provider that answers for it. `ai.Model` and its
+    `ai.Provider` have this shape. Anything else with the same shape goes
+    where a model goes.
+    """
+
+    @property
+    def id(self) -> str: ...
+
+    @property
+    def provider(self) -> ProviderLike[Self]: ...
 
 
 class Model(pydantic.BaseModel):
