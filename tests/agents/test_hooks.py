@@ -349,6 +349,13 @@ async def test_hook_metadata_in_deferred() -> None:
     assert hooks[0].metadata == {"tool": "rm -rf", "path": "/"}
 
 
+async def test_hook_outside_run_has_a_clear_error() -> None:
+    with pytest.raises(
+        LookupError, match=r"^No active agent runtime: .*agent\.run\(\)\.$"
+    ):
+        await ai.hook("outside_run", payload=Confirmation)
+
+
 # -- telemetry spans --------------------------------------------------------
 
 

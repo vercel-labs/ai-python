@@ -6,6 +6,8 @@ import asyncio
 import contextlib
 from collections.abc import AsyncGenerator
 
+import pytest
+
 import ai
 from ai.agents import runtime
 from ai.types import events, messages
@@ -34,6 +36,25 @@ async def concat(a: str, b: str) -> str:
 
 
 # -- runtime.run ------------------------------------------------------------
+
+
+def test_get_runtime_outside_run_has_a_clear_error() -> None:
+    with pytest.raises(
+        LookupError, match=r"^No active agent runtime: .*agent\.run\(\)\.$"
+    ) as exc_info:
+        runtime.get_runtime()
+    assert type(exc_info.value) is LookupError
+    assert exc_info.value.__suppress_context__
+
+
+async def test_yield_from_outside_run_has_a_clear_error() -> None:
+    async def source() -> AsyncGenerator[events.AgentEvent]:
+        yield events.TextDelta(chunk="unused")
+
+    with pytest.raises(
+        LookupError, match=r"^No active agent runtime: .*agent\.run\(\)\.$"
+    ):
+        await ai.yield_from(source(), aggregator=ai.agents.MessageAggregator)
 
 
 async def test_run_source_lockstep() -> None:

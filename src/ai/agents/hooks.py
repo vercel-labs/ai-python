@@ -171,8 +171,8 @@ async def hook[T: pydantic.BaseModel](
             whose ``hook_id`` supplies it.
         payload: Pydantic model class — the resolution data must validate
             against this type.  The return value is a validated instance.
-        metadata: Arbitrary metadata surfaced in the deferred signal message
-            and checkpoint.  Useful for UI rendering (e.g. which tool needs
+        metadata: Arbitrary metadata included in the HookPart emitted in
+            hook events.  Useful for UI rendering (e.g. which tool needs
             approval, what arguments it received).
         tool_call_id: The tool call this hook suspends, if any.  Stamped
             onto the emitted :class:`~ai.messages.HookPart` so consumers
