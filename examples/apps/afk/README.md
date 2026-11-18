@@ -16,12 +16,12 @@ $ afk
   here
   a3f5  claude  migrate the billing tests to pytest     active 2m
   b81c  claude  add rate limiting to the webhook        idle 6h
-  01a0  codex   audit the auth middleware               idle 3h
+  7e4d  codex   audit the auth middleware               idle 3h
 
   remote
   c2d1  claude  billing · migrate the billing tests…  running   $0.031 ($0.085/h)   ← from a3f5 · amber-fox
   9e07  claude  add rate limiting to the webhook      finished  $0.012 ($0.085/h)   ← new, was running · ← from b81c · teal-owl
-  4b2a  codex   audit the auth middleware             expired   $0.054              snapshot 1.1 GB, kept to Nov 18 · ← from 01a0 · red-elk
+  4b2a  codex   audit the auth middleware             expired   $0.054              snapshot 1.1 GB, kept to Nov 18 · ← from 7e4d · red-elk
   /h: memory, every hour it runs; CPU adds while it computes
 
 afk push <id> [--bg] · attach <id> · peek <id> · pull <id> [--files] · stop <id> · rm <id>
@@ -68,7 +68,7 @@ terminal is never seen: it shows no conversation in its process name.
 conversation opens in an ordinary local TUI: quit it as you always do.
 
 An id is whatever the list showed: a label you gave with `--as`, a word from a
-title, or a short id prefix. With no id, `afk` chooses only when exactly one
+title, or its short id. With no id, `afk` chooses only when exactly one
 conversation is clearly in use; with several in play it shows them and asks.
 It never guesses.
 

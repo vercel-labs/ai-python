@@ -15,7 +15,7 @@
     afk setup                choose the Vercel team afk's sandboxes use
 
 An id is whatever the list showed: a label you gave (`--as`), a word from a
-title, or a short id prefix. With none, the one conversation clearly in use
+title, or its short id. With none, the one conversation clearly in use
 is chosen; with several in play, afk asks. Ctrl-] detaches from any TUI.
 
 On a terminal, bare `afk` is a picker: arrow keys choose a conversation,
@@ -51,6 +51,7 @@ from .rows import (
     display_name,
     local_rows,
     remote_rows,
+    short_id,
     stored_rows,
     titled,
 )
@@ -145,7 +146,7 @@ async def listing(
         remote = titled(remote, here)
         news = {r.session_id: was for r, was in state.changed(remote)}
         for r in remote:
-            origin = f"← from {r.from_id[:4]} · " if r.from_id else ""
+            origin = f"← from {short_id(r.from_id)} · " if r.from_id else ""
             detail = f"{r.detail} · " if r.detail else ""
             new = (
                 f"{BOLD}← new, was {news[r.session_id]}{RESET} "

@@ -1,7 +1,7 @@
 """Turning what you typed into one conversation — or asking, never guessing.
 
 Humans mostly do not type ids. A verb accepts a label you gave, a word
-from a title, or a short id prefix, whatever the list showed. With no
+from a title, or its short id, whatever the list showed. With no
 argument, the one conversation clearly in use is chosen; with several in
 play, afk shows them and asks. The only thing ever auto-selected is a
 choice with exactly one candidate.

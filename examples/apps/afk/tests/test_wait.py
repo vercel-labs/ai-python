@@ -3,9 +3,10 @@ changed since you last looked, and `afk wait` polls until it is over."""
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING, Any
 
-from afk import cli
+from afk import cli, rows
 from afk import state as st
 from afk.rows import Row, display_name, titled
 
@@ -105,3 +106,40 @@ def test_one_pushed_before_titles_were_kept_borrows_its_sources() -> None:
         title="add rate limiting",
     )
     assert titled([old], [here])[0].title == "add rate limiting"
+
+
+async def test_a_sandbox_that_does_not_answer_does_not_hold_the_list(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Measured: one sandbox stopped answering and `afk wait` never
+    returned. It is listed `unreachable`, and its record is kept."""
+
+    class Silent:
+        def __init__(self, **_: Any) -> None:
+            pass
+
+        async def info(self) -> Any:
+            await asyncio.sleep(3600)
+
+    handle = Handle(
+        kind="claude-code",
+        session_id="abcd1234",
+        workspace=WorkspaceCoords(provider="sandbox", location="sb"),
+    )
+    state = st.State(
+        remotes=[
+            st.Remote(
+                label="job",
+                origin=str(tmp_path),
+                sandbox="sb",
+                mode="bg",
+                handle=handle,
+                pushed_at=0,
+            )
+        ]
+    )
+    monkeypatch.setattr(rows, "VercelSandbox", Silent)
+    monkeypatch.setattr(rows, "PROBE_TIMEOUT", 0.05)
+    listed, gone = await rows.remote_rows(state, tmp_path, None)
+    assert [r.status for r in listed] == ["unreachable"]
+    assert gone == []

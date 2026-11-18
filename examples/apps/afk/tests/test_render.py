@@ -120,6 +120,18 @@ def test_a_turn_is_finished_only_on_the_agents_own_words() -> None:
         [asked, calling, result]
     ), "a result means the agent speaks next"
     assert not turn_finished([asked]) and not turn_finished([])
+    # codex narrates before it acts, and the command it is running is not in
+    # its record yet: measured, mid-`sleep 150` the list said `finished`.
+    narrating = Message(
+        role="assistant",
+        parts=[TextPart(text="I'll run the tests.")],
+        provider_metadata={"codex": {"phase": "commentary"}},
+    )
+    answer = narrating.model_copy(
+        update={"provider_metadata": {"codex": {"phase": "final_answer"}}}
+    )
+    assert not turn_finished([asked, narrating])
+    assert turn_finished([asked, narrating, answer])
 
 
 def test_bold_markers_are_not_drawn_as_asterisks() -> None:

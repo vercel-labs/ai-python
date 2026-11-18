@@ -74,3 +74,17 @@ def test_where_scopes_the_search() -> None:
 def test_pick_takes_a_number_and_enter_cancels() -> None:
     assert pick(ROWS, "pick", ask=lambda _: "2") is ROWS[1]
     assert pick(ROWS, "pick", ask=lambda _: "") is None
+
+
+def test_time_ordered_ids_are_told_apart_by_their_last_four() -> None:
+    """codex and pi mint UUIDv7 ids, which begin alike for weeks: measured,
+    a codex and a pi conversation of one day both listed as `01a1`."""
+    codex = _row("01a1f02c-5258-76d1-9f58-5c48903b9cab", "audit the auth")
+    pi = _row("01a1f029-b237-7503-8b39-ff50902e1b02", "fix the flaky test")
+    assert (codex.short, pi.short) == ("9cab", "1b02")
+    assert match([codex, pi], "9cab") is codex
+    assert match([codex, pi], "1b02") is pi
+    # A prefix still names it, when it names one.
+    assert match([codex, pi], "01a1f029") is pi
+    # A random id (claude's, or one the SDK minted) keeps its first four.
+    assert _row("a3f5aaaa-0000-4000-8000-000000000000", "x").short == "a3f5"

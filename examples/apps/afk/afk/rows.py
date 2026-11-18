@@ -47,6 +47,11 @@ CONTINUE = (
 afk wrote it, so finding it in a transcript is how afk knows where the pushed
 turn began.
 """
+PROBE_TIMEOUT = 60.0
+"""Seconds one sandbox gets to say how its conversations are doing. Past
+that it is listed `unreachable`: one sandbox that does not answer must not
+hold the list, or `afk wait`, forever (measured: a wait that never
+returned)."""
 ACTIVE_WITHIN = 10 * 60
 """A conversation written to this recently is one you are probably in."""
 
@@ -81,7 +86,7 @@ class Row(BaseModel):
 
     @property
     def short(self) -> str:
-        return self.session_id[:4]
+        return short_id(self.session_id)
 
     @property
     def active(self) -> bool:
@@ -94,9 +99,21 @@ class Row(BaseModel):
         w = word.lower()
         return (
             self.session_id.lower().startswith(w)
+            or self.short.lower() == w
             or (self.label or "").lower() == w
             or w in (self.title or "").lower()
         )
+
+
+def short_id(session_id: str) -> str:
+    """The four characters the list shows for a conversation: its id's first.
+
+    codex and pi mint time-ordered ids (UUIDv7), which begin alike for weeks
+    (measured: every conversation of a day listed as `01a1`). Those show
+    their last four, which are random.
+    """
+    v7 = len(session_id) == 36 and session_id[14] == "7"
+    return session_id[-4:] if v7 else session_id[:4]
 
 
 def seconds(ts: int) -> float:
@@ -185,13 +202,16 @@ async def remote_rows(
         # Asked first WITHOUT resuming it: a stopped sandbox stays stopped,
         # and costs nothing more, because it was listed.
         try:
-            described = await VercelSandbox(name=name, gateway=gateway).info()
+            async with asyncio.timeout(PROBE_TIMEOUT):
+                described = await VercelSandbox(
+                    name=name, gateway=gateway
+                ).info()
         except WorkspaceGoneError:
             gone.append(name)
             for r in group:
                 rows.append(_remote_row(r, "gone"))
             return
-        except (HarnessError, WorkspaceError):
+        except (HarnessError, WorkspaceError, TimeoutError):
             for r in group:
                 rows.append(_remote_row(r, "unreachable"))
             return
@@ -205,8 +225,12 @@ async def remote_rows(
             for r in group:
                 rows.append(_remote_row(r, status, cost=spent, detail=detail))
             return
+        answered: list[Row] = []
         try:
-            async with VercelSandbox(name=name, gateway=gateway) as ws:
+            async with (
+                asyncio.timeout(PROBE_TIMEOUT),
+                VercelSandbox(name=name, gateway=gateway) as ws,
+            ):
                 # Ask only what the rows need: a TUI's status is its pty, so
                 # a sandbox holding only TUIs never opens a harness (measured:
                 # the harness open and session listing were ~3s of a 4s probe).
@@ -228,18 +252,19 @@ async def remote_rows(
                         )
                     else:
                         status = await _unattended_status(ws, r)
-                    rows.append(_remote_row(r, status, cost=spent))
+                    answered.append(_remote_row(r, status, cost=spent))
+            rows.extend(answered)
         except WorkspaceGoneError:
             # The platform says it is stopped or was never there: forget it.
             gone.append(name)
             for r in group:
                 rows.append(_remote_row(r, "gone"))
-        except (HarnessError, WorkspaceError):
+        except (HarnessError, WorkspaceError, TimeoutError):
             # Could not ask — network, credentials, the platform (the SDK says
-            # so as a WorkspaceError). It may well be running: keep the
-            # record, or it is the only way back lost.
+            # so as a WorkspaceError), or no answer in time. It may well be
+            # running: keep the record, or it is the only way back lost.
             for r in group:
-                rows.append(_remote_row(r, "unreachable"))
+                rows.append(_remote_row(r, "unreachable", cost=spent))
 
     await asyncio.gather(*(probe(n, g) for n, g in by_sandbox.items()))
     rows.sort(key=lambda r: seconds(r.updated_at or 0), reverse=True)
@@ -352,8 +377,21 @@ def turn_finished(messages: list[Any], asked: str | None = None) -> bool:
             return False
     if not messages or messages[-1].role != "assistant":
         return False
+    if narrating(messages[-1]):
+        return False
     kinds = {getattr(p, "kind", "") for p in messages[-1].parts}
     return "text" in kinds and "tool_call" not in kinds
+
+
+def narrating(message: Any) -> bool:
+    """Whether the agent is saying what it is about to do, not answering.
+
+    codex labels that ("commentary"), and the command it then runs is not in
+    its record until it ends: such a message is a turn under way (measured:
+    mid-`sleep 150`, the list said `finished`).
+    """
+    said = (message.provider_metadata or {}).get("codex") or {}
+    return bool(said.get("phase") == "commentary")
 
 
 def _text(message: Any) -> str:

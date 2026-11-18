@@ -35,6 +35,8 @@ from .rows import (
     HARNESSES,
     KIND_SHORT,
     Row,
+    narrating,
+    short_id,
     snapshot_detail,
     turn_finished,
 )
@@ -47,6 +49,10 @@ if TYPE_CHECKING:
 
 OPEN = ("*",)
 """Every host: what a sandbox may reach unless `--no-network`."""
+
+
+START_WAIT = 120.0
+"""Seconds an unattended push waits for the agent's first event."""
 
 
 def _pty_name(label: str) -> str:
@@ -141,12 +147,24 @@ async def push(
             # before letting go — the first event proves the agent is
             # working — then this client detaches and the VM keeps it.
             asked = prompt or CONTINUE.format(path=ws.path)
-            events = aiter(session.stream(asked))
-            first = asyncio.ensure_future(anext(events))
-            with contextlib.suppress(Exception):
-                await asyncio.wait_for(asyncio.shield(first), 120)
+            turn = session.stream(asked)
+            # Kept until this client has detached: a stream nobody holds is
+            # closed at once, and that close stops the agent.
+            events = aiter(turn)
+            try:
+                # An error here is the push failing (the CLI did not start,
+                # the model refused): said, not recorded as running.
+                await asyncio.wait_for(anext(events, None), START_WAIT)
+            except TimeoutError:
+                raise HarnessError(
+                    f"the agent did not start within {START_WAIT:g}s"
+                ) from None
             sid = session.session_id
-            name = label or sid[:4]
+            if not sid:
+                raise HarnessError(
+                    "the harness did not report the new conversation's id"
+                )
+            name = label or short_id(sid)
             remote = st.Remote(
                 label=name,
                 origin=str(cwd),
@@ -162,17 +180,18 @@ async def push(
             )
             _remember(remote)
             recorded = True
-            first.cancel()
-            with contextlib.suppress(BaseException):
-                await first
             await agent.detach()
+            # Detached, this reaches nothing in the VM: it only settles the
+            # stream here, rather than leaving that to interpreter exit.
+            with contextlib.suppress(Exception):
+                await turn.aclose()
             print(f"afk: {name} ({sid[:8]}) · running unattended in {ws.name}")
             return remote
         tui = await agent.tui(
             history=history, name=_pty_name(label or "pending")
         )
         sid = tui.session_id or ""
-        name = label or sid[:4]
+        name = label or short_id(sid)
         if tui.handle is None:
             raise HarnessError(
                 "the harness did not report the new conversation's id"
@@ -414,8 +433,10 @@ def _pending(messages: list[Any]) -> bool:
     if not messages:
         return False
     last = messages[-1]
-    return last.role == "tool" or any(
-        getattr(p, "kind", "") == "tool_call" for p in last.parts
+    return (
+        last.role == "tool"
+        or narrating(last)
+        or any(getattr(p, "kind", "") == "tool_call" for p in last.parts)
     )
 
 
