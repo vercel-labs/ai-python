@@ -4,17 +4,25 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from ai.harnesses.experimental import Allow, ApprovalContext, Deny
+from ai.harnesses.experimental import (
+    Allow,
+    ApprovalContext,
+    Deny,
+    _cli_processes,
+)
 from ai.harnesses.experimental._adapters import codex, jsonrpc
-from ai.harnesses.experimental.errors import UnsupportedError
+from ai.harnesses.experimental.errors import SessionBusyError, UnsupportedError
 from ai.types import events
 from ai.types import messages as m
 
 from . import fakes
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 THREAD = "019a0000-0000-7000-8000-000000000000"
 
@@ -243,3 +251,80 @@ async def test_listing_asks_for_this_directory_and_reads_every_page() -> None:
     assert all(p["cwd"] == "/fake" for p in asked)
     assert [p.get("cursor") for p in asked] == [None, "p2"]
     await _close(adapter)
+
+
+def test_a_stored_reply_keeps_its_phase() -> None:
+    """A command under way is not in codex's record until it ends, so
+    mid-command the record ends on what codex said it was about to do.
+    Measured: an app reading it called a turn finished mid-`sleep 150`."""
+    item = {
+        "type": "agentMessage",
+        "text": "I'll run it.",
+        "phase": "commentary",
+    }
+    (said,) = codex._item_to_messages(item, replay=True)
+    assert said.provider_metadata == {"codex": {"phase": "commentary"}}
+    del item["phase"]
+    (said,) = codex._item_to_messages(item, replay=True)
+    assert said.provider_metadata is None
+
+
+@pytest.mark.parametrize(
+    ("config", "own"),
+    [
+        (None, False),
+        ("model = 'x'\n", False),
+        ("[model_providers.vercel]\nname = 'mine'\n", False),
+        ("[model_providers.other.auth]\ncommand = 'true'\n", False),
+        ("[model_providers.vercel.auth]\ncommand = 'true'\n", True),
+        ("[model_providers.vercel.auth\n", False),
+    ],
+)
+async def test_a_provider_with_its_own_auth_is_not_given_a_key_variable(
+    tmp_path: Path, config: str | None, own: bool
+) -> None:
+    """codex refuses a provider with both `auth` and `env_key`, and `-c`
+    overrides merge into the table its config already has. Measured, with
+    the `[model_providers.vercel.auth]` Vercel's own setup writes: every
+    thread start failed with "provider auth cannot be combined with
+    env_key"."""
+    workspace = fakes.LockWorkspace(tmp_path)
+    if config is not None:
+        await workspace.write_text(
+            f"{await workspace.home()}/.codex/config.toml", config
+        )
+    assert await codex._authenticates_itself(workspace) is own
+
+
+@pytest.mark.parametrize(
+    ("running", "held"),
+    [
+        (["sh", "-c", "sleep 60"], False),
+        (["/usr/lib/codex-linux-x64/bin/codex", "app-server"], True),
+    ],
+)
+async def test_a_writer_lock_nothing_holds_is_not_a_holder(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    running: list[str],
+    held: bool,
+) -> None:
+    """codex's writer lock is a file it locks, and the file outlives its
+    holder. Measured: a sandbox resumed from its snapshot came back with the
+    file and no process, and its TUI could not be reopened."""
+    workspace = fakes.LockWorkspace(tmp_path)
+    await workspace.write_text(
+        f"{await workspace.home()}/.codex/thread-writer-locks/{THREAD}.lock", ""
+    )
+
+    async def processes(_: Any) -> dict[int, _cli_processes.Process]:
+        return {7: _cli_processes.Process(7, "", running)}
+
+    monkeypatch.setattr(_cli_processes, "processes", processes)
+    adapter = codex.CodexAdapter()
+    adapter._workspace = workspace
+    if held:
+        with pytest.raises(SessionBusyError):
+            await adapter._hand_over(THREAD)
+    else:
+        await adapter._hand_over(THREAD)

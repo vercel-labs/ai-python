@@ -18,6 +18,7 @@ import importlib.metadata
 import json
 import posixpath
 import re
+import tomllib
 from typing import TYPE_CHECKING, Any
 
 from ....types import events as events_
@@ -44,6 +45,8 @@ KIND = "codex"
 # Internal marker delivered on a turn queue when the process dies.
 CRASHED = "__crashed__"
 PACKAGE = "@openai/codex"
+PROVIDER = "vercel"
+"""The provider table a gateway is written to, in codex's config."""
 INSTALL = f"npm install -g {PACKAGE}"
 LIST_PAGE_SIZE = 100
 LIST_PAGES = 50
@@ -175,7 +178,13 @@ class CodexAdapter:
         ):
             gateway = gateway.brokered()
         self._gateway = gateway
-        self._config = {**gateway_config(gateway), **self._explicit_config}
+        provider = gateway_config(gateway)
+        if provider and await _authenticates_itself(workspace):
+            # codex refuses a provider with both (measured, 0.167: "provider
+            # auth cannot be combined with env_key", on every thread start),
+            # and `-c` overrides merge into the table codex already has.
+            del provider[f"model_providers.{PROVIDER}.env_key"]
+        self._config = {**provider, **self._explicit_config}
         self._gateway_env = gateway_env(gateway)
         if (
             self._sandbox_explicit
@@ -610,6 +619,24 @@ class CodexAdapter:
         if not await self._held_elsewhere(session_id):
             return
         if session_id not in self._threads:
+            # The lock is a file codex locks, and the file outlives its
+            # holder: a sandbox resumed from a snapshot comes back with the
+            # file and no process (measured: its TUI could not be reopened).
+            # So it counts only while another codex runs here.
+            mine = (
+                await self._process.os_pid()
+                if self._process is not None
+                else None
+            )
+            assert self._workspace is not None
+            running = await _cli_processes.processes(self._workspace)
+            if running and not any(
+                p.pid != mine
+                and p.argv
+                and posixpath.basename(p.argv[0]) == "codex"
+                for p in running.values()
+            ):
+                return
             raise errors.SessionBusyError(
                 session_id, None, "another codex process holds this thread"
             )
@@ -1169,10 +1196,16 @@ def _item_to_messages(
             )
         ]
     if kind == "agentMessage" and item.get("text"):
+        # Its phase rides along: "commentary" is what codex narrates before
+        # it acts, and a command under way is not in the record until it
+        # ends. So a transcript ending on commentary is a turn still running
+        # (measured: mid-`sleep`, the record ended on "I'll run sleep").
+        phase = item.get("phase")
         return [
             messages_.Message(
                 role="assistant",
                 parts=[messages_.TextPart(text=item["text"])],
+                provider_metadata={KIND: {"phase": phase}} if phase else None,
                 replay=replay,
             )
         ]
@@ -1266,13 +1299,33 @@ def gateway_config(gateway: _gateway.Gateway | None) -> dict[str, str]:
     if gateway is None:
         return {}
     return {
-        "model_provider": "vercel",
-        "model_providers.vercel.name": "Vercel AI Gateway",
-        "model_providers.vercel.base_url": f"{gateway.base_url}/codex/v1",
-        "model_providers.vercel.env_key": _gateway.KEY_VAR,
+        "model_provider": PROVIDER,
+        f"model_providers.{PROVIDER}.name": "Vercel AI Gateway",
+        f"model_providers.{PROVIDER}.base_url": f"{gateway.base_url}/codex/v1",
+        f"model_providers.{PROVIDER}.env_key": _gateway.KEY_VAR,
         # Required: codex no longer speaks Chat Completions.
-        "model_providers.vercel.wire_api": "responses",
+        f"model_providers.{PROVIDER}.wire_api": "responses",
     }
+
+
+async def _authenticates_itself(workspace: _base.Workspace) -> bool:
+    """Whether codex's config there gives the gateway's provider its own auth.
+
+    A `[model_providers.vercel.auth]` table: a command codex runs for the
+    key, as Vercel's own setup writes it. That login then reaches the
+    gateway, and the provider table must not name a key variable as well.
+    """
+    try:
+        config = tomllib.loads(
+            await workspace.read_text(
+                f"{await workspace.home()}/.codex/config.toml"
+            )
+        )
+    except (OSError, ValueError):  # no config there, or not one codex reads
+        return False
+    providers = config.get("model_providers")
+    table = providers.get(PROVIDER) if isinstance(providers, dict) else None
+    return isinstance(table, dict) and "auth" in table
 
 
 def mcp_config(servers: dict[str, Any] | None) -> dict[str, Any]:
