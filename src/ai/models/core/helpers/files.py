@@ -46,7 +46,8 @@ class DownloadError(Exception):
             self.__cause__ = cause
 
     def __reduce__(self) -> tuple[object, ...]:
-        # Preserve the formatted message, including keyword-only status details.
+        # Pickle and copy need the URL, not the formatted message.
+        # Restore args to keep the keyword-only status details in the message.
         return type(self), (self.url,), {**self.__dict__, "args": self.args}
 
 
