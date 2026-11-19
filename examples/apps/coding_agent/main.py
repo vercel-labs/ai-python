@@ -14,6 +14,7 @@ Run it from this directory:
 import asyncio
 import json
 import os
+import signal
 from typing import TYPE_CHECKING, Any, ClassVar
 
 import rich.text
@@ -63,6 +64,7 @@ async def bash(command: str, timeout: float = 120) -> ai.StreamingTextTool:
         stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
+        start_new_session=True,
     )
     assert proc.stdout is not None
     loop = asyncio.get_running_loop()
@@ -85,7 +87,10 @@ async def bash(command: str, timeout: float = 120) -> ai.StreamingTextTool:
             break
         yield chunk.decode(errors="replace")
     if note:
-        proc.kill()
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
     await proc.wait()
     if not note and proc.returncode:
         note = f"[Exit code: {proc.returncode}]"
