@@ -129,7 +129,7 @@ model = ai.testing.FakeModel(
     ]
 )
 
-message = await ai.experimental_generate(
+message = await ai.generate(
     model,
     [ai.user_message("Weather in San Francisco as JSON.")],
     output_type=Weather,

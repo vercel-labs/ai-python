@@ -1,21 +1,21 @@
 """Agent run with telemetry: console adapter + a custom span in a tool.
 
 For an out-of-process viewer, run
-``python -m ai.experimental_telemetry.utils.viewer`` and see
-``ai/experimental_telemetry/utils/viewer.py`` for the otel exporter
+``python -m ai.telemetry.utils.viewer`` and see
+``ai/telemetry/utils/viewer.py`` for the otel exporter
 setup.
 """
 
 import asyncio
 
 import ai
-from ai.experimental_telemetry.utils import console
+from ai.telemetry.utils import console
 
 
 @ai.tool
 async def get_weather(city: str) -> str:
     """Get current weather for a city."""
-    async with ai.experimental_telemetry.span("lookup") as span:
+    async with ai.telemetry.span("lookup") as span:
         span.set_attrs(city=city)
         await asyncio.sleep(0.1)
         span.set_attrs(source="cache")
@@ -23,7 +23,7 @@ async def get_weather(city: str) -> str:
 
 
 async def main() -> None:
-    ai.experimental_telemetry.register(console.ConsoleAdapter())
+    ai.telemetry.register(console.ConsoleAdapter())
 
     model = ai.get_model("anthropic/claude-sonnet-4.6")
     my_agent = ai.Agent(tools=[get_weather])

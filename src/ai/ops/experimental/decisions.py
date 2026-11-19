@@ -37,7 +37,7 @@ from typing import TYPE_CHECKING, Annotated, Any, Literal, TypedDict, overload
 
 import pydantic
 
-from ... import experimental_telemetry as telemetry
+from ... import telemetry
 from ...types import messages
 from .. import items
 

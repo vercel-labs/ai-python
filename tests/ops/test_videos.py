@@ -52,7 +52,7 @@ async def test_error_recorded_on_span(recorder: conftest.Recorder) -> None:
 
     (span,) = recorder.ended
     data = span.data
-    assert isinstance(data, ai.experimental_telemetry.GenerateVideoSpanData)
+    assert isinstance(data, ai.telemetry.GenerateVideoSpanData)
     assert data.output_count is None
     assert span.error is not None
     assert span.error.type == "NotImplementedError"

@@ -148,7 +148,7 @@ class ExternalHarnessProvider(pydantic.BaseModel):
         output_type: type[pydantic.BaseModel] | None = None,
         params: params_.InferenceRequestParams | None = None,
     ) -> messages_.Message:
-        """Not implemented: `ai.experimental_generate` drains `stream()`."""
+        """Not implemented: `ai.generate` drains `stream()`."""
         raise NotImplementedError
 
 

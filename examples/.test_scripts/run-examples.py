@@ -15,7 +15,7 @@ Usage (from repo root):
     uv run examples/.test_scripts/run-examples.py --model MODEL
         # patch ai.get_model() to use the given model for every sample
     uv run examples/.test_scripts/run-examples.py --protocol=responses
-        # patch model/provider helpers, ai.stream(), and experimental_generate()
+        # patch model/provider helpers, ai.stream(), and generate()
 """
 
 import argparse

@@ -929,7 +929,7 @@ async def test_stream_reply_is_in_history_while_telemetry_is_pending() -> None:
     release_telemetry = asyncio.Event()
 
     class BlockingSink:
-        async def on_push(self, span: ai.experimental_telemetry.Span) -> None:
+        async def on_push(self, span: ai.telemetry.Span) -> None:
             if (
                 isinstance(span.data, external.ExternalHarnessMessageSpanData)
                 and span.ended_at is not None
@@ -946,7 +946,7 @@ async def test_stream_reply_is_in_history_while_telemetry_is_pending() -> None:
                 pass
         return stream.message
 
-    async with ai.experimental_telemetry.use_sink(BlockingSink()), harness:
+    async with ai.telemetry.use_sink(BlockingSink()), harness:
         task = asyncio.create_task(reply())
         try:
             async with asyncio.timeout(5):
@@ -972,8 +972,8 @@ async def test_sessions_messages_and_cli_tools_have_spans() -> None:
             _wire.TurnEnd(),
         ]
 
-    sink = ai.experimental_telemetry.DictSink()
-    async with ai.experimental_telemetry.use_sink(sink):
+    sink = ai.telemetry.DictSink()
+    async with ai.telemetry.use_sink(sink):
         harness = fakes.fake(reply)
         async with harness:
             async with ai.stream(harness, [ai.user_message("go")]) as s:
@@ -993,9 +993,7 @@ async def test_sessions_messages_and_cli_tools_have_spans() -> None:
     )
     assert isinstance(session.data, external.ExternalHarnessSessionSpanData)
     assert isinstance(message.data, external.ExternalHarnessMessageSpanData)
-    assert isinstance(
-        tool.data, ai.experimental_telemetry.ToolExecutionSpanData
-    )
+    assert isinstance(tool.data, ai.telemetry.ToolExecutionSpanData)
     assert session.data.session_id == "s1"
     assert message.parent_id == session.id
     assert message.data.finish_reason == "stop"

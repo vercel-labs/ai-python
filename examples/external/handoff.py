@@ -17,7 +17,7 @@ async def main() -> None:
             )
         ]
         async with ai.external.ClaudeCode(cwd=tmp) as claude:
-            reply = await ai.experimental_generate(claude, messages)
+            reply = await ai.generate(claude, messages)
         print(
             f"Claude Code: {reply.text.strip()} "
             f"({len(reply.builtin_tool_calls)} tool call(s))"
@@ -36,7 +36,7 @@ async def main() -> None:
             ),
         ]
         async with ai.external.Codex(cwd=tmp) as codex:
-            reply = await ai.experimental_generate(codex, messages)
+            reply = await ai.generate(codex, messages)
         print("Codex:", reply.text.strip())
 
         notes = pathlib.Path(tmp, "notes.txt").read_text()

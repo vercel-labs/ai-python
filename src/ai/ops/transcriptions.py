@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any
 
 import pydantic
 
-from .. import experimental_telemetry as telemetry
+from .. import telemetry
 
 if TYPE_CHECKING:
     from collections.abc import Mapping

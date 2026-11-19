@@ -78,7 +78,7 @@ Direct provider model IDs use `ai.get_model("handle:model")`; slash-separated
 IDs route through AI Gateway.
 
 Implement `ProviderProtocol.generate` when the upstream API has a native
-buffered language-model endpoint. Otherwise, `ai.experimental_generate` falls
+buffered language-model endpoint. Otherwise, `ai.generate` falls
 back to `stream`. Implement `generate_image`, `generate_video`,
 `generate_audio`, `embed`, `transcribe`, or `rerank` only for the dedicated
 model operations that the provider supports.

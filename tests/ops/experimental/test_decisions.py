@@ -170,7 +170,7 @@ async def test_decide_dispatch_and_span(recorder: conftest.Recorder) -> None:
     assert result.provider_metadata == {"test": {"request_id": "req_1"}}
 
     (span,) = recorder.ended
-    assert isinstance(span.data, ai.experimental_telemetry.DecideSpanData)
+    assert isinstance(span.data, ai.telemetry.DecideSpanData)
     assert span.data.question_count == 3
     assert span.data.answer_count == 3
     assert span.data.usage == ai.types.usage.Usage(input_tokens=12)

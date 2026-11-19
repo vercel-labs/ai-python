@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 import pydantic
 
-from .. import experimental_telemetry as telemetry
+from .. import telemetry
 from ..types import events as events_
 from ..types import messages as messages_
 from ..types import tools as tools_

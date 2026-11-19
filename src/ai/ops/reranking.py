@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any
 
 import pydantic
 
-from .. import experimental_telemetry as telemetry
+from .. import telemetry
 from . import items
 
 if TYPE_CHECKING:

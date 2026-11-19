@@ -64,7 +64,7 @@ async def main() -> None:
                     "Which file did you write? Reply with its name only."
                 ),
             ]
-            print((await ai.experimental_generate(harness, messages)).text)
+            print((await ai.generate(harness, messages)).text)
 
 
 if __name__ == "__main__":

@@ -172,7 +172,7 @@ class ProviderProtocol(pydantic.BaseModel, Generic[ClientT]):
         """Generate a non-streaming language-model response using *client*.
 
         Optional: protocols that don't implement it fall back to the
-        streaming path in :func:`ai.experimental_generate`.
+        streaming path in :func:`ai.generate`.
         """
         raise NotImplementedError(
             f"protocol {type(self).__name__!r} does not support generate()"
@@ -516,7 +516,7 @@ class Provider(pydantic.BaseModel, Generic[ClientT]):
         """Generate a non-streaming response from this provider.
 
         Optional: providers that don't implement it fall back to the
-        streaming path in :func:`ai.experimental_generate`.
+        streaming path in :func:`ai.generate`.
         """
         selected_protocol = model.protocol or self.protocol
         return await selected_protocol.generate(

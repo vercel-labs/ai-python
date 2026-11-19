@@ -51,7 +51,7 @@ async def test_embed_span(recorder: conftest.Recorder) -> None:
 
     (span,) = recorder.ended
     data = span.data
-    assert isinstance(data, ai.experimental_telemetry.EmbedSpanData)
+    assert isinstance(data, ai.telemetry.EmbedSpanData)
     assert data.model == "mock-embed-model"
     assert data.provider == "mock-embed"
     assert data.input_count == 2
@@ -63,4 +63,4 @@ async def test_embed_span(recorder: conftest.Recorder) -> None:
     assert span.error is None
 
     (started,) = recorder.started
-    assert isinstance(started.data, ai.experimental_telemetry.EmbedSpanData)
+    assert isinstance(started.data, ai.telemetry.EmbedSpanData)

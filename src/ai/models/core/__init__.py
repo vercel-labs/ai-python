@@ -1,10 +1,13 @@
 """Core types for models."""
 
+import warnings
+from typing import TYPE_CHECKING
+
 from ...providers.base import Provider
 from . import helpers
 from .api import (
     Stream,
-    experimental_generate,
+    generate,
     probe,
     stream,
 )
@@ -77,8 +80,24 @@ __all__ = [
     "TopPSamplerParams",
     "Unset",
     "experimental_generate",
+    "generate",
     "get_model",
     "helpers",
     "probe",
     "stream",
 ]
+
+if TYPE_CHECKING:
+    experimental_generate = generate
+else:
+
+    def __getattr__(name: str) -> object:
+        if name == "experimental_generate":
+            warnings.warn(
+                f"{__name__}.experimental_generate is deprecated; "
+                "use ai.generate",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            return generate
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
