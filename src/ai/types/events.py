@@ -226,6 +226,13 @@ class FileEvent(ModelEvent):
 
     kind: Literal["file"] = "file"
 
+    @pydantic.field_serializer("data", when_used="json")
+    @classmethod
+    def _serialize_data(cls, value: str | bytes) -> str:
+        if isinstance(value, bytes):
+            return pydantic.Base64Encoder.encode(value).decode("ascii")
+        return value
+
 
 Event = (
     StreamStart
