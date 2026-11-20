@@ -15,6 +15,7 @@ import pytest
 import ai
 from ai.types import events as events_
 from ai.types import messages as messages_
+from ai.types import usage as usage_
 
 
 @ai.tool
@@ -280,3 +281,43 @@ async def test_foreign_tool_results_fail() -> None:
                 pass
 
     assert "call_bogus" in str(err.value)
+
+
+async def test_fake_model_stream_reports_scripted_usage() -> None:
+    """A completed stream reports the usage on the scripted response."""
+    scripted = ai.assistant_message("hello")
+    scripted.usage = usage_.Usage(input_tokens=3, output_tokens=5)
+    model = ai.testing.FakeModel([ai.user_message("go"), scripted])
+
+    async with ai.stream(model, [ai.user_message("go")]) as stream:
+        async for _ in stream:
+            pass
+
+    assert stream.usage == scripted.usage
+
+
+async def test_fake_model_generate_does_not_hand_out_the_script() -> None:
+    """A generated response is equal to, but distinct from, its script."""
+    scripted = ai.assistant_message("hello")
+    model = ai.testing.FakeModel([ai.user_message("go"), scripted])
+
+    message = await ai.generate(model, [ai.user_message("go")])
+
+    assert message == scripted
+    assert message is not scripted
+
+
+def test_fake_provider_stream_matches_before_iteration() -> None:
+    scripted = ai.assistant_message("hello")
+    model = ai.testing.FakeModel([ai.user_message("go"), scripted])
+    messages = [ai.user_message("go")]
+
+    model.provider.stream(model, messages)
+
+    assert len(model.calls) == 1
+    assert model.calls[0] == messages
+    assert not model.unused
+
+    with pytest.raises(AssertionError, match="no script continues"):
+        model.provider.stream(model, [ai.user_message("unexpected")])
+    assert len(model.calls) == 2

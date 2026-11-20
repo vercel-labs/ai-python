@@ -43,6 +43,20 @@ Properties:
 
 `FakeModel` works with both `ai.stream` and `Agent.run`.
 
+Responses are deep copies of scripted messages. Scripted `usage` is preserved in
+both generated messages and completed streams.
+
+### Limits
+
+- `FakeModel` does not implement `ai.ops.*` or `ai.probe`.
+- Each nonempty text part produces one text delta, not token-sized chunks.
+- Usage comes from the scripted message; the fake does not count tokens.
+- Matching requires a result for every tool call. It does not repair incomplete
+  tool histories.
+- The fake does not validate provider capabilities or inference parameters.
+  Structured output is parsed when `Message.get_output` is called, not when the
+  script is played.
+
 ## tool_call
 
 ```python

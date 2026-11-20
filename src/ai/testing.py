@@ -247,7 +247,14 @@ class _FakeProvider(models.Provider):
         params: params_.InferenceRequestParams | None = None,
     ) -> AsyncGenerator[events.Event]:
         response = self._next_response(messages)
-        return events._replay_message_events(response)
+
+        async def replay() -> AsyncGenerator[events.Event]:
+            async for event in events._replay_message_events(response):
+                if isinstance(event, events.StreamEnd):
+                    event = event.model_copy(update={"usage": response.usage})
+                yield event
+
+        return replay()
 
     async def generate(
         self,
@@ -272,7 +279,7 @@ class _FakeProvider(models.Provider):
             result = _walk(script, messages, fingerprints)
             if isinstance(result, int):
                 script.played.add(result)
-                return script.messages[result]
+                return script.messages[result].model_copy(deep=True)
             failures.append((script, result))
         raise AssertionError(self._no_match_error(fingerprints, failures))
 
