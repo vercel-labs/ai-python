@@ -567,12 +567,17 @@ class OtelAdapter:
     def _parent_context(
         self, span: telemetry.Span
     ) -> opentelemetry.context.Context | None:
+        # sometimes we need to set a parent span that isn't currently live.
         if span.parent_id is None:
+            # no parent was specified
             return None
         if parent := self._live.get(span.parent_id):
             current = telemetry.current_span()
             if current is not None and current.id == span.parent_id:
+                # parent is live and current, proceed as normal
+                # keep ambient otel context, including raw spans under parent
                 return None
+            # the parent is live but not current
             return opentelemetry.trace.set_span_in_context(parent)
 
         # parent is indeed not live
