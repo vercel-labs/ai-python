@@ -202,7 +202,8 @@ _SPECIAL_TOOL_RESULT_ADAPTER: pydantic.TypeAdapter[SpecialToolResult] = (
 
 
 class _ModelInputUnset:
-    pass
+    def __reduce__(self) -> str:
+        return "MODEL_INPUT_UNSET"
 
 
 MODEL_INPUT_UNSET: Any = _ModelInputUnset()
