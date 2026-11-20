@@ -286,6 +286,11 @@ class UnsupportedProviderError(AIError):
         self.provider_id = provider_id
         super().__init__(f"unsupported provider {provider_id!r}")
 
+    def __reduce__(self) -> tuple[object, ...]:
+        # Pickle and copy need the provider ID, not the formatted message,
+        # to avoid formatting the message twice.
+        return type(self), (self.provider_id,), self.__dict__
+
 
 def http_status_to_provider_status_error_class(
     status_code: int,

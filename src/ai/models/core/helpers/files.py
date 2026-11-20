@@ -45,6 +45,11 @@ class DownloadError(Exception):
         if cause is not None:
             self.__cause__ = cause
 
+    def __reduce__(self) -> tuple[object, ...]:
+        # Pickle and copy need the URL, not the formatted message.
+        # Restore args to keep the keyword-only status details in the message.
+        return type(self), (self.url,), {**self.__dict__, "args": self.args}
+
 
 def _validate_address(address: str, url: str) -> None:
     """Allow only public unicast addresses, including embedded IPv4 targets."""
