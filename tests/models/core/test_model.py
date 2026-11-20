@@ -6,6 +6,7 @@ from collections.abc import AsyncGenerator, Sequence
 from typing import Any
 
 import pydantic
+import pytest
 
 import ai
 from ai.types import events
@@ -86,3 +87,12 @@ def test_a_context_keeps_a_model_like_as_it_is() -> None:
     model = Echo()
     context = ai.Context(model=model, messages=[], tools=[])
     assert context.model is model
+
+
+@pytest.mark.parametrize("model_id", ["nope:model", "ollama:llama3"])
+def test_get_model_unknown_provider_raises_unsupported_provider(
+    model_id: str,
+) -> None:
+    """The docstring promises ``UnsupportedProviderError``."""
+    with pytest.raises(ai.errors.UnsupportedProviderError):
+        ai.get_model(model_id)
