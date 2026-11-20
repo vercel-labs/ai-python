@@ -139,21 +139,3 @@ assert message.get_output(Weather).conditions == "sunny"
 
 The fake does not validate scripted text against the schema; parsing happens only
 when the test calls `get_output`.
-
-## Limits
-
-- `FakeModel` scripts model conversations for `ai.stream`,
-  `ai.experimental_generate`, and `Agent.run`. It does not implement `ai.ops.*`
-  operations or model capability probing with `ai.probe`.
-- Streaming emits one text delta per nonempty scripted text part. It does not
-  simulate token-by-token delivery or network timing.
-- To test usage accounting, set `usage` on the scripted assistant message. With
-  `ai.stream`, read the completed stream's `stream.usage`. With `Agent.run`, read
-  `usage` on each assistant message in `stream.messages`; the agent stream has no
-  `usage` property. Usage is not calculated from the text.
-- Every scripted tool call needs a result before the next assistant message can
-  play, even when tool messages are omitted from the script. The fake does not
-  repair incomplete tool histories.
-- The fake does not check whether a real provider supports the supplied tools,
-  schema, or inference parameters. Use separate provider integration tests for
-  those checks.
